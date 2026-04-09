@@ -1,10 +1,8 @@
-
 use std::pin::Pin;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use tonic::{Request, Response, Status};
-
 
 use ank_core::{SchedulerEvent, PCB as CorePCB};
 use ank_http::AppState;
@@ -353,10 +351,7 @@ impl KernelService for AnkRpcServer {
         Err(Status::unimplemented("Not implemented"))
     }
 
-    async fn sync_router_catalog(
-        &self,
-        _req: Request<Empty>,
-    ) -> Result<Response<Empty>, Status> {
+    async fn sync_router_catalog(&self, _req: Request<Empty>) -> Result<Response<Empty>, Status> {
         Err(Status::unimplemented("Not implemented"))
     }
 

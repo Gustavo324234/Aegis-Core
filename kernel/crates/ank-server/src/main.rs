@@ -2,8 +2,7 @@ use ank_core::plugins::watcher::watch_plugins_dir;
 use ank_core::plugins::PluginManager;
 use ank_core::{
     citadel::identity::Citadel, enclave::master::MasterEnclave, router::CognitiveRouter,
-    router::SirenRouter, CognitiveHAL, CognitiveScheduler, SQLCipherPersistor,
-    StatePersistor,
+    router::SirenRouter, CognitiveHAL, CognitiveScheduler, SQLCipherPersistor, StatePersistor,
 };
 use ank_http::{AegisHttpServer, AppState, HttpConfig};
 use ank_proto::v1::kernel_service_server::KernelServiceServer;
@@ -87,8 +86,7 @@ async fn main() -> Result<()> {
 
     // 7. Scheduler
     let (scheduler_tx, scheduler_rx) = mpsc::channel(1024);
-    let scheduler =
-        CognitiveScheduler::new(Arc::clone(&persistence) as Arc<dyn StatePersistor>);
+    let scheduler = CognitiveScheduler::new(Arc::clone(&persistence) as Arc<dyn StatePersistor>);
     let scheduler_tx_clone = scheduler_tx.clone();
     tokio::spawn(async move {
         if let Err(e) = scheduler.start(scheduler_rx, scheduler_tx_clone).await {

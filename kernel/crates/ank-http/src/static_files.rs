@@ -12,7 +12,6 @@ use tower_http::services::ServeDir;
 #[cfg(feature = "embed-ui")]
 use include_dir::{include_dir, Dir};
 
-
 #[cfg(feature = "embed-ui")]
 static UI_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../../shell/ui/dist");
 
