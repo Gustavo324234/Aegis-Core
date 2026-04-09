@@ -14,9 +14,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # Job separado para construir ui-dist.tar.gz (se hace una sola vez)
+  # ── UI dist ────────────────────────────────────────────────────────────────
   build-ui:
-    name: "Build UI dist"
+    name: "UI dist"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,43 +26,6 @@ jobs:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: 'shell/ui/package-lock.json'
-
-      - name: "🎨 Build UI"
-        run: cd shell/ui && npm ci && npm run build
-
-      - name: "📦 Package ui-dist"
-        run: |
-          mkdir -p dist-ui
-          tar -czf dist-ui/ui-dist.tar.gz -C shell/ui/dist .
-          sha256sum dist-ui/ui-dist.tar.gz > dist-ui/ui-dist.tar.gz.sha256
-
-      - name: "⬆️ Upload ui-dist artifact"
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-dist-pkg
-          path: dist-ui/*
-
-  build:
-    name: "Build ${{ matrix.artifact }}"
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: ank-server-linux-x86_64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact: ank-server-linux-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: ank-server-windows-x86_64.exe
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: ank-server-macos-arm64
-
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
 
       - run: cd shell/ui && npm ci && npm run build
 
@@ -74,11 +37,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ui-dist-pkg
+          name: ui-dist-pkg-${{ github.run_id }}
           path: dist-ui/*
 
   # ── Linux x86_64 ─────────────────────────────────────────────────────────
-  # Runner nativo — no hay cross-compilación, todas las deps C compilan bien
   build-linux-x86_64:
     name: "Linux x86_64"
     runs-on: ubuntu-latest
@@ -106,27 +68,61 @@ jobs:
       - name: Build
         run: cargo build --release -p ank-server
 
-      - name: "🔧 Install system dependencies (Windows)"
-        if: runner.os == 'Windows'
-        run: choco install protoc -y
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/ank-server dist/ank-server-linux-x86_64
+          cd dist
+          tar -czf ank-server-linux-x86_64.tar.gz ank-server-linux-x86_64
+          sha256sum ank-server-linux-x86_64.tar.gz > ank-server-linux-x86_64.tar.gz.sha256
 
-      - name: "🔧 Install system dependencies (macOS)"
-        if: runner.os == 'macOS'
-        run: brew install protobuf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-pkg-${{ github.run_id }}
+          path: dist/*
+
+  # ── Linux ARM64 ───────────────────────────────────────────────────────────
+  build-linux-arm64:
+    name: "Linux ARM64"
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            protobuf-compiler \
+            cmake \
+            build-essential \
+            libssl-dev \
+            libsqlite3-dev \
+            pkg-config \
+            libclang-dev
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
         with:
           key: linux-arm64
 
       - name: Build
         run: cargo build --release -p ank-server
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/ank-server dist/ank-server-linux-arm64
+          cd dist
+          tar -czf ank-server-linux-arm64.tar.gz ank-server-linux-arm64
+          sha256sum ank-server-linux-arm64.tar.gz > ank-server-linux-arm64.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: linux-arm64-pkg
+          name: linux-arm64-pkg-${{ github.run_id }}
           path: dist/*
 
-  # ── macOS ARM64 (Apple Silicon) ───────────────────────────────────────────
+  # ── macOS ARM64 ───────────────────────────────────────────────────────────
   build-macos-arm64:
     name: "macOS ARM64"
     runs-on: macos-latest
@@ -155,10 +151,10 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64-pkg
+          name: macos-arm64-pkg-${{ github.run_id }}
           path: dist/*
 
-  # ── macOS x86_64 (Intel) ─────────────────────────────────────────────────
+  # ── macOS x86_64 ─────────────────────────────────────────────────────────
   build-macos-x86_64:
     name: "macOS x86_64"
     runs-on: macos-13
@@ -187,15 +183,27 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-x86_64-pkg
+          name: macos-x86_64-pkg-${{ github.run_id }}
           path: dist/*
 
   # ── Windows x86_64 ────────────────────────────────────────────────────────
+  # SQLCipher necesita OpenSSL en Windows — usamos vcpkg que viene preinstalado
+  # en los runners de GitHub Actions
   build-windows-x86_64:
     name: "Windows x86_64"
     runs-on: windows-latest
+    env:
+      VCPKG_ROOT: C:\vcpkg
+      OPENSSL_DIR: C:\vcpkg\installed\x64-windows-static
+      OPENSSL_STATIC: "1"
+      LIBSQLITE3_SYS_USE_PKG_CONFIG: "0"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install OpenSSL via vcpkg
+        run: |
+          vcpkg install openssl:x64-windows-static
+          vcpkg integrate install
 
       - name: Install protoc
         run: choco install protoc -y
@@ -213,39 +221,37 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          BIN_NAME="ank-server"
-          [ "${{ runner.os }}" = "Windows" ] && BIN_NAME="ank-server.exe"
-          SOURCE_BIN="target/${{ matrix.target }}/release/$BIN_NAME"
-          cp "$SOURCE_BIN" "dist/${{ matrix.artifact }}"
+          cp target/release/ank-server.exe dist/ank-server-windows-x86_64.exe
           cd dist
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            tar -czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
-            sha256sum "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256"
-          elif [ "${{ runner.os }}" = "macOS" ]; then
-            zip -r "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
-            shasum -a 256 "${{ matrix.artifact }}.zip" > "${{ matrix.artifact }}.zip.sha256"
-          elif [ "${{ runner.os }}" = "Windows" ]; then
-            zip "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
-            sha256sum "${{ matrix.artifact }}.zip" > "${{ matrix.artifact }}.zip.sha256"
-          fi
+          7z a ank-server-windows-x86_64.zip ank-server-windows-x86_64.exe
+          sha256sum ank-server-windows-x86_64.zip > ank-server-windows-x86_64.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-x86_64-pkg
+          name: windows-x86_64-pkg-${{ github.run_id }}
           path: dist/*
 
   # ── Release ───────────────────────────────────────────────────────────────
-  # Publica todo lo que se haya compilado exitosamente.
-  # Si algún target falla, los demás se publican igual.
   release:
-    name: "🚀 Release Binaries"
-    needs: [build, build-ui]
+    name: "🚀 Publish Release"
+    needs:
+      - build-ui
+      - build-linux-x86_64
+      - build-linux-arm64
+      - build-macos-arm64
+      - build-macos-x86_64
+      - build-windows-x86_64
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: |
+      always() &&
+      needs.build-ui.result == 'success' &&
+      needs.build-linux-x86_64.result == 'success' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: all-dist
+          pattern: "*-pkg-${{ github.run_id }}"
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
