@@ -102,34 +102,31 @@ install_native() {
     chown -R aegis:aegis "$DATA_DIR"
 
     # 3. Download ank-server binary
-    # El CI publica: ank-server-linux-x86_64.tar.gz conteniendo ank-server-linux-x86_64
     local release_url="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
-    local artifact_name="ank-server-linux-${ARCH}"
-    local tar_file="${artifact_name}.tar.gz"
+    local bin_file="ank-server-linux-${ARCH}.tar.gz"
 
-    log "Downloading ank-server (${RELEASE_TAG} / ${artifact_name})..."
-    curl -L --fail --progress-bar \
-        "${release_url}/${tar_file}" \
-        -o "/tmp/${tar_file}" \
-        || error "Failed to download ank-server. Verify that release '${RELEASE_TAG}' exists at github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases"
+    log "Downloading ank-server from GitHub Releases (${RELEASE_TAG})..."
+    curl -L --fail --silent --show-error \
+        "${release_url}/${bin_file}" \
+        -o "/tmp/${bin_file}" >> "$LOG_FILE" 2>&1 \
+        || error "Failed to download ank-server. Check that a '${RELEASE_TAG}' release exists."
 
-    # Extraer — el tar contiene un archivo llamado ank-server-linux-{arch}
-    tar -xzf "/tmp/${tar_file}" -C "/tmp/" >> "$LOG_FILE" 2>&1
-    mv "/tmp/${artifact_name}" "${BIN_DIR}/ank-server"
+    tar -xzf "/tmp/${bin_file}" -C "$BIN_DIR" "ank-server-linux-${ARCH}" >> "$LOG_FILE" 2>&1
+    mv "${BIN_DIR}/ank-server-linux-${ARCH}" "${BIN_DIR}/ank-server"
     chmod +x "${BIN_DIR}/ank-server"
-    rm "/tmp/${tar_file}"
-    success "ank-server installed → ${BIN_DIR}/ank-server"
+    rm "/tmp/${bin_file}"
+    success "ank-server installed to ${BIN_DIR}/ank-server"
 
     # 4. Download UI assets
     log "Downloading UI assets..."
-    curl -L --fail --progress-bar \
+    curl -L --fail --silent --show-error \
         "${release_url}/ui-dist.tar.gz" \
-        -o "/tmp/ui-dist.tar.gz" \
+        -o "/tmp/ui-dist.tar.gz" >> "$LOG_FILE" 2>&1 \
         || error "Failed to download UI assets."
 
     tar -xzf "/tmp/ui-dist.tar.gz" -C "$UI_DIST_PATH" >> "$LOG_FILE" 2>&1
     rm "/tmp/ui-dist.tar.gz"
-    success "UI assets installed → ${UI_DIST_PATH}"
+    success "UI assets installed to ${UI_DIST_PATH}"
 
     # 5. Install aegis CLI
     log "Installing aegis CLI..."
@@ -138,15 +135,14 @@ install_native() {
     if [[ -f "${script_dir}/aegis" ]]; then
         cp "${script_dir}/aegis" "${BIN_DIR}/aegis"
     else
-        curl -L --fail --silent \
+        curl -L --fail --silent --show-error \
             "https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/aegis" \
-            -o "${BIN_DIR}/aegis" \
-            || warn "Could not download aegis CLI"
+            -o "${BIN_DIR}/aegis" >> "$LOG_FILE" 2>&1 \
+            || warn "Could not install aegis CLI"
     fi
     chmod +x "${BIN_DIR}/aegis"
-    success "aegis CLI installed → ${BIN_DIR}/aegis"
 
-    # 6. Generate environment file (solo si no existe — preserva instalaciones previas)
+    # 6. Generate environment file
     if [[ ! -f "$ENV_FILE" ]]; then
         log "Generating AEGIS_ROOT_KEY..."
         local root_key
@@ -159,13 +155,9 @@ UI_DIST_PATH=${UI_DIST_PATH}
 EOF
         chmod 600 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
-        success "Environment file created → ${ENV_FILE}"
+        success "Environment file created at ${ENV_FILE}"
     else
-        warn "Environment file already exists at ${ENV_FILE} — preserving existing keys."
-        # Asegurar que UI_DIST_PATH esté en el env (puede faltar en instalaciones antiguas)
-        if ! grep -q "UI_DIST_PATH" "$ENV_FILE"; then
-            echo "UI_DIST_PATH=${UI_DIST_PATH}" >> "$ENV_FILE"
-        fi
+        warn "Environment file already exists at ${ENV_FILE} — skipping key generation."
     fi
 
     # 7. Write mode file
@@ -201,10 +193,12 @@ SyslogIdentifier=aegis
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload >> "$LOG_FILE" 2>&1
-    systemctl enable aegis.service >> "$LOG_FILE" 2>&1
-    systemctl start aegis.service >> "$LOG_FILE" 2>&1
-    success "systemd service installed and started."
+    {
+        systemctl daemon-reload
+        systemctl enable aegis.service
+        systemctl start aegis.service
+    } >> "$LOG_FILE" 2>&1
+    success "Native installation complete."
 }
 
 install_docker() {
@@ -215,9 +209,9 @@ install_docker() {
     # Download docker-compose.yml
     local raw_url="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/docker-compose.yml"
     log "Fetching docker-compose.yml..."
-    curl -L --fail --silent \
+    curl -L --fail --silent --show-error \
         "$raw_url" \
-        -o "${INSTALL_ROOT}/docker-compose.yml" \
+        -o "${INSTALL_ROOT}/docker-compose.yml" >> "$LOG_FILE" 2>&1 \
         || error "Failed to download docker-compose.yml"
 
     # Generate .env
@@ -229,9 +223,9 @@ AEGIS_ROOT_KEY=${root_key}
 AEGIS_MTLS_STRICT=false
 EOF
         chmod 600 "${INSTALL_ROOT}/.env"
-        success "Docker .env created → ${INSTALL_ROOT}/.env"
+        success "Docker .env file created at ${INSTALL_ROOT}/.env"
     else
-        warn ".env already exists — preserving existing keys."
+        warn ".env already exists — skipping key generation."
     fi
 
     # Write mode file
@@ -262,7 +256,7 @@ show_menu() {
     echo "│           AEGIS OS — INSTALLATION MODE          │"
     echo "├─────────────────────────────────────────────────┤"
     echo "│  [1] Native (recommended)                       │"
-    echo "│      Single binary, systemd managed             │"
+    echo "│      Single binary, systemd service             │"
     echo "│  [2] Docker                                     │"
     echo "│      Containerized deployment                   │"
     echo "└─────────────────────────────────────────────────┘"
@@ -291,13 +285,14 @@ wait_and_show() {
     if curl -s "http://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
         success "Aegis is UP at http://localhost:8000"
 
+        # Extract setup token from logs
         local token=""
         if [[ "${INSTALL_MODE}" == "1" ]]; then
             token=$(journalctl -u aegis --since "5 min ago" --no-pager 2>/dev/null \
-                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || true)
+                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || echo "")
         else
             token=$(docker compose -f "${INSTALL_ROOT}/docker-compose.yml" logs ank-server 2>&1 \
-                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || true)
+                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || echo "")
         fi
 
         echo ""
@@ -316,12 +311,11 @@ wait_and_show() {
             echo -e "  To regenerate: ${CYAN}sudo aegis token${NC}"
         else
             echo -e "  Access URL: ${CYAN}http://${ip}:8000${NC}"
-            echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
+            echo -e "  If this is a fresh install, run: ${CYAN}sudo aegis token${NC}"
         fi
         echo -e "${GREEN}################################################################${NC}"
     else
-        warn "Health check timed out after 60s."
-        warn "Check logs with: sudo journalctl -u aegis -n 50"
+        warn "Health check timed out. Check logs with: sudo aegis logs"
     fi
 }
 
