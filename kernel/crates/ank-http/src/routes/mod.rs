@@ -7,10 +7,10 @@ pub mod siren_api;
 pub mod status;
 pub mod workspace;
 
-use axum::Router;
-use crate::AppState;
-use crate::ws;
 use crate::static_files;
+use crate::ws;
+use crate::AppState;
+use axum::Router;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
@@ -25,14 +25,10 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/status", status::router())
         .nest("/api/system", status::system_router())
         .nest("/api/siren", siren_api::router())
-        
         // WebSocket Routes
         .nest("/ws/chat", ws::chat::router())
         .nest("/ws/siren", ws::siren::router())
-        
         // Static Files (Catch-all)
         .fallback(static_files::spa_handler)
-
-        
         .with_state(state)
 }

@@ -1,12 +1,10 @@
+use ank_core::{
+    chal::CognitiveHAL, citadel::identity::Citadel, router::syncer::CatalogSyncer, SchedulerEvent,
+    StatePersistor,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
-use ank_core::{
-    chal::CognitiveHAL,
-    citadel::identity::Citadel,
-    router::syncer::CatalogSyncer,
-    SchedulerEvent, StatePersistor,
-};
 
 #[derive(Clone)]
 pub struct AppState {

@@ -1,5 +1,5 @@
+use aegis_sdk::{run_plugin, PluginMetadata, PluginRequest, PluginResponse};
 use anyhow::Result;
-use aegis_sdk::{PluginRequest, PluginResponse, PluginMetadata, run_plugin};
 
 fn main() -> Result<()> {
     let metadata = PluginMetadata {
@@ -17,10 +17,12 @@ fn main() -> Result<()> {
 fn process_request(request: &PluginRequest) -> Result<PluginResponse> {
     match request.action.as_str() {
         "parse" => {
-            let html = request.params.get("html")
+            let html = request
+                .params
+                .get("html")
                 .and_then(|h| h.as_str())
                 .unwrap_or("");
-            
+
             let cleaned_text = clean_html(html);
 
             Ok(PluginResponse {
@@ -43,10 +45,10 @@ fn clean_html(html: &str) -> String {
     let mut output = String::with_capacity(html.len());
     let mut in_tag = false;
     let mut in_script_or_style = false;
-    
+
     // Simplificación: no manejamos tags anidados complejos ni comentarios de forma perfecta,
     // pero para extraer texto legible por una IA es suficiente.
-    
+
     let mut chars = html.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
@@ -55,7 +57,9 @@ fn clean_html(html: &str) -> String {
                 // Detectar inicio de <script o <style para ignorar su contenido
                 let mut tag_acc = String::new();
                 while let Some(&next_c) = chars.peek() {
-                    if next_c == '>' || next_c.is_whitespace() { break; }
+                    if next_c == '>' || next_c.is_whitespace() {
+                        break;
+                    }
                     if let Some(next_char) = chars.next() {
                         tag_acc.push(next_char.to_ascii_lowercase());
                     }
@@ -76,9 +80,10 @@ fn clean_html(html: &str) -> String {
             }
         }
     }
-    
+
     // Post-procesamiento: Colapsar espacios y eliminar líneas vacías excesivas
-    output.lines()
+    output
+        .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()

@@ -75,7 +75,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    match cli.command.context("No command provided. Use 'aegis --help' for usage.")? {
+    match cli
+        .command
+        .context("No command provided. Use 'aegis --help' for usage.")?
+    {
         Commands::Start => {
             config.dev_mode = false;
             let mut supervisor = AegisSupervisor::new(config);
@@ -84,7 +87,7 @@ async fn main() -> Result<()> {
         }
         Commands::Stop => {
             println!("Stop command received. Terminating Aegis processes...");
-            // Simplified: we could send signals if we had a daemon, 
+            // Simplified: we could send signals if we had a daemon,
             // but for now we follow the legacy's path or just a simple message.
         }
         Commands::Restart => {

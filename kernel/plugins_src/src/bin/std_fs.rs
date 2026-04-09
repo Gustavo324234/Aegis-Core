@@ -1,7 +1,7 @@
+use aegis_sdk::{run_plugin, PluginMetadata, PluginRequest, PluginResponse};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
-use aegis_sdk::{PluginRequest, PluginResponse, PluginMetadata, run_plugin};
 
 const WORKSPACE_ROOT: &str = "/workspace";
 
@@ -43,7 +43,7 @@ fn list_dir(params: &serde_json::Value) -> Result<PluginResponse> {
         let file_name = entry.file_name().to_string_lossy().into_owned();
         let metadata = entry.metadata()?;
         let kind = if metadata.is_dir() { "dir" } else { "file" };
-        
+
         entries.push(serde_json::json!({
             "name": file_name,
             "type": kind,
@@ -59,7 +59,8 @@ fn list_dir(params: &serde_json::Value) -> Result<PluginResponse> {
 }
 
 fn read_file(params: &serde_json::Value) -> Result<PluginResponse> {
-    let relative_path = params["path"].as_str()
+    let relative_path = params["path"]
+        .as_str()
         .context("Se requiere la clave 'path' para leer un archivo")?;
     let target_path = safe_path(relative_path)?;
 
@@ -77,9 +78,9 @@ fn read_file(params: &serde_json::Value) -> Result<PluginResponse> {
 /// Evita ataques de path traversal básicos.
 fn safe_path(rel_path: &str) -> Result<PathBuf> {
     let mut path = PathBuf::from(WORKSPACE_ROOT);
-    
+
     // Eliminamos prefijos peligrosos como / o ..
-    let rel = rel_path.trim_start_matches(|c| c == '/' || c == '\\');
+    let rel = rel_path.trim_start_matches(['/', '\\']);
     path.push(rel);
 
     // En un entorno WASI real con jailing, no podemos salir de /workspace
@@ -97,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_safe_path_logic() -> anyhow::Result<()> {
-        // En tests unitarios normales (no wasm), /workspace no existirá, 
+        // En tests unitarios normales (no wasm), /workspace no existirá,
         // pero validamos la construcción de la ruta.
         let p = safe_path("docs/readme.txt")?;
         let p_str = p.to_str().context("Path is not valid UTF-8")?;

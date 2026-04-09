@@ -29,6 +29,8 @@ import VoiceButton from '@/components/VoiceButton';
 import { nanoid } from 'nanoid/non-secure';
 import { TRANSLATIONS } from '@/constants/i18n';
 
+const TypedFlatList = FlatList as unknown as React.ComponentType<any>;
+
 export default function ChatScreen() {
   const router = useRouter();
   const { serverUrl, tenantId, sessionKey, logout, mode, setMode } = useAuthStore();
@@ -303,11 +305,11 @@ export default function ChatScreen() {
         </View>
       )}
 
-      <FlatList
-        ref={flatListRef as any}
+      <TypedFlatList
+        ref={flatListRef}
         data={messages}
         renderItem={renderMessage}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item: ChatMessage) => item.id}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>

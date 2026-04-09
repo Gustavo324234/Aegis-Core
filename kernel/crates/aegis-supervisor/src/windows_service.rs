@@ -150,12 +150,16 @@ fn service_run() -> Result<()> {
 
 #[cfg(not(windows))]
 pub fn install_service() -> Result<()> {
-    Err(anyhow!("Service installation is only supported on Windows."))
+    Err(anyhow!(
+        "Service installation is only supported on Windows."
+    ))
 }
 
 #[cfg(not(windows))]
 pub fn uninstall_service() -> Result<()> {
-    Err(anyhow!("Service uninstallation is only supported on Windows."))
+    Err(anyhow!(
+        "Service uninstallation is only supported on Windows."
+    ))
 }
 
 #[cfg(not(windows))]

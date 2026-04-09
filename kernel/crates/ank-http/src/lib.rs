@@ -3,8 +3,8 @@ pub mod config;
 pub mod error;
 pub mod routes;
 pub mod state;
-pub mod ws;
 mod static_files;
+pub mod ws;
 
 pub use config::HttpConfig;
 pub use state::AppState;

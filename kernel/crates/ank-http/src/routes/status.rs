@@ -1,3 +1,4 @@
+use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
 use axum::{
     extract::{Query, State},
     http::HeaderMap,
@@ -6,11 +7,6 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use crate::{
-    citadel::hash_passphrase,
-    error::AegisHttpError,
-    state::AppState,
-};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -35,12 +31,13 @@ pub async fn get_system_status(
     Query(query): Query<StatusQuery>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let x_citadel_key = headers.get("x-citadel-key")
+    let x_citadel_key = headers
+        .get("x-citadel-key")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| AegisHttpError::Citadel(crate::citadel::CitadelError::MissingKey))?;
 
     let hash = hash_passphrase(x_citadel_key);
-    
+
     // Validar contra Citadel
     {
         let citadel = state.citadel.lock().await;
@@ -50,11 +47,14 @@ pub async fn get_system_status(
             .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
     }
-    
+
     // Obtener hardware status del HAL
     let hw_info = {
         let hal = state.hal.write().await;
-        let mut monitor = hal.hardware.lock().map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let mut monitor = hal
+            .hardware
+            .lock()
+            .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e.to_string())))?;
         let status = monitor.get_status();
         json!({
             "cpu_load": status.cpu_usage,
@@ -62,7 +62,7 @@ pub async fn get_system_status(
             "vram_total_mb": status.total_mem_mb,
         })
     };
-    
+
     let hw_profile = std::env::var("HW_PROFILE").unwrap_or_else(|_| "1".to_string());
     let hw_profile_name = match hw_profile.as_str() {
         "1" => "cloud",
@@ -80,9 +80,7 @@ pub async fn get_system_status(
     Ok(Json(res))
 }
 
-pub async fn get_public_system_state(
-    State(_state): State<AppState>,
-) -> Json<Value> {
+pub async fn get_public_system_state(State(_state): State<AppState>) -> Json<Value> {
     // Basic public state
     Json(json!({ "state": "STATE_OPERATIONAL" }))
 }

@@ -1,18 +1,10 @@
-use axum::{
-    extract::State,
-    routing::post,
-    Json, Router,
-};
+use crate::{error::AegisHttpError, state::AppState};
+use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::{
-    error::AegisHttpError,
-    state::AppState,
-};
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/models", post(list_provider_models))
+    Router::new().route("/models", post(list_provider_models))
 }
 
 #[derive(Deserialize)]
@@ -58,13 +50,17 @@ async fn list_provider_models(
         }
         "ollama" => {
             let client = reqwest::Client::new();
-            let res = client.get("http://localhost:11434/api/tags")
+            let res = client
+                .get("http://localhost:11434/api/tags")
                 .timeout(std::time::Duration::from_secs(5))
                 .send()
                 .await
                 .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-            
-            let data: Value = res.json().await.map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+            let data: Value = res
+                .json()
+                .await
+                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
             if let Some(list) = data.get("models").and_then(|m| m.as_array()) {
                 for m in list {
                     if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
@@ -75,8 +71,13 @@ async fn list_provider_models(
         }
         _ => {
             let client = reqwest::Client::new();
-            let mut base_url = req.api_url.split("/chat/completions").next().unwrap_or(&req.api_url).to_string();
-            
+            let mut base_url = req
+                .api_url
+                .split("/chat/completions")
+                .next()
+                .unwrap_or(&req.api_url)
+                .to_string();
+
             let models_url = if base_url.ends_with("/v1") {
                 format!("{}/models", base_url)
             } else {
@@ -86,14 +87,18 @@ async fn list_provider_models(
                 format!("{}/v1/models", base_url)
             };
 
-            let res = client.get(&models_url)
+            let res = client
+                .get(&models_url)
                 .header("Authorization", format!("Bearer {}", req.api_key))
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
                 .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-            let data: Value = res.json().await.map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+            let data: Value = res
+                .json()
+                .await
+                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
             if let Some(list) = data.get("data").and_then(|d| d.as_array()) {
                 for m in list {
                     if let Some(id) = m.get("id").and_then(|i| i.as_str()) {

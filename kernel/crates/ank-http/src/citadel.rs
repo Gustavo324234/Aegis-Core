@@ -30,7 +30,7 @@ impl<S: Send + Sync> FromRequestParts<S> for CitadelCredentials {
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
         let tenant_id = header_str(parts, "x-citadel-tenant")?;
-        let raw_key   = header_str(parts, "x-citadel-key")?;
+        let raw_key = header_str(parts, "x-citadel-key")?;
         // La UI manda la key en texto plano; el BFF Python la hashea antes de
         // pasarla al kernel. Hacemos lo mismo aquí.
         Ok(CitadelCredentials {
@@ -128,7 +128,7 @@ mod tests {
         // Python: hashlib.sha256("test_password".encode()).hexdigest()
         assert_eq!(
             hash_passphrase("test_password"),
-            "0b14d501a594442a01c6859541b2d233faf05d43d09dce5629ad1976f5dc4af4"
+            "10a6e6cc8311a3e2bcc09bf6c199adecd5dd59408c343e926b129c4914f3cb01"
         );
     }
 

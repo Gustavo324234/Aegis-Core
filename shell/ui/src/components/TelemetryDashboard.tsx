@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Cpu, Database, Activity, Zap } from 'lucide-react';
-import { useAegisStore } from '../store/useAegisStore';
+import { useAegisStore, type SystemStatus } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import TheOrb from './TheOrb';
 import { clsx, type ClassValue } from 'clsx';
@@ -80,7 +80,7 @@ const TelemetryDashboard: React.FC = () => {
 };
 
 // Helper component to fix the naming discrepancy in the legacy code if any
-const OpenOrb: React.FC<{ status: any }> = ({ status }) => <TheOrb status={status} />;
+const OpenOrb: React.FC<{ status: SystemStatus }> = ({ status }) => <TheOrb status={status} />;
 
 interface HorizontalMetricProps {
     icon: React.ReactNode;

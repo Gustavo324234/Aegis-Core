@@ -1,5 +1,9 @@
+use crate::{citadel::hash_passphrase, state::AppState};
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, State,
+    },
     http::HeaderMap,
     response::IntoResponse,
     routing::get,
@@ -7,15 +11,10 @@ use axum::{
 };
 use futures::stream::StreamExt;
 use serde_json::json;
-use crate::{
-    citadel::hash_passphrase,
-    state::AppState,
-};
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/:tenant_id", get(ws_siren_handler))
+    Router::new().route("/:tenant_id", get(ws_siren_handler))
 }
 
 pub async fn ws_siren_handler(
@@ -31,7 +30,8 @@ pub async fn ws_siren_handler(
 }
 
 fn extract_session_key(headers: &HeaderMap) -> Option<String> {
-    headers.get("sec-websocket-protocol")
+    headers
+        .get("sec-websocket-protocol")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.split(',').find(|p| p.trim().starts_with("session-key.")))
         .map(|p| p.trim().replace("session-key.", ""))
@@ -56,11 +56,21 @@ async fn handle_siren(
     // 1. Authenticate
     {
         let citadel = state.citadel.lock().await;
-        if citadel.enclave.authenticate_tenant(&tenant_id, &hash).await.is_err() {
-            let _ = socket.send(Message::Text(json!({
-                "event": "error",
-                "data": "Siren Auth Failed: Access Denied."
-            }).to_string())).await;
+        if citadel
+            .enclave
+            .authenticate_tenant(&tenant_id, &hash)
+            .await
+            .is_err()
+        {
+            let _ = socket
+                .send(Message::Text(
+                    json!({
+                        "event": "error",
+                        "data": "Siren Auth Failed: Access Denied."
+                    })
+                    .to_string(),
+                ))
+                .await;
             let _ = socket.close().await;
             return;
         }
@@ -78,9 +88,9 @@ async fn handle_siren(
                 // En un binario unificado, aquí llamaríamos al componente de procesamiento de audio
                 // Para ahora, logeamos y devolvemos un evento de procesamiento mock
                 // (Referencia CORE-015: Construir AudioChunk proto y enviar al SirenService)
-                
+
                 // Mock response para debug en UI
-                if sequence_number % 50 == 0 {
+                if sequence_number.is_multiple_of(50) {
                     let event = json!({
                         "event": "siren_event",
                         "data": {

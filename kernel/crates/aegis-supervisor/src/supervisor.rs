@@ -8,10 +8,10 @@ use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SupervisorConfig {
-    pub ank_bin: PathBuf,   // path al binario ank-server
+    pub ank_bin: PathBuf, // path al binario ank-server
     pub data_dir: PathBuf,
     pub root_key: String,
-    pub port: u16,          // puerto unificado (gRPC + HTTP suelen compartir o el supervisor solo checkea uno)
+    pub port: u16, // puerto unificado (gRPC + HTTP suelen compartir o el supervisor solo checkea uno)
     pub dev_mode: bool,
 }
 

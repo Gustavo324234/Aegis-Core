@@ -1,8 +1,8 @@
 pub mod chat;
 pub mod siren;
 
-use axum::Router;
 use crate::AppState;
+use axum::Router;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()

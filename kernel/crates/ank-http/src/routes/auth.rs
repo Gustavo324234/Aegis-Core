@@ -1,15 +1,7 @@
-use axum::{
-    extract::State,
-    routing::post,
-    Json, Router,
-};
+use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
+use axum::{extract::State, routing::post, Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use crate::{
-    citadel::hash_passphrase,
-    error::AegisHttpError,
-    state::AppState,
-};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -52,9 +44,9 @@ pub async fn login(
         .map_err(|e| {
             let msg = e.to_string();
             if msg.contains("PASSWORD_MUST_CHANGE") {
-               AegisHttpError::Citadel(crate::citadel::CitadelError::PasswordMustChange)
+                AegisHttpError::Citadel(crate::citadel::CitadelError::PasswordMustChange)
             } else {
-               AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized)
+                AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized)
             }
         })?;
 
@@ -75,7 +67,7 @@ pub async fn setup(
         .initialize_master(&body.username, &hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    
+
     Ok(Json(json!({
         "status": "success",
         "message": "Master Admin initialized",
@@ -89,16 +81,20 @@ pub async fn setup_token(
 ) -> Result<Json<Value>, AegisHttpError> {
     let hash = hash_passphrase(&body.password);
     let citadel = state.citadel.lock().await;
-    
+
     // Validar token
-    let valid = citadel.enclave.validate_and_consume_setup_token(&body.setup_token)
+    let valid = citadel
+        .enclave
+        .validate_and_consume_setup_token(&body.setup_token)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        
+
     if !valid {
-        return Err(AegisHttpError::Kernel("Invalid or expired setup token".to_string()));
+        return Err(AegisHttpError::Kernel(
+            "Invalid or expired setup token".to_string(),
+        ));
     }
-    
+
     // Inicializar master
     citadel
         .enclave
@@ -111,4 +107,3 @@ pub async fn setup_token(
         "factory_reset_applied": true
     })))
 }
-

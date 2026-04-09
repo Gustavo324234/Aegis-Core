@@ -1,15 +1,11 @@
+use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
 use axum::{
     extract::{Path, Query, State},
-    routing::{get, post, delete},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use crate::{
-    citadel::hash_passphrase,
-    error::AegisHttpError,
-    state::AppState,
-};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -57,12 +53,16 @@ pub async fn create_tenant(
     let citadel = state.citadel.lock().await;
 
     // TODO(ANK-SEC-044): Validador centralizado de admin
-    let is_auth = citadel.enclave.authenticate_master(&body.admin_tenant_id, &admin_hash)
+    let is_auth = citadel
+        .enclave
+        .authenticate_master(&body.admin_tenant_id, &admin_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        
+
     if !is_auth {
-        return Err(AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized));
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
     }
 
     let (port, temp_pass) = citadel
@@ -70,14 +70,13 @@ pub async fn create_tenant(
         .create_tenant(&body.username) // Enclave usa username como tenant_id
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    
+
     Ok(Json(json!({
         "tenant_id": body.username,
         "temporary_passphrase": temp_pass,
         "network_port": port
     })))
 }
-
 
 pub async fn list_tenants(
     State(state): State<AppState>,
@@ -86,12 +85,16 @@ pub async fn list_tenants(
     let admin_hash = hash_passphrase(&query.admin_session_key);
     let citadel = state.citadel.lock().await;
 
-    let is_auth = citadel.enclave.authenticate_master(&query.admin_tenant_id, &admin_hash)
+    let is_auth = citadel
+        .enclave
+        .authenticate_master(&query.admin_tenant_id, &admin_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        
+
     if !is_auth {
-        return Err(AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized));
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
     }
 
     let tenants = citadel
@@ -100,21 +103,22 @@ pub async fn list_tenants(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    let tenants_json: Vec<Value> = tenants.into_iter().map(|t| {
-        json!({
-            "tenant_id": t.tenant_id,
-            "username": t.username,
-            "role": t.role,
-            "created_at": t.created_at,
-            "last_active": t.last_active,
-            "port": t.port
+    let tenants_json: Vec<Value> = tenants
+        .into_iter()
+        .map(|t| {
+            json!({
+                "tenant_id": t.tenant_id,
+                "username": t.username,
+                "role": t.role,
+                "created_at": t.created_at,
+                "last_active": t.last_active,
+                "port": t.port
+            })
         })
-    }).collect();
-    
+        .collect();
+
     Ok(Json(json!(tenants_json)))
 }
-
-
 
 pub async fn delete_tenant_path(
     State(state): State<AppState>,
@@ -124,12 +128,16 @@ pub async fn delete_tenant_path(
     let admin_hash = hash_passphrase(&query.admin_session_key);
     let citadel = state.citadel.lock().await;
 
-    let is_auth = citadel.enclave.authenticate_master(&query.admin_tenant_id, &admin_hash)
+    let is_auth = citadel
+        .enclave
+        .authenticate_master(&query.admin_tenant_id, &admin_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        
+
     if !is_auth {
-        return Err(AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized));
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
     }
 
     citadel
@@ -137,8 +145,10 @@ pub async fn delete_tenant_path(
         .delete_tenant(&target_id)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    
-    Ok(Json(json!({ "success": true, "message": format!("Tenant {} deleted.", target_id) })))
+
+    Ok(Json(
+        json!({ "success": true, "message": format!("Tenant {} deleted.", target_id) }),
+    ))
 }
 
 pub async fn delete_tenant_body(
@@ -148,12 +158,16 @@ pub async fn delete_tenant_body(
     let admin_hash = hash_passphrase(&body.admin_session_key);
     let citadel = state.citadel.lock().await;
 
-    let is_auth = citadel.enclave.authenticate_master(&body.admin_tenant_id, &admin_hash)
+    let is_auth = citadel
+        .enclave
+        .authenticate_master(&body.admin_tenant_id, &admin_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        
+
     if !is_auth {
-        return Err(AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized));
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
     }
 
     citadel
@@ -161,8 +175,10 @@ pub async fn delete_tenant_body(
         .delete_tenant(&body.target_tenant_id)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    
-    Ok(Json(json!({ "success": true, "message": "Tenant deleted successfully" })))
+
+    Ok(Json(
+        json!({ "success": true, "message": "Tenant deleted successfully" }),
+    ))
 }
 
 pub async fn reset_password(
@@ -173,12 +189,16 @@ pub async fn reset_password(
     let admin_hash = hash_passphrase(&body.admin_session_key);
     let citadel = state.citadel.lock().await;
 
-    let is_auth = citadel.enclave.authenticate_master(&body.admin_tenant_id, &admin_hash)
+    let is_auth = citadel
+        .enclave
+        .authenticate_master(&body.admin_tenant_id, &admin_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        
+
     if !is_auth {
-        return Err(AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized));
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
     }
 
     citadel
@@ -186,7 +206,8 @@ pub async fn reset_password(
         .reset_tenant_password(&body.tenant_id, &new_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    
-    Ok(Json(json!({ "success": true, "message": "Password reset successful" })))
-}
 
+    Ok(Json(
+        json!({ "success": true, "message": "Password reset successful" }),
+    ))
+}

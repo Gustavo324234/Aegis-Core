@@ -1,6 +1,6 @@
+use aegis_sdk::{run_plugin, PluginMetadata, PluginRequest, PluginResponse};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use aegis_sdk::{PluginRequest, PluginResponse, PluginMetadata, run_plugin};
 
 fn main() -> Result<()> {
     let metadata = PluginMetadata {
@@ -20,7 +20,9 @@ fn process_request(request: &PluginRequest) -> Result<PluginResponse> {
             let now = Utc::now();
             Ok(PluginResponse {
                 status: "success".to_string(),
-                data: Some(serde_json::to_value(now).context("Error al convertir Utc::now() a JSON")?),
+                data: Some(
+                    serde_json::to_value(now).context("Error al convertir Utc::now() a JSON")?,
+                ),
                 error: None,
             })
         }
@@ -46,10 +48,13 @@ mod tests {
         let result = process_request(&req)?;
         assert_eq!(result.status, "success");
         assert!(result.data.is_some());
-        
+
         // Verificamos que sea una fecha válida (formato ISO 8601 que usa chrono por defecto en Serde)
         let data = result.data.context("data should be present")?;
-        let date_str = data.as_str().context("data should be a string")?.to_string();
+        let date_str = data
+            .as_str()
+            .context("data should be a string")?
+            .to_string();
         assert!(date_str.contains("Z")); // UTC
         Ok(())
     }

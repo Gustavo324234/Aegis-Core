@@ -29,4 +29,3 @@ impl IntoResponse for AegisHttpError {
         (status, Json(json!({ "error": msg }))).into_response()
     }
 }
-
