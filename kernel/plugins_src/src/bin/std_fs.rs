@@ -80,7 +80,7 @@ fn safe_path(rel_path: &str) -> Result<PathBuf> {
     let mut path = PathBuf::from(WORKSPACE_ROOT);
 
     // Eliminamos prefijos peligrosos como / o ..
-    let rel = rel_path.trim_start_matches(|c| c == '/' || c == '\\');
+    let rel = rel_path.trim_start_matches(['/', '\\']);
     path.push(rel);
 
     // En un entorno WASI real con jailing, no podemos salir de /workspace
