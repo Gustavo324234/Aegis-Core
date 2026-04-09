@@ -14,6 +14,34 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Job separado para construir ui-dist.tar.gz (se hace una sola vez)
+  build-ui:
+    name: "Build UI dist"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'shell/ui/package-lock.json'
+
+      - name: "🎨 Build UI"
+        run: cd shell/ui && npm ci && npm run build
+
+      - name: "📦 Package ui-dist"
+        run: |
+          mkdir -p dist-ui
+          tar -czf dist-ui/ui-dist.tar.gz -C shell/ui/dist .
+          sha256sum dist-ui/ui-dist.tar.gz > dist-ui/ui-dist.tar.gz.sha256
+
+      - name: "⬆️ Upload ui-dist artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist-pkg
+          path: dist-ui/*
+
   build:
     name: "Build ${{ matrix.artifact }}"
     strategy:
@@ -34,8 +62,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - name: "📥 Checkout source"
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: "🔧 Install system dependencies (Linux)"
         if: runner.os == 'Linux'
@@ -54,22 +81,17 @@ jobs:
 
       - name: "🔧 Install system dependencies (Windows)"
         if: runner.os == 'Windows'
-        run: |
-          # Vcpkg is already on the runner, but we might need protoc
-          choco install protoc -y
+        run: choco install protoc -y
 
       - name: "🔧 Install system dependencies (macOS)"
         if: runner.os == 'macOS'
-        run: |
-          brew install protobuf
+        run: brew install protobuf
 
-      - name: "🦀 Install Rust stable"
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: "⚡ Cache Rust"
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}-release
 
@@ -85,13 +107,8 @@ jobs:
           mkdir -p dist
           BIN_NAME="ank-server"
           [ "${{ runner.os }}" = "Windows" ] && BIN_NAME="ank-server.exe"
-          
           SOURCE_BIN="target/${{ matrix.target }}/release/$BIN_NAME"
-          # If target was not specified as a full triple, it might be in target/release/
-          # but we always use --target so it should be in target/<triple>/release/
-          
           cp "$SOURCE_BIN" "dist/${{ matrix.artifact }}"
-          
           cd dist
           if [ "${{ runner.os }}" = "Linux" ]; then
             tar -czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
@@ -100,33 +117,27 @@ jobs:
             zip -r "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
             shasum -a 256 "${{ matrix.artifact }}.zip" > "${{ matrix.artifact }}.zip.sha256"
           elif [ "${{ runner.os }}" = "Windows" ]; then
-            # Use certutil or powershell for sha256 on windows if needed, 
-            # but bash on windows (git bash) usually has sha256sum.
             zip "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
             sha256sum "${{ matrix.artifact }}.zip" > "${{ matrix.artifact }}.zip.sha256"
           fi
 
-      - name: "⬆️ Upload artifact"
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}-pkg
           path: dist/*
 
   release:
     name: "🚀 Release Binaries"
-    needs: build
+    needs: [build, build-ui]
     runs-on: ubuntu-latest
-    # Only release on main branch or tags
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     steps:
-      - name: "📥 Download all artifacts"
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: all-dist
           merge-multiple: true
 
-      - name: "🚀 Publish to GitHub Releases"
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
           name: ${{ startsWith(github.ref, 'refs/tags/v') && format('Aegis Release {0}', github.ref_name) || 'Aegis Nightly Build' }}

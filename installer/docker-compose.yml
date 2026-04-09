@@ -1,10 +1,10 @@
 services:
   ank-server:
-    image: ghcr.io/your-org/aegis-core:latest
+    image: ghcr.io/gustavo324234/aegis-core:latest
     restart: unless-stopped
     ports:
-      - "8000:8000"   # HTTP + WebSocket (UI)
-      - "50051:50051" # gRPC (external clients, CLI)
+      - "8000:8000"
+      - "50051:50051"
     volumes:
       - aegis_data:/data
     environment:
