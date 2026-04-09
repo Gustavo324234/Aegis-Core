@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    body {
+        @apply font-sans;
+    }
+
+    code,
+    pre {
+        @apply font-mono;
+    }
+}
+
+@layer components {
+    .glass {
+        @apply bg-white/5 backdrop-blur-md border border-white/10;
+    }
+
+    .neon-cyan {
+        @apply text-aegis-cyan drop-shadow-[0_0_8px_rgba(0, 242, 254, 0.5)];
+    }
+
+    .neon-purple {
+        @apply text-aegis-purple drop-shadow-[0_0_8px_rgba(191, 0, 255, 0.5)];
+    }
+
+    .border-neon-cyan {
+        @apply border-aegis-cyan shadow-[0_0_10px_rgba(0, 242, 254, 0.3)];
+    }
+
+    .border-neon-purple {
+        @apply border-aegis-purple shadow-[0_0_10px_rgba(191, 0, 255, 0.3)];
+    }
+}
+
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    @apply bg-aegis-black;
+}
+
+::-webkit-scrollbar-thumb {
+    @apply bg-aegis-steel rounded-full hover:bg-aegis-steel/80;
+}

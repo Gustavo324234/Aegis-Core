@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package ank.v1.siren;
+
+// ----------------------------------------------------------------------------
+// SIREN PROTOCOL: Cognitive Sensing & Voice Streaming
+// ----------------------------------------------------------------------------
+
+message AudioChunk {
+  uint64 sequence_number = 1;
+  bytes data = 2; // Raw PCM o Opus
+  string format = 3; // "pcm_16khz_16bit" | "opus"
+  uint32 sample_rate = 4;
+}
+
+message SirenEvent {
+  string event_type = 1; // "VAD_START", "VAD_END", "ERROR", "TTS_AUDIO"
+  string message = 2;
+  uint64 processed_sequence_number = 3;
+  bytes tts_audio_chunk = 4;
+  uint32 sample_rate = 5;
+  string engine_id = 6; // Identity of the synthesis engine (e.g. "voxtral", "elevenlabs")
+}
+
+service SirenService {
+  rpc SirenStream (stream AudioChunk) returns (stream SirenEvent);
+}

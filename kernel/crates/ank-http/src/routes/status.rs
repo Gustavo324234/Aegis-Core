@@ -1,0 +1,100 @@
+use axum::{
+    extract::{Query, State},
+    http::HeaderMap,
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use crate::{
+    citadel::hash_passphrase,
+    error::AegisHttpError,
+    state::AppState,
+};
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/", get(get_system_status))
+        .route("/health", get(health_check))
+}
+
+pub fn system_router() -> Router<AppState> {
+    Router::new()
+        .route("/state", get(get_public_system_state))
+        .route("/sync_version", get(get_sync_version))
+        .route("/hw_profile", post(crate::routes::engine::set_hw_profile))
+}
+
+#[derive(Deserialize)]
+pub struct StatusQuery {
+    pub tenant_id: String,
+}
+
+pub async fn get_system_status(
+    State(state): State<AppState>,
+    Query(query): Query<StatusQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AegisHttpError> {
+    let x_citadel_key = headers.get("x-citadel-key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AegisHttpError::Citadel(crate::citadel::CitadelError::MissingKey))?;
+
+    let hash = hash_passphrase(x_citadel_key);
+    
+    // Validar contra Citadel
+    {
+        let citadel = state.citadel.lock().await;
+        citadel
+            .enclave
+            .authenticate_tenant(&query.tenant_id, &hash)
+            .await
+            .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
+    }
+    
+    // Obtener hardware status del HAL
+    let hw_info = {
+        let hal = state.hal.write().await;
+        let mut monitor = hal.hardware.lock().map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e.to_string())))?;
+        let status = monitor.get_status();
+        json!({
+            "cpu_load": status.cpu_usage,
+            "vram_allocated_mb": status.used_mem_mb,
+            "vram_total_mb": status.total_mem_mb,
+        })
+    };
+    
+    let hw_profile = std::env::var("HW_PROFILE").unwrap_or_else(|_| "1".to_string());
+    let hw_profile_name = match hw_profile.as_str() {
+        "1" => "cloud",
+        "2" => "local",
+        "3" => "hybrid",
+        _ => "cloud",
+    };
+
+    let mut res = hw_info;
+    if let Some(obj) = res.as_object_mut() {
+        obj.insert("hw_profile".to_string(), json!(hw_profile_name));
+        obj.insert("state".to_string(), json!("STATE_OPERATIONAL"));
+    }
+
+    Ok(Json(res))
+}
+
+pub async fn get_public_system_state(
+    State(_state): State<AppState>,
+) -> Json<Value> {
+    // Basic public state
+    Json(json!({ "state": "STATE_OPERATIONAL" }))
+}
+
+pub async fn get_sync_version() -> Json<Value> {
+    let version = std::fs::read_to_string("VERSION")
+        .unwrap_or_else(|_| "0.1.0".to_string())
+        .trim()
+        .to_string();
+    Json(json!({ "version": version }))
+}
+
+pub async fn health_check() -> Json<Value> {
+    Json(json!({ "status": "Aegis HTTP Online" }))
+}

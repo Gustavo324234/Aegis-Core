@@ -1,0 +1,53 @@
+# Rust build artifacts
+target/
+*.rs.bk
+
+# Node / UI
+shell/ui/node_modules/
+shell/ui/dist/
+app/node_modules/
+app/.expo/
+app/android/.gradle/
+app/android/app/build/
+
+# Python (legacy BFF)
+shell/bff/__pycache__/
+shell/bff/*.pyc
+shell/bff/.pytest_cache/
+
+# Environment files
+.env
+.env.local
+**/.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Aegis local tooling (never commit)
+dev_sync.ps1
+auto_push_ui.ps1
+dev.ps1
+dev.sh
+
+# Logs
+*.log
+kernel/crates/ank-server/build_error.log
+kernel/crates/ank-server/test_output.txt
+
+# Compiled WASM plugins (build artifacts)
+kernel/plugins_src/target/
+
+# Model files
+installer/models/
+*.gguf
+*.bin
+
+# Docker local overrides
+docker-compose.override.yml

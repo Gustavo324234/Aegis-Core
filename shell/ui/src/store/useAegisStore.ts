@@ -1,0 +1,482 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { ttsPlayer } from '../audio/TTSPlayer';
+
+export type MessageType = 'text' | 'thought' | 'system' | 'error';
+export type SystemStatus = 'disconnected' | 'connecting' | 'idle' | 'thinking' | 'executing_syscall' | 'error' | 'listening' | 'transcribing';
+export type TaskTypeValue = 'chat' | 'coding' | 'planning' | 'analysis' | 'summarization';
+
+export interface RoutingInfo {
+    model_id: string;
+    provider: string;
+    task_type: string;
+    latency_ms: number;
+}
+
+export interface Message {
+    id: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    type: MessageType;
+    timestamp: number;
+}
+
+export interface SystemMetrics {
+    cpu_load: number;
+    vram_allocated_mb: number;
+    vram_total_mb: number;
+    total_processes: number;
+    active_workers: number;
+}
+
+interface AegisState {
+    messages: Message[];
+    status: SystemStatus;
+    system_metrics: SystemMetrics;
+    tenants: string[];
+    socket: WebSocket | null;
+    activePid: string | null;
+    isAuthenticated: boolean;
+    isAdmin: boolean;
+    systemState: 'STATE_INITIALIZING' | 'STATE_OPERATIONAL' | 'UNKNOWN';
+    tenantId: string | null;
+    sessionKey: string | null;
+    isRecording: boolean;
+    sirenSocket: WebSocket | null;
+    isEngineConfigured: boolean;
+    taskType: TaskTypeValue;
+    lastRoutingInfo: RoutingInfo | null;
+    lastError: string | null;
+    _hydrated: boolean;
+    needsPasswordReset: boolean;
+    adminActiveTab: string;
+    isFetchingTenants: boolean;
+    lastTenantsUpdate: string | null;
+    tenantsError: string | null;
+
+    setHydrated: (val: boolean) => void;
+    setNeedsPasswordReset: (val: boolean) => void;
+    setAdminActiveTab: (tab: string) => void;
+    connect: (tenantId: string, sessionKey: string) => void;
+    disconnect: () => void;
+    sendMessage: (prompt: string) => void;
+    appendToken: (msgId: string, token: string, type: MessageType) => void;
+    setStatus: (status: SystemStatus) => void;
+    clearHistory: () => void;
+    addSystemMessage: (content: string) => void;
+    startTelemetryPolling: (tenantId: string) => void;
+    fetchSystemState: () => Promise<void>;
+    setAuth: (tenantId: string, sessionKey: string) => void;
+    authenticate: (tenantId: string, passphrase: string) => Promise<'authenticated' | 'password_must_change' | 'failed'>;
+    logout: () => void;
+    fetchTenants: () => Promise<void>;
+    createTenant: (targetUsername: string) => Promise<{ success: boolean; message?: string; temporary_passphrase?: string }>;
+    deleteTenant: (targetId: string) => Promise<boolean>;
+    resetPassword: (targetId: string, newPass: string) => Promise<boolean>;
+    startSirenStream: () => Promise<void>;
+    stopSirenStream: () => void;
+    configureEngine: (apiUrl: string, model: string, apiKey: string, provider?: string) => Promise<boolean>;
+    setEngineConfigured: (configured: boolean) => void;
+    setTaskType: (taskType: TaskTypeValue) => void;
+    setLastRoutingInfo: (info: RoutingInfo) => void;
+}
+
+interface AegisAudioRefs {
+    _aegis_audio_stream?: MediaStream;
+    _aegis_audio_ctx?: AudioContext;
+    _aegis_audio_node?: ScriptProcessorNode;
+}
+
+interface WindowWithWebkit extends Window {
+    AudioContext?: typeof AudioContext;
+    webkitAudioContext?: typeof AudioContext;
+}
+
+let telemetryInterval: number | null = null;
+
+export const useAegisStore = create<AegisState>()(
+    persist(
+        (set, get) => ({
+            messages: [],
+            status: 'disconnected',
+            system_metrics: { cpu_load: 0, vram_allocated_mb: 0, vram_total_mb: 0, total_processes: 0, active_workers: 0 },
+            tenants: [],
+            socket: null,
+            activePid: null,
+            isAuthenticated: false,
+            isAdmin: false,
+            systemState: 'UNKNOWN',
+            tenantId: null,
+            sessionKey: null,
+            isRecording: false,
+            sirenSocket: null,
+            isEngineConfigured: false,
+            taskType: 'chat',
+            lastRoutingInfo: null,
+            lastError: null,
+            _hydrated: false,
+            needsPasswordReset: false,
+            adminActiveTab: 'users',
+            isFetchingTenants: false,
+            lastTenantsUpdate: null,
+            tenantsError: null,
+
+            setHydrated: (val) => set({ _hydrated: val }),
+            setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
+            setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
+
+            startTelemetryPolling: (tenantId: string) => {
+                if (telemetryInterval) clearInterval(telemetryInterval);
+                const poll = async () => {
+                    try {
+                        const sessionKey = get().sessionKey;
+                        if (!sessionKey || !tenantId) return;
+                        const response = await fetch(`/api/status?tenant_id=${encodeURIComponent(tenantId)}`, {
+                            headers: { 'x-citadel-key': sessionKey }
+                        });
+                        if (response.ok) {
+                            const data = await response.json();
+                            set({ system_metrics: data, status: get().status === 'error' ? 'idle' : get().status, lastError: null });
+                        } else if (response.status === 401) {
+                            set({ lastError: 'Citadel Session Expired/Unauthorized' });
+                            get().logout();
+                        } else {
+                            const data = await response.json();
+                            set({ lastError: data.detail || 'Telemetry Stream Interrupted' });
+                        }
+                    } catch (error) { console.error('🛰️ Telemetry Polling Error:', error); }
+                };
+                poll();
+                telemetryInterval = window.setInterval(poll, 3000);
+            },
+
+            fetchSystemState: async () => {
+                try {
+                    const response = await fetch('/api/system/state');
+                    if (response.ok) {
+                        const data = await response.json();
+                        set({ systemState: data.state });
+                    } else if (response.status === 401) {
+                        // SRE-FIX: A 401 here is EXPECTED when the system is operational.
+                        // This endpoint is called without credentials to determine the public
+                        // system state. We must NOT logout — the session is still valid.
+                        set({ systemState: 'STATE_OPERATIONAL' });
+                    }
+                } catch (error) {
+                    console.error('Failed to fetch system state:', error);
+                    set({ systemState: 'UNKNOWN' });
+                }
+            },
+
+            fetchTenants: async () => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return;
+                set({ isFetchingTenants: true, tenantsError: null });
+                try {
+                    const res = await fetch(`/api/admin/tenants?admin_tenant_id=${encodeURIComponent(tenantId as string)}&admin_session_key=${encodeURIComponent(sessionKey as string)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        const rawTenants = data.tenants || [];
+                        const ids = rawTenants.map((t: string | { tenant_id: string }) => typeof t === 'string' ? t : t.tenant_id).filter((id: string) => !!id && id !== 'root');
+                        set({ tenants: ids, lastTenantsUpdate: new Date().toLocaleTimeString() });
+                    } else {
+                        const err = await res.json().catch(() => ({ detail: 'Servidor no respondió con JSON válido' }));
+                        set({ tenantsError: err.detail || 'Error al listar enclaves' });
+                    }
+                } catch (e) {
+                    console.error('🛡️ Citadel Fetch Error:', e);
+                    set({ tenantsError: 'Fallo de conexión con el BFF (Network Error)' });
+                } finally {
+                    set({ isFetchingTenants: false });
+                }
+            },
+
+            createTenant: async (targetUsername: string) => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return { success: false, message: 'No admin session' };
+                try {
+                    const res = await fetch('/api/admin/tenant', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ admin_tenant_id: tenantId, admin_session_key: sessionKey, username: targetUsername })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        get().fetchTenants();
+                        return { success: true, temporary_passphrase: data.temporary_passphrase };
+                    } else {
+                        let errMsg = data.detail || 'Error desconocido al crear Tenant';
+                        if (errMsg.includes('already exists') || errMsg.includes('Duplicate')) errMsg = `El Tenant "${targetUsername}" ya existe en el Ring 0.`;
+                        return { success: false, message: errMsg };
+                    }
+                } catch (e) {
+                    console.error('Create tenant error:', e);
+                    return { success: false, message: 'Fallo crítico en la comunicación con el Citadel' };
+                }
+            },
+
+            deleteTenant: async (targetId: string) => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return false;
+                try {
+                    const res = await fetch(`/api/admin/tenant/${encodeURIComponent(targetId)}?admin_tenant_id=${encodeURIComponent(tenantId)}`, { 
+                        method: 'DELETE',
+                        headers: { 'x-citadel-key': sessionKey }
+                    });
+                    if (res.ok) { get().fetchTenants(); return true; }
+                    return false;
+                } catch (e) { console.error('Delete tenant error:', e); return false; }
+            },
+
+            resetPassword: async (targetId: string, newPass: string) => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return false;
+                try {
+                    const res = await fetch('/api/admin/reset_password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tenant_id: targetId, admin_tenant_id: tenantId, admin_session_key: sessionKey, new_passphrase: newPass })
+                    });
+                    if (res.ok) {
+                        // Very important: if we reset our own password during the force reset flow, update the current active session key!
+                        if (tenantId === targetId) {
+                            set({ sessionKey: newPass });
+                        }
+                        return true;
+                    }
+                    return false;
+                } catch (e) { console.error('Reset password error:', e); return false; }
+            },
+
+            connect: (tenantId, sessionKey) => {
+                const wsUrl = `ws://${window.location.hostname}:8000/ws/chat/${encodeURIComponent(tenantId)}`;
+                const currentSocket = get().socket;
+                if (currentSocket) currentSocket.close();
+                set({ status: 'connecting' });
+                const socket = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
+                socket.onopen = () => { set({ socket, status: 'idle' }); get().startTelemetryPolling(tenantId); };
+                socket.onmessage = (event) => {
+                    console.log('DEBUG_SHELL: Incoming message:', event.data);
+                    const msg = JSON.parse(event.data);
+                    const { event: type, data, pid } = msg;
+                    switch (type) {
+                        case 'syslog':
+                            set((state) => ({ messages: [...state.messages, { id: `sys-${Date.now()}`, role: 'system', content: data, type: 'system', timestamp: Date.now() }] }));
+                            break;
+                        case 'status':
+                            set({ status: 'thinking' });
+                            if (pid) set({ activePid: pid });
+                            break;
+                        case 'kernel_event': {
+                            const payload = data;
+                            if (payload.routing_info) get().setLastRoutingInfo(payload.routing_info as RoutingInfo);
+                            if (payload.thought) { get().appendToken(payload.pid, payload.thought, 'thought'); set({ status: 'thinking' }); }
+                            else if (payload.output) { get().appendToken(payload.pid, payload.output, 'text'); set({ status: 'thinking' }); }
+                            else if (payload.error) { get().appendToken(payload.pid, payload.error, 'error'); set({ status: 'error' }); }
+                            else if (payload.status_update) { if (payload.status_update.state === 'STATE_COMPLETED') set({ status: 'idle', activePid: null }); }
+                            break;
+                        }
+                        case 'error': 
+                            set({ status: 'error', lastError: data || 'Unknown Kernel Panic' }); 
+                            console.error('BFF Error:', data);
+                            if (data === 'PASSWORD_MUST_CHANGE') {
+                                set({ needsPasswordReset: true });
+                            } else if (data && data.includes('AUTH_FAILURE: Access Denied')) {
+                                // SRE-FIX: Do NOT reconnect after auth failure.
+                                // Close socket manually, keep status='error' so App.tsx won't reconnect.
+                                console.error('Citadel Auth Failure on WebSocket — closing connection.');
+                                const sock = get().socket;
+                                if (sock) sock.close();
+                                set({ socket: null, status: 'error' });
+                            }
+                            break;
+                    }
+                };
+                socket.onclose = () => {
+                    set(state => ({ socket: null, status: state.status === 'error' ? 'error' : 'disconnected' }));
+                };
+                socket.onerror = () => set({ status: 'error' });
+            },
+
+            disconnect: () => get().socket?.close(),
+
+            sendMessage: (prompt) => {
+                const { socket, messages } = get();
+                console.log('DEBUG_SHELL: Attempting to send message:', prompt);
+                if (!socket || socket.readyState !== WebSocket.OPEN) {
+                    console.error('DEBUG_SHELL: WebSocket not open, state:', socket?.readyState);
+                    return;
+                }
+                ttsPlayer.initialize();
+                set({ messages: [...messages, { id: `user-${Date.now()}`, role: 'user', content: prompt, type: 'text', timestamp: Date.now() }] });
+                socket.send(JSON.stringify({ prompt, task_type: get().taskType }));
+            },
+
+            appendToken: (pid, token, type) => {
+                set((state) => {
+                    const lastMessage = state.messages[state.messages.length - 1];
+                    if (lastMessage && lastMessage.role === 'assistant' && lastMessage.type === type && lastMessage.id === pid) {
+                        const updatedMessages = [...state.messages];
+                        updatedMessages[updatedMessages.length - 1] = { ...lastMessage, content: lastMessage.content + token };
+                        return { messages: updatedMessages };
+                    }
+                    return { messages: [...state.messages, { id: pid, role: 'assistant', content: token, type, timestamp: Date.now() }] };
+                });
+            },
+
+            setStatus: (status) => set({ status }),
+            clearHistory: () => set({ messages: [] }),
+            addSystemMessage: (content: string) => {
+                set({ messages: [...get().messages, { id: `sys-${Date.now()}`, role: 'system', content, type: 'system', timestamp: Date.now() }] });
+            },
+
+            setAuth: (tenantId, sessionKey) => set({ tenantId, sessionKey, isAuthenticated: true }),
+
+            authenticate: async (tenantId, passphrase) => {
+                try {
+                    const response = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tenant_id: tenantId, session_key: passphrase })
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.status === 'password_must_change') {
+                            set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: false, needsPasswordReset: true });
+                            return 'password_must_change';
+                        }
+                        set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: tenantId.toLowerCase() === 'root' || tenantId.toLowerCase() === 'admin', needsPasswordReset: false });
+                        return 'authenticated';
+                    }
+                    return 'failed';
+                } catch (error) { console.error('🛡️ Citadel Auth Error:', error); return 'failed'; }
+            },
+
+            logout: () => {
+                get().disconnect();
+                set({ isAuthenticated: false, isAdmin: false, tenantId: null, sessionKey: null, messages: [], needsPasswordReset: false });
+                if (telemetryInterval) clearInterval(telemetryInterval);
+            },
+
+            startSirenStream: async () => {
+                const { tenantId, sessionKey, isRecording } = get();
+                if (isRecording || !tenantId || !sessionKey) return;
+                try {
+                    await ttsPlayer.initialize();
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+                    const win = window as WindowWithWebkit;
+                    const AudioCtx = win.AudioContext || win.webkitAudioContext;
+                    if (!AudioCtx) throw new Error('Web Audio API not supported');
+                    const ctx = new AudioCtx({ sampleRate: 16000 });
+                    const source = ctx.createMediaStreamSource(stream);
+                    const scriptNode = ctx.createScriptProcessor(4096, 1, 1);
+                    const analyser = ctx.createAnalyser();
+                    analyser.fftSize = 256;
+                    analyser.smoothingTimeConstant = 0.2;
+                    source.connect(analyser);
+                    let silenceStart = Date.now();
+                    const SILENCE_THRESHOLD = 5;
+                    const MAX_SILENCE_MS = 1500;
+                    let vadRequestedStop = false;
+                    const checkSilence = () => {
+                        if (!get().isRecording || vadRequestedStop) return;
+                        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+                        analyser.getByteFrequencyData(dataArray);
+                        let sum = 0;
+                        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+                        if (sum / dataArray.length < SILENCE_THRESHOLD) {
+                            if (Date.now() - silenceStart > MAX_SILENCE_MS) { vadRequestedStop = true; get().stopSirenStream(); return; }
+                        } else silenceStart = Date.now();
+                        requestAnimationFrame(checkSilence);
+                    };
+                    const wsUrl = `ws://${window.location.hostname}:8000/ws/siren/${encodeURIComponent(tenantId)}`;
+                    const sirenWs = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
+                    sirenWs.binaryType = 'arraybuffer';
+                    sirenWs.onopen = () => { set({ isRecording: true, sirenSocket: sirenWs }); requestAnimationFrame(checkSilence); };
+                    sirenWs.onmessage = (event) => {
+                        const msg = JSON.parse(event.data);
+                        if (msg.event === 'siren_event') {
+                            const sirenEvent = msg.data;
+                            if (sirenEvent.tts_audio_chunk) { try { ttsPlayer.playChunk(sirenEvent.tts_audio_chunk, sirenEvent.sample_rate || 22050); } catch (e) { console.error("TTS Playback error:", e); } }
+                            if (sirenEvent.event_type === 'VAD_START') set({ status: 'listening' });
+                            else if (sirenEvent.event_type === 'STT_START') set({ status: 'transcribing' });
+                            else if (sirenEvent.event_type === 'STT_DONE') {
+                                try {
+                                    const payload = JSON.parse(sirenEvent.message);
+                                    set((state) => ({ messages: [...state.messages, { id: `voice-${Date.now()}`, role: 'user', content: payload.transcript, type: 'text', timestamp: Date.now() }], activePid: payload.pid, status: 'thinking' }));
+                                    const chatSocket = get().socket;
+                                    if (chatSocket && chatSocket.readyState === WebSocket.OPEN) chatSocket.send(JSON.stringify({ action: "watch", pid: payload.pid }));
+                                } catch (e) { console.error("Failed to parse STT_DONE payload", e); set({ status: 'idle' }); }
+                            } else if (sirenEvent.event_type === 'STT_ERROR') set({ status: 'error' });
+                        } else if (msg.error) { console.error('❌ Siren Kernel Error:', msg.error); get().stopSirenStream(); }
+                    };
+                    sirenWs.onclose = () => get().stopSirenStream();
+                    scriptNode.onaudioprocess = (audioEvent: AudioProcessingEvent) => {
+                        if (sirenWs.readyState !== WebSocket.OPEN) return;
+                        const inputData = audioEvent.inputBuffer.getChannelData(0);
+                        const pcmBuffer = new Int16Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) { const s = Math.max(-1, Math.min(1, inputData[i])); pcmBuffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF; }
+                        sirenWs.send(pcmBuffer.buffer);
+                    };
+                    source.connect(scriptNode);
+                    scriptNode.connect(ctx.destination);
+                    const audioRefs = window as Window & AegisAudioRefs;
+                    audioRefs._aegis_audio_stream = stream;
+                    audioRefs._aegis_audio_ctx = ctx;
+                    audioRefs._aegis_audio_node = scriptNode;
+                } catch (error) { console.error('🎤 Siren Capture Error:', error); set({ isRecording: false }); throw error; }
+            },
+
+            stopSirenStream: () => {
+                const { sirenSocket } = get();
+                if (sirenSocket && sirenSocket.readyState === WebSocket.OPEN) {
+                    sirenSocket.send(JSON.stringify({ sequence_number: 9999, data: "", format: "VAD_END_SIGNAL", sample_rate: 16000 }));
+                    setTimeout(() => { if (sirenSocket.readyState === WebSocket.OPEN) sirenSocket.close(); }, 100);
+                } else if (sirenSocket) sirenSocket.close();
+                set({ sirenSocket: null });
+                const audioRefs = window as Window & AegisAudioRefs;
+                if (audioRefs._aegis_audio_stream) audioRefs._aegis_audio_stream.getTracks().forEach(track => track.stop());
+                if (audioRefs._aegis_audio_node) audioRefs._aegis_audio_node.disconnect();
+                if (audioRefs._aegis_audio_ctx) audioRefs._aegis_audio_ctx.close();
+                set({ isRecording: false });
+            },
+
+            setEngineConfigured: (configured: boolean) => set({ isEngineConfigured: configured }),
+            setTaskType: (taskType) => set({ taskType }),
+            setLastRoutingInfo: (info) => set({ lastRoutingInfo: info }),
+
+            configureEngine: async (apiUrl, model, apiKey, provider = 'custom') => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return false;
+                try {
+                    const response = await fetch('/api/engine/configure', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tenant_id: tenantId, session_key: sessionKey, api_url: apiUrl, model_name: model, api_key: apiKey, provider })
+                    });
+                    if (response.ok) { set({ isEngineConfigured: true }); return true; }
+                    return false;
+                } catch (error) { console.error('Engine Setup Error:', error); return false; }
+            }
+        }),
+        {
+            name: 'aegis-storage',
+            onRehydrateStorage: (state) => {
+                return () => state?.setHydrated(true);
+            },
+            partialize: (state) => ({
+                isAuthenticated: state.isAuthenticated,
+                isAdmin: state.isAdmin,
+                tenantId: state.tenantId,
+                sessionKey: state.sessionKey,
+                isEngineConfigured: state.isEngineConfigured,
+                taskType: state.taskType,
+                messages: state.messages,
+                lastError: state.lastError,
+                needsPasswordReset: state.needsPasswordReset,
+                adminActiveTab: state.adminActiveTab,
+                lastTenantsUpdate: state.lastTenantsUpdate,
+            }),
+        }
+    )
+);

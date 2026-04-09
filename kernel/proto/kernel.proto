@@ -1,0 +1,298 @@
+syntax = "proto3";
+
+package ank.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// --- CORE KERNEL INTERFACE ---
+// The KernelService is the primary entry point for orchestrating LLM "ALUs".
+service KernelService {
+  // Submits a new mission to the Kernel. Returns a PID (Process ID).
+  rpc SubmitTask (TaskRequest) returns (TaskResponse);
+  
+  // Real-time stream of the process execution (Thinking, Syscalls, Results).
+  rpc WatchTask (TaskSubscription) returns (stream TaskEvent);
+  
+  // Returns detailed information about the Kernel's health and hardware usage.
+  rpc GetSystemStatus (Empty) returns (SystemStatus);
+
+  // Lists all active processes in the Kernel.
+  rpc ListProcesses (Empty) returns (ProcessList);
+
+  // Teleports a full process. The Worker adds it to its local Scheduler.
+  // The stream returns real-time state changes (RUNNING, WAITING).
+  rpc TeleportProcess (PCB) returns (stream TaskEvent);
+
+  // --- IDENTITY & TENANT MANAGEMENT ---
+  // Initializes the super admin if not yet configured
+  rpc InitializeMasterAdmin (AdminSetupRequest) returns (AdminSetupResponse);
+
+  // Generates a new tenant, assigns port and temporary passphrase
+  rpc CreateTenant (TenantCreateRequest) returns (TenantCreateResponse);
+
+  // Configures the Cognitive Engine dynamically
+  rpc ConfigureEngine (EngineConfigRequest) returns (Empty);
+
+  // Forces a password reset for a given tenant
+  rpc ResetTenantPassword (PasswordResetRequest) returns (Empty);
+
+  // Lists all tenants
+  rpc ListTenants (Empty) returns (ListTenantsResponse);
+
+  // Deletes a tenant
+  rpc DeleteTenant (TenantDeleteRequest) returns (Empty);
+
+  // --- KEY POOL MANAGEMENT (Epic 26 / ANK-CMR-005) ---
+  rpc AddGlobalKey(GlobalKeyRequest) returns (Empty);
+  rpc ListGlobalKeys(Empty) returns (KeyListResponse);
+  rpc DeleteKey(DeleteKeyRequest) returns (Empty);
+  rpc ListMyKeys(Empty) returns (KeyListResponse);
+  rpc SyncRouterCatalog (Empty) returns (Empty);
+  rpc ListRouterModels (Empty) returns (ModelListResponse);
+
+  // --- SIREN VOICE MANAGEMENT ---
+  rpc GetSirenConfig (Empty) returns (SirenConfig);
+  rpc SetSirenConfig (SirenConfigRequest) returns (Empty);
+  rpc ListSirenVoices (Empty) returns (SirenVoiceList);
+}
+
+// --- MESSAGES ---
+
+message ModelListResponse {
+  repeated ModelInfo models = 1;
+  string synced_at = 2;
+}
+
+message ModelInfo {
+  string model_id = 1;
+  string provider = 2;
+  string display_name = 3;
+  uint32 context_window = 4;
+  float cost_input_per_mtok = 5;
+  float cost_output_per_mtok = 6;
+  bool is_local = 7;
+  ModelTaskScores task_scores = 8;
+}
+
+message ModelTaskScores {
+  uint32 chat = 1;
+  uint32 coding = 2;
+  uint32 planning = 3;
+  uint32 analysis = 4;
+}
+
+message TaskRequest {
+  string prompt = 1;         // The main instruction for the Kernel.
+  Priority priority = 2;     // Execution priority level.
+  ExecutionPolicy policy = 3; // How the Kernel should handle this task.
+  google.protobuf.Struct initial_context = 4; // Metadata or specific variables.
+  optional string tenant_id = 5; // The ID of the tenant owning this task.
+  string task_type = 6;      // Typology of the task (chat, coding, analysis, etc.)
+}
+
+enum Priority {
+  PRIORITY_IDLE = 0;
+  PRIORITY_LOW = 1;
+  PRIORITY_NORMAL = 5;
+  PRIORITY_CRITICAL = 10;
+}
+
+message ExecutionPolicy {
+  enum Mode {
+    MODE_STRICT = 0;   // Fails if any dependency is not met.
+    MODE_ADAPTIVE = 1; // Can fallback between models or strategies.
+    MODE_DRY_RUN = 2;  // Only generates DAG and validates, no execution.
+  }
+  Mode mode = 1;
+  string target_model_group = 2; // e.g., "coding", "logic", "fast"
+  uint32 max_retries = 3;
+}
+
+// Process Control Block (PCB)
+// Represents the full state of a Cognitive Process.
+message PCB {
+  string pid = 1;                     // Unique identifier.
+  string parent_pid = 2;              // For hierarchical task fragmentation.
+  ProcessState state = 3;             // Current state (RUNNING, BLOCKED, etc).
+  uint32 quantum_used = 4;            // Time/Cycles spent in the current state.
+  
+  message MemorySpace {
+    string instruction_pointer = 1;   // The current step in the DAG.
+    repeated string context_refs = 2; // LanceDB/Vector point IDs.
+    map<string, string> registers = 3; // Key-value "fast" memory.
+  }
+  MemorySpace memory = 5;
+  
+  map<string, string> inlined_context = 6; // Resolved local dependencies for migration.
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp last_updated = 8;
+  uint32 priority = 9;
+  string process_name = 10;
+  string tenant_id = 11;
+  optional string teleport_token = 12; // OTP for secure node-to-node migration
+}
+
+enum ProcessState {
+  STATE_PENDING = 0;
+  STATE_RUNNING = 1;
+  STATE_BLOCKED = 2; // Waiting for Syscall or User Input.
+  STATE_SUSPENDED = 3;
+  STATE_COMPLETED = 4;
+  STATE_TERMINATED = 5;
+}
+
+message Syscall {
+  string name = 1;      // e.g., "memory_load", "web_search"
+  google.protobuf.Struct arguments = 2; // Named parameters for the syscall.
+  string return_type = 3; // Type of data expected back.
+}
+
+message TaskEvent {
+  string pid = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  oneof payload {
+    string thought = 3;      // LLM Reasoning segment.
+    Syscall syscall = 4;     // Intercepted structured Neural Syscall.
+    string output = 5;       // Final or partial result.
+    PCB status_update = 6;   // Heartbeat with updated state.
+    string error = 7;        // Execution error or crash log.
+  }
+}
+
+
+message TaskSubscription {
+  string pid = 1;
+  optional string tenant_id = 2;
+}
+
+message TaskResponse {
+  string pid = 1;
+  bool accepted = 2;
+  string message = 3;
+}
+
+message ProcessList {
+  repeated PCB processes = 1;
+}
+
+enum SystemState {
+  STATE_INITIALIZING = 0;
+  STATE_OPERATIONAL = 1;
+}
+
+message SystemStatus {
+  float cpu_load = 1;
+  float vram_allocated_mb = 2;
+  float vram_total_mb = 3;
+  uint32 total_processes = 4;
+  uint32 active_workers = 5;
+  string uptime = 6;
+  repeated string loaded_models = 7;
+  SystemState state = 8;
+  reserved 9; // was install_token — removed in ANK-INST-003
+}
+
+// --- ADMIN & TENANT MESSAGES ---
+
+message AdminSetupRequest {
+  string username = 1;
+  string passphrase = 2;
+  string setup_token = 3;
+}
+
+message AdminSetupResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message TenantCreateRequest {
+  string username = 1;
+}
+
+message TenantCreateResponse {
+  bool success = 1;
+  string tenant_id = 2;
+  string temporary_passphrase = 3;
+  uint32 network_port = 4;
+  string message = 5;
+}
+
+message PasswordResetRequest {
+  string tenant_id = 1;
+  string new_passphrase = 2;
+}
+
+message EngineConfigRequest {
+  string api_url = 1;
+  string model_name = 2;
+  string api_key = 3;
+}
+
+message ListTenantsResponse {
+  repeated TenantInfo tenants = 1;
+}
+
+message TenantInfo {
+  string tenant_id = 1;
+  string username = 2;
+  string role = 3;
+  string created_at = 4;
+  string last_active = 5;
+  uint32 port = 6;
+}
+
+message TenantDeleteRequest {
+  string tenant_id = 1;
+}
+
+message GlobalKeyRequest {
+  string provider = 1;
+  string api_key = 2;
+  optional string api_url = 3;
+  optional string label = 4;
+}
+
+message KeyInfo {
+  string key_id = 1;
+  string provider = 2;
+  string api_key = 3;  // Always "***" in responses
+  optional string api_url = 4;
+  optional string label = 5;
+  bool is_active = 6;
+  optional string rate_limited_until = 7;
+}
+
+message KeyListResponse {
+  repeated KeyInfo keys = 1;
+}
+
+message DeleteKeyRequest {
+  string key_id = 1;
+  optional string tenant_id = 2;
+}
+
+message Empty {}
+
+// --- SIREN VOICE MANAGEMENT MESSAGES ---
+message SirenConfig {
+  string provider = 1;
+  string api_key = 2; // Redacted in GET
+  string voice_id = 3;
+}
+
+message SirenConfigRequest {
+  string provider = 1;
+  string api_key = 2;
+  string voice_id = 3;
+}
+
+message SirenVoiceList {
+  repeated SirenVoice voices = 1;
+}
+
+message SirenVoice {
+  string id = 1;
+  string name = 2;
+  string provider = 3;
+}

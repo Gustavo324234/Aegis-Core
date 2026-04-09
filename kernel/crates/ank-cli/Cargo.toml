@@ -1,0 +1,19 @@
+[package]
+name = "ank-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ank"
+path = "src/main.rs"
+
+[dependencies]
+ank-proto = { path = "../ank-proto" }
+tonic.workspace     = true
+tokio.workspace     = true
+tokio-stream.workspace = true
+anyhow.workspace    = true
+clap = { workspace = true, features = ["env"] }
+serde_json.workspace = true
+tracing.workspace   = true
+tracing-subscriber.workspace = true

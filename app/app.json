@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Aegis",
+    "slug": "aegis-app",
+    "version": "1.0.0",
+    "scheme": "aegis",
+    "platforms": [
+      "android",
+      "ios"
+    ],
+    "android": {
+      "package": "io.aegis.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_CONTACTS",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.POST_NOTIFICATIONS"
+      ]
+    },
+    "ios": {
+      "bundleIdentifier": "io.aegis.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Aegis needs the microphone for voice commands.",
+        "NSContactsUsageDescription": "Aegis can reference your contacts to help with messages.",
+        "NSPhotoLibraryUsageDescription": "Aegis needs access to share images in chat."
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Aegis needs the microphone for voice commands."
+        }
+      ],
+      "expo-asset",
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./Logo/logo_icon.png",
+          "color": "#7C6FE0"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

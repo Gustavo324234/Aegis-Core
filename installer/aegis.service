@@ -1,0 +1,29 @@
+[Unit]
+Description=Aegis OS — Cognitive Operating System
+Documentation=https://github.com/your-org/aegis-core
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=aegis
+Group=aegis
+EnvironmentFile=/etc/aegis/aegis.env
+ExecStart=/usr/local/bin/ank-server
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/aegis /etc/aegis
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aegis
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+services:
+  ank-server:
+    image: ghcr.io/your-org/aegis-core:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"   # HTTP + WebSocket (UI)
+      - "50051:50051" # gRPC (external clients, CLI)
+    volumes:
+      - aegis_data:/data
+    environment:
+      AEGIS_ROOT_KEY: ${AEGIS_ROOT_KEY}
+      AEGIS_DATA_DIR: /data
+      AEGIS_MTLS_STRICT: ${AEGIS_MTLS_STRICT:-false}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  aegis_data:
+    driver: local

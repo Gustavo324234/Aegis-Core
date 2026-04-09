@@ -1,0 +1,36 @@
+[package]
+name = "plugins_src"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde.workspace      = true
+serde_json.workspace = true
+chrono.workspace     = true
+anyhow.workspace     = true
+aegis-sdk            = { path = "../crates/aegis-sdk" }
+
+[[bin]]
+name = "std_sys"
+path = "src/bin/std_sys.rs"
+
+[[bin]]
+name = "std_fs"
+path = "src/bin/std_fs.rs"
+
+[[bin]]
+name = "std_net"
+path = "src/bin/std_net.rs"
+
+[[bin]]
+name = "hello_world"
+path = "src/bin/hello_world.rs"
+
+[profile.release]
+opt-level = "s"
+strip = true
+lto = true
+codegen-units = 1

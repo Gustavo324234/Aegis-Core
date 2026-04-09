@@ -1,0 +1,22 @@
+{
+  "packages": {
+    "kernel/crates/ank-proto": { "release-type": "rust", "package-name": "ank-proto" },
+    "kernel/crates/ank-core": { "release-type": "rust", "package-name": "ank-core" },
+    "kernel/crates/ank-http": { "release-type": "rust", "package-name": "ank-http" },
+    "kernel/crates/ank-server": { "release-type": "rust", "package-name": "ank-server" },
+    "kernel/crates/ank-cli": { "release-type": "rust", "package-name": "ank-cli" },
+    "kernel/crates/ank-mcp": { "release-type": "rust", "package-name": "ank-mcp" },
+    "kernel/crates/aegis-supervisor": { "release-type": "rust", "package-name": "aegis-supervisor" },
+    "kernel/crates/aegis-sdk": { "release-type": "rust", "package-name": "aegis-sdk" },
+    "kernel/plugins_src": { "release-type": "rust", "package-name": "plugins_src" },
+    "shell/ui": { "release-type": "node", "package-name": "@aegis/shell-ui" }
+  },
+  "plugins": [
+    {
+      "type": "cargo-workspace",
+      "update_backend": "cargo"
+    }
+  ],
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true
+}
