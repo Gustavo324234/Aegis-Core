@@ -1,11 +1,10 @@
-use std::collections::HashMap;
+
 use std::pin::Pin;
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
+
 use tonic::{Request, Response, Status};
-use tracing::{info, warn};
+
 
 use ank_core::{SchedulerEvent, PCB as CorePCB};
 use ank_http::AppState;
@@ -28,10 +27,6 @@ pub struct AnkRpcServer {
 }
 
 impl AnkRpcServer {
-    pub fn new(state: AppState) -> Self {
-        Self { state }
-    }
-
     pub fn from_state(state: &AppState) -> Self {
         Self {
             state: state.clone(),
@@ -299,8 +294,95 @@ impl KernelService for AnkRpcServer {
     ) -> Result<Response<Self::TeleportProcessStream>, Status> {
         Err(Status::unimplemented("Not implemented"))
     }
+
+    async fn list_siren_voices(
+        &self,
+        _req: Request<Empty>,
+    ) -> Result<Response<ank_proto::v1::SirenVoiceList>, Status> {
+        Ok(Response::new(ank_proto::v1::SirenVoiceList {
+            voices: vec![],
+        }))
+    }
+
+    async fn configure_engine(
+        &self,
+        _req: Request<ank_proto::v1::EngineConfigRequest>,
+    ) -> Result<Response<Empty>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn list_tenants(
+        &self,
+        _req: Request<Empty>,
+    ) -> Result<Response<ank_proto::v1::ListTenantsResponse>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn delete_tenant(
+        &self,
+        _req: Request<ank_proto::v1::TenantDeleteRequest>,
+    ) -> Result<Response<Empty>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn add_global_key(
+        &self,
+        _req: Request<ank_proto::v1::GlobalKeyRequest>,
+    ) -> Result<Response<Empty>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn list_global_keys(
+        &self,
+        _req: Request<Empty>,
+    ) -> Result<Response<ank_proto::v1::KeyListResponse>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn delete_key(
+        &self,
+        _req: Request<ank_proto::v1::DeleteKeyRequest>,
+    ) -> Result<Response<Empty>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn list_my_keys(
+        &self,
+        _req: Request<Empty>,
+    ) -> Result<Response<ank_proto::v1::KeyListResponse>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn sync_router_catalog(
+        &self,
+        _req: Request<Empty>,
+    ) -> Result<Response<Empty>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn list_router_models(
+        &self,
+        _req: Request<Empty>,
+    ) -> Result<Response<ank_proto::v1::ModelListResponse>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn get_siren_config(
+        &self,
+        _req: Request<Empty>,
+    ) -> Result<Response<ank_proto::v1::SirenConfig>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
+
+    async fn set_siren_config(
+        &self,
+        _req: Request<ank_proto::v1::SirenConfigRequest>,
+    ) -> Result<Response<Empty>, Status> {
+        Err(Status::unimplemented("Not implemented"))
+    }
 }
 
+#[allow(clippy::result_large_err)]
 pub fn auth_interceptor(req: Request<()>) -> Result<Request<()>, Status> {
     let metadata = req.metadata();
 

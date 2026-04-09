@@ -90,7 +90,7 @@ async fn handle_siren(
                 // (Referencia CORE-015: Construir AudioChunk proto y enviar al SirenService)
 
                 // Mock response para debug en UI
-                if sequence_number % 50 == 0 {
+                if sequence_number.is_multiple_of(50) {
                     let event = json!({
                         "event": "siren_event",
                         "data": {

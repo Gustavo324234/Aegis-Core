@@ -83,7 +83,7 @@ pub struct CognitiveHAL {
     pub drivers: HashMap<String, Box<dyn InferenceDriver>>,
     pub plugin_manager: Arc<RwLock<PluginManager>>,
     pub mcp_registry: Arc<ank_mcp::registry::McpToolRegistry>,
-    pub router: Option<Arc<CognitiveRouter>>,
+    pub router: Option<Arc<RwLock<CognitiveRouter>>>,
     pub hardware: std::sync::Mutex<hardware::HardwareMonitor>,
 }
 
@@ -106,7 +106,7 @@ impl CognitiveHAL {
         }
     }
 
-    pub fn set_router(&mut self, router: Arc<CognitiveRouter>) {
+    pub fn set_router(&mut self, router: Arc<RwLock<CognitiveRouter>>) {
         self.router = Some(router);
     }
 
@@ -142,7 +142,8 @@ impl CognitiveHAL {
         };
 
         // Try CognitiveRouter first if available
-        if let Some(router) = &self.router {
+        if let Some(router_rw) = &self.router {
+            let router = router_rw.read().await;
             let pcb_snapshot = {
                 let pcb = shared_pcb.read().await;
                 pcb.clone()
@@ -346,7 +347,7 @@ mod tests {
 
         // Debe enrutar a cloud-driver
         let stream_res = hal.route_and_execute(shared_pcb).await?;
-        let tokens: Vec<_> = stream_res.collect().await;
+        let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
 
         assert_eq!(tokens.len(), 1);
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -382,7 +383,7 @@ mod tests {
 
         // Debe enrutar a local-driver
         let stream_res = hal.route_and_execute(shared_pcb).await?;
-        let tokens: Vec<_> = stream_res.collect().await;
+        let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
 
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
         assert!(

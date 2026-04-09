@@ -215,6 +215,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tracing",
  "tracing-appender",
