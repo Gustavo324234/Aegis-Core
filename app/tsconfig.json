@@ -5,9 +5,15 @@
     "baseUrl": ".",
     "paths": {
       "@/*": [
-        "src/*"
+        "./src/*"
       ]
-    }
+    },
+    "jsx": "react-native",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "target": "ESNext",
+    "lib": ["DOM", "DOM.Iterable", "ESNext", "ES2023"],
+    "moduleResolution": "node"
   },
   "include": [
     "**/*.ts",

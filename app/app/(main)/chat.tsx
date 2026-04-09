@@ -57,7 +57,7 @@ export default function ChatScreen() {
   
   const wsRef = useRef<WebSocket | null>(null);
   const sirenWsRef = useRef<WebSocket | null>(null);
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef = useRef<FlatList<ChatMessage>>(null);
   const hasReceivedMessage = useRef(false);
 
   // Siren Bridge
