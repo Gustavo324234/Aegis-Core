@@ -1,100 +1,93 @@
 # CLAUDE.md — Aegis Core
 
 > Contexto para todos los agentes IA que trabajan en este repositorio.
+> **Repo activo único:** `Aegis-Core` — todo el desarrollo ocurre acá.
 
 ---
 
-## Rol de este repositorio
-
-**Aegis-Core es el sistema nuevo.** No es una migración del código legacy —
-es la implementación correcta de la arquitectura final.
-
-Los repos legacy (`Aegis-ANK`, `Aegis-Shell`, `Aegis-Installer`, `Aegis-App`)
-existen como **referencia de lectura**. Se consultan para entender qué hace
-el sistema hoy, qué contratos existen, y qué debe quedar integrado.
-**Nunca se modifica el legacy desde acá.**
-
----
-
-## Estructura
+## Repositorio de trabajo
 
 ```
-aegis-core/
-├── kernel/      ANK — Rust/Tokio (Kernel Engineer)
-├── shell/       UI — React/TypeScript (Shell Engineer)
-├── app/         Mobile — React Native/Expo (Mobile Engineer)
-├── installer/   Deploy — Bash/Docker (DevOps Engineer)
-├── governance/  Docs/Tickets (Arquitecto IA)
-└── distro/      Linux distro — futuro
+Aegis-Core/        ← ÚNICO REPO ACTIVO — todo se escribe acá
+```
+
+### Repos legacy (solo lectura, nunca modificar)
+```
+Aegis-ANK/         → referencia de lógica del kernel Rust
+Aegis-Shell/       → referencia de endpoints HTTP y UI
+Aegis-Installer/   → referencia de scripts de deployment
+Aegis-App/         → referencia de lógica mobile
+Aegis-Governance/  → referencia de normativa histórica
 ```
 
 ---
 
-## Protocolo de inicio de sesión (OBLIGATORIO)
+## Protocolo de inicio de sesión (OBLIGATORIO para todos los agentes)
 
-1. `get_workspace_overview()`
-2. `get_governance_docs(AEGIS_CONTEXT)`
-3. `get_governance_docs(TICKETS_MASTER)`
+```
+1. get_project_structure("Aegis-Core")
+2. read_file("Aegis-Core", "governance/TICKETS_MASTER.md")
+3. read_file("Aegis-Core", "governance/AEGIS_CONTEXT.md")
+```
 
 ---
 
-## Reglas universales
+## Estructura del repo
+
+```
+Aegis-Core/
+├── kernel/        ANK — Rust/Tokio (Kernel Engineer)
+├── shell/ui/      Web UI — React/TypeScript (Shell Engineer)
+├── app/           Mobile — React Native/Expo (Mobile Engineer)
+├── installer/     Deploy — Bash/Docker (DevOps Engineer)
+├── governance/    Tickets, docs, codex (Arquitecto IA)
+└── distro/        Linux distro — futuro
+```
+
+---
+
+## Leyes SRE (no negociables)
 
 ### Zero-Panic (Rust)
-- Prohibido `.unwrap()`, `.expect()`, `panic!()`
-- Errores via `Result<T, E>` con `anyhow` o `thiserror`
-- CI gate: `cargo clippy -- -D warnings -D clippy::unwrap_used -D clippy::expect_used`
+- Prohibido: `.unwrap()`, `.expect()`, `panic!()`
+- Obligatorio: errores via `Result<T, E>` con `anyhow` o `thiserror`
+- CI gate: `cargo clippy --workspace -- -D warnings -D clippy::unwrap_used -D clippy::expect_used`
 
-### Protocolo Citadel
-- Auth: `tenant_id` + `session_key` (SHA-256 del passphrase)
+### Strict Shell (Bash)
+- Obligatorio: `set -euo pipefail` en todos los scripts
+- CI gate: `shellcheck` sin warnings
+
+### TypeScript estricto
+- Obligatorio: `strict: true` en `tsconfig.json`
+- CI gate: `npm run build` sin errores TypeScript
+
+---
+
+## Protocolo Citadel
+
+- Auth: `tenant_id` + SHA-256(passphrase)
 - Headers HTTP: `x-citadel-tenant` + `x-citadel-key`
-- Headers gRPC: mismos nombres via metadata
+- WebSocket: `Sec-WebSocket-Protocol: session-key.<hash>`
 - Nunca exponer credenciales en logs, URLs ni respuestas
 
-### Arquitectura del binario único
-- `ank-server` levanta Axum (:8000) + Tonic (:50051) en el mismo proceso Tokio
-- La UI React habla HTTP/WS directo con `ank-server` — sin BFF Python
-- Aegis-App habla HTTP/WS con `ank-server` (ADR-022)
-- `ank-cli` habla gRPC directo con `:50051`
-- `kernel/proto/` es el contrato gRPC externo — cambios impactan clientes externos
-
-### Trazabilidad
-- Todo cambio → ticket en `governance/Tickets/`
-- Estado global → `governance/TICKETS_MASTER.md`
-- CHANGELOG.md por componente afectado
-- Commits: Conventional Commits con ID de ticket
-
 ---
 
-## Por agente
+## Reglas absolutas
 
-### Kernel Engineer (kernel/)
-- Stack: Rust, Tokio, Tonic, Axum
-- Consulta legacy: `Aegis-ANK` (leer, no modificar)
-- Gate: `cargo build -p <crate>` + clippy
-
-### Shell Engineer (shell/)
-- Stack: React 18, TypeScript strict, Zustand, Tailwind, Vite
-- Consulta legacy: `Aegis-Shell/ui/` (leer, no modificar)
-- Gate: `npm run build` sin errores TypeScript
-
-### DevOps Engineer (installer/)
-- Stack: Bash 5+ con `set -euo pipefail`
-- Consulta legacy: `Aegis-Installer` (leer, no modificar)
-- Gate: `shellcheck` sin warnings
-
-### Mobile Engineer (app/)
-- Stack: React Native, Expo SDK 52, TypeScript
-- Consulta legacy: `Aegis-App` (leer, no modificar)
-- Gate: `npx expo export` sin errores
-
----
-
-## Prohibiciones absolutas
-
-- NUNCA modificar repos legacy desde este contexto
-- NUNCA hardcodear paths — usar `dirs` crate o `AEGIS_DATA_DIR`
-- NUNCA commitear `.env` ni credenciales
-- NUNCA crear archivos batch de tickets — un ticket = un `.md`
+- NUNCA modificar repos legacy
+- NUNCA hardcodear paths — usar crate `dirs` o `AEGIS_DATA_DIR`
+- NUNCA commitear `.env` ni `AEGIS_ROOT_KEY`
 - NUNCA hacer push a git (Tavo lo hace manualmente)
-- NUNCA correr `cargo test` o `pytest` localmente (CI los corre)
+- NUNCA correr `cargo test` localmente — CI los corre en cada PR
+- NUNCA crear archivos de tickets fuera de `governance/Tickets/`
+- Un ticket = un archivo `.md` — nunca batch
+
+---
+
+## Tickets
+
+- IDs: `CORE-XXX`
+- Ubicación: `governance/Tickets/CORE-XXX.md`
+- Estado global: `governance/TICKETS_MASTER.md`
+- Al cerrar un ticket: actualizar estado en `TICKETS_MASTER.md`
+- Commits: Conventional Commits con ID del ticket (`feat(ank-http): CORE-012 ...`)
