@@ -1,3 +1,5 @@
+use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
+use ank_core::scheduler::persistence::VoiceProfile;
 use axum::{
     extract::{Query, State},
     routing::{get, post},
@@ -5,12 +7,6 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use crate::{
-    citadel::hash_passphrase,
-    error::AegisHttpError,
-    state::AppState,
-};
-use ank_core::scheduler::persistence::VoiceProfile;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -41,11 +37,17 @@ async fn get_siren_config(
     let hash = hash_passphrase(&query.session_key);
     {
         let citadel = state.citadel.lock().await;
-        citadel.enclave.authenticate_tenant(&query.tenant_id, &hash).await
+        citadel
+            .enclave
+            .authenticate_tenant(&query.tenant_id, &hash)
+            .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
     }
 
-    let profile = state.persistence.get_voice_profile(&query.tenant_id).await
+    let profile = state
+        .persistence
+        .get_voice_profile(&query.tenant_id)
+        .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
     match profile {
@@ -59,7 +61,7 @@ async fn get_siren_config(
             "provider": "mock",
             "voice_id": "",
             "configured": false
-        })))
+        }))),
     }
 }
 
@@ -70,7 +72,10 @@ async fn set_siren_config(
     let hash = hash_passphrase(&req.session_key);
     {
         let citadel = state.citadel.lock().await;
-        citadel.enclave.authenticate_tenant(&req.tenant_id, &hash).await
+        citadel
+            .enclave
+            .authenticate_tenant(&req.tenant_id, &hash)
+            .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
     }
 
@@ -81,7 +86,10 @@ async fn set_siren_config(
         settings_json: json!({ "api_key": req.api_key }).to_string(),
     };
 
-    state.persistence.update_voice_profile(profile).await
+    state
+        .persistence
+        .update_voice_profile(profile)
+        .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
     Ok(Json(json!({

@@ -28,17 +28,15 @@ impl HttpConfig {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(3000);
-        
-        let static_dir = std::env::var("ANK_HTTP_STATIC_DIR")
-            .unwrap_or_else(|_| "./dist".to_string());
+
+        let static_dir =
+            std::env::var("ANK_HTTP_STATIC_DIR").unwrap_or_else(|_| "./dist".to_string());
 
         let dev_mode = std::env::var("DEV_MODE")
             .map(|s| s.to_lowercase() == "true")
             .unwrap_or(false);
 
-        let ui_dist_path = std::env::var("UI_DIST_PATH")
-            .ok()
-            .map(PathBuf::from);
+        let ui_dist_path = std::env::var("UI_DIST_PATH").ok().map(PathBuf::from);
 
         let data_dir = std::env::var("AEGIS_DATA_DIR")
             .map(PathBuf::from)
@@ -53,4 +51,3 @@ impl HttpConfig {
         }
     }
 }
-

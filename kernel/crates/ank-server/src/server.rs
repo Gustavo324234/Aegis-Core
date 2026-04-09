@@ -7,14 +7,13 @@ use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
-use ank_core::{PCB as CorePCB, SchedulerEvent};
+use ank_core::{SchedulerEvent, PCB as CorePCB};
 use ank_http::AppState;
 use ank_proto::v1::kernel_service_server::KernelService;
 use ank_proto::v1::{
-    AdminSetupRequest, AdminSetupResponse, Empty, Pcb as ProtoPcb,
-    ProcessList, ProcessState as ProtoProcessState, SystemStatus,
-    TaskEvent, TaskRequest, TaskResponse, TaskSubscription, TenantCreateRequest,
-    TenantCreateResponse,
+    AdminSetupRequest, AdminSetupResponse, Empty, Pcb as ProtoPcb, ProcessList,
+    ProcessState as ProtoProcessState, SystemStatus, TaskEvent, TaskRequest, TaskResponse,
+    TaskSubscription, TenantCreateRequest, TenantCreateResponse,
 };
 
 #[derive(Clone, Debug)]
@@ -34,26 +33,38 @@ impl AnkRpcServer {
     }
 
     pub fn from_state(state: &AppState) -> Self {
-        Self { state: state.clone() }
+        Self {
+            state: state.clone(),
+        }
     }
 
     async fn validate_auth(&self, auth: &CitadelAuth) -> Result<(), Status> {
         let citadel = self.state.citadel.lock().await;
-        
+
         // Try master first
-        if let Ok(is_master) = citadel.enclave.authenticate_master(&auth.tenant_id, &auth.session_key).await {
+        if let Ok(is_master) = citadel
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
+        {
             if is_master {
                 return Ok(());
             }
         }
 
         // Try tenant
-        match citadel.enclave.authenticate_tenant(&auth.tenant_id, &auth.session_key).await {
+        match citadel
+            .enclave
+            .authenticate_tenant(&auth.tenant_id, &auth.session_key)
+            .await
+        {
             Ok(true) => Ok(()),
             Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => {
                 Err(Status::unauthenticated("PASSWORD_MUST_CHANGE"))
             }
-            _ => Err(Status::unauthenticated("Citadel AUTH_FAILURE: Access Denied.")),
+            _ => Err(Status::unauthenticated(
+                "Citadel AUTH_FAILURE: Access Denied.",
+            )),
         }
     }
 }
@@ -80,7 +91,12 @@ impl KernelService for AnkRpcServer {
 
         let pid = core_pcb.pid.clone();
 
-        if let Err(e) = self.state.scheduler_tx.send(SchedulerEvent::ScheduleTask(Box::new(core_pcb))).await {
+        if let Err(e) = self
+            .state
+            .scheduler_tx
+            .send(SchedulerEvent::ScheduleTask(Box::new(core_pcb)))
+            .await
+        {
             return Err(Status::internal(format!("Failed to register task: {}", e)));
         }
 
@@ -91,7 +107,8 @@ impl KernelService for AnkRpcServer {
         }))
     }
 
-    type WatchTaskStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<TaskEvent, Status>> + Send>>;
+    type WatchTaskStream =
+        Pin<Box<dyn tokio_stream::Stream<Item = Result<TaskEvent, Status>> + Send>>;
 
     async fn watch_task(
         &self,
@@ -111,14 +128,14 @@ impl KernelService for AnkRpcServer {
         // In Aegis-Core, event_broker stores broadcast::Sender
         let (tx, rx) = mpsc::channel(100);
         let mut broker = self.state.event_broker.write().await;
-        
+
         let broadcast_tx = broker.entry(pid.clone()).or_insert_with(|| {
             let (btx, _) = tokio::sync::broadcast::channel(1024);
             btx
         });
 
         let mut broadcast_rx = broadcast_tx.subscribe();
-        
+
         tokio::spawn(async move {
             while let Ok(event) = broadcast_rx.recv().await {
                 if tx.send(Ok(event)).await.is_err() {
@@ -136,8 +153,16 @@ impl KernelService for AnkRpcServer {
         _request: Request<Empty>,
     ) -> Result<Response<SystemStatus>, Status> {
         // Basic implementation for health check / status
-        let is_init = self.state.citadel.lock().await.enclave.admin_exists().await.unwrap_or(false);
-        
+        let is_init = self
+            .state
+            .citadel
+            .lock()
+            .await
+            .enclave
+            .admin_exists()
+            .await
+            .unwrap_or(false);
+
         Ok(Response::new(SystemStatus {
             state: if is_init { 1 } else { 0 }, // 1: Operational, 0: Initializing
             ..Default::default()
@@ -154,28 +179,34 @@ impl KernelService for AnkRpcServer {
             .ok_or_else(|| Status::unauthenticated("Citadel Protocol context missing"))?;
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.state.scheduler_tx.send(SchedulerEvent::ListProcesses(reply_tx)).await
+        self.state
+            .scheduler_tx
+            .send(SchedulerEvent::ListProcesses(reply_tx))
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let core_processes = reply_rx.await
+        let core_processes = reply_rx
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let processes = core_processes
             .into_iter()
             .filter(|p| p.tenant_id.as_deref() == Some(&auth.tenant_id))
-            .map(|p| {
-                ProtoPcb {
-                    pid: p.pid,
-                    process_name: p.process_name,
-                    state: match p.state {
-                        ank_core::ProcessState::New | ank_core::ProcessState::Ready => ProtoProcessState::StatePending as i32,
-                        ank_core::ProcessState::Running => ProtoProcessState::StateRunning as i32,
-                        ank_core::ProcessState::WaitingSyscall => ProtoProcessState::StateBlocked as i32,
-                        ank_core::ProcessState::Completed => ProtoProcessState::StateCompleted as i32,
-                        ank_core::ProcessState::Failed => ProtoProcessState::StateTerminated as i32,
-                    },
-                    ..Default::default()
-                }
+            .map(|p| ProtoPcb {
+                pid: p.pid,
+                process_name: p.process_name,
+                state: match p.state {
+                    ank_core::ProcessState::New | ank_core::ProcessState::Ready => {
+                        ProtoProcessState::StatePending as i32
+                    }
+                    ank_core::ProcessState::Running => ProtoProcessState::StateRunning as i32,
+                    ank_core::ProcessState::WaitingSyscall => {
+                        ProtoProcessState::StateBlocked as i32
+                    }
+                    ank_core::ProcessState::Completed => ProtoProcessState::StateCompleted as i32,
+                    ank_core::ProcessState::Failed => ProtoProcessState::StateTerminated as i32,
+                },
+                ..Default::default()
             })
             .collect();
 
@@ -192,17 +223,23 @@ impl KernelService for AnkRpcServer {
         }
 
         let req = request.into_inner();
-        
+
         // Validate setup token if provided
         if !req.setup_token.is_empty() {
-            let is_valid = citadel.enclave.validate_and_consume_setup_token(&req.setup_token).await
+            let is_valid = citadel
+                .enclave
+                .validate_and_consume_setup_token(&req.setup_token)
+                .await
                 .map_err(|e| Status::internal(e.to_string()))?;
             if !is_valid {
                 return Err(Status::unauthenticated("Invalid setup token"));
             }
         }
 
-        citadel.enclave.initialize_master(&req.username, &req.passphrase).await
+        citadel
+            .enclave
+            .initialize_master(&req.username, &req.passphrase)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(AdminSetupResponse {
@@ -221,14 +258,20 @@ impl KernelService for AnkRpcServer {
             .ok_or_else(|| Status::unauthenticated("Citadel Protocol context missing"))?;
 
         let citadel = self.state.citadel.lock().await;
-        let is_master = citadel.enclave.authenticate_master(&auth.tenant_id, &auth.session_key).await
+        let is_master = citadel
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
             .unwrap_or(false);
 
         if !is_master {
             return Err(Status::permission_denied("Only Master can create tenants"));
         }
 
-        let (port, pass) = citadel.enclave.create_tenant(&request.into_inner().username).await
+        let (port, pass) = citadel
+            .enclave
+            .create_tenant(&request.into_inner().username)
+            .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(Response::new(TenantCreateResponse {
@@ -239,14 +282,21 @@ impl KernelService for AnkRpcServer {
         }))
     }
 
-    // Rest of service methods can be empty or basic for now, 
+    // Rest of service methods can be empty or basic for now,
     // but these are the main ones needed for health/setup.
-    async fn reset_tenant_password(&self, _req: Request<ank_proto::v1::PasswordResetRequest>) -> Result<Response<Empty>, Status> {
+    async fn reset_tenant_password(
+        &self,
+        _req: Request<ank_proto::v1::PasswordResetRequest>,
+    ) -> Result<Response<Empty>, Status> {
         Err(Status::unimplemented("Not implemented"))
     }
-    
-    type TeleportProcessStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<TaskEvent, Status>> + Send>>;
-    async fn teleport_process(&self, _req: Request<ProtoPcb>) -> Result<Response<Self::TeleportProcessStream>, Status> {
+
+    type TeleportProcessStream =
+        Pin<Box<dyn tokio_stream::Stream<Item = Result<TaskEvent, Status>> + Send>>;
+    async fn teleport_process(
+        &self,
+        _req: Request<ProtoPcb>,
+    ) -> Result<Response<Self::TeleportProcessStream>, Status> {
         Err(Status::unimplemented("Not implemented"))
     }
 }

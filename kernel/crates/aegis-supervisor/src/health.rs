@@ -1,5 +1,5 @@
-use tracing::debug;
 use std::time::Duration;
+use tracing::debug;
 
 /// Verifica que el ANK responde HTTP en el puerto configurado
 pub async fn check_health(port: u16) -> bool {

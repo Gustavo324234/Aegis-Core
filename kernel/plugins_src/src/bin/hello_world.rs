@@ -1,5 +1,5 @@
-use anyhow::Result;
 use aegis_sdk::{run_plugin, PluginMetadata, PluginRequest, PluginResponse};
+use anyhow::Result;
 use serde_json::json;
 
 /// Entry point for the "Hello World" plugin.
@@ -20,7 +20,7 @@ fn main() -> Result<()> {
     run_plugin(metadata, handle_request)
 }
 
-/// The core logic of the plugin. 
+/// The core logic of the plugin.
 /// Dispatches actions based on the request.
 fn handle_request(request: &PluginRequest) -> Result<PluginResponse> {
     match request.action.as_str() {
@@ -28,7 +28,7 @@ fn handle_request(request: &PluginRequest) -> Result<PluginResponse> {
             // Extracts the "name" from params, defaulting to "Stranger" if not present.
             let name = request.params["name"].as_str().unwrap_or("Stranger");
             let message = format!("Hello, {}! From Aegis OS.", name);
-            
+
             Ok(PluginResponse {
                 status: "success".to_string(),
                 data: Some(json!({ "message": message })),

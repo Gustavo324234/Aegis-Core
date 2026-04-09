@@ -14,8 +14,8 @@ pub mod vcm;
 
 // Re-exportar para fácil acceso
 pub use chal::{CognitiveHAL, InferenceDriver, SystemError};
-pub use citadel::identity::Citadel;
 pub use chronos::ChronosDaemon;
+pub use citadel::identity::Citadel;
 pub use dag::{DagNode, DagNodeStatus, ExecutionGraph, GraphManager, NodeResult};
 pub use enclave::{MasterEnclave, TenantDB};
 pub use pcb::{ProcessState, TaskType, PCB};

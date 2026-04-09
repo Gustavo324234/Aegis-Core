@@ -1,3 +1,4 @@
+use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
 use axum::{
     extract::State,
     routing::{get, post},
@@ -6,11 +7,6 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
-use crate::{
-    citadel::hash_passphrase,
-    error::AegisHttpError,
-    state::AppState,
-};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -33,9 +29,7 @@ fn default_provider() -> String {
     "custom".to_string()
 }
 
-pub async fn get_status(
-    State(_state): State<AppState>,
-) -> Result<Json<Value>, AegisHttpError> {
+pub async fn get_status(State(_state): State<AppState>) -> Result<Json<Value>, AegisHttpError> {
     // Intentar leer de engine_config.json en el DATA_DIR o relativo
     let config_path = "engine_config.json";
     if let Ok(content) = fs::read_to_string(config_path) {
@@ -43,7 +37,7 @@ pub async fn get_status(
             return Ok(Json(val));
         }
     }
-    
+
     Ok(Json(json!({ "configured": false })))
 }
 
@@ -52,7 +46,7 @@ pub async fn configure(
     Json(body): Json<EngineConfig>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let hash = hash_passphrase(&body.session_key);
-    
+
     // 1. Validar contra Citadel
     {
         let citadel = state.citadel.lock().await;
@@ -62,13 +56,17 @@ pub async fn configure(
             .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
     }
-    
+
     // 2. Actualizar HAL
     {
         let mut hal = state.hal.write().await;
-        hal.update_cloud_credentials(body.api_url.clone(), body.model_name.clone(), body.api_key.clone());
+        hal.update_cloud_credentials(
+            body.api_url.clone(),
+            body.model_name.clone(),
+            body.api_key.clone(),
+        );
     }
-    
+
     // 3. Persistir config
     let config_to_save = json!({
         "configured": true,
@@ -76,10 +74,10 @@ pub async fn configure(
         "api_url": body.api_url,
         "model_name": body.model_name,
     });
-    
+
     let config_json = serde_json::to_string_pretty(&config_to_save)
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-        
+
     fs::write("engine_config.json", config_json)
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
@@ -100,11 +98,13 @@ pub async fn set_hw_profile(
     Json(body): Json<HwProfileRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
     if body.admin_tenant_id != "root" {
-        return Err(AegisHttpError::Kernel("Only Master Admin can change HW profiles.".to_string()));
+        return Err(AegisHttpError::Kernel(
+            "Only Master Admin can change HW profiles.".to_string(),
+        ));
     }
-    
+
     std::env::set_var("HW_PROFILE", &body.profile);
-    
+
     Ok(Json(json!({
         "success": true,
         "profile": body.profile

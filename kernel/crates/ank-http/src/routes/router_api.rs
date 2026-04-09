@@ -1,3 +1,9 @@
+use crate::{
+    citadel::{hash_passphrase, CitadelAuthenticated},
+    error::AegisHttpError,
+    state::AppState,
+};
+use ank_core::router::key_pool::ApiKeyEntry;
 use axum::{
     extract::{Path, State},
     routing::{delete, get, post},
@@ -5,12 +11,6 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use crate::{
-    citadel::{hash_passphrase, CitadelAuthenticated},
-    error::AegisHttpError,
-    state::AppState,
-};
-use ank_core::router::key_pool::ApiKeyEntry;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -41,13 +41,18 @@ async fn add_global_key(
 ) -> Result<Json<Value>, AegisHttpError> {
     // Solo root puede agregar keys globales
     if req.tenant_id != "root" {
-        return Err(AegisHttpError::Kernel("Only Master Admin can manage global keys".into()));
+        return Err(AegisHttpError::Kernel(
+            "Only Master Admin can manage global keys".into(),
+        ));
     }
-    
+
     let hash = hash_passphrase(&req.session_key);
     {
         let citadel = state.citadel.lock().await;
-        citadel.enclave.authenticate_tenant(&req.tenant_id, &hash).await
+        citadel
+            .enclave
+            .authenticate_tenant(&req.tenant_id, &hash)
+            .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
     }
 
@@ -62,7 +67,9 @@ async fn add_global_key(
     };
 
     let router = state.router.read().await;
-    router.add_global_key(entry).await
+    router
+        .add_global_key(entry)
+        .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
     Ok(Json(json!({ "success": true })))
@@ -73,7 +80,9 @@ async fn list_global_keys(
     auth: CitadelAuthenticated,
 ) -> Result<Json<Value>, AegisHttpError> {
     if auth.tenant_id != "root" {
-         return Err(AegisHttpError::Kernel("Only Master Admin can list global keys".into()));
+        return Err(AegisHttpError::Kernel(
+            "Only Master Admin can list global keys".into(),
+        ));
     }
 
     let router = state.router.read().await;
@@ -87,11 +96,15 @@ async fn delete_global_key(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AegisHttpError> {
     if auth.tenant_id != "root" {
-         return Err(AegisHttpError::Kernel("Only Master Admin can delete global keys".into()));
+        return Err(AegisHttpError::Kernel(
+            "Only Master Admin can delete global keys".into(),
+        ));
     }
 
     let router = state.router.read().await;
-    router.delete_key(&id, None).await
+    router
+        .delete_key(&id, None)
+        .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
     Ok(Json(json!({ "success": true })))
@@ -104,7 +117,10 @@ async fn add_tenant_key(
     let hash = hash_passphrase(&req.session_key);
     {
         let citadel = state.citadel.lock().await;
-        citadel.enclave.authenticate_tenant(&req.tenant_id, &hash).await
+        citadel
+            .enclave
+            .authenticate_tenant(&req.tenant_id, &hash)
+            .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
     }
 
@@ -119,7 +135,9 @@ async fn add_tenant_key(
     };
 
     let router = state.router.read().await;
-    router.add_tenant_key(&req.tenant_id, entry).await
+    router
+        .add_tenant_key(&req.tenant_id, entry)
+        .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
     Ok(Json(json!({ "success": true })))
@@ -140,7 +158,9 @@ async fn delete_tenant_key(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let router = state.router.read().await;
-    router.delete_key(&id, Some(&auth.tenant_id)).await
+    router
+        .delete_key(&id, Some(&auth.tenant_id))
+        .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
     Ok(Json(json!({ "success": true })))
@@ -160,11 +180,15 @@ async fn sync_router_catalog(
     auth: CitadelAuthenticated,
 ) -> Result<Json<Value>, AegisHttpError> {
     if auth.tenant_id != "root" {
-         return Err(AegisHttpError::Kernel("Only Master Admin can trigger sync".into()));
+        return Err(AegisHttpError::Kernel(
+            "Only Master Admin can trigger sync".into(),
+        ));
     }
     // Catalog sync is usually background and triggered via syncer.
     // For now returning success as in Python BFF.
-    Ok(Json(json!({ "success": true, "message": "Catalog synchronization triggered" })))
+    Ok(Json(
+        json!({ "success": true, "message": "Catalog synchronization triggered" }),
+    ))
 }
 
 async fn router_status() -> Json<Value> {

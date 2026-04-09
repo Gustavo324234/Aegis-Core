@@ -7,8 +7,6 @@ set -euo pipefail
 
 # Configuración
 SERVICE_NAME="aegis"
-INSTALL_DIR="/opt/aegis"
-BIN_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/aegis"
 DATA_DIR="/var/lib/aegis"
 UI_DIST_PATH="/usr/share/aegis/ui"

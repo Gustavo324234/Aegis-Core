@@ -1,21 +1,21 @@
-use ank_core::{
-    enclave::master::MasterEnclave, CognitiveScheduler, SQLCipherPersistor, SchedulerEvent,
-    StatePersistor, CognitiveHAL, router::CognitiveRouter, router::SirenRouter,
-    citadel::identity::Citadel,
-};
 use ank_core::plugins::watcher::watch_plugins_dir;
 use ank_core::plugins::PluginManager;
-use ank_http::{AppState, AegisHttpServer, HttpConfig};
+use ank_core::{
+    citadel::identity::Citadel, enclave::master::MasterEnclave, router::CognitiveRouter,
+    router::SirenRouter, CognitiveHAL, CognitiveScheduler, SQLCipherPersistor, SchedulerEvent,
+    StatePersistor,
+};
+use ank_http::{AegisHttpServer, AppState, HttpConfig};
 use ank_proto::v1::kernel_service_server::KernelServiceServer;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, RwLock, broadcast};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tonic::transport::Server;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 mod server;
-use server::{AnkRpcServer, auth_interceptor};
+use server::{auth_interceptor, AnkRpcServer};
 
 fn resolve_data_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("AEGIS_DATA_DIR") {
@@ -66,8 +66,11 @@ async fn main() -> Result<()> {
     let master_enclave = MasterEnclave::open(
         admin_db_path.to_str().context("Invalid admin db path")?,
         &root_key,
-    ).await?;
-    let citadel = Arc::new(Mutex::new(Citadel { enclave: master_enclave }));
+    )
+    .await?;
+    let citadel = Arc::new(Mutex::new(Citadel {
+        enclave: master_enclave,
+    }));
 
     // 6. Setup Token
     {
@@ -84,7 +87,8 @@ async fn main() -> Result<()> {
 
     // 7. Scheduler
     let (scheduler_tx, scheduler_rx) = mpsc::channel(1024);
-    let mut scheduler = CognitiveScheduler::new(Arc::clone(&persistence) as Arc<dyn StatePersistor>);
+    let mut scheduler =
+        CognitiveScheduler::new(Arc::clone(&persistence) as Arc<dyn StatePersistor>);
     let scheduler_tx_clone = scheduler_tx.clone();
     tokio::spawn(async move {
         if let Err(e) = scheduler.start(scheduler_rx, scheduler_tx_clone).await {
@@ -108,20 +112,29 @@ async fn main() -> Result<()> {
 
     // 10. Router & Catalog
     let catalog = Arc::new(ank_core::router::catalog::ModelCatalog::load_bundled()?);
-    let key_pool = Arc::new(ank_core::router::key_pool::KeyPool::new(Arc::clone(&persistence) as Arc<dyn StatePersistor>));
+    let key_pool = Arc::new(ank_core::router::key_pool::KeyPool::new(
+        Arc::clone(&persistence) as Arc<dyn StatePersistor>,
+    ));
     let _ = key_pool.load().await;
-    
-    let router = Arc::new(RwLock::new(CognitiveRouter::new(catalog.clone(), key_pool.clone())));
+
+    let router = Arc::new(RwLock::new(CognitiveRouter::new(
+        catalog.clone(),
+        key_pool.clone(),
+    )));
     hal.write().await.set_router(router.clone());
 
-    let catalog_syncer = Arc::new(ank_core::router::syncer::CatalogSyncer::new(catalog, key_pool));
+    let catalog_syncer = Arc::new(ank_core::router::syncer::CatalogSyncer::new(
+        catalog, key_pool,
+    ));
     catalog_syncer.clone().start_background_sync();
 
-    let siren_router = Arc::new(SirenRouter::new(Arc::clone(&persistence) as Arc<dyn StatePersistor>));
+    let siren_router = Arc::new(SirenRouter::new(
+        Arc::clone(&persistence) as Arc<dyn StatePersistor>
+    ));
 
     // 11. AppState
     let event_broker = Arc::new(RwLock::new(HashMap::new()));
-    
+
     let mut config = HttpConfig::from_env();
     config.port = 8000; // Force 8000 as per ticket
 
@@ -140,21 +153,28 @@ async fn main() -> Result<()> {
     // 12. Tonic Server
     let ank_rpc = AnkRpcServer::from_state(&state);
     let tonic_svc = KernelServiceServer::with_interceptor(ank_rpc, auth_interceptor);
-    
+
     let grpc_addr = "0.0.0.0:50051".parse()?;
     let mut tonic_builder = Server::builder();
 
     // TLS Logic
-    match (std::env::var("AEGIS_TLS_CERT"), std::env::var("AEGIS_TLS_KEY")) {
+    match (
+        std::env::var("AEGIS_TLS_CERT"),
+        std::env::var("AEGIS_TLS_KEY"),
+    ) {
         (Ok(cert_p), Ok(key_p)) => {
             info!("TLS enabled for gRPC (Tonic)");
             let cert = tokio::fs::read(cert_p).await?;
             let key = tokio::fs::read(key_p).await?;
             let id = tonic::transport::Identity::from_pem(cert, key);
-            tonic_builder = tonic_builder.tls_config(tonic::transport::ServerTlsConfig::new().identity(id))?;
+            tonic_builder =
+                tonic_builder.tls_config(tonic::transport::ServerTlsConfig::new().identity(id))?;
         }
         _ => {
-            let strict = std::env::var("AEGIS_MTLS_STRICT").unwrap_or_default().to_lowercase() == "true";
+            let strict = std::env::var("AEGIS_MTLS_STRICT")
+                .unwrap_or_default()
+                .to_lowercase()
+                == "true";
             if strict {
                 anyhow::bail!("AEGIS_MTLS_STRICT=true but certificates are missing.");
             }
@@ -163,11 +183,7 @@ async fn main() -> Result<()> {
     }
 
     tokio::spawn(async move {
-        if let Err(e) = tonic_builder
-            .add_service(tonic_svc)
-            .serve(grpc_addr)
-            .await 
-        {
+        if let Err(e) = tonic_builder.add_service(tonic_svc).serve(grpc_addr).await {
             error!("gRPC server failed: {}", e);
         }
     });

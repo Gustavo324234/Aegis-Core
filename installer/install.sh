@@ -193,9 +193,11 @@ SyslogIdentifier=aegis
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload >> "$LOG_FILE" 2>&1
-    systemctl enable aegis.service >> "$LOG_FILE" 2>&1
-    systemctl start aegis.service >> "$LOG_FILE" 2>&1
+    {
+        systemctl daemon-reload
+        systemctl enable aegis.service
+        systemctl start aegis.service
+    } >> "$LOG_FILE" 2>&1
     success "Native installation complete."
 }
 
