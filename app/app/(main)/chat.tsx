@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import type { ChatMessage } from '@/types/chat';
 import {
   View,
   Text,
@@ -256,7 +257,7 @@ export default function ChatScreen() {
     }
   };
 
-  const renderMessage = ({ item }: { item: any }) => (
+  const renderMessage = ({ item }: { item: ChatMessage }) => (
     <ChatBubble message={item} language={language} />
   );
 
@@ -303,7 +304,7 @@ export default function ChatScreen() {
       )}
 
       <FlatList
-        ref={flatListRef}
+        ref={flatListRef as any}
         data={messages}
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
