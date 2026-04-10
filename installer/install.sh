@@ -2,9 +2,6 @@
 # ==============================================================================
 # AEGIS OS — UNIFIED INSTALLER (NATIVE + DOCKER)
 # ==============================================================================
-# OS: Ubuntu / Debian / Linux
-# Reference: CORE-040
-# ==============================================================================
 
 set -euo pipefail
 
@@ -15,7 +12,7 @@ BIN_DIR="/usr/local/bin"
 DATA_DIR="/var/lib/aegis"
 UI_DIST_PATH="/usr/share/aegis/ui"
 ENV_FILE="$CONFIG_DIR/aegis.env"
-LOG_FILE="/tmp/aegis_install.log"
+LOG_FILE="/root/aegis_install.log"
 
 GITHUB_ORG="Gustavo324234"
 GITHUB_REPO="Aegis-Core"
@@ -29,12 +26,11 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Helpers
-log()     { echo -e "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE" 2>/dev/null || true; echo -e "${CYAN}  ->${NC} $1"; }
-success() { echo -e "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE" 2>/dev/null || true; echo -e "${GREEN}  [OK]${NC} $1"; }
-warn()    { echo -e "[WARN] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE" 2>/dev/null || true; echo -e "${YELLOW}  [!]${NC} $1"; }
-error()   { echo -e "[ERROR] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE" 2>/dev/null || true; echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
+log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
+success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
+warn()    { echo "[WARN] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${YELLOW}  [!]${NC} $1"; }
+error()   { echo "[ERROR] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 
-# --- Banner ---
 print_banner() {
     echo -e "${CYAN}"
     cat << "EOF"
@@ -50,11 +46,14 @@ EOF
     echo -e "------------------------------------------------------------"
 }
 
-# --- System Audit ---
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
-        error "This script must be run as root (use sudo)."
+        echo -e "${RED}[ERROR]${NC} This script must be run as root (use sudo)." >&2
+        exit 1
     fi
+    # Inicializar log como root
+    touch "$LOG_FILE"
+    chmod 600 "$LOG_FILE"
 }
 
 detect_arch() {
@@ -68,7 +67,6 @@ detect_arch() {
     log "Architecture detected: $ARCH"
 }
 
-# --- Dependencies ---
 install_dependencies() {
     log "Updating package lists..."
     apt-get update -qq >> "$LOG_FILE" 2>&1
@@ -86,8 +84,6 @@ install_dependencies() {
     done
 }
 
-# --- Installation Flows ---
-
 install_native() {
     log "Starting native installation..."
 
@@ -104,29 +100,30 @@ install_native() {
     # 3. Download ank-server binary
     local release_url="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
     local bin_file="ank-server-linux-${ARCH}.tar.gz"
+    local tmp_bin="/root/${bin_file}"
 
-    log "Downloading ank-server from GitHub Releases (${RELEASE_TAG})..."
-    curl -L --fail --silent --show-error \
+    log "Downloading ank-server (${RELEASE_TAG})..."
+    curl -L --fail --progress-bar \
         "${release_url}/${bin_file}" \
-        -o "/tmp/${bin_file}" >> "$LOG_FILE" 2>&1 \
-        || error "Failed to download ank-server. Check that a '${RELEASE_TAG}' release exists."
+        -o "${tmp_bin}" \
+        || error "Failed to download ank-server. Verify release exists at github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases"
 
-    tar -xzf "/tmp/${bin_file}" -C "$BIN_DIR" "ank-server-linux-${ARCH}" >> "$LOG_FILE" 2>&1
-    mv "${BIN_DIR}/ank-server-linux-${ARCH}" "${BIN_DIR}/ank-server"
+    tar -xzf "${tmp_bin}" -C "/root/" >> "$LOG_FILE" 2>&1
+    mv "/root/ank-server-linux-${ARCH}" "${BIN_DIR}/ank-server"
     chmod +x "${BIN_DIR}/ank-server"
-    rm "/tmp/${bin_file}"
-    success "ank-server installed to ${BIN_DIR}/ank-server"
+    rm "${tmp_bin}"
+    success "ank-server installed → ${BIN_DIR}/ank-server"
 
     # 4. Download UI assets
     log "Downloading UI assets..."
-    curl -L --fail --silent --show-error \
+    curl -L --fail --progress-bar \
         "${release_url}/ui-dist.tar.gz" \
-        -o "/tmp/ui-dist.tar.gz" >> "$LOG_FILE" 2>&1 \
+        -o "/root/ui-dist.tar.gz" \
         || error "Failed to download UI assets."
 
-    tar -xzf "/tmp/ui-dist.tar.gz" -C "$UI_DIST_PATH" >> "$LOG_FILE" 2>&1
-    rm "/tmp/ui-dist.tar.gz"
-    success "UI assets installed to ${UI_DIST_PATH}"
+    tar -xzf "/root/ui-dist.tar.gz" -C "$UI_DIST_PATH" >> "$LOG_FILE" 2>&1
+    rm "/root/ui-dist.tar.gz"
+    success "UI assets installed → ${UI_DIST_PATH}"
 
     # 5. Install aegis CLI
     log "Installing aegis CLI..."
@@ -135,12 +132,13 @@ install_native() {
     if [[ -f "${script_dir}/aegis" ]]; then
         cp "${script_dir}/aegis" "${BIN_DIR}/aegis"
     else
-        curl -L --fail --silent --show-error \
+        curl -L --fail --silent \
             "https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/aegis" \
             -o "${BIN_DIR}/aegis" >> "$LOG_FILE" 2>&1 \
-            || warn "Could not install aegis CLI"
+            || warn "Could not download aegis CLI"
     fi
     chmod +x "${BIN_DIR}/aegis"
+    success "aegis CLI installed → ${BIN_DIR}/aegis"
 
     # 6. Generate environment file
     if [[ ! -f "$ENV_FILE" ]]; then
@@ -155,13 +153,14 @@ UI_DIST_PATH=${UI_DIST_PATH}
 EOF
         chmod 600 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
-        success "Environment file created at ${ENV_FILE}"
+        success "Environment file created → ${ENV_FILE}"
     else
-        warn "Environment file already exists at ${ENV_FILE} — skipping key generation."
+        warn "Environment file already exists — preserving existing keys."
+        grep -q "UI_DIST_PATH" "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}" >> "$ENV_FILE"
     fi
 
     # 7. Write mode file
-    echo "native" > /etc/aegis/mode
+    echo "native" > "$CONFIG_DIR/mode"
 
     # 8. Install systemd service
     log "Installing systemd service..."
@@ -193,28 +192,23 @@ SyslogIdentifier=aegis
 WantedBy=multi-user.target
 EOF
 
-    {
-        systemctl daemon-reload
-        systemctl enable aegis.service
-        systemctl start aegis.service
-    } >> "$LOG_FILE" 2>&1
-    success "Native installation complete."
+    systemctl daemon-reload >> "$LOG_FILE" 2>&1
+    systemctl enable aegis.service >> "$LOG_FILE" 2>&1
+    systemctl start aegis.service >> "$LOG_FILE" 2>&1
+    success "systemd service installed and started."
 }
 
 install_docker() {
     log "Starting Docker installation..."
-
     mkdir -p "$INSTALL_ROOT"
 
-    # Download docker-compose.yml
     local raw_url="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/docker-compose.yml"
     log "Fetching docker-compose.yml..."
-    curl -L --fail --silent --show-error \
+    curl -L --fail --silent \
         "$raw_url" \
         -o "${INSTALL_ROOT}/docker-compose.yml" >> "$LOG_FILE" 2>&1 \
         || error "Failed to download docker-compose.yml"
 
-    # Generate .env
     if [[ ! -f "${INSTALL_ROOT}/.env" ]]; then
         local root_key
         root_key=$(openssl rand -hex 32)
@@ -223,16 +217,14 @@ AEGIS_ROOT_KEY=${root_key}
 AEGIS_MTLS_STRICT=false
 EOF
         chmod 600 "${INSTALL_ROOT}/.env"
-        success "Docker .env file created at ${INSTALL_ROOT}/.env"
+        success "Docker .env created → ${INSTALL_ROOT}/.env"
     else
-        warn ".env already exists — skipping key generation."
+        warn ".env already exists — preserving existing keys."
     fi
 
-    # Write mode file
-    mkdir -p /etc/aegis
-    echo "docker" > /etc/aegis/mode
+    mkdir -p "$CONFIG_DIR"
+    echo "docker" > "$CONFIG_DIR/mode"
 
-    # Install aegis CLI
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [[ -f "${script_dir}/aegis" ]]; then
@@ -240,7 +232,6 @@ EOF
         chmod +x "${BIN_DIR}/aegis"
     fi
 
-    # Pull and start
     log "Pulling image and starting containers..."
     (cd "$INSTALL_ROOT" && docker compose up -d >> "$LOG_FILE" 2>&1) \
         || error "Docker Compose failed. Check ${LOG_FILE} for details."
@@ -248,7 +239,6 @@ EOF
     success "Docker installation complete."
 }
 
-# --- TUI / Menu ---
 show_menu() {
     clear
     print_banner
@@ -256,7 +246,7 @@ show_menu() {
     echo "│           AEGIS OS — INSTALLATION MODE          │"
     echo "├─────────────────────────────────────────────────┤"
     echo "│  [1] Native (recommended)                       │"
-    echo "│      Single binary, systemd service             │"
+    echo "│      Single binary, systemd managed             │"
     echo "│  [2] Docker                                     │"
     echo "│      Containerized deployment                   │"
     echo "└─────────────────────────────────────────────────┘"
@@ -270,7 +260,6 @@ show_menu() {
     esac
 }
 
-# --- Health Check + Token Display ---
 wait_and_show() {
     log "Waiting for Aegis to initialize (max 60s)..."
     local attempts=0
@@ -285,14 +274,13 @@ wait_and_show() {
     if curl -s "http://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
         success "Aegis is UP at http://localhost:8000"
 
-        # Extract setup token from logs
         local token=""
         if [[ "${INSTALL_MODE}" == "1" ]]; then
             token=$(journalctl -u aegis --since "5 min ago" --no-pager 2>/dev/null \
-                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || echo "")
+                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || true)
         else
             token=$(docker compose -f "${INSTALL_ROOT}/docker-compose.yml" logs ank-server 2>&1 \
-                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || echo "")
+                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || true)
         fi
 
         echo ""
@@ -311,11 +299,13 @@ wait_and_show() {
             echo -e "  To regenerate: ${CYAN}sudo aegis token${NC}"
         else
             echo -e "  Access URL: ${CYAN}http://${ip}:8000${NC}"
-            echo -e "  If this is a fresh install, run: ${CYAN}sudo aegis token${NC}"
+            echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
         fi
         echo -e "${GREEN}################################################################${NC}"
+        echo ""
+        echo -e "  Log file: ${LOG_FILE}"
     else
-        warn "Health check timed out. Check logs with: sudo aegis logs"
+        warn "Health check timed out. Check: journalctl -u aegis -n 50"
     fi
 }
 
