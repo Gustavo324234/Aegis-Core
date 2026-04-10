@@ -31,11 +31,19 @@ echo "  - Identity databases (admin.db)"
 echo "  - Chat histories and workspace files"
 echo "  - System configurations (/etc/aegis)"
 echo ""
-read -rp "Are you absolutely sure you want to proceed? (y/N): " confirm
+# Check for non-interactive flag
+SKIP_CONFIRM=false
+if [[ "${1:-}" == "--yes" ]]; then
+    SKIP_CONFIRM=true
+fi
 
-if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-    echo "Uninstallation aborted."
-    exit 0
+if [[ "$SKIP_CONFIRM" == "false" ]]; then
+    read -rp "Are you absolutely sure you want to proceed? (y/N): " confirm
+
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        echo "Uninstallation aborted."
+        exit 0
+    fi
 fi
 
 # Detect Mode
