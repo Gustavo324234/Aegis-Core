@@ -150,7 +150,6 @@ cmd_token() {
 }
 
 cmd_uninstall() {
-    local script_path="/tmp/aegis-uninstall.sh"
     echo -e "${CYAN}Downloading/Running uninstaller...${NC}"
     
     # Try to use the local one if available, otherwise fetch from main
