@@ -14,9 +14,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # Job separado para construir ui-dist.tar.gz (se hace una sola vez)
+  # ── UI dist ────────────────────────────────────────────────────────────────
   build-ui:
-    name: "Build UI dist"
+    name: "UI dist"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,40 +27,23 @@ jobs:
           cache: 'npm'
           cache-dependency-path: 'shell/ui/package-lock.json'
 
-      - name: "🎨 Build UI"
-        run: cd shell/ui && npm ci && npm run build
+      - run: cd shell/ui && npm ci && npm run build
 
-      - name: "📦 Package ui-dist"
+      - name: Package ui-dist.tar.gz
         run: |
           mkdir -p dist-ui
           tar -czf dist-ui/ui-dist.tar.gz -C shell/ui/dist .
           sha256sum dist-ui/ui-dist.tar.gz > dist-ui/ui-dist.tar.gz.sha256
 
-      - name: "⬆️ Upload ui-dist artifact"
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ui-dist-pkg
+          name: ui-dist-pkg-${{ github.run_id }}
           path: dist-ui/*
 
-  build:
-    name: "Build ${{ matrix.artifact }}"
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact: ank-server-linux-x86_64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            artifact: ank-server-linux-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: ank-server-windows-x86_64.exe
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: ank-server-macos-arm64
-
-    runs-on: ${{ matrix.os }}
+  # ── Linux x86_64 ─────────────────────────────────────────────────────────
+  build-linux-x86_64:
+    name: "Linux x86_64"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -106,15 +89,50 @@ jobs:
       - name: Build
         run: cargo build --release -p ank-server
 
-      - name: "🔧 Install system dependencies (Windows)"
-        if: runner.os == 'Windows'
-        run: choco install protoc -y
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: "🔧 Install system dependencies (macOS)"
-        if: runner.os == 'macOS'
-        run: brew install protobuf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64
+
+      - name: Build
+        run: cargo build --release -p ank-server
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/ank-server dist/ank-server-linux-x86_64
+          cd dist
+          tar -czf ank-server-linux-x86_64.tar.gz ank-server-linux-x86_64
+          sha256sum ank-server-linux-x86_64.tar.gz > ank-server-linux-x86_64.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-pkg-${{ github.run_id }}
+          path: dist/*
+
+  # ── Linux ARM64 ───────────────────────────────────────────────────────────
+  build-linux-arm64:
+    name: "Linux ARM64"
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            protobuf-compiler \
+            cmake \
+            build-essential \
+            libssl-dev \
+            libsqlite3-dev \
+            pkg-config \
+            libclang-dev
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
         with:
           key: linux-arm64
 
@@ -213,21 +231,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          BIN_NAME="ank-server"
-          [ "${{ runner.os }}" = "Windows" ] && BIN_NAME="ank-server.exe"
-          SOURCE_BIN="target/${{ matrix.target }}/release/$BIN_NAME"
-          cp "$SOURCE_BIN" "dist/${{ matrix.artifact }}"
+          cp target/release/ank-server.exe dist/ank-server-windows-x86_64.exe
           cd dist
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            tar -czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
-            sha256sum "${{ matrix.artifact }}.tar.gz" > "${{ matrix.artifact }}.tar.gz.sha256"
-          elif [ "${{ runner.os }}" = "macOS" ]; then
-            zip -r "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
-            shasum -a 256 "${{ matrix.artifact }}.zip" > "${{ matrix.artifact }}.zip.sha256"
-          elif [ "${{ runner.os }}" = "Windows" ]; then
-            zip "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
-            sha256sum "${{ matrix.artifact }}.zip" > "${{ matrix.artifact }}.zip.sha256"
-          fi
+          7z a ank-server-windows-x86_64.zip ank-server-windows-x86_64.exe
+          sha256sum ank-server-windows-x86_64.zip > ank-server-windows-x86_64.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
@@ -238,14 +245,25 @@ jobs:
   # Publica todo lo que se haya compilado exitosamente.
   # Si algún target falla, los demás se publican igual.
   release:
-    name: "🚀 Release Binaries"
-    needs: [build, build-ui]
+    name: "🚀 Publish Release"
+    needs:
+      - build-ui
+      - build-linux-x86_64
+      - build-linux-arm64
+      - build-macos-arm64
+      - build-macos-x86_64
+      - build-windows-x86_64
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: |
+      always() &&
+      needs.build-ui.result == 'success' &&
+      needs.build-linux-x86_64.result == 'success' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: all-dist
+          pattern: "*-pkg-${{ github.run_id }}"
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
