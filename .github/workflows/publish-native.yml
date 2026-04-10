@@ -14,7 +14,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-
+  # ── UI dist ────────────────────────────────────────────────────────────────
   build-ui:
     name: "UI dist"
     runs-on: ubuntu-latest
@@ -27,8 +27,27 @@ jobs:
           cache: 'npm'
           cache-dependency-path: 'shell/ui/package-lock.json'
 
-      - name: Build UI
-        run: cd shell/ui && npm ci && npm run build
+      - run: cd shell/ui && npm ci && npm run build
+
+      - name: Package ui-dist.tar.gz
+        run: |
+          mkdir -p dist-ui
+          tar -czf dist-ui/ui-dist.tar.gz -C shell/ui/dist .
+          sha256sum dist-ui/ui-dist.tar.gz > dist-ui/ui-dist.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist-pkg-${{ github.run_id }}
+          path: dist-ui/*
+
+  # ── Linux x86_64 ─────────────────────────────────────────────────────────
+  build-linux-x86_64:
+    name: "Linux x86_64"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: cd shell/ui && npm ci && npm run build
 
       - name: Package ui-dist.tar.gz
         run: |
@@ -63,6 +82,15 @@ jobs:
       - name: Build
         run: cargo build --release -p ank-server
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64
+
+      - name: Build
+        run: cargo build --release -p ank-server
+
       - name: Package
         run: |
           mkdir -p dist
@@ -76,6 +104,7 @@ jobs:
           name: linux-x86_64-pkg-${{ github.run_id }}
           path: dist/*
 
+  # ── Linux ARM64 ───────────────────────────────────────────────────────────
   build-linux-arm64:
     name: "Linux ARM64"
     runs-on: ubuntu-24.04-arm
@@ -86,8 +115,13 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
-            protobuf-compiler cmake build-essential \
-            libssl-dev libsqlite3-dev pkg-config libclang-dev
+            protobuf-compiler \
+            cmake \
+            build-essential \
+            libssl-dev \
+            libsqlite3-dev \
+            pkg-config \
+            libclang-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
