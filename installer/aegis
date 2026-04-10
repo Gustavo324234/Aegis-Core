@@ -149,20 +149,35 @@ cmd_token() {
     fi
 }
 
+cmd_uninstall() {
+    local script_path="/tmp/aegis-uninstall.sh"
+    echo -e "${CYAN}Downloading/Running uninstaller...${NC}"
+    
+    # Try to use the local one if available, otherwise fetch from main
+    if [[ -f "$(dirname "$0")/uninstall.sh" ]]; then
+        bash "$(dirname "$0")/uninstall.sh"
+    elif [[ -f "${INSTALL_DIR}/uninstall.sh" ]]; then
+        bash "${INSTALL_DIR}/uninstall.sh"
+    else
+        curl -sSL "https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/uninstall.sh" | sudo bash
+    fi
+}
+
 # --- Execution ---
 
 case "${1:-help}" in
-    start)   cmd_start ;;
-    stop)    cmd_stop ;;
-    restart) cmd_stop; cmd_start ;;
-    status)  cmd_status ;;
-    logs)    cmd_logs "${2:-}" ;;
-    update)  cmd_update ;;
-    token)   cmd_token ;;
+    start)     cmd_start ;;
+    stop)      cmd_stop ;;
+    restart)   cmd_stop; cmd_start ;;
+    status)    cmd_status ;;
+    logs)      cmd_logs "${2:-}" ;;
+    update)    cmd_update ;;
+    token)     cmd_token ;;
+    uninstall) cmd_uninstall ;;
     help|*)
         echo "Aegis OS Unified CLI"
         echo ""
-        echo "Usage: aegis {start|stop|restart|status|logs|update|token}"
+        echo "Usage: aegis {start|stop|restart|status|logs|update|token|uninstall}"
         echo ""
         echo "Commands:"
         echo "  start       Start the service"
@@ -172,6 +187,7 @@ case "${1:-help}" in
         echo "  logs [N]    Show logs (default last 100 lines)"
         echo "  update      Update to latest version"
         echo "  token       Show active setup_token"
+        echo "  uninstall   Completely remove Aegis OS from system"
         exit 1
         ;;
 esac
