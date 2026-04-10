@@ -5,7 +5,6 @@
 
 set -euo pipefail
 
-# --- Configuration ---
 INSTALL_ROOT="/opt/aegis"
 CONFIG_DIR="/etc/aegis"
 BIN_DIR="/usr/local/bin"
@@ -18,14 +17,12 @@ GITHUB_ORG="Gustavo324234"
 GITHUB_REPO="Aegis-Core"
 RELEASE_TAG="nightly"
 
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Helpers
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
 warn()    { echo "[WARN] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${YELLOW}  [!]${NC} $1"; }
@@ -51,7 +48,6 @@ check_root() {
         echo -e "${RED}[ERROR]${NC} This script must be run as root (use sudo)." >&2
         exit 1
     fi
-    # Inicializar log como root
     touch "$LOG_FILE"
     chmod 600 "$LOG_FILE"
 }
@@ -87,17 +83,14 @@ install_dependencies() {
 install_native() {
     log "Starting native installation..."
 
-    # 1. Create system user
     if ! id -u aegis >/dev/null 2>&1; then
         log "Creating 'aegis' system user..."
         useradd --system --no-create-home --shell /sbin/nologin aegis >> "$LOG_FILE" 2>&1
     fi
 
-    # 2. Create directories
     mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$UI_DIST_PATH"
     chown -R aegis:aegis "$DATA_DIR"
 
-    # 3. Download ank-server binary
     local release_url="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
     local bin_file="ank-server-linux-${ARCH}.tar.gz"
     local tmp_bin="/root/${bin_file}"
@@ -106,7 +99,7 @@ install_native() {
     curl -L --fail --progress-bar \
         "${release_url}/${bin_file}" \
         -o "${tmp_bin}" \
-        || error "Failed to download ank-server. Verify release exists at github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases"
+        || error "Failed to download ank-server. Check releases at github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases"
 
     tar -xzf "${tmp_bin}" -C "/root/" >> "$LOG_FILE" 2>&1
     mv "/root/ank-server-linux-${ARCH}" "${BIN_DIR}/ank-server"
@@ -114,7 +107,6 @@ install_native() {
     rm "${tmp_bin}"
     success "ank-server installed → ${BIN_DIR}/ank-server"
 
-    # 4. Download UI assets
     log "Downloading UI assets..."
     curl -L --fail --progress-bar \
         "${release_url}/ui-dist.tar.gz" \
@@ -125,7 +117,6 @@ install_native() {
     rm "/root/ui-dist.tar.gz"
     success "UI assets installed → ${UI_DIST_PATH}"
 
-    # 5. Install aegis CLI
     log "Installing aegis CLI..."
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -140,7 +131,6 @@ install_native() {
     chmod +x "${BIN_DIR}/aegis"
     success "aegis CLI installed → ${BIN_DIR}/aegis"
 
-    # 6. Generate environment file
     if [[ ! -f "$ENV_FILE" ]]; then
         log "Generating AEGIS_ROOT_KEY..."
         local root_key
@@ -159,10 +149,8 @@ EOF
         grep -q "UI_DIST_PATH" "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}" >> "$ENV_FILE"
     fi
 
-    # 7. Write mode file
     echo "native" > "$CONFIG_DIR/mode"
 
-    # 8. Install systemd service
     log "Installing systemd service..."
     cat > /etc/systemd/system/aegis.service <<EOF
 [Unit]
@@ -192,9 +180,7 @@ SyslogIdentifier=aegis
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload >> "$LOG_FILE" 2>&1
-    systemctl enable aegis.service >> "$LOG_FILE" 2>&1
-    systemctl start aegis.service >> "$LOG_FILE" 2>&1
+    { systemctl daemon-reload && systemctl enable aegis.service && systemctl start aegis.service; } >> "$LOG_FILE" 2>&1
     success "systemd service installed and started."
 }
 
@@ -233,7 +219,7 @@ EOF
     fi
 
     log "Pulling image and starting containers..."
-    (cd "$INSTALL_ROOT" && docker compose up -d >> "$LOG_FILE" 2>&1) \
+    { cd "$INSTALL_ROOT" && docker compose up -d; } >> "$LOG_FILE" 2>&1 \
         || error "Docker Compose failed. Check ${LOG_FILE} for details."
 
     success "Docker installation complete."
