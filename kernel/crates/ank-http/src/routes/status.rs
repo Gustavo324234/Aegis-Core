@@ -80,9 +80,17 @@ pub async fn get_system_status(
     Ok(Json(res))
 }
 
-pub async fn get_public_system_state(State(_state): State<AppState>) -> Json<Value> {
-    // Basic public state
-    Json(json!({ "state": "STATE_OPERATIONAL" }))
+pub async fn get_public_system_state(State(state): State<AppState>) -> Json<Value> {
+    let citadel = state.citadel.lock().await;
+    let exists = citadel.enclave.admin_exists().await.unwrap_or(false);
+    
+    let state_str = if exists {
+        "STATE_OPERATIONAL"
+    } else {
+        "STATE_INITIALIZING"
+    };
+
+    Json(json!({ "state": state_str }))
 }
 
 pub async fn get_sync_version() -> Json<Value> {
