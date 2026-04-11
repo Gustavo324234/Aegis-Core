@@ -41,11 +41,15 @@ pub async fn get_system_status(
     // Validar contra Citadel
     {
         let citadel = state.citadel.lock().await;
-        citadel
+        let is_auth = citadel
             .enclave
             .authenticate_tenant(&query.tenant_id, &hash)
             .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
+        
+        if !is_auth {
+            return Err(AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized));
+        }
     }
 
     // Obtener hardware status del HAL

@@ -33,6 +33,7 @@ pub async fn login(
     State(state): State<AppState>,
     Json(body): Json<AuthRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
+    let hash = hash_passphrase(&body.session_key);
     let is_auth = state
         .citadel
         .lock()

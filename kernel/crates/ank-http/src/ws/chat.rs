@@ -71,12 +71,13 @@ async fn handle_chat(
     // 1. Authenticate
     {
         let citadel = state.citadel.lock().await;
-        if citadel
+        let is_auth = citadel
             .enclave
             .authenticate_tenant(&tenant_id, &hash)
             .await
-            .is_err()
-        {
+            .unwrap_or(false);
+
+        if !is_auth {
             let _ = socket
                 .send(Message::Text(
                     json!({
