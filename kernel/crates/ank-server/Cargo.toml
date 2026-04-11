@@ -22,7 +22,9 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace   = true
 dirs.workspace               = true
 uuid.workspace               = true
+openssl                      = { workspace = true }
 
 [features]
-full_local  = ["ank-core/full_local"]
-embed-ui    = ["ank-http/embed-ui"]
+full_local       = ["ank-core/full_local"]
+embed-ui         = ["ank-http/embed-ui"]
+vendored-openssl = ["openssl"]
