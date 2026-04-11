@@ -73,11 +73,17 @@ async fn upload(
     let hash = hash_passphrase(&session_key);
     {
         let citadel = state.citadel.lock().await;
-        citadel
+        let is_auth = citadel
             .enclave
             .authenticate_tenant(&tenant_id, &hash)
             .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
+
+        if !is_auth {
+            return Err(AegisHttpError::Citadel(
+                crate::citadel::CitadelError::Unauthorized,
+            ));
+        }
     }
 
     // Sanitizar filename

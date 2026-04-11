@@ -50,11 +50,17 @@ pub async fn configure(
     // 1. Validar contra Citadel
     {
         let citadel = state.citadel.lock().await;
-        citadel
+        let is_auth = citadel
             .enclave
             .authenticate_tenant(&body.tenant_id, &hash)
             .await
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
+
+        if !is_auth {
+            return Err(AegisHttpError::Citadel(
+                crate::citadel::CitadelError::Unauthorized,
+            ));
+        }
     }
 
     // 2. Actualizar HAL
