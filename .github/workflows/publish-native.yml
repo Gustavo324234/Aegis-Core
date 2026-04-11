@@ -122,21 +122,23 @@ jobs:
 
   build-macos-x86_64:
     name: "macOS x86_64"
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: System dependencies
         run: brew install protobuf cmake
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           key: macos-x86_64
       - name: Build
-        run: cargo build --release -p ank-server
+        run: cargo build --release -p ank-server --target x86_64-apple-darwin
       - name: Package
         run: |
           mkdir -p dist
-          cp target/release/ank-server dist/ank-server-macos-x86_64
+          cp target/x86_64-apple-darwin/release/ank-server dist/ank-server-macos-x86_64
           cd dist
           zip ank-server-macos-x86_64.zip ank-server-macos-x86_64
           shasum -a 256 ank-server-macos-x86_64.zip > ank-server-macos-x86_64.zip.sha256
