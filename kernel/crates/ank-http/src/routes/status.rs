@@ -83,7 +83,7 @@ pub async fn get_system_status(
 pub async fn get_public_system_state(State(state): State<AppState>) -> Json<Value> {
     let citadel = state.citadel.lock().await;
     let exists = citadel.enclave.admin_exists().await.unwrap_or(false);
-    
+
     let state_str = if exists {
         "STATE_OPERATIONAL"
     } else {
