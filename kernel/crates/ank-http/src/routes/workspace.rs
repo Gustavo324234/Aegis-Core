@@ -80,7 +80,9 @@ async fn upload(
             .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
 
         if !is_auth {
-            return Err(AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized));
+            return Err(AegisHttpError::Citadel(
+                crate::citadel::CitadelError::Unauthorized,
+            ));
         }
     }
 
