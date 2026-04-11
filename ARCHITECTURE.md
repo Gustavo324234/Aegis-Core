@@ -100,7 +100,7 @@ aegis-core/
 ├── installer/
 │   ├── install.sh            instalador unificado
 │   ├── docker-compose.yml    modo Docker (opcional)
-│   └── aegis-native-install.sh  modo nativo
+│   └── setup-service.sh      configuración de servicio nativo
 │
 ├── governance/
 │   ├── TICKETS_MASTER.md

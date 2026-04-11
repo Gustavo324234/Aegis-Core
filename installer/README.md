@@ -10,11 +10,11 @@ native Windows/macOS systems.
 | Script | Purpose |
 |---|---|
 | `install.sh` | One-line installer (native + Docker modes) |
-| `aegis-native-install.sh` | Native mode: downloads binaries, configures systemd |
+| `setup-service.sh` | Native mode: configures systemd and environment |
 | `docker-compose.yml` | Docker deployment |
-| `aegis_hotreload.sh` | Hot-reload for development on remote servers |
-| `aegis_sync.ps1` | Windows → server rsync + SSH |
+| `aegis` | CLI tool for management |
 | `uninstall.sh` | Clean uninstall |
+| `aegis.service` | Systemd service template |
 
 ## Source
 

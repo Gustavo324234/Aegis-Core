@@ -34,7 +34,7 @@ pub async fn login(
     Json(body): Json<AuthRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let hash = hash_passphrase(&body.session_key);
-    state
+    let is_auth = state
         .citadel
         .lock()
         .await
@@ -49,6 +49,12 @@ pub async fn login(
                 AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized)
             }
         })?;
+
+    if !is_auth {
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
+    }
 
     Ok(Json(json!({
         "message": "Citadel Handshake Successful",

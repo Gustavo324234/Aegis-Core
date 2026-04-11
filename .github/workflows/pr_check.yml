@@ -26,11 +26,22 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: fmt
-        run: cargo fmt --all -- --check
+      - name: Auto-format code
+        run: cargo fmt --all
 
-      - name: clippy
-        run: cargo clippy --workspace -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+      - name: Clippy auto-fix
+        run: cargo clippy --workspace --fix --allow-dirty --allow-staged -- -D warnings
+
+      - name: Commit fixes (if any)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: auto-format and clippy fixes [skip ci]"
+          file_pattern: "*.rs"
+
+      - name: Strict checks
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 
       - name: test
         run: cargo test --workspace
