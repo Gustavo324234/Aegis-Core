@@ -31,11 +31,18 @@ echo "  - Identity databases (admin.db)"
 echo "  - Chat histories and workspace files"
 echo "  - System configurations (/etc/aegis)"
 echo ""
-read -rp "Are you absolutely sure you want to proceed? (y/N): " confirm
+# Parse arguments
+FORCE_MODE=false
+if [[ "${1:-}" == "--force" ]]; then
+    FORCE_MODE=true
+fi
 
-if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-    echo "Uninstallation aborted."
-    exit 0
+if [[ "$FORCE_MODE" == "false" ]]; then
+    read -rp "Are you absolutely sure you want to proceed? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        echo "Uninstallation aborted."
+        exit 0
+    fi
 fi
 
 # Detect Mode

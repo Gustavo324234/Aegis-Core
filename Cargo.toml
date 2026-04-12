@@ -89,6 +89,8 @@ arrow-array        = "58"
 arrow-schema       = "58"
 arrow-buffer       = "58"
 
+openssl            = { version = "0.10", features = ["vendored"] }
+
 [profile.release]
 opt-level     = 3
 lto           = true
