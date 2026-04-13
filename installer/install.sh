@@ -157,7 +157,11 @@ install_native() {
     fi
 
     mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$UI_DIST_PATH"
+    mkdir -p "$DATA_DIR/logs" "$DATA_DIR/plugins" "$DATA_DIR/users"
+    
+    # Recursive chown to ensure all subdirs are writable by the aegis service user
     chown -R aegis:aegis "$DATA_DIR" "$CONFIG_DIR" "$UI_DIST_PATH"
+    chmod -R 750 "$DATA_DIR"
 
     local release_url="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
     local bin_file="ank-server-linux-${ARCH}.tar.gz"
@@ -201,10 +205,13 @@ Type=simple
 User=aegis
 Group=aegis
 EnvironmentFile=${ENV_FILE}
+Environment=RUST_LOG=info
 ExecStart=${BIN_DIR}/ank-server
 Restart=always
 RestartSec=5s
 ReadWritePaths=${DATA_DIR} ${CONFIG_DIR}
+StandardOutput=journal+console
+StandardError=journal+console
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=full
