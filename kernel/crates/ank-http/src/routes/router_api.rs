@@ -1,11 +1,12 @@
 use crate::{
-    citadel::{hash_passphrase, CitadelAuthenticated},
+    citadel::{hash_passphrase, CitadelAuthenticated, CitadelError},
     error::AegisHttpError,
     state::AppState,
 };
 use ank_core::router::key_pool::ApiKeyEntry;
 use axum::{
     extract::{Path, State},
+    http::HeaderMap,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -25,36 +26,55 @@ pub fn router() -> Router<AppState> {
         .route("/status", get(router_status))
 }
 
+/// Body para operaciones de clave — credenciales vienen de headers Citadel.
 #[derive(Deserialize)]
 pub struct KeyAddRequest {
-    pub tenant_id: String,
-    pub session_key: String,
     pub provider: String,
     pub api_key: String,
     pub api_url: Option<String>,
     pub label: Option<String>,
 }
 
-async fn add_global_key(
-    State(state): State<AppState>,
-    Json(req): Json<KeyAddRequest>,
-) -> Result<Json<Value>, AegisHttpError> {
-    // Solo root puede agregar keys globales
-    if req.tenant_id != "root" {
-        return Err(AegisHttpError::Kernel(
-            "Only Master Admin can manage global keys".into(),
-        ));
+/// Valida que los headers Citadel correspondan al Master Admin.
+/// Retorna el `tenant_id` autenticado.
+async fn require_master_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<String, AegisHttpError> {
+    let tenant_id = headers
+        .get("x-citadel-tenant")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .ok_or(AegisHttpError::Citadel(CitadelError::MissingTenant))?;
+
+    let raw_key = headers
+        .get("x-citadel-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .ok_or(AegisHttpError::Citadel(CitadelError::MissingKey))?;
+
+    let hash = hash_passphrase(&raw_key);
+
+    let citadel = state.citadel.lock().await;
+    let is_master = citadel
+        .enclave
+        .authenticate_master(&tenant_id, &hash)
+        .await
+        .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+
+    if !is_master {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
     }
 
-    let hash = hash_passphrase(&req.session_key);
-    {
-        let citadel = state.citadel.lock().await;
-        citadel
-            .enclave
-            .authenticate_tenant(&req.tenant_id, &hash)
-            .await
-            .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-    }
+    Ok(tenant_id)
+}
+
+async fn add_global_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<KeyAddRequest>,
+) -> Result<Json<Value>, AegisHttpError> {
+    require_master_auth(&state, &headers).await?;
 
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
@@ -77,13 +97,9 @@ async fn add_global_key(
 
 async fn list_global_keys(
     State(state): State<AppState>,
-    auth: CitadelAuthenticated,
+    headers: HeaderMap,
 ) -> Result<Json<Value>, AegisHttpError> {
-    if auth.tenant_id != "root" {
-        return Err(AegisHttpError::Kernel(
-            "Only Master Admin can list global keys".into(),
-        ));
-    }
+    require_master_auth(&state, &headers).await?;
 
     let router = state.router.read().await;
     let keys = router.list_global_keys().await;
@@ -92,14 +108,10 @@ async fn list_global_keys(
 
 async fn delete_global_key(
     State(state): State<AppState>,
-    auth: CitadelAuthenticated,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    if auth.tenant_id != "root" {
-        return Err(AegisHttpError::Kernel(
-            "Only Master Admin can delete global keys".into(),
-        ));
-    }
+    require_master_auth(&state, &headers).await?;
 
     let router = state.router.read().await;
     router
@@ -112,18 +124,9 @@ async fn delete_global_key(
 
 async fn add_tenant_key(
     State(state): State<AppState>,
+    auth: CitadelAuthenticated,
     Json(req): Json<KeyAddRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let hash = hash_passphrase(&req.session_key);
-    {
-        let citadel = state.citadel.lock().await;
-        citadel
-            .enclave
-            .authenticate_tenant(&req.tenant_id, &hash)
-            .await
-            .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-    }
-
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
         provider: req.provider,
@@ -136,7 +139,7 @@ async fn add_tenant_key(
 
     let router = state.router.read().await;
     router
-        .add_tenant_key(&req.tenant_id, entry)
+        .add_tenant_key(&auth.tenant_id, entry)
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
@@ -176,16 +179,10 @@ async fn list_router_models(
 }
 
 async fn sync_router_catalog(
-    State(_state): State<AppState>,
-    auth: CitadelAuthenticated,
+    State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<Value>, AegisHttpError> {
-    if auth.tenant_id != "root" {
-        return Err(AegisHttpError::Kernel(
-            "Only Master Admin can trigger sync".into(),
-        ));
-    }
-    // Catalog sync is usually background and triggered via syncer.
-    // For now returning success as in Python BFF.
+    require_master_auth(&state, &headers).await?;
     Ok(Json(
         json!({ "success": true, "message": "Catalog synchronization triggered" }),
     ))

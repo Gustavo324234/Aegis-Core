@@ -279,9 +279,30 @@ impl KernelService for AnkRpcServer {
     // but these are the main ones needed for health/setup.
     async fn reset_tenant_password(
         &self,
-        _req: Request<ank_proto::v1::PasswordResetRequest>,
+        request: Request<ank_proto::v1::PasswordResetRequest>,
     ) -> Result<Response<Empty>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let req = request.into_inner();
+        let citadel = self.state.citadel.lock().await;
+        let is_master = citadel
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
+            .unwrap_or(false);
+        if !is_master {
+            return Err(Status::permission_denied("Only Master can reset passwords"));
+        }
+        citadel
+            .enclave
+            .reset_tenant_password(&req.tenant_id, &req.new_passphrase)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(Empty {}))
     }
 
     type TeleportProcessStream =
@@ -297,6 +318,7 @@ impl KernelService for AnkRpcServer {
         &self,
         _req: Request<Empty>,
     ) -> Result<Response<ank_proto::v1::SirenVoiceList>, Status> {
+        // TODO(CORE-080-P3): post-launch
         Ok(Response::new(ank_proto::v1::SirenVoiceList {
             voices: vec![],
         }))
@@ -306,60 +328,278 @@ impl KernelService for AnkRpcServer {
         &self,
         _req: Request<ank_proto::v1::EngineConfigRequest>,
     ) -> Result<Response<Empty>, Status> {
+        // TODO(CORE-080-P3): post-launch
         Err(Status::unimplemented("Not implemented"))
     }
 
     async fn list_tenants(
         &self,
-        _req: Request<Empty>,
+        request: Request<Empty>,
     ) -> Result<Response<ank_proto::v1::ListTenantsResponse>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let citadel = self.state.citadel.lock().await;
+        let is_master = citadel
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
+            .unwrap_or(false);
+        if !is_master {
+            return Err(Status::permission_denied("Only Master can list tenants"));
+        }
+        let tenants = citadel
+            .enclave
+            .list_tenants()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(ank_proto::v1::ListTenantsResponse {
+            tenants,
+        }))
     }
 
     async fn delete_tenant(
         &self,
-        _req: Request<ank_proto::v1::TenantDeleteRequest>,
+        request: Request<ank_proto::v1::TenantDeleteRequest>,
     ) -> Result<Response<Empty>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let req = request.into_inner();
+        let citadel = self.state.citadel.lock().await;
+        let is_master = citadel
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
+            .unwrap_or(false);
+        if !is_master {
+            return Err(Status::permission_denied("Only Master can delete tenants"));
+        }
+        citadel
+            .enclave
+            .delete_tenant(&req.tenant_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(Empty {}))
     }
 
     async fn add_global_key(
         &self,
-        _req: Request<ank_proto::v1::GlobalKeyRequest>,
+        request: Request<ank_proto::v1::GlobalKeyRequest>,
     ) -> Result<Response<Empty>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let req = request.into_inner();
+        let is_master = self
+            .state
+            .citadel
+            .lock()
+            .await
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
+            .unwrap_or(false);
+        if !is_master {
+            return Err(Status::permission_denied("Only Master can add global keys"));
+        }
+        let entry = ank_core::router::key_pool::ApiKeyEntry {
+            key_id: uuid::Uuid::new_v4().to_string(),
+            provider: req.provider,
+            api_key: req.api_key,
+            api_url: req.api_url,
+            label: req.label,
+            is_active: true,
+            rate_limited_until: None,
+        };
+        let router = self.state.router.read().await;
+        router
+            .add_global_key(entry)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(Empty {}))
     }
 
     async fn list_global_keys(
         &self,
-        _req: Request<Empty>,
+        request: Request<Empty>,
     ) -> Result<Response<ank_proto::v1::KeyListResponse>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let is_master = self
+            .state
+            .citadel
+            .lock()
+            .await
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
+            .unwrap_or(false);
+        if !is_master {
+            return Err(Status::permission_denied(
+                "Only Master can list global keys",
+            ));
+        }
+        let router = self.state.router.read().await;
+        let keys = router
+            .list_global_keys()
+            .await
+            .into_iter()
+            .map(|k| ank_proto::v1::KeyInfo {
+                key_id: k.key_id,
+                provider: k.provider,
+                api_key: "***".to_string(),
+                api_url: k.api_url,
+                label: k.label,
+                is_active: k.is_active,
+                rate_limited_until: None,
+            })
+            .collect();
+        Ok(Response::new(ank_proto::v1::KeyListResponse { keys }))
     }
 
     async fn delete_key(
         &self,
-        _req: Request<ank_proto::v1::DeleteKeyRequest>,
+        request: Request<ank_proto::v1::DeleteKeyRequest>,
     ) -> Result<Response<Empty>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let req = request.into_inner();
+        let is_master = self
+            .state
+            .citadel
+            .lock()
+            .await
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
+            .unwrap_or(false);
+        let tenant_filter = if is_master {
+            req.tenant_id.as_deref()
+        } else {
+            Some(auth.tenant_id.as_str())
+        };
+        let router = self.state.router.read().await;
+        router
+            .delete_key(&req.key_id, tenant_filter)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(Empty {}))
     }
 
     async fn list_my_keys(
         &self,
-        _req: Request<Empty>,
+        request: Request<Empty>,
     ) -> Result<Response<ank_proto::v1::KeyListResponse>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let router = self.state.router.read().await;
+        let keys = router
+            .list_tenant_keys(&auth.tenant_id)
+            .await
+            .into_iter()
+            .map(|k| ank_proto::v1::KeyInfo {
+                key_id: k.key_id,
+                provider: k.provider,
+                api_key: "***".to_string(),
+                api_url: k.api_url,
+                label: k.label,
+                is_active: k.is_active,
+                rate_limited_until: None,
+            })
+            .collect();
+        Ok(Response::new(ank_proto::v1::KeyListResponse { keys }))
     }
 
-    async fn sync_router_catalog(&self, _req: Request<Empty>) -> Result<Response<Empty>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+    async fn sync_router_catalog(
+        &self,
+        request: Request<Empty>,
+    ) -> Result<Response<Empty>, Status> {
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let is_master = self
+            .state
+            .citadel
+            .lock()
+            .await
+            .enclave
+            .authenticate_master(&auth.tenant_id, &auth.session_key)
+            .await
+            .unwrap_or(false);
+        if !is_master {
+            return Err(Status::permission_denied("Only Master can sync catalog"));
+        }
+
+        if let Some(syncer) = &self.state.catalog_syncer {
+            syncer
+                .sync_now()
+                .await
+                .map_err(|e| Status::internal(format!("Sync failed: {}", e)))?;
+        }
+
+        Ok(Response::new(Empty {}))
     }
 
     async fn list_router_models(
         &self,
-        _req: Request<Empty>,
+        request: Request<Empty>,
     ) -> Result<Response<ank_proto::v1::ModelListResponse>, Status> {
-        Err(Status::unimplemented("Not implemented"))
+        let auth = request
+            .extensions()
+            .get::<CitadelAuth>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Missing Citadel context"))?;
+        self.validate_auth(&auth).await?;
+        let router = self.state.router.read().await;
+        let models = router
+            .list_models_for_catalog()
+            .await
+            .into_iter()
+            .map(|m| ank_proto::v1::ModelInfo {
+                model_id: m.model_id,
+                provider: m.provider,
+                display_name: m.display_name,
+                context_window: m.context_window,
+                cost_input_per_mtok: m.cost_input_per_mtok as f32,
+                cost_output_per_mtok: m.cost_output_per_mtok as f32,
+                is_local: m.is_local,
+                task_scores: Some(ank_proto::v1::ModelTaskScores {
+                    chat: m.task_scores.chat as u32,
+                    coding: m.task_scores.coding as u32,
+                    planning: m.task_scores.planning as u32,
+                    analysis: m.task_scores.analysis as u32,
+                }),
+            })
+            .collect();
+        Ok(Response::new(ank_proto::v1::ModelListResponse {
+            models,
+            synced_at: String::new(),
+        }))
     }
 
     async fn get_siren_config(
@@ -381,25 +621,32 @@ impl KernelService for AnkRpcServer {
 pub fn auth_interceptor(req: Request<()>) -> Result<Request<()>, Status> {
     let metadata = req.metadata();
 
-    let tenant_id = match metadata.get("x-citadel-tenant") {
-        Some(v) => v.to_str().map(|s| s.to_string()).unwrap_or_default(),
-        None => return Ok(req),
-    };
+    let tenant_id = metadata
+        .get("x-citadel-tenant")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
-    let session_key = match metadata.get("x-citadel-key") {
-        Some(v) => v.to_str().map(|s| s.to_string()).unwrap_or_default(),
-        None => return Ok(req),
-    };
+    let session_key = metadata
+        .get("x-citadel-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
-    // simplified hashing to match BFF (actually it should be exactly what citadel.rs does)
-    let session_key_hash = ank_http::citadel::hash_passphrase(&session_key);
-
-    let mut req = req;
-    req.extensions_mut().insert(CitadelAuth {
-        tenant_id,
-        session_key: session_key_hash,
-        public_id: "obfuscated".to_string(), // Placeholder
-    });
-
-    Ok(req)
+    match (tenant_id, session_key) {
+        (Some(tid), Some(key)) => {
+            let hash = ank_http::citadel::hash_passphrase(&key);
+            let mut req = req;
+            req.extensions_mut().insert(CitadelAuth {
+                tenant_id: tid,
+                session_key: hash,
+                public_id: "obfuscated".to_string(),
+            });
+            Ok(req)
+        }
+        // No headers at all — public request, handler decides if auth is required
+        (None, None) => Ok(req),
+        // Partial headers — Citadel Protocol violation
+        _ => Err(Status::unauthenticated(
+            "Citadel Protocol violation: partial credentials",
+        )),
+    }
 }

@@ -14,7 +14,7 @@ import EngineSetupWizard from './components/EngineSetupWizard';
 function App() {
     const { 
         _hydrated, status, isAuthenticated, isAdmin, systemState, 
-        tenantId, sessionKey, connect, fetchSystemState, 
+        tenantId, sessionKey, connect, logout, fetchSystemState, 
         isEngineConfigured, setEngineConfigured, 
         needsPasswordReset, setNeedsPasswordReset 
     } = useAegisStore();
@@ -38,6 +38,13 @@ function App() {
             window.history.replaceState({}, document.title, window.location.pathname);
         }
     }, []);
+
+    // Security: Identity Law - If store claims authenticated but sessionKey is missing (e.g. F5 refresh), force logout
+    useEffect(() => {
+        if (_hydrated && isAuthenticated && !sessionKey) {
+            logout();
+        }
+    }, [_hydrated, isAuthenticated, sessionKey, logout]);
 
     // Check for global cognitive engine if user is authenticated but enclave engine not set
     useEffect(() => {

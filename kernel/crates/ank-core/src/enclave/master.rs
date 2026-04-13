@@ -180,13 +180,9 @@ impl MasterEnclave {
         username: &str,
         passphrase_or_session: &str,
     ) -> Result<bool> {
-        // ANK-SEC-BYPASS: Desarrollo / Emergencia
-        if std::env::var("AEGIS_DEV_MASTER_BYPASS").unwrap_or_default() == "true"
-            && username == "root"
-        {
-            tracing::warn!("ANK-SECURITY-WARNING: Master Admin BYPASS enabled for user 'root'.");
-            return Ok(true);
-        }
+        // SECURITY: No development bypass is provided. Use the setup token flow
+        // (store_setup_token / validate_and_consume_setup_token) for first-time access.
+        // See ADR-023.
 
         let conn = self.connection.lock().await;
 

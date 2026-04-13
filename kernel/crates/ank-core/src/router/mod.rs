@@ -208,14 +208,21 @@ impl CognitiveRouter {
 fn entry_api_url(entry: &ModelEntry) -> String {
     // Default API URLs per provider
     match entry.provider.as_str() {
-        "anthropic" => "https://api.anthropic.com/v1/messages".to_string(),
+        // Compatible OpenAI — requiere key propia
         "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
         "groq" => "https://api.groq.com/openai/v1/chat/completions".to_string(),
+        "ollama" => "http://localhost:11434/v1/chat/completions".to_string(),
+        // Compatible OpenAI via OpenRouter — requiere key de OpenRouter
+        "anthropic" | "deepseek" | "mistral" | "qwen" => {
+            "https://openrouter.ai/api/v1/chat/completions".to_string()
+        }
+        // Google: compatible OpenAI via endpoint beta
         "google" => {
             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".to_string()
         }
+        // OpenRouter: hub universal
         "openrouter" => "https://openrouter.ai/api/v1/chat/completions".to_string(),
-        "ollama" => "http://localhost:11434/v1/chat/completions".to_string(),
+        // Fallback seguro
         _ => "https://openrouter.ai/api/v1/chat/completions".to_string(),
     }
 }

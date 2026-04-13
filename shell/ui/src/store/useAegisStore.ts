@@ -92,6 +92,11 @@ interface WindowWithWebkit extends Window {
     webkitAudioContext?: typeof AudioContext;
 }
 
+const buildWsUrl = (path: string) => {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}${path}`;
+};
+
 let telemetryInterval: number | null = null;
 
 export const useAegisStore = create<AegisState>()(
@@ -131,8 +136,11 @@ export const useAegisStore = create<AegisState>()(
                     try {
                         const sessionKey = get().sessionKey;
                         if (!sessionKey || !tenantId) return;
-                        const response = await fetch(`/api/status?tenant_id=${encodeURIComponent(tenantId)}`, {
-                            headers: { 'x-citadel-key': sessionKey }
+                        const response = await fetch(`/api/status`, {
+                            headers: { 
+                                'x-citadel-tenant': tenantId,
+                                'x-citadel-key': sessionKey 
+                            }
                         });
                         if (response.ok) {
                             const data = await response.json();
@@ -173,7 +181,13 @@ export const useAegisStore = create<AegisState>()(
                 if (!tenantId || !sessionKey) return;
                 set({ isFetchingTenants: true, tenantsError: null });
                 try {
-                    const res = await fetch(`/api/admin/tenants?admin_tenant_id=${encodeURIComponent(tenantId as string)}&admin_session_key=${encodeURIComponent(sessionKey as string)}`);
+                    const res = await fetch(`/api/admin/tenants`, {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey
+                        }
+                    });
                     if (res.ok) {
                         const data = await res.json();
                         const rawTenants = data.tenants || [];
@@ -197,8 +211,12 @@ export const useAegisStore = create<AegisState>()(
                 try {
                     const res = await fetch('/api/admin/tenant', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ admin_tenant_id: tenantId, admin_session_key: sessionKey, username: targetUsername })
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId!,
+                            'x-citadel-key': sessionKey!
+                        },
+                        body: JSON.stringify({ username: targetUsername })
                     });
                     const data = await res.json();
                     if (res.ok) {
@@ -219,9 +237,13 @@ export const useAegisStore = create<AegisState>()(
                 const { tenantId, sessionKey } = get();
                 if (!tenantId || !sessionKey) return false;
                 try {
-                    const res = await fetch(`/api/admin/tenant/${encodeURIComponent(targetId)}?admin_tenant_id=${encodeURIComponent(tenantId)}`, { 
+                    const res = await fetch(`/api/admin/tenant/${encodeURIComponent(targetId)}`, { 
                         method: 'DELETE',
-                        headers: { 'x-citadel-key': sessionKey }
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey
+                        }
                     });
                     if (res.ok) { get().fetchTenants(); return true; }
                     return false;
@@ -234,8 +256,12 @@ export const useAegisStore = create<AegisState>()(
                 try {
                     const res = await fetch('/api/admin/reset_password', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ tenant_id: targetId, admin_tenant_id: tenantId, admin_session_key: sessionKey, new_passphrase: newPass })
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId!,
+                            'x-citadel-key': sessionKey!
+                        },
+                        body: JSON.stringify({ tenant_id: targetId, new_passphrase: newPass })
                     });
                     if (res.ok) {
                         // Very important: if we reset our own password during the force reset flow, update the current active session key!
@@ -249,7 +275,7 @@ export const useAegisStore = create<AegisState>()(
             },
 
             connect: (tenantId, sessionKey) => {
-                const wsUrl = `ws://${window.location.hostname}:8000/ws/chat/${encodeURIComponent(tenantId)}`;
+                const wsUrl = buildWsUrl(`/ws/chat/${encodeURIComponent(tenantId)}`);
                 const currentSocket = get().socket;
                 if (currentSocket) currentSocket.close();
                 set({ status: 'connecting' });
@@ -340,12 +366,12 @@ export const useAegisStore = create<AegisState>()(
                         body: JSON.stringify({ tenant_id: tenantId, session_key: passphrase })
                     });
                     if (response.ok) {
-                        const data = await response.json();
+                        const data = await response.json() as { status: string; role?: string };
                         if (data.status === 'password_must_change') {
                             set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: false, needsPasswordReset: true });
                             return 'password_must_change';
                         }
-                        set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: tenantId.toLowerCase() === 'root' || tenantId.toLowerCase() === 'admin', needsPasswordReset: false });
+                        set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: data.role === 'admin', needsPasswordReset: false });
                         return 'authenticated';
                     }
                     return 'failed';
@@ -353,9 +379,25 @@ export const useAegisStore = create<AegisState>()(
             },
 
             logout: () => {
-                get().disconnect();
-                set({ isAuthenticated: false, isAdmin: false, tenantId: null, sessionKey: null, messages: [], needsPasswordReset: false });
-                if (telemetryInterval) clearInterval(telemetryInterval);
+                const { socket, sirenSocket } = get();
+                if (socket) socket.close();
+                if (sirenSocket) sirenSocket.close();
+                
+                set({ 
+                    isAuthenticated: false, 
+                    isAdmin: false, 
+                    tenantId: null, 
+                    sessionKey: null, 
+                    socket: null, 
+                    sirenSocket: null,
+                    messages: [], 
+                    needsPasswordReset: false 
+                });
+
+                if (telemetryInterval) {
+                    clearInterval(telemetryInterval);
+                    telemetryInterval = null;
+                }
             },
 
             startSirenStream: async () => {
@@ -389,7 +431,7 @@ export const useAegisStore = create<AegisState>()(
                         } else silenceStart = Date.now();
                         requestAnimationFrame(checkSilence);
                     };
-                    const wsUrl = `ws://${window.location.hostname}:8000/ws/siren/${encodeURIComponent(tenantId)}`;
+                    const wsUrl = buildWsUrl(`/ws/siren/${encodeURIComponent(tenantId)}`);
                     const sirenWs = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
                     sirenWs.binaryType = 'arraybuffer';
                     sirenWs.onopen = () => { set({ isRecording: true, sirenSocket: sirenWs }); requestAnimationFrame(checkSilence); };
@@ -451,8 +493,12 @@ export const useAegisStore = create<AegisState>()(
                 try {
                     const response = await fetch('/api/engine/configure', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ tenant_id: tenantId, session_key: sessionKey, api_url: apiUrl, model_name: model, api_key: apiKey, provider })
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId!,
+                            'x-citadel-key': sessionKey!
+                        },
+                        body: JSON.stringify({ api_url: apiUrl, model_name: model, api_key: apiKey, provider })
                     });
                     if (response.ok) { set({ isEngineConfigured: true }); return true; }
                     return false;
@@ -468,7 +514,6 @@ export const useAegisStore = create<AegisState>()(
                 isAuthenticated: state.isAuthenticated,
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
-                sessionKey: state.sessionKey,
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
                 messages: state.messages,

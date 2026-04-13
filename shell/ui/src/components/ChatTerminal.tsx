@@ -178,12 +178,14 @@ const ChatTerminal: React.FC = () => {
         setIsUploading(true);
         try {
             const formData = new FormData();
-            formData.append('tenant_id', tenantId);
-            formData.append('session_key', sessionKey);
             formData.append('file', file);
 
             const response = await fetch('/api/workspace/upload', {
                 method: 'POST',
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                },
                 body: formData,
             });
 
@@ -211,12 +213,14 @@ const ChatTerminal: React.FC = () => {
         setIsUploading(true);
         try {
             const formData = new FormData();
-            formData.append('tenant_id', tenantId);
-            formData.append('session_key', sessionKey);
             formData.append('file', file);
 
             const response = await fetch('/api/workspace/upload', {
                 method: 'POST',
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                },
                 body: formData,
             });
 

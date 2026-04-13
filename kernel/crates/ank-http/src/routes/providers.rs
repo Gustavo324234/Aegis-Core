@@ -1,4 +1,4 @@
-use crate::{error::AegisHttpError, state::AppState};
+use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
 use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -35,8 +35,43 @@ const GEMINI_MODELS: &[&str] = &[
     "gemini-1.5-flash",
 ];
 
+/// Allowlist de hosts permitidos para requests HTTP salientes.
+const ALLOWED_API_HOSTS: &[&str] = &[
+    "api.openai.com",
+    "api.anthropic.com",
+    "api.groq.com",
+    "openrouter.ai",
+    "generativelanguage.googleapis.com",
+    "api.together.xyz",
+    "localhost",
+    "127.0.0.1",
+];
+
+/// Valida que `api_url` apunte a un host en la allowlist.
+/// Previene SSRF hacia hosts internos arbitrarios.
+fn validate_api_url(url: &str) -> Result<(), AegisHttpError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| AegisHttpError::BadRequest("Invalid api_url".into()))?;
+
+    let host = parsed.host_str().unwrap_or("");
+
+    let allowed = ALLOWED_API_HOSTS
+        .iter()
+        .any(|allowed| host == *allowed || host.ends_with(&format!(".{}", allowed)));
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(AegisHttpError::BadRequest(format!(
+            "api_url host '{}' is not in the allowlist",
+            host
+        )))
+    }
+}
+
 async fn list_provider_models(
     State(_state): State<AppState>,
+    _auth: CitadelAuthenticated,
     Json(req): Json<ProviderModelsRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let mut models = Vec::new();
@@ -70,6 +105,8 @@ async fn list_provider_models(
             }
         }
         _ => {
+            validate_api_url(&req.api_url)?;
+
             let client = reqwest::Client::new();
             let mut base_url = req
                 .api_url

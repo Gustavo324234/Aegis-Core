@@ -100,11 +100,7 @@ pub async fn get_public_system_state(State(state): State<AppState>) -> Json<Valu
 }
 
 pub async fn get_sync_version() -> Json<Value> {
-    let version = std::fs::read_to_string("VERSION")
-        .unwrap_or_else(|_| "0.1.0".to_string())
-        .trim()
-        .to_string();
-    Json(json!({ "version": version }))
+    Json(json!({ "version": env!("CARGO_PKG_VERSION") }))
 }
 
 pub async fn health_check() -> Json<Value> {

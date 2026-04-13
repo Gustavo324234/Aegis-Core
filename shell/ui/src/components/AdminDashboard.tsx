@@ -276,7 +276,12 @@ const SystemTab: React.FC<{ tenantId: string | null; sessionKey: string | null }
         if (!tenantId || !sessionKey) return;
         const poll = async () => {
             try {
-                const response = await fetch(`/api/status?tenant_id=${encodeURIComponent(tenantId)}&session_key=${encodeURIComponent(sessionKey)}`);
+                const response = await fetch(`/api/status`, {
+                    headers: {
+                        'x-citadel-tenant': tenantId!,
+                        'x-citadel-key': sessionKey!
+                    }
+                });
                 if (response.ok) setMetrics(await response.json());
             } catch (err) {
                 console.error('Telemetry poll error:', err);

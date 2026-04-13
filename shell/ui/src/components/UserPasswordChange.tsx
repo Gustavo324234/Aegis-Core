@@ -28,11 +28,13 @@ const UserPasswordChange: React.FC<{ onComplete?: () => void }> = ({ onComplete 
         try {
             const response = await fetch('/api/admin/reset_password', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId!,
+                    'x-citadel-key': sessionKey!
+                },
                 body: JSON.stringify({
                     tenant_id: tenantId,
-                    admin_tenant_id: tenantId,
-                    admin_session_key: sessionKey,
                     new_passphrase: newPassphrase
                 })
             });
