@@ -1,7 +1,7 @@
-use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
+use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
 use ank_core::scheduler::persistence::VoiceProfile;
 use axum::{
-    extract::{Query, State},
+    extract::State,
     routing::{get, post},
     Json, Router,
 };
@@ -16,15 +16,7 @@ pub fn router() -> Router<AppState> {
 }
 
 #[derive(Deserialize)]
-pub struct SirenQuery {
-    pub tenant_id: String,
-    pub session_key: String,
-}
-
-#[derive(Deserialize)]
-pub struct SirenConfigRequest {
-    pub tenant_id: String,
-    pub session_key: String,
+pub struct SirenConfigBody {
     pub provider: String,
     pub api_key: String,
     pub voice_id: String,
@@ -32,21 +24,11 @@ pub struct SirenConfigRequest {
 
 async fn get_siren_config(
     State(state): State<AppState>,
-    Query(query): Query<SirenQuery>,
+    auth: CitadelAuthenticated,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let hash = hash_passphrase(&query.session_key);
-    {
-        let citadel = state.citadel.lock().await;
-        citadel
-            .enclave
-            .authenticate_tenant(&query.tenant_id, &hash)
-            .await
-            .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-    }
-
     let profile = state
         .persistence
-        .get_voice_profile(&query.tenant_id)
+        .get_voice_profile(&auth.tenant_id)
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
@@ -67,20 +49,11 @@ async fn get_siren_config(
 
 async fn set_siren_config(
     State(state): State<AppState>,
-    Json(req): Json<SirenConfigRequest>,
+    auth: CitadelAuthenticated,
+    Json(req): Json<SirenConfigBody>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let hash = hash_passphrase(&req.session_key);
-    {
-        let citadel = state.citadel.lock().await;
-        citadel
-            .enclave
-            .authenticate_tenant(&req.tenant_id, &hash)
-            .await
-            .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-    }
-
     let profile = VoiceProfile {
-        tenant_id: req.tenant_id,
+        tenant_id: auth.tenant_id.clone(),
         engine_id: req.provider,
         voice_id: req.voice_id,
         settings_json: json!({ "api_key": req.api_key }).to_string(),
@@ -98,16 +71,12 @@ async fn set_siren_config(
     })))
 }
 
-async fn list_siren_voices(
-    State(_state): State<AppState>,
-    Query(_query): Query<SirenQuery>,
-) -> Result<Json<Value>, AegisHttpError> {
-    // For now, return a list reflecting supported engines
-    Ok(Json(json!({
+async fn list_siren_voices() -> Json<Value> {
+    Json(json!({
         "voices": [
             { "id": "aura-asteria-en", "name": "Asteria (EN)", "provider": "voxtral" },
             { "id": "aura-luna-en", "name": "Luna (EN)", "provider": "voxtral" },
             { "id": "mock-voice", "name": "Mock Voice", "provider": "mock" }
         ]
-    })))
+    }))
 }

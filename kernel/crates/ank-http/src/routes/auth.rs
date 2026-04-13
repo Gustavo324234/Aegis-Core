@@ -34,10 +34,25 @@ pub async fn login(
     Json(body): Json<AuthRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let hash = hash_passphrase(&body.session_key);
-    let is_auth = state
-        .citadel
-        .lock()
+    let citadel = state.citadel.lock().await;
+
+    // Master Admin check first — determines role = "admin"
+    let is_master = citadel
+        .enclave
+        .authenticate_master(&body.tenant_id, &hash)
         .await
+        .unwrap_or(false);
+
+    if is_master {
+        return Ok(Json(json!({
+            "message": "Citadel Handshake Successful",
+            "status": "authenticated",
+            "role": "admin"
+        })));
+    }
+
+    // Regular tenant check — role = "tenant"
+    let is_auth = citadel
         .enclave
         .authenticate_tenant(&body.tenant_id, &hash)
         .await
@@ -58,7 +73,8 @@ pub async fn login(
 
     Ok(Json(json!({
         "message": "Citadel Handshake Successful",
-        "status": "authenticated"
+        "status": "authenticated",
+        "role": "tenant"
     })))
 }
 

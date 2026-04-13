@@ -381,25 +381,32 @@ impl KernelService for AnkRpcServer {
 pub fn auth_interceptor(req: Request<()>) -> Result<Request<()>, Status> {
     let metadata = req.metadata();
 
-    let tenant_id = match metadata.get("x-citadel-tenant") {
-        Some(v) => v.to_str().map(|s| s.to_string()).unwrap_or_default(),
-        None => return Ok(req),
-    };
+    let tenant_id = metadata
+        .get("x-citadel-tenant")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
-    let session_key = match metadata.get("x-citadel-key") {
-        Some(v) => v.to_str().map(|s| s.to_string()).unwrap_or_default(),
-        None => return Ok(req),
-    };
+    let session_key = metadata
+        .get("x-citadel-key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
-    // simplified hashing to match BFF (actually it should be exactly what citadel.rs does)
-    let session_key_hash = ank_http::citadel::hash_passphrase(&session_key);
-
-    let mut req = req;
-    req.extensions_mut().insert(CitadelAuth {
-        tenant_id,
-        session_key: session_key_hash,
-        public_id: "obfuscated".to_string(), // Placeholder
-    });
-
-    Ok(req)
+    match (tenant_id, session_key) {
+        (Some(tid), Some(key)) => {
+            let hash = ank_http::citadel::hash_passphrase(&key);
+            let mut req = req;
+            req.extensions_mut().insert(CitadelAuth {
+                tenant_id: tid,
+                session_key: hash,
+                public_id: "obfuscated".to_string(),
+            });
+            Ok(req)
+        }
+        // No headers at all — public request, handler decides if auth is required
+        (None, None) => Ok(req),
+        // Partial headers — Citadel Protocol violation
+        _ => Err(Status::unauthenticated(
+            "Citadel Protocol violation: partial credentials",
+        )),
+    }
 }

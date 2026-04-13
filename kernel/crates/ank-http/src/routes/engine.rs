@@ -29,10 +29,9 @@ fn default_provider() -> String {
     "custom".to_string()
 }
 
-pub async fn get_status(State(_state): State<AppState>) -> Result<Json<Value>, AegisHttpError> {
-    // Intentar leer de engine_config.json en el DATA_DIR o relativo
-    let config_path = "engine_config.json";
-    if let Ok(content) = fs::read_to_string(config_path) {
+pub async fn get_status(State(state): State<AppState>) -> Result<Json<Value>, AegisHttpError> {
+    let config_path = state.config.data_dir.join("engine_config.json");
+    if let Ok(content) = fs::read_to_string(&config_path) {
         if let Ok(val) = serde_json::from_str::<Value>(&content) {
             return Ok(Json(val));
         }
@@ -84,7 +83,8 @@ pub async fn configure(
     let config_json = serde_json::to_string_pretty(&config_to_save)
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    fs::write("engine_config.json", config_json)
+    let config_path = state.config.data_dir.join("engine_config.json");
+    fs::write(&config_path, config_json)
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
     Ok(Json(json!({
@@ -96,16 +96,32 @@ pub async fn configure(
 #[derive(Deserialize)]
 pub struct HwProfileRequest {
     pub admin_tenant_id: String,
+    pub session_key: String,
     pub profile: String,
 }
 
 pub async fn set_hw_profile(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<HwProfileRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    if body.admin_tenant_id != "root" {
-        return Err(AegisHttpError::Kernel(
-            "Only Master Admin can change HW profiles.".to_string(),
+    let admin_hash = crate::citadel::hash_passphrase(&body.session_key);
+    let citadel = state.citadel.lock().await;
+
+    let is_auth = citadel
+        .enclave
+        .authenticate_master(&body.admin_tenant_id, &admin_hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    if !is_auth {
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
+    }
+
+    if !["1", "2", "3"].contains(&body.profile.as_str()) {
+        return Err(AegisHttpError::BadRequest(
+            "Invalid profile. Use 1, 2 or 3.".into(),
         ));
     }
 

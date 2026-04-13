@@ -2,7 +2,8 @@ use ank_core::plugins::watcher::watch_plugins_dir;
 use ank_core::plugins::PluginManager;
 use ank_core::{
     citadel::identity::Citadel, enclave::master::MasterEnclave, router::CognitiveRouter,
-    router::SirenRouter, CognitiveHAL, CognitiveScheduler, SQLCipherPersistor, StatePersistor,
+    router::SirenRouter, CognitiveHAL, CognitiveScheduler, SQLCipherPersistor, SchedulerEvent,
+    StatePersistor, PCB,
 };
 use ank_http::{AegisHttpServer, AppState, HttpConfig};
 use ank_proto::v1::kernel_service_server::KernelServiceServer;
@@ -86,7 +87,10 @@ async fn main() -> Result<()> {
 
     // 7. Scheduler
     let (scheduler_tx, scheduler_rx) = mpsc::channel(1024);
-    let scheduler = CognitiveScheduler::new(Arc::clone(&persistence) as Arc<dyn StatePersistor>);
+    let (execution_tx, mut execution_rx) = mpsc::channel::<Box<PCB>>(64);
+    let mut scheduler =
+        CognitiveScheduler::new(Arc::clone(&persistence) as Arc<dyn StatePersistor>);
+    scheduler.execution_tx = Some(execution_tx);
     let scheduler_tx_clone = scheduler_tx.clone();
     tokio::spawn(async move {
         if let Err(e) = scheduler.start(scheduler_rx, scheduler_tx_clone).await {
@@ -132,6 +136,96 @@ async fn main() -> Result<()> {
 
     // 11. AppState
     let event_broker = Arc::new(RwLock::new(HashMap::new()));
+
+    // 11.5. HAL Runner — connects Scheduler → CognitiveHAL → event_broker → WebSocket
+    {
+        let hal_runner = Arc::clone(&hal);
+        let event_broker_runner = Arc::clone(&event_broker);
+        let scheduler_tx_runner = scheduler_tx.clone();
+
+        tokio::spawn(async move {
+            while let Some(pcb) = execution_rx.recv().await {
+                let pid = pcb.pid.clone();
+                let shared_pcb = Arc::new(RwLock::new(*pcb));
+
+                // Obtener o crear el sender del event_broker para este PID
+                let event_tx = {
+                    let mut broker = event_broker_runner.write().await;
+                    broker
+                        .entry(pid.clone())
+                        .or_insert_with(|| {
+                            let (tx, _) = tokio::sync::broadcast::channel(256);
+                            tx
+                        })
+                        .clone()
+                };
+
+                let hal_read = hal_runner.read().await;
+                match hal_read.route_and_execute(Arc::clone(&shared_pcb)).await {
+                    Ok(mut stream) => {
+                        use tokio_stream::StreamExt as _;
+                        while let Some(token_result) = stream.next().await {
+                            match token_result {
+                                Ok(token) => {
+                                    let event = ank_proto::v1::TaskEvent {
+                                        pid: pid.clone(),
+                                        timestamp: None,
+                                        payload: Some(ank_proto::v1::task_event::Payload::Output(
+                                            token,
+                                        )),
+                                    };
+                                    let _ = event_tx.send(event);
+                                }
+                                Err(e) => {
+                                    let event = ank_proto::v1::TaskEvent {
+                                        pid: pid.clone(),
+                                        timestamp: None,
+                                        payload: Some(ank_proto::v1::task_event::Payload::Error(
+                                            e.to_string(),
+                                        )),
+                                    };
+                                    let _ = event_tx.send(event);
+                                    break;
+                                }
+                            }
+                        }
+                        let _ = scheduler_tx_runner
+                            .send(SchedulerEvent::ProcessCompleted {
+                                pid: pid.clone(),
+                                output: "stream_complete".to_string(),
+                            })
+                            .await;
+                        let done_event = ank_proto::v1::TaskEvent {
+                            pid: pid.clone(),
+                            timestamp: None,
+                            payload: Some(ank_proto::v1::task_event::Payload::StatusUpdate(
+                                Box::new(ank_proto::v1::Pcb {
+                                    state: 4, // STATE_COMPLETED
+                                    ..Default::default()
+                                }),
+                            )),
+                        };
+                        let _ = event_tx.send(done_event);
+                    }
+                    Err(e) => {
+                        tracing::error!(pid = %pid, "HAL execution failed: {}", e);
+                        let event = ank_proto::v1::TaskEvent {
+                            pid: pid.clone(),
+                            timestamp: None,
+                            payload: Some(ank_proto::v1::task_event::Payload::Error(e.to_string())),
+                        };
+                        let _ = event_tx.send(event);
+                        let _ = scheduler_tx_runner
+                            .send(SchedulerEvent::ProcessCompleted {
+                                pid,
+                                output: format!("error: {}", e),
+                            })
+                            .await;
+                    }
+                }
+            }
+        });
+    }
 
     let mut config = HttpConfig::from_env();
     config.port = 8000; // Force 8000 as per ticket
