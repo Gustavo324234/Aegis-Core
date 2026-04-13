@@ -80,6 +80,8 @@ const ProviderCard: React.FC<{
 interface AddProviderPanelProps {
     onClose: () => void;
     onSaved: (provider: ProviderEntry) => void;
+    tenantId: string;
+    sessionKey: string;
 }
 
 const ModelSelector: React.FC<{ 
@@ -147,7 +149,7 @@ const ModelSelector: React.FC<{
     );
 };
 
-const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved }) => {
+const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, tenantId, sessionKey }) => {
     const { t } = useTranslation();
     const [selectedProvider, setSelectedProvider] = useState<ProviderType>('openai');
     const [apiKey, setApiKey] = useState('');
@@ -193,10 +195,12 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved })
         try {
             const res = await fetch('/api/router/keys/global', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                },
                 body: JSON.stringify({
-                    tenant_id: 'admin', 
-                    session_key: 'session', 
                     provider: selectedProvider,
                     api_key: apiKey,
                     api_url: PROVIDER_PRESETS[selectedProvider].url,
@@ -380,7 +384,12 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
         if (!tenantId || !sessionKey) return;
         setLoading(true);
         try {
-            const res = await fetch(`/api/router/keys/global?tenant_id=${tenantId}&session_key=${sessionKey}`);
+            const res = await fetch(`/api/router/keys/global`, {
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setProviders(data.keys || []);
@@ -394,8 +403,12 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
 
     const handleDelete = async (keyId: string) => {
         try {
-            const res = await fetch(`/api/router/keys/global/${keyId}?tenant_id=${tenantId}&session_key=${sessionKey}`, {
-                method: 'DELETE'
+            const res = await fetch(`/api/router/keys/global/${keyId}`, {
+                method: 'DELETE',
+                headers: {
+                    'x-citadel-tenant': tenantId as string,
+                    'x-citadel-key': sessionKey as string
+                }
             });
             if (res.ok) {
                 setProviders(prev => prev.filter(p => p.key_id !== keyId));
@@ -467,6 +480,8 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
                 {showAddPanel && (
                     <AddProviderPanel 
                         onClose={() => setShowAddPanel(false)} 
+                        tenantId={tenantId!}
+                        sessionKey={sessionKey!}
                         onSaved={(p) => {
                             setProviders(prev => [...prev, p]);
                             setShowAddPanel(false);

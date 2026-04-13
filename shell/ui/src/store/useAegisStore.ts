@@ -92,6 +92,12 @@ interface WindowWithWebkit extends Window {
     webkitAudioContext?: typeof AudioContext;
 }
 
+const buildWsUrl = (path: string) => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host; 
+    return `${protocol}//${host}${path}`;
+};
+
 let telemetryInterval: number | null = null;
 
 export const useAegisStore = create<AegisState>()(
@@ -249,7 +255,7 @@ export const useAegisStore = create<AegisState>()(
             },
 
             connect: (tenantId, sessionKey) => {
-                const wsUrl = `ws://${window.location.hostname}:8000/ws/chat/${encodeURIComponent(tenantId)}`;
+                const wsUrl = buildWsUrl(`/ws/chat/${encodeURIComponent(tenantId)}`);
                 const currentSocket = get().socket;
                 if (currentSocket) currentSocket.close();
                 set({ status: 'connecting' });
@@ -389,7 +395,7 @@ export const useAegisStore = create<AegisState>()(
                         } else silenceStart = Date.now();
                         requestAnimationFrame(checkSilence);
                     };
-                    const wsUrl = `ws://${window.location.hostname}:8000/ws/siren/${encodeURIComponent(tenantId)}`;
+                    const wsUrl = buildWsUrl(`/ws/siren/${encodeURIComponent(tenantId)}`);
                     const sirenWs = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
                     sirenWs.binaryType = 'arraybuffer';
                     sirenWs.onopen = () => { set({ isRecording: true, sirenSocket: sirenWs }); requestAnimationFrame(checkSilence); };
@@ -468,7 +474,6 @@ export const useAegisStore = create<AegisState>()(
                 isAuthenticated: state.isAuthenticated,
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
-                sessionKey: state.sessionKey,
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
                 messages: state.messages,
