@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# AEGIS OS - UNINSTALLER
+# AEGIS OS - UNINSTALLATION UTILITY (SRE GRADE)
 # ==============================================================================
-# Description: Full removal script for Aegis OS (Native/Docker)
+# Description: Full removal script for Aegis OS with safety checks
 # ==============================================================================
 
 set -euo pipefail
@@ -14,76 +14,81 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Check root
-if [[ "$EUID" -ne 0 ]]; then
-    echo -e "${RED}[ERROR]${NC} This script must be run as root (use sudo)." >&2
-    exit 1
-fi
+LOG_FILE="/root/aegis_uninstall.log"
 
-echo -e "${RED}"
-echo "╔════════════════════════════════════════════════════════════╗"
-echo "║          AEGIS OS - UNINSTALLATION UTILITY                 ║"
-echo "╚════════════════════════════════════════════════════════════╝"
-echo -e "${NC}"
-echo -e "${YELLOW}WARNING: This will permanently delete ALL data, including:${NC}"
-echo "  - Master Admin & Tenant Users"
-echo "  - Identity databases (admin.db)"
-echo "  - Chat histories and workspace files"
-echo "  - System configurations (/etc/aegis)"
-echo ""
-# Parse arguments
-FORCE_MODE=false
-if [[ "${1:-}" == "--force" ]]; then
-    FORCE_MODE=true
-fi
-
-if [[ "$FORCE_MODE" == "false" ]]; then
-    read -rp "Are you absolutely sure you want to proceed? (y/N): " confirm
-    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-        echo "Uninstallation aborted."
-        exit 0
+check_root() {
+    if [[ "$EUID" -ne 0 ]]; then
+        echo -e "${RED}[ERROR]${NC} This script must be run as root (use sudo)." >&2
+        exit 1
     fi
-fi
+}
 
-# Detect Mode
-MODE="native"
-if [[ -f "/etc/aegis/mode" ]]; then
-    MODE=$(cat "/etc/aegis/mode")
-fi
+print_warning() {
+    clear
+    echo -e "${RED}"
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║          AEGIS OS - DESTRUCTIVE REMOVAL                    ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo -e "${YELLOW}DANGER: This action is permanent. All data will be wiped:${NC}"
+    echo "  - Identity databases (admin.db)"
+    echo "  - Chat histories and cognitive logs"
+    echo "  - System configurations (/etc/aegis)"
+    echo "  - Custom workspace files"
+    echo ""
+}
 
-echo -e "${CYAN}Uninstalling Aegis OS (Mode: $MODE)...${NC}"
-
-if [[ "$MODE" == "docker" ]]; then
-    if [[ -d "/opt/aegis" ]]; then
-        echo "→ Stopping Docker containers and removing volumes..."
-        (cd /opt/aegis && docker compose down -v) || true
-        rm -rf "/opt/aegis"
+confirm_removal() {
+    # If --force is passed, skip confirmation
+    if [[ "${1:-}" == "--force" ]]; then
+        return 0
     fi
-fi
 
-# Generic cleanup (Native & Shared)
-echo "→ Stopping and disabling systemd service..."
+    if [ -t 0 ] && command -v dialog &> /dev/null; then
+        if ! dialog --title "CONFIRM DESTRUCTION" --yesno "Are you ABSOLUTELY sure you want to uninstall Aegis OS and delete ALL associated data?\n\nThis cannot be undone." 10 60; then
+            echo "Uninstallation aborted."
+            exit 0
+        fi
+    else
+        read -rp "Final confirmation: Type 'DELETE' to proceed: " confirm < /dev/tty
+        if [[ "$confirm" != "DELETE" ]]; then
+            echo "Uninstallation aborted."
+            exit 0
+        fi
+    fi
+}
+
+# --- Main Execution ---
+check_root
+print_warning
+confirm_removal "$@"
+
+echo -e "${CYAN}→ Stopping all Aegis processes...${NC}"
 systemctl stop aegis 2>/dev/null || true
 systemctl disable aegis 2>/dev/null || true
 
-echo "→ Removing systemd unit files..."
+echo -e "${CYAN}→ Removing systemd unit files...${NC}"
 rm -f /etc/systemd/system/aegis.service
 systemctl daemon-reload
 
-echo "→ Removing binaries..."
+echo -e "${CYAN}→ Purging binaries...${NC}"
 rm -f /usr/local/bin/ank-server
 rm -f /usr/local/bin/aegis
 
-echo "→ Removing configuration and data directories..."
+echo -e "${CYAN}→ Wiping configuration and data...${NC}"
 rm -rf /etc/aegis
 rm -rf /var/lib/aegis
 rm -rf /usr/share/aegis
 
-# Remove internal installer log
-rm -f /root/aegis_install.log
+# Docker cleanup if mode exists
+if [[ -d "/opt/aegis" ]]; then
+    echo -e "${CYAN}→ Cleaning up Docker orchestrator...${NC}"
+    (cd /opt/aegis && docker compose down -v) 2>/dev/null || true
+    rm -rf "/opt/aegis"
+fi
 
 echo ""
 echo -e "${GREEN}################################################################${NC}"
-echo -e "${GREEN}#          AEGIS OS HAS BEEN FULLY UNINSTALLED                 #${NC}"
+echo -e "${GREEN}#          AEGIS OS HAS BEEN COMPLETELY REMOVED                #${NC}"
 echo -e "${GREEN}################################################################${NC}"
 echo ""

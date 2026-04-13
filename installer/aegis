@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# AEGIS OS CLI - Unified Control Interface
+# AEGIS OS CLI - UNIFIED CONTROL INTERFACE (SRE GRADE)
 # ==============================================================================
-# Description: Management toolkit for Aegis OS (Native/Docker)
-# Ticket: CORE-043
+# Description: Professional management toolkit for Aegis OS
+# Ticket: CORE-043, CORE-090
 # ==============================================================================
 
 set -euo pipefail
@@ -27,10 +27,8 @@ detect_mode() {
         cat "/etc/aegis/mode"
     elif [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
         echo "native"
-    elif [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
-        echo "docker"
     else
-        echo "${AEGIS_MODE:-native}"
+        echo "native"
     fi
 }
 
@@ -59,17 +57,13 @@ cmd_stop() {
 cmd_status() {
     echo -e "${CYAN}--- Aegis OS Status (${AEGIS_MODE}) ---${NC}"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
-        if command -v docker &> /dev/null; then
-            (cd "$INSTALL_DIR" && docker compose ps)
-        else
-            echo -e "${RED}Error: docker not found.${NC}"
-        fi
+        (cd "$INSTALL_DIR" && docker compose ps) || echo "Docker not running."
     else
         systemctl status "$SERVICE_NAME" --no-pager || true
     fi
     
     echo -e "\n${CYAN}--- API Health Check ---${NC}"
-    if curl -s -f http://localhost:8000/health > /dev/null; then
+    if curl -s -f --connect-timeout 2 http://localhost:8000/health > /dev/null; then
         echo -e "${GREEN}API is UP (http://localhost:8000)${NC}"
     else
         echo -e "${RED}API is DOWN or unreachable${NC}"
@@ -78,10 +72,6 @@ cmd_status() {
 
 cmd_logs() {
     local n="${1:-100}"
-    # Ensure n is a number
-    if ! [[ "$n" =~ ^[0-9]+$ ]]; then n=100; fi
-
-    echo -e "${CYAN}Showing last $n logs (use Ctrl+C to stop)...${NC}"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" && docker compose logs -f --tail "$n" "$DOCKER_SERVICE")
     else
@@ -89,104 +79,82 @@ cmd_logs() {
     fi
 }
 
+cmd_diag() {
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${CYAN}   AEGIS OS - SRE DIAGNOSTIC REPORT                             ${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+    echo ""
+    echo -e "${YELLOW}[1] SYSTEM RESOURCE USAGE${NC}"
+    ps -u aegis -o %cpu,%mem,cmd 2>/dev/null || echo "Aegis process not found."
+    echo ""
+    echo -e "${YELLOW}[2] NETWORK & PORTS${NC}"
+    ss -tulpn | grep -E "8000|50051" || echo "Aegis ports not listening."
+    echo ""
+    echo -e "${YELLOW}[3] RECENT ERROR LOGS${NC}"
+    if [[ "$AEGIS_MODE" == "docker" ]]; then
+        (cd "$INSTALL_DIR" && docker compose logs --tail 20 "$DOCKER_SERVICE" | grep -i "error") || echo "No recent errors found."
+    else
+        journalctl -u "$SERVICE_NAME" -n 50 --no-pager | grep -i "error" | tail -n 10 || echo "No recent errors found."
+    fi
+    echo ""
+    echo -e "${YELLOW}[4] CONFIGURATION${NC}"
+    ls -l /etc/aegis/aegis.env 2>/dev/null || echo "Config file missing."
+    echo ""
+    echo -e "${CYAN}================================================================${NC}"
+}
+
 cmd_update() {
     echo -e "${YELLOW}Updating Aegis OS (${AEGIS_MODE})...${NC}"
-    if [[ "$AEGIS_MODE" == "docker" ]]; then
-        (cd "$INSTALL_DIR" && docker compose pull && docker compose up -d)
-    else
-        # Native update logic
-        local arch
-        arch=$(uname -m)
-        case "$arch" in
-            x86_64)  ARCH="x86_64" ;;
-            aarch64) ARCH="arm64" ;;
-            *)       echo -e "${RED}Unsupported architecture: $arch${NC}"; exit 1 ;;
-        esac
-        
-        local org="Gustavo324234"
-        local repo="Aegis-Core"
-        local url="https://github.com/${org}/${repo}/releases/latest/download/ank-server-linux-${ARCH}"
-        
-        echo -e "${CYAN}Downloading latest binary from: ${url}${NC}"
-        # Use a temporary file to avoid partial writes to the running binary
-        if curl -L --fail --progress-bar "$url" -o "${BIN_DIR}/ank-server.new"; then
-            chmod +x "${BIN_DIR}/ank-server.new"
-            mv "${BIN_DIR}/ank-server.new" "${BIN_DIR}/ank-server"
-            echo -e "${GREEN}Binary updated successfully.${NC}"
-            
-            echo -e "${CYAN}Restarting service...${NC}"
-            systemctl restart "$SERVICE_NAME"
-        else
-            echo -e "${RED}Failed to download update.${NC}"
-            exit 1
-        fi
-    fi
-    echo -e "${GREEN}Update process finished.${NC}"
+    # Re-use the installer as it handles updates gracefully
+    curl -sSL "https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh" | sudo bash
 }
 
 cmd_token() {
     echo -e "${CYAN}Retrieving Setup Token...${NC}"
     local token=""
     if [[ "$AEGIS_MODE" == "docker" ]]; then
-        token=$(cd "$INSTALL_DIR" && docker compose logs "$DOCKER_SERVICE" 2>&1 | grep "setup_token=" | tail -n 1 | sed 's/.*setup_token=\([^ ]*\).*/\1/' || echo "")
+        token=$(cd "$INSTALL_DIR" && docker compose logs "$DOCKER_SERVICE" 2>&1 | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || echo "")
     else
-        token=$(journalctl -u "$SERVICE_NAME" -n 2000 --no-pager | grep "setup_token=" | tail -n 1 | sed 's/.*setup_token=\([^ ]*\).*/\1/' || echo "")
+        token=$(journalctl -u "$SERVICE_NAME" -n 2000 --no-pager | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || echo "")
     fi
 
     if [[ -z "$token" ]]; then
-        echo -e "${YELLOW}No setup token found in recent logs.${NC}"
-        echo -e "If the system is already initialized, token generation is disabled."
+        echo -e "${YELLOW}No setup token found. If the system is initialized, token is disabled.${NC}"
     else
-        echo -e "\n${GREEN}################################################################${NC}"
-        echo -e "${GREEN}#          AEGIS OS - SETUP TOKEN                              #${NC}"
-        echo -e "${GREEN}################################################################${NC}"
-        echo ""
-        local ip
-        ip=$(hostname -I 2>/dev/null | awk '{print $1}') || ip="localhost"
-        echo -e "  URL: ${CYAN}http://$ip:8000?setup_token=$token${NC}"
-        echo ""
-        echo -e "${GREEN}################################################################${NC}"
+        echo -e "\n${GREEN}Setup URL: http://$(hostname -I | awk '{print $1}'):8000?setup_token=$token${NC}"
     fi
 }
 
 cmd_uninstall() {
-    echo -e "${CYAN}Downloading/Running uninstaller...${NC}"
-    
-    # Try to use the local one if available, otherwise fetch from main
-    if [[ -f "$(dirname "$0")/uninstall.sh" ]]; then
-        bash "$(dirname "$0")/uninstall.sh"
-    elif [[ -f "${INSTALL_DIR}/uninstall.sh" ]]; then
-        bash "${INSTALL_DIR}/uninstall.sh"
-    else
-        curl -sSL "https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/uninstall.sh" | sudo bash
-    fi
+    sudo bash -c "$(curl -sSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/uninstall.sh)" -- "$@"
 }
 
 # --- Execution ---
 
 case "${1:-help}" in
-    start)     cmd_start ;;
-    stop)      cmd_stop ;;
-    restart)   cmd_stop; cmd_start ;;
-    status)    cmd_status ;;
-    logs)      cmd_logs "${2:-}" ;;
-    update)    cmd_update ;;
-    token)     cmd_token ;;
-    uninstall) cmd_uninstall ;;
+    start)     shift; cmd_start "$@" ;;
+    stop)      shift; cmd_stop "$@" ;;
+    restart)   shift; cmd_stop "$@"; cmd_start "$@" ;;
+    status)    shift; cmd_status "$@" ;;
+    diag)      shift; cmd_diag "$@" ;;
+    logs)      shift; cmd_logs "$@" ;;
+    update)    shift; cmd_update "$@" ;;
+    token)     shift; cmd_token "$@" ;;
+    uninstall) shift; cmd_uninstall "$@" ;;
     help|*)
         echo "Aegis OS Unified CLI"
         echo ""
-        echo "Usage: aegis {start|stop|restart|status|logs|update|token|uninstall}"
+        echo "Usage: aegis {command} [args]"
         echo ""
         echo "Commands:"
-        echo "  start       Start the service"
-        echo "  stop        Stop the service"
-        echo "  restart     Restart the service"
-        echo "  status      Check system status and health"
-        echo "  logs [N]    Show logs (default last 100 lines)"
+        echo "  start       Start Aegis service"
+        echo "  stop        Stop Aegis service"
+        echo "  status      Check high-level status"
+        echo "  diag        Run deep diagnostic report"
+        echo "  logs [N]    Follow logs (default 100)"
         echo "  update      Update to latest version"
-        echo "  token       Show active setup_token"
-        echo "  uninstall   Completely remove Aegis OS from system"
+        echo "  token       Get setup URL"
+        echo "  uninstall   Remove Aegis from system"
         exit 1
         ;;
 esac
