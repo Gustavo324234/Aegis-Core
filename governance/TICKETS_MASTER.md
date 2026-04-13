@@ -148,8 +148,11 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 
 ## 📊 EPIC 34 — AUDITORÍA COMPLETA — 2026-04-13
 
-**Total tickets:** 20
-**Críticos 🔴:** 10 | **Altos 🟠:** 8 | **Medios 🟡:** 2
+**Total tickets:** 21
+**Críticos 🔴:** 10 | **Altos 🟠:** 9 | **Medios 🟡:** 2
+
+#### Fase 0 — CI Integrity (Automatización Centralizada)
+0. **[CORE-090]** CI — Reforzar auto-format/clippy fix en GitHub Actions como fuente de verdad `[DONE]`
 
 ### Orden de implementación recomendado (por impacto)
 
