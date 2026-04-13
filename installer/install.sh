@@ -10,7 +10,6 @@
 set -euo pipefail
 
 # --- Configuration ---
-INSTALL_ROOT="/opt/aegis"
 CONFIG_DIR="/etc/aegis"
 BIN_DIR="/usr/local/bin"
 DATA_DIR="/var/lib/aegis"
@@ -27,7 +26,6 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
-MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 USE_TUI=true
@@ -184,7 +182,8 @@ install_native() {
 
     # Generate environment and systemd
     if [[ ! -f "$ENV_FILE" ]]; then
-        local root_key=$(openssl rand -hex 32)
+        local root_key
+        root_key=$(openssl rand -hex 32)
         cat > "$ENV_FILE" <<EOF
 AEGIS_ROOT_KEY=${root_key}
 AEGIS_DATA_DIR=${DATA_DIR}

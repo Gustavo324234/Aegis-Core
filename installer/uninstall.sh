@@ -14,8 +14,6 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-LOG_FILE="/root/aegis_uninstall.log"
-
 check_root() {
     if [[ "$EUID" -ne 0 ]]; then
         echo -e "${RED}[ERROR]${NC} This script must be run as root (use sudo)." >&2

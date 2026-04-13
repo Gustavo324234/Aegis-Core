@@ -10,7 +10,6 @@ set -euo pipefail
 
 # --- Configuration ---
 INSTALL_DIR="/opt/aegis"
-BIN_DIR="/usr/local/bin"
 SERVICE_NAME="aegis"
 DOCKER_SERVICE="ank-server"
 
@@ -111,7 +110,8 @@ cmd_update() {
 
 cmd_token() {
     echo -e "${CYAN}Retrieving Setup Token...${NC}"
-    local token=""
+    local token
+    token=""
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         token=$(cd "$INSTALL_DIR" && docker compose logs "$DOCKER_SERVICE" 2>&1 | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || echo "")
     else
