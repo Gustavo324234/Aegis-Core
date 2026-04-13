@@ -173,6 +173,8 @@ ank-cli           →  CLI administrativa (gRPC directo)
 | LIM-001 | ank-core | LanceDB desactivado — conflictos de compilación |
 | LIM-002 | ank-core | ONNX Local Embeddings pendiente (post-launch) |
 | LIM-003 | ank-http | embed-ui feature flag no implementado en Fase 1 |
+| LIM-004 | ank-http | ws/siren - STT completo no disponible (path mínimo de transcripción implementado) |
+| LIM-005 | ank-core | Anthropic, DeepSeek, Mistral, Qwen se acceden via OpenRouter — key de OpenRouter requerida para estos providers |
 | DT-001 | ank-core | MCP Tool Orchestrator Schema Mapping pendiente |
 | DT-002 | ank-core | Hardware Dual (NVIDIA + Coral) pendiente |
 | DT-003 | distro/ | Sin contenido — prerequisito: Epic 32 estable en producción |

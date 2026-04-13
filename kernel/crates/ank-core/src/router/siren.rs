@@ -14,6 +14,13 @@ pub trait SirenEngine: Send + Sync {
     /// Sintetiza texto a audio PCM (bytes).
     async fn synthesize(&self, text: String) -> Result<Vec<u8>>;
 
+    /// Transcribe audio PCM a texto (STT).
+    async fn transcribe(&self, _audio: Vec<u8>) -> Result<String> {
+        // Path mínimo (LIM-004): Si el motor no tiene STT real, devolvemos success
+        // con un placeholder para no romper el pipeline de chat.
+        Ok("[audio received - STT pending]".to_string())
+    }
+
     /// Clona una voz basada una muestra de audio y devuelve el VoiceID.
     async fn clone_voice(&self, _sample: Vec<u8>) -> Result<String> {
         Err(anyhow::anyhow!(
@@ -108,6 +115,18 @@ impl SirenRouter {
             .get("mock")
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("SirenRouter: No default 'mock' engine registered"))
+    }
+
+    /// Procesa audio crudo para un tenant (CORE-077).
+    pub async fn process_audio(&self, tenant_id: &str, pcm_data: Vec<u8>) -> Result<String> {
+        let engine = self.resolve(tenant_id).await?;
+        info!(
+            "SirenRouter: Processing {} bytes of audio with engine '{}'",
+            pcm_data.len(),
+            engine.id()
+        );
+
+        engine.transcribe(pcm_data).await
     }
 }
 

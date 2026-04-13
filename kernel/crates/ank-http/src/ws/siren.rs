@@ -80,35 +80,86 @@ async fn handle_siren(
     info!("Siren Stream: WebSocket established for {}", tenant_id);
 
     // 2. Loop
-    let mut sequence_number = 0u64;
+    let mut audio_buffer: Vec<u8> = Vec::new();
 
     while let Some(msg_res) = socket.next().await {
         match msg_res {
-            Ok(Message::Binary(_data)) => {
-                sequence_number += 1;
-                // En un binario unificado, aquí llamaríamos al componente de procesamiento de audio
-                // Para ahora, logeamos y devolvemos un evento de procesamiento mock
-                // (Referencia CORE-015: Construir AudioChunk proto y enviar al SirenService)
-
-                // Mock response para debug en UI
-                if sequence_number.is_multiple_of(50) {
-                    let event = json!({
-                        "event": "siren_event",
-                        "data": {
-                           "event_type": "AUDIO_PROCESSED",
-                           "message": format!("Processed chunk {}", sequence_number),
-                           "processed_sequence_number": sequence_number
-                        }
-                    });
-                    if let Err(e) = socket.send(Message::Text(event.to_string())).await {
-                        error!("Failed to send siren event: {}", e);
-                        break;
-                    }
+            Ok(Message::Binary(data)) => {
+                // Acumular audio PCM
+                audio_buffer.extend_from_slice(&data);
+                if audio_buffer.len() > 10 * 1024 * 1024 {
+                    // Safety cap: 10MB
+                    warn!("Siren: Audio buffer exceeded safety cap, clearing.");
+                    audio_buffer.clear();
                 }
             }
             Ok(Message::Text(t)) => {
-                // Posible comando de configuración o stop
-                warn!("Received unexpected text message on siren WS: {}", t);
+                if t.contains("VAD_END_SIGNAL") {
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({
+                                "event": "siren_event",
+                                "data": { "event_type": "VAD_START" }
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({
+                                "event": "siren_event",
+                                "data": { "event_type": "STT_START" }
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+
+                    // Procesar audio real vía SirenRouter
+                    let pcm_data = std::mem::take(&mut audio_buffer);
+                    let transcript =
+                        match state.siren_router.process_audio(&tenant_id, pcm_data).await {
+                            Ok(t) => t,
+                            Err(e) => {
+                                error!("Siren: STT Processing failed: {}", e);
+                                let _ = socket.send(Message::Text(
+                                json!({
+                                    "event": "siren_event",
+                                    "data": { "event_type": "STT_ERROR", "message": e.to_string() }
+                                }).to_string()
+                            )).await;
+                                continue;
+                            }
+                        };
+
+                    let mut pcb =
+                        ank_core::PCB::new("Voice Task".to_string(), 5, transcript.clone());
+                    pcb.tenant_id = Some(tenant_id.clone());
+                    pcb.session_key = Some(session_key.clone());
+                    pcb.task_type = ank_core::pcb::TaskType::Chat;
+                    let pid = pcb.pid.clone();
+
+                    if let Err(e) = state
+                        .scheduler_tx
+                        .send(ank_core::SchedulerEvent::ScheduleTask(Box::new(pcb)))
+                        .await
+                    {
+                        error!("Failed to schedule STT transcript: {}", e);
+                    }
+
+                    let payload = json!({ "transcript": transcript, "pid": pid }).to_string();
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({
+                                "event": "siren_event",
+                                "data": { "event_type": "STT_DONE", "message": payload }
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                } else {
+                    warn!("Received unexpected text message on siren WS: {}", t);
+                }
             }
             Ok(Message::Close(_)) => break,
             Err(e) => {

@@ -86,7 +86,7 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 *   **[CORE-073]** Fix: `sessionKey` (contraseña) persistida en localStorage `[TODO — Shell Engineer]`
 
 ### Kernel
-*   **[CORE-074]** Fix: `get_sync_version` usa path relativo `VERSION` — usar `env!("CARGO_PKG_VERSION")` `[TODO — Kernel Engineer]`
+*   **[CORE-074]** Fix: `get_sync_version` usa path relativo `VERSION` — usar `env!("CARGO_PKG_VERSION")` `[DONE — Kernel Engineer]`
 
 ---
 
@@ -101,7 +101,7 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 ### Kernel
 *   **[CORE-075]** Fix: `engine_config.json` path relativo — persistir en `data_dir` `[DONE]`
 *   **[CORE-076]** Fix: `set_hw_profile` sin autenticación real `[DONE]`
-*   **[CORE-077]** Fix: `ws/siren.rs` mock — conectar al SirenRouter real `[TODO — Kernel Engineer]`
+*   **[CORE-077]** Fix: `ws/siren.rs` mock — conectar al SirenRouter real `[DONE — Kernel Engineer]`
 *   **[CORE-078]** Fix: Eliminar `AEGIS_DEV_MASTER_BYPASS` de producción `[DONE]`
 
 ## 🏁 UPDATE — 2026-04-13 (EPIC 34 — TERCERA RONDA DE AUDITORÍA)
@@ -114,8 +114,8 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 *   **[CORE-079]** Fix: `SystemTab` pasa `session_key` en query param de `/api/status` `[TODO — Shell Engineer]`
 
 ### Kernel
-*   **[CORE-080]** Fix: gRPC `server.rs` — implementar métodos `unimplemented!()` Prioridad 1 y 2 `[TODO — Kernel Engineer]`
-*   **[CORE-081]** Fix: `CloudProxyDriver` no soporta protocolo nativo de Anthropic `[TODO — Kernel Engineer]`
+*   **[CORE-080]** Fix: gRPC `server.rs` — implementar métodos `unimplemented!()` Prioridad 1 y 2 `[DONE — Kernel Engineer]`
+*   **[CORE-081]** Fix: `CloudProxyDriver` no soporta protocolo nativo de Anthropic `[DONE — Kernel Engineer]`
 *   **[CORE-082]** Fix: `auth_interceptor` gRPC deja pasar headers Citadel parciales `[DONE]`
 
 ## 🏁 UPDATE — 2026-04-13 (EPIC 34 — CUARTA RONDA DE AUDITORÍA)
@@ -127,7 +127,7 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 *   **[CORE-083]** Fix: `ProvidersTab` usa credenciales hardcodeadas y query params `[TODO — Shell Engineer]`
 
 ### Kernel
-*   **[CORE-084]** Fix: `models.yaml` providers sin URL explícita en `entry_api_url` `[TODO — Kernel Engineer]`
+*   **[CORE-084]** Fix: `models.yaml` providers sin URL explícita en `entry_api_url` `[DONE — Kernel Engineer]`
 *   **[CORE-085]** Fix: Scheduler no conecta al HAL — `execution_tx` siempre `None` — chat nunca responde `[DONE]`
 
 ## 🏁 UPDATE — 2026-04-13 (EPIC 34 — QUINTA RONDA DE AUDITORÍA — CIERRE)
