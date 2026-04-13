@@ -39,7 +39,7 @@ function App() {
         }
     }, []);
 
-    // Security: If sessionKey was not persisted but we are "authenticated", force logout to re-establish session
+    // Security: Identity Law - If store claims authenticated but sessionKey is missing (e.g. F5 refresh), force logout
     useEffect(() => {
         if (_hydrated && isAuthenticated && !sessionKey) {
             logout();

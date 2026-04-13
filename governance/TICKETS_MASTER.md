@@ -80,10 +80,10 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 introducidos durante la consolidación de repos legacy en Aegis-Core.
 
 ### Shell
-*   **[CORE-070]** Fix: WebSocket URL hardcodeada con puerto 8000 `[TODO — Shell Engineer]`
-*   **[CORE-071]** Fix: Credenciales admin en query params — migrar a headers Citadel `[DONE — Kernel Engineer]`
-*   **[CORE-072]** Fix: `isAdmin` determinado en el cliente por nombre de tenant `[DONE — Kernel Engineer]`
-*   **[CORE-073]** Fix: `sessionKey` (contraseña) persistida en localStorage `[TODO — Shell Engineer]`
+*   **[CORE-070]** Fix: WebSocket URL hardcodeada con puerto 8000 `[DONE — 2026-04-13]`
+*   **[CORE-071]** Fix: Credenciales admin en query params — migrar a headers Citadel `[DONE — 2026-04-13]`
+*   **[CORE-072]** Fix: `isAdmin` determinado en el cliente por nombre de tenant `[DONE — 2026-04-13]`
+*   **[CORE-073]** Fix: `sessionKey` (contraseña) persistida en localStorage `[DONE — 2026-04-13]`
 
 ### Kernel
 *   **[CORE-074]** Fix: `get_sync_version` usa path relativo `VERSION` — usar `env!("CARGO_PKG_VERSION")` `[DONE — Kernel Engineer]`
@@ -111,7 +111,7 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 - CORE-082 creado: auth_interceptor gRPC deja pasar headers Citadel parciales
 
 ### Shell
-*   **[CORE-079]** Fix: `SystemTab` pasa `session_key` en query param de `/api/status` `[TODO — Shell Engineer]`
+*   **[CORE-079]** Fix: `SystemTab` pasa `session_key` en query param de `/api/status` `[DONE — 2026-04-13]`
 
 ### Kernel
 *   **[CORE-080]** Fix: gRPC `server.rs` — implementar métodos `unimplemented!()` Prioridad 1 y 2 `[DONE — Kernel Engineer]`
@@ -124,7 +124,7 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 - CORE-085 creado: Scheduler no conecta al HAL — execution_tx siempre None → CHAT NUNCA FUNCIONA
 
 ### Shell
-*   **[CORE-083]** Fix: `ProvidersTab` usa credenciales hardcodeadas y query params `[TODO — Shell Engineer]`
+*   **[CORE-083]** Fix: `ProvidersTab` usa credenciales hardcodeadas y query params `[DONE — 2026-04-13]`
 
 ### Kernel
 *   **[CORE-084]** Fix: `models.yaml` providers sin URL explícita en `entry_api_url` `[DONE — Kernel Engineer]`
@@ -142,7 +142,7 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 *   **[CORE-089]** Fix: `providers.rs` — sin autenticación ni validación SSRF en `api_url` `[DONE]`
 
 ### Shell
-*   **[CORE-088]** Fix: `ChatTerminal` envía `session_key` en FormData del file upload `[DONE — Kernel Engineer]`
+*   **[CORE-088]** Fix: `ChatTerminal` envía `session_key` en FormData del file upload `[DONE — 2026-04-13]`
 
 ---
 
@@ -160,12 +160,12 @@ introducidos durante la consolidación de repos legacy en Aegis-Core.
 
 #### Fase 2 — Seguridad de credenciales (viajan en texto plano)
 4. **CORE-070** Shell — WebSocket URL hardcodeada
-5. **CORE-071** Shell + Kernel — admin endpoints migrar a headers
+5. **CORE-071** Shell + Kernel — admin endpoints migrar a headers `[DONE]`
 6. **CORE-073** Shell — sessionKey fuera de localStorage
 7. **CORE-079** Shell — SystemTab query param
-8. **CORE-083** Shell — ProvidersTab credenciales hardcodeadas
+8. **CORE-083** Shell — ProvidersTab credenciales hardcodeadas `[DONE]`
 9. **CORE-087** Kernel — siren_api query params
-10. **CORE-088** Shell + Kernel — file upload FormData
+10. **CORE-088** Shell + Kernel — file upload FormData `[DONE]`
 
 #### Fase 3 — Seguridad de backend
 11. **CORE-076** Kernel — set_hw_profile sin auth

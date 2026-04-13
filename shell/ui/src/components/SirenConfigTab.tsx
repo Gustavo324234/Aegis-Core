@@ -31,8 +31,14 @@ const SirenConfigTab: React.FC = () => {
     const [success, setSuccess] = useState(false);
 
     const fetchConfig = useCallback(async () => {
+        if (!tenantId || !sessionKey) return;
         try {
-            const res = await fetch(`/api/siren/config?tenant_id=${encodeURIComponent(tenantId || '')}&session_key=${encodeURIComponent(sessionKey || '')}`);
+            const res = await fetch('/api/siren/config', {
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setProvider(data.provider || 'voxtral');
@@ -47,8 +53,14 @@ const SirenConfigTab: React.FC = () => {
     }, [tenantId, sessionKey]);
 
     const fetchVoices = useCallback(async () => {
+        if (!tenantId || !sessionKey) return;
         try {
-            const res = await fetch(`/api/siren/voices?tenant_id=${encodeURIComponent(tenantId || '')}&session_key=${encodeURIComponent(sessionKey || '')}`);
+            const res = await fetch('/api/siren/voices', {
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                }
+            });
             if (res.ok) {
                 const data = await res.json();
                 setVoices(data.voices || []);
@@ -59,21 +71,25 @@ const SirenConfigTab: React.FC = () => {
     }, [tenantId, sessionKey]);
 
     useEffect(() => {
-        if (!tenantId || !sessionKey) return;
         fetchConfig();
         fetchVoices();
-    }, [tenantId, sessionKey, fetchConfig, fetchVoices]);
+    }, [fetchConfig, fetchVoices]);
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!tenantId || !sessionKey) return;
         setIsSaving(true);
         setError(null);
         setSuccess(false);
         try {
             const response = await fetch('/api/siren/config', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tenant_id: tenantId, session_key: sessionKey, provider, api_key: apiKey, voice_id: voiceId })
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                },
+                body: JSON.stringify({ provider, api_key: apiKey, voice_id: voiceId })
             });
             if (response.ok) {
                 setSuccess(true);

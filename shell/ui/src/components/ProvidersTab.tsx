@@ -167,7 +167,11 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
         try {
             const res = await fetch('/api/providers/models', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId!,
+                    'x-citadel-key': sessionKey!
+                },
                 body: JSON.stringify({
                     provider: selectedProvider,
                     api_key: apiKey,
@@ -197,8 +201,8 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
-                    'x-citadel-tenant': tenantId,
-                    'x-citadel-key': sessionKey
+                    'x-citadel-tenant': tenantId!,
+                    'x-citadel-key': sessionKey!
                 },
                 body: JSON.stringify({
                     provider: selectedProvider,
@@ -386,8 +390,9 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
         try {
             const res = await fetch(`/api/router/keys/global`, {
                 headers: {
-                    'x-citadel-tenant': tenantId,
-                    'x-citadel-key': sessionKey
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId!,
+                    'x-citadel-key': sessionKey!
                 }
             });
             if (res.ok) {
@@ -406,8 +411,9 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
             const res = await fetch(`/api/router/keys/global/${keyId}`, {
                 method: 'DELETE',
                 headers: {
-                    'x-citadel-tenant': tenantId as string,
-                    'x-citadel-key': sessionKey as string
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId!,
+                    'x-citadel-key': sessionKey!
                 }
             });
             if (res.ok) {

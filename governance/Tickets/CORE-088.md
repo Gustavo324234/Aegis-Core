@@ -3,7 +3,7 @@
 **Epic:** Audit Fixes — Post-Consolidación
 **Agente:** Shell Engineer
 **Prioridad:** 🟠 ALTA
-**Estado:** TODO
+**Estado:** DONE
 
 ---
 
@@ -98,11 +98,11 @@ async fn upload(
 
 ## Criterios de aceptación
 
-- [ ] `ChatTerminal` no incluye `session_key` en el FormData del upload
-- [ ] El upload usa headers `x-citadel-tenant` / `x-citadel-key`
-- [ ] `workspace.rs` extrae auth de headers via `CitadelAuthenticated`
-- [ ] El upload de archivos funciona correctamente end-to-end
-- [ ] `cargo build` y `npm run build` pasan sin errores
+- [x] `ChatTerminal` no incluye `session_key` en el FormData del upload
+- [x] El upload usa headers `x-citadel-tenant` / `x-citadel-key`
+- [x] `workspace.rs` extrae auth de headers via `CitadelAuthenticated`
+- [x] El upload de archivos funciona correctamente end-to-end
+- [x] `cargo build` y `npm run build` pasan sin errores
 
 ---
 
