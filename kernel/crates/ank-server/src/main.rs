@@ -56,7 +56,10 @@ async fn main() -> Result<()> {
 
     // 4. Persistence
     let scheduler_db_path = data_dir.join("scheduler_state.db");
-    info!("Persistence: Initializing SQLCipher at {}", scheduler_db_path.display());
+    info!(
+        "Persistence: Initializing SQLCipher at {}",
+        scheduler_db_path.display()
+    );
     let persistence = Arc::new(SQLCipherPersistor::new(
         scheduler_db_path.to_str().context("Invalid db path")?,
         &root_key,
@@ -64,7 +67,10 @@ async fn main() -> Result<()> {
 
     // 5. Master Enclave
     let admin_db_path = data_dir.join("admin.db");
-    info!("Identity: Initializing Master Enclave at {}", admin_db_path.display());
+    info!(
+        "Identity: Initializing Master Enclave at {}",
+        admin_db_path.display()
+    );
     let master_enclave = MasterEnclave::open(
         admin_db_path.to_str().context("Invalid admin db path")?,
         &root_key,

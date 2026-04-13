@@ -46,7 +46,10 @@ impl MasterEnclave {
             .context("Decryption failed: invalid master key or corrupted master database file")?;
 
         let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| path.to_path_buf());
-        info!("Master Admin Enclave initialized. Storage: {}", canonical_path.display());
+        info!(
+            "Master Admin Enclave initialized. Storage: {}",
+            canonical_path.display()
+        );
 
         let enclave = Self {
             connection: Arc::new(Mutex::new(conn)),
@@ -173,12 +176,19 @@ impl MasterEnclave {
         .context("Failed to configure Master Admin")?;
 
         // Verificación inmediata de persistencia
-        let count: i64 = conn.query_row("SELECT count(*) FROM master_admin WHERE username = ?1", [&username], |row| row.get(0))?;
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM master_admin WHERE username = ?1",
+            [&username],
+            |row| row.get(0),
+        )?;
         if count == 0 {
             anyhow::bail!("Critical persistence failure: Master Admin was not saved to disk.");
         }
 
-        info!("Master admin {} successfully configured and verified in storage.", username);
+        info!(
+            "Master admin {} successfully configured and verified in storage.",
+            username
+        );
         Ok(())
     }
 
