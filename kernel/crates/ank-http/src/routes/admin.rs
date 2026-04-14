@@ -143,7 +143,9 @@ pub async fn delete_tenant_path(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    Ok(Json(json!({ "success": true, "message": format!("Tenant {} deleted.", target_id) })))
+    Ok(Json(
+        json!({ "success": true, "message": format!("Tenant {} deleted.", target_id) }),
+    ))
 }
 
 pub async fn delete_tenant_body(
@@ -170,7 +172,9 @@ pub async fn delete_tenant_body(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    Ok(Json(json!({ "success": true, "message": "Tenant deleted successfully" })))
+    Ok(Json(
+        json!({ "success": true, "message": "Tenant deleted successfully" }),
+    ))
 }
 
 pub async fn reset_password(
@@ -189,5 +193,7 @@ pub async fn reset_password(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    Ok(Json(json!({ "success": true, "message": "Password reset successful" })))
+    Ok(Json(
+        json!({ "success": true, "message": "Password reset successful" }),
+    ))
 }

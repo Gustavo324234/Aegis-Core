@@ -28,12 +28,16 @@ pub async fn get_system_status(
     let tenant_id = headers
         .get("x-citadel-tenant")
         .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(crate::citadel::CitadelError::MissingTenant))?;
+        .ok_or(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::MissingTenant,
+        ))?;
 
     let raw_key = headers
         .get("x-citadel-key")
         .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(crate::citadel::CitadelError::MissingKey))?;
+        .ok_or(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::MissingKey,
+        ))?;
 
     let hash = hash_passphrase(raw_key);
 
