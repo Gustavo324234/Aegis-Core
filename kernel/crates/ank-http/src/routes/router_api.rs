@@ -26,7 +26,6 @@ pub fn router() -> Router<AppState> {
         .route("/status", get(router_status))
 }
 
-/// Body para operaciones de clave — credenciales vienen de headers Citadel.
 #[derive(Deserialize)]
 pub struct KeyAddRequest {
     pub provider: String,
@@ -35,8 +34,6 @@ pub struct KeyAddRequest {
     pub label: Option<String>,
 }
 
-/// Valida que los headers Citadel correspondan al Master Admin.
-/// Retorna el `tenant_id` autenticado.
 async fn require_master_auth(
     state: &AppState,
     headers: &HeaderMap,
@@ -103,7 +100,8 @@ async fn list_global_keys(
 
     let router = state.router.read().await;
     let keys = router.list_global_keys().await;
-    Ok(Json(json!(keys)))
+    // Envolver en objeto { "keys": [...] } para que el frontend pueda hacer data.keys
+    Ok(Json(json!({ "keys": keys })))
 }
 
 async fn delete_global_key(
@@ -152,7 +150,7 @@ async fn list_tenant_keys(
 ) -> Result<Json<Value>, AegisHttpError> {
     let router = state.router.read().await;
     let keys = router.list_tenant_keys(&auth.tenant_id).await;
-    Ok(Json(json!(keys)))
+    Ok(Json(json!({ "keys": keys })))
 }
 
 async fn delete_tenant_key(
