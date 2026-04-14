@@ -186,7 +186,9 @@ impl MasterEnclave {
         // SRE-FIX (CORE-090): Checkpoint inmediato tras insertar el admin.
         // Garantiza que admin_exists() devuelva true en la misma sesión de proceso,
         // sin necesidad de reiniciar el servicio.
-        self.checkpoint().await.context("Failed to checkpoint WAL after initialize_master")?;
+        self.checkpoint()
+            .await
+            .context("Failed to checkpoint WAL after initialize_master")?;
 
         info!("Master admin {} successfully configured.", username);
         Ok(())
@@ -287,7 +289,11 @@ impl MasterEnclave {
         let max_port: Option<u32> = stmt.query_row([], |row| row.get(0)).unwrap_or(Some(50051));
 
         let next_port = if let Some(p) = max_port {
-            if p >= 50052 { p + 1 } else { 50052 }
+            if p >= 50052 {
+                p + 1
+            } else {
+                50052
+            }
         } else {
             50052
         };
@@ -302,7 +308,10 @@ impl MasterEnclave {
             rusqlite::params![tenant_id, next_port, hash],
         ).with_context(|| format!("Failed to create tenant {}", tenant_id))?;
 
-        info!("Created tenant {} assigned to port {}", tenant_id, next_port);
+        info!(
+            "Created tenant {} assigned to port {}",
+            tenant_id, next_port
+        );
         Ok((next_port, temp_passphrase))
     }
 
@@ -390,7 +399,9 @@ impl MasterEnclave {
         }
         // SRE-FIX (CORE-090): Checkpoint tras guardar el token para que sea
         // visible inmediatamente si el proceso lee la BD desde otra task de Tokio.
-        self.checkpoint().await.context("Failed to checkpoint WAL after store_setup_token")?;
+        self.checkpoint()
+            .await
+            .context("Failed to checkpoint WAL after store_setup_token")?;
         Ok(())
     }
 
@@ -469,7 +480,10 @@ mod tests {
 
         // SRE-FIX (CORE-090): admin_exists() debe devolver true INMEDIATAMENTE
         // después de initialize_master, sin reiniciar el proceso.
-        assert!(enclave.admin_exists().await?, "admin_exists must be true immediately after initialize_master — no restart required");
+        assert!(
+            enclave.admin_exists().await?,
+            "admin_exists must be true immediately after initialize_master — no restart required"
+        );
 
         let haxor_sha256 = format!("{:x}", Sha256::digest("haxor".as_bytes()));
         let is_auth = enclave.authenticate_master("root", &haxor_sha256).await?;
@@ -492,7 +506,9 @@ mod tests {
 
         let new_pass_raw = "new_secure_pass";
         let sha256_new = format!("{:x}", Sha256::digest(new_pass_raw.as_bytes()));
-        enclave.reset_tenant_password("testuser", &sha256_new).await?;
+        enclave
+            .reset_tenant_password("testuser", &sha256_new)
+            .await?;
         let is_auth_after_reset = enclave.authenticate_tenant("testuser", &sha256_new).await?;
         assert!(is_auth_after_reset);
 
@@ -511,7 +527,10 @@ mod tests {
 
         let sha256_old = format!("{:x}", Sha256::digest(temp_pass.as_bytes()));
         let old_auth = enclave.authenticate_tenant("alice", &sha256_old).await?;
-        assert!(!old_auth, "Old temp password should be rejected after reset");
+        assert!(
+            !old_auth,
+            "Old temp password should be rejected after reset"
+        );
 
         let new_auth = enclave.authenticate_tenant("alice", &sha256_new).await?;
         assert!(new_auth, "New password should be accepted after reset");
@@ -541,7 +560,9 @@ mod tests {
         assert!(valid, "Token should be valid");
 
         let passphrase_sha256 = format!("{:x}", Sha256::digest("mypassword".as_bytes()));
-        enclave.initialize_master("admin", &passphrase_sha256).await?;
+        enclave
+            .initialize_master("admin", &passphrase_sha256)
+            .await?;
 
         // Este es el assert que fallaba en producción: admin_exists() devolvía false
         // porque el WAL no se había checkpointeado
@@ -553,8 +574,15 @@ mod tests {
         // Verificar también que STATE_OPERATIONAL sería devuelto por el servidor
         // (simulando get_public_system_state)
         let exists = enclave.admin_exists().await?;
-        let state = if exists { "STATE_OPERATIONAL" } else { "STATE_INITIALIZING" };
-        assert_eq!(state, "STATE_OPERATIONAL", "System state must be OPERATIONAL after setup");
+        let state = if exists {
+            "STATE_OPERATIONAL"
+        } else {
+            "STATE_INITIALIZING"
+        };
+        assert_eq!(
+            state, "STATE_OPERATIONAL",
+            "System state must be OPERATIONAL after setup"
+        );
 
         Ok(())
     }
