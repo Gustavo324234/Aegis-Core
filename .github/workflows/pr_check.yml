@@ -16,6 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # SRE-FIX: Usar PAT en lugar de GITHUB_TOKEN para que el auto-commit
+          # de fmt/clippy dispare el workflow en el nuevo commit.
+          # Con GITHUB_TOKEN, GitHub bloquea el re-trigger y el PR queda en
+          # "Waiting for status to be reported" indefinidamente.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -35,7 +41,7 @@ jobs:
       - name: Commit fixes (if any)
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: auto-format and clippy fixes"
+          commit_message: "chore: auto-format and clippy fixes [skip ci]"
           file_pattern: "*.rs"
 
       - name: Strict checks
