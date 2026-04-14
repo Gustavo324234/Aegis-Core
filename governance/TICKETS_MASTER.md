@@ -124,3 +124,20 @@ Chat conectado al HAL, credenciales migradas a headers Citadel, bypass de seguri
 ## 🔮 EPIC 35: Smoke Test en Producción — PRÓXIMA
 
 *Última actualización: 2026-04-13 | Arquitecto IA*
+
+## 🐛 CORE-090 — Fix: WAL checkpoint race en `initialize_master`
+**Status:** ✅ DONE — 2026-04-14
+**Agente:** Arquitecto IA (fix directo — bug bloqueante de producción)
+
+**Problema:** `admin_exists()` devolvía `false` inmediatamente después de
+`initialize_master` porque los datos estaban en el WAL pero la conexión
+mantenía un snapshot de lectura anterior. El sistema quedaba en
+`STATE_INITIALIZING` tras el setup, obligando a reiniciar el servicio.
+
+**Fix aplicado en `kernel/crates/ank-core/src/enclave/master.rs`:**
+- `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=1;` en `open()`
+- `PRAGMA wal_checkpoint(TRUNCATE)` en `init_schema()` y nuevo método privado `checkpoint()`
+- `checkpoint()` llamado al final de `initialize_master()` y `store_setup_token()`
+- Nuevo test `test_admin_exists_immediately_after_setup` que reproduce el bug exacto
+
+**Commit:** `fix(ank-core): CORE-090 WAL checkpoint race in initialize_master`

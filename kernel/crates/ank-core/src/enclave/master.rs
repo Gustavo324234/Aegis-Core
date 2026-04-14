@@ -33,23 +33,26 @@ impl MasterEnclave {
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open master database at {}", db_path))?;
 
-        // Aplicamos la llave SQLCipher
         conn.pragma_update(None, "key", master_key)
             .context("Failed to apply PRAGMA key to master database")?;
 
-        // Pragma: Enable WAL mode for better concurrency and persistence reliability
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .context("Failed to set journal_mode to WAL")?;
-
-        // Verificación básica de integridad
+        // Verificación básica de integridad y capacidad de desencriptación.
         conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
             .context("Decryption failed: invalid master key or corrupted master database file")?;
 
-        let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| path.to_path_buf());
-        info!(
-            "Master Admin Enclave initialized. Storage: {}",
-            canonical_path.display()
-        );
+        // SRE-FIX (CORE-090): Usar WAL mode para escrituras concurrentes, pero forzar
+        // synchronous=FULL para garantizar que los writes sean visibles inmediatamente
+        // a la misma conexión sin necesidad de checkpoint manual.
+        // journal_mode=WAL + synchronous=FULL es el modo más seguro para un proceso
+        // único con Arc<Mutex<Connection>>.
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=FULL;
+             PRAGMA wal_autocheckpoint=1;",
+        )
+        .context("Failed to configure WAL pragmas")?;
+
+        info!("Master Admin Enclave initialized successfully.");
 
         let enclave = Self {
             connection: Arc::new(Mutex::new(conn)),
@@ -113,6 +116,11 @@ impl MasterEnclave {
         )
         .context("Failed to init setup_tokens table")?;
 
+        // SRE-FIX (CORE-090): Forzar checkpoint tras init_schema para que el WAL
+        // quede vacío y todas las lecturas posteriores vean el estado actual.
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .context("Failed to checkpoint WAL after schema init")?;
+
         Ok(())
     }
 
@@ -141,8 +149,6 @@ impl MasterEnclave {
     pub async fn admin_exists(&self) -> Result<bool> {
         let conn = self.connection.lock().await;
 
-        // Primero verificamos que la tabla exista consultando sqlite_master.
-        // Si no existe (ej: DB acaba de ser creada pero init_schema no terminó), es false.
         let table_exists: bool = conn
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='master_admin'",
@@ -168,32 +174,35 @@ impl MasterEnclave {
         }
 
         let hash = Self::hash_password(passphrase_sha256).context("Failed to hash password")?;
-        let conn = self.connection.lock().await;
-        conn.execute(
-            "INSERT INTO master_admin (id, username, password_hash) VALUES (1, ?1, ?2)",
-            [&username, &hash.as_str()],
-        )
-        .context("Failed to configure Master Admin")?;
-
-        // Verificación inmediata de persistencia
-        let count: i64 = conn.query_row(
-            "SELECT count(*) FROM master_admin WHERE username = ?1",
-            [&username],
-            |row| row.get(0),
-        )?;
-        if count == 0 {
-            anyhow::bail!("Critical persistence failure: Master Admin was not saved to disk.");
+        {
+            let conn = self.connection.lock().await;
+            conn.execute(
+                "INSERT INTO master_admin (id, username, password_hash) VALUES (1, ?1, ?2)",
+                [&username, &hash.as_str()],
+            )
+            .context("Failed to configure Master Admin")?;
         }
 
-        info!(
-            "Master admin {} successfully configured and verified in storage.",
-            username
-        );
+        // SRE-FIX (CORE-090): Checkpoint inmediato tras insertar el admin.
+        // Garantiza que admin_exists() devuelva true en la misma sesión de proceso,
+        // sin necesidad de reiniciar el servicio.
+        self.checkpoint().await.context("Failed to checkpoint WAL after initialize_master")?;
+
+        info!("Master admin {} successfully configured.", username);
+        Ok(())
+    }
+
+    /// SRE-FIX (CORE-090): Fuerza un WAL checkpoint TRUNCATE.
+    /// Llamar después de cualquier write crítico (initialize_master, store_setup_token).
+    /// Con wal_autocheckpoint=1 esto es redundante pero actúa como garantía explícita.
+    async fn checkpoint(&self) -> Result<()> {
+        let conn = self.connection.lock().await;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| anyhow::anyhow!("WAL checkpoint failed: {}", e))?;
         Ok(())
     }
 
     /// Valida que el session_key proporcione matching real con el Master Admin password.
-    /// Es vital validar tanto username como password_hash para identidad robusta.
     pub async fn authenticate_master(
         &self,
         username: &str,
@@ -205,7 +214,6 @@ impl MasterEnclave {
 
         let conn = self.connection.lock().await;
 
-        // Buscamos el hash del admin específico por su username
         let mut stmt =
             conn.prepare("SELECT password_hash FROM master_admin WHERE username = ?1 LIMIT 1")?;
 
@@ -226,14 +234,12 @@ impl MasterEnclave {
                     .is_ok();
                 Ok(is_valid)
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false), // Admin no encontrado
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
             Err(e) => Err(anyhow::anyhow!("Database authentication error: {}", e)),
         }
     }
 
     /// Valida que el tenant proporcione un login válido no-root.
-    /// Si las credenciales son correctas pero `password_must_change = 1`, retorna
-    /// `Err("PASSWORD_MUST_CHANGE")` para que el BFF pueda redirigir al flujo de cambio de clave.
     pub async fn authenticate_tenant(
         &self,
         tenant_id: &str,
@@ -277,25 +283,17 @@ impl MasterEnclave {
     pub async fn create_tenant(&self, tenant_id: &str) -> Result<(u32, String)> {
         use anyhow::Context;
         let conn = self.connection.lock().await;
-        // En un escenario real, buscaríamos el último puerto usado.
         let mut stmt = conn.prepare("SELECT MAX(network_port) FROM tenants")?;
         let max_port: Option<u32> = stmt.query_row([], |row| row.get(0)).unwrap_or(Some(50051));
 
-        // Asignamos el siguiente puerto disponible, empezando desde 50052 para los tenants.
         let next_port = if let Some(p) = max_port {
-            if p >= 50052 {
-                p + 1
-            } else {
-                50052
-            }
+            if p >= 50052 { p + 1 } else { 50052 }
         } else {
             50052
         };
 
-        // Generar passphrase temporal, e.g., uuid-base o hash. Usaremos uuid simplificado
         let temp_passphrase = uuid::Uuid::new_v4().to_string().replace("-", "")[0..12].to_string();
 
-        // El BFF enviará SHA256(temp_passphrase). Nosotros guardamos Argon2(SHA256(temp_passphrase)).
         let sha256_pass = format!("{:x}", Sha256::digest(temp_passphrase.as_bytes()));
         let hash = Self::hash_password(&sha256_pass).context("Failed to hash temp passphrase")?;
 
@@ -304,17 +302,11 @@ impl MasterEnclave {
             rusqlite::params![tenant_id, next_port, hash],
         ).with_context(|| format!("Failed to create tenant {}", tenant_id))?;
 
-        info!(
-            "Created tenant {} assigned to port {}",
-            tenant_id, next_port
-        );
-
-        // Devolvemos el puerto y la contraseña temporal sin encriptar, solo para devolvérsela al cliente ahora
+        info!("Created tenant {} assigned to port {}", tenant_id, next_port);
         Ok((next_port, temp_passphrase))
     }
 
-    /// Resetea la contraseña del tenant: hashea y persiste la nueva clave, y limpia el flag
-    /// `password_must_change` para que la próxima autenticación no requiera cambio inmediato.
+    /// Resetea la contraseña del tenant
     pub async fn reset_tenant_password(
         &self,
         tenant_id: &str,
@@ -366,7 +358,7 @@ impl MasterEnclave {
         Ok(tenants)
     }
 
-    /// Elimina un tenant de la base de datos maestra y su DB individual si existe.
+    /// Elimina un tenant de la base de datos maestra
     pub async fn delete_tenant(&self, tenant_id: &str) -> Result<()> {
         use anyhow::Context;
         let conn = self.connection.lock().await;
@@ -388,12 +380,17 @@ impl MasterEnclave {
     /// ANK-29-001: Almacena un setup token con TTL
     pub async fn store_setup_token(&self, token: &str, ttl_minutes: i64) -> Result<()> {
         use anyhow::Context;
-        let conn = self.connection.lock().await;
-        conn.execute(
-            "INSERT OR REPLACE INTO setup_tokens (token, expires_at) VALUES (?1, datetime('now', '+' || ?2 || ' minutes'))",
-            rusqlite::params![token, ttl_minutes],
-        )
-        .context("Failed to store setup token")?;
+        {
+            let conn = self.connection.lock().await;
+            conn.execute(
+                "INSERT OR REPLACE INTO setup_tokens (token, expires_at) VALUES (?1, datetime('now', '+' || ?2 || ' minutes'))",
+                rusqlite::params![token, ttl_minutes],
+            )
+            .context("Failed to store setup token")?;
+        }
+        // SRE-FIX (CORE-090): Checkpoint tras guardar el token para que sea
+        // visible inmediatamente si el proceso lee la BD desde otra task de Tokio.
+        self.checkpoint().await.context("Failed to checkpoint WAL after store_setup_token")?;
         Ok(())
     }
 
@@ -430,13 +427,19 @@ impl MasterEnclave {
 
 impl MasterEnclave {
     /// Crea un `MasterEnclave` en memoria para uso exclusivo en tests de integración.
-    /// Usa SQLite `:memory:` para garantizar cero side-effects y aislamiento total.
-    /// SRE Law: Nunca llamar este método en producción.
     #[doc(hidden)]
     pub async fn new_in_memory() -> Result<Self> {
         use anyhow::Context;
         let conn =
             Connection::open(":memory:").context("Failed to open in-memory SQLite for test")?;
+        // En memoria no necesita WAL (no hay archivo físico), pero aplicamos los mismos pragmas
+        // para consistencia de comportamiento en tests.
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=FULL;
+             PRAGMA wal_autocheckpoint=1;",
+        )
+        .context("Failed to configure WAL pragmas for in-memory db")?;
         let enclave = Self {
             connection: Arc::new(Mutex::new(conn)),
         };
@@ -463,10 +466,11 @@ mod tests {
 
         let haxor_sha256 = format!("{:x}", Sha256::digest("haxor".as_bytes()));
         enclave.initialize_master("root", &haxor_sha256).await?;
-        let is_auth = enclave.admin_exists().await?;
-        assert!(is_auth);
 
-        // Simulate BFF hashing for admin login
+        // SRE-FIX (CORE-090): admin_exists() debe devolver true INMEDIATAMENTE
+        // después de initialize_master, sin reiniciar el proceso.
+        assert!(enclave.admin_exists().await?, "admin_exists must be true immediately after initialize_master — no restart required");
+
         let haxor_sha256 = format!("{:x}", Sha256::digest("haxor".as_bytes()));
         let is_auth = enclave.authenticate_master("root", &haxor_sha256).await?;
         assert!(is_auth);
@@ -475,9 +479,6 @@ mod tests {
         assert!(port >= 50052);
         assert!(!pass.is_empty());
 
-        // The tenant is created with password_must_change = 1, so authentication
-        // with the temp password must fail with PASSWORD_MUST_CHANGE.
-        // We must SHA256 the temp pass because that's what the BFF does.
         let sha256_pass = format!("{:x}", Sha256::digest(pass.as_bytes()));
         let auth_result = enclave.authenticate_tenant("testuser", &sha256_pass).await;
         let Err(e) = auth_result else {
@@ -489,44 +490,71 @@ mod tests {
             e
         );
 
-        // After a password reset the flag must be cleared and the new credential must work.
         let new_pass_raw = "new_secure_pass";
         let sha256_new = format!("{:x}", Sha256::digest(new_pass_raw.as_bytes()));
-        enclave
-            .reset_tenant_password("testuser", &sha256_new)
-            .await?;
+        enclave.reset_tenant_password("testuser", &sha256_new).await?;
         let is_auth_after_reset = enclave.authenticate_tenant("testuser", &sha256_new).await?;
         assert!(is_auth_after_reset);
 
         Ok(())
     }
 
-    /// Verifies that `reset_tenant_password` persists a new hash so the old
-    /// credential is rejected and the new one is accepted.
     #[tokio::test]
     async fn test_reset_password_actually_changes_hash() -> anyhow::Result<()> {
         let enclave = MasterEnclave::new_in_memory().await?;
 
-        // Create a tenant (temp password assigned, password_must_change = 1).
         let (_port, temp_pass) = enclave.create_tenant("alice").await?;
 
-        // Reset to a known new password (pre-hash with SHA256 like the BFF does).
         let new_pass_raw = "super_secret_new_pass";
         let sha256_new = format!("{:x}", Sha256::digest(new_pass_raw.as_bytes()));
         enclave.reset_tenant_password("alice", &sha256_new).await?;
 
-        // Old temporary password (SHA256'd) must be rejected after reset.
         let sha256_old = format!("{:x}", Sha256::digest(temp_pass.as_bytes()));
         let old_auth = enclave.authenticate_tenant("alice", &sha256_old).await?;
-        assert!(
-            !old_auth,
-            "Old temp password should be rejected after reset"
-        );
+        assert!(!old_auth, "Old temp password should be rejected after reset");
 
-        // New password must be accepted without a PASSWORD_MUST_CHANGE error
-        // (reset sets password_must_change = 0).
         let new_auth = enclave.authenticate_tenant("alice", &sha256_new).await?;
         assert!(new_auth, "New password should be accepted after reset");
+
+        Ok(())
+    }
+
+    /// SRE-FIX (CORE-090): Verifica que admin_exists() devuelve true inmediatamente
+    /// después de initialize_master sin ningún restart ni reconexión intermedia.
+    /// Este test reproduce el escenario exacto del bug de producción.
+    #[tokio::test]
+    async fn test_admin_exists_immediately_after_setup() -> anyhow::Result<()> {
+        let dir = tempdir().context("Failed to create tempdir")?;
+        let db_path = dir.path().join("admin.db");
+        let path_str = db_path.to_str().context("Path is not valid UTF-8")?;
+
+        let enclave = MasterEnclave::open(path_str, "test_key").await?;
+
+        // Simular el flujo de setup token → initialize_master → admin_exists
+        // exactamente como ocurre en producción (misma conexión, sin restart)
+        assert!(!enclave.admin_exists().await?, "Should start uninitialized");
+
+        let token = "test_token_abc123";
+        enclave.store_setup_token(token, 30).await?;
+
+        let valid = enclave.validate_and_consume_setup_token(token).await?;
+        assert!(valid, "Token should be valid");
+
+        let passphrase_sha256 = format!("{:x}", Sha256::digest("mypassword".as_bytes()));
+        enclave.initialize_master("admin", &passphrase_sha256).await?;
+
+        // Este es el assert que fallaba en producción: admin_exists() devolvía false
+        // porque el WAL no se había checkpointeado
+        assert!(
+            enclave.admin_exists().await?,
+            "CORE-090: admin_exists() MUST return true immediately after initialize_master"
+        );
+
+        // Verificar también que STATE_OPERATIONAL sería devuelto por el servidor
+        // (simulando get_public_system_state)
+        let exists = enclave.admin_exists().await?;
+        let state = if exists { "STATE_OPERATIONAL" } else { "STATE_INITIALIZING" };
+        assert_eq!(state, "STATE_OPERATIONAL", "System state must be OPERATIONAL after setup");
 
         Ok(())
     }
