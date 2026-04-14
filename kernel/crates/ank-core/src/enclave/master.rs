@@ -33,17 +33,23 @@ impl MasterEnclave {
         let conn = Connection::open(db_path)
             .with_context(|| format!("Failed to open master database at {}", db_path))?;
 
-        // Aplicamos la llave. El sistema Aegis pasará una llave estática configurada en variables de entorno,
-        // o generada en runtime para encriptar la propia BD maestra si se desea.
+        // Aplicamos la llave SQLCipher
         conn.pragma_update(None, "key", master_key)
             .context("Failed to apply PRAGMA key to master database")?;
 
-        // Verificación básica de integridad y capacidad de desencriptación.
-        // Si el PRAGMA key falló o la DB está corrupta, esta consulta fallará.
+        // Pragma: Enable WAL mode for better concurrency and persistence reliability
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .context("Failed to set journal_mode to WAL")?;
+
+        // Verificación básica de integridad
         conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
             .context("Decryption failed: invalid master key or corrupted master database file")?;
 
-        info!("Master Admin Enclave initialized successfully.");
+        let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| path.to_path_buf());
+        info!(
+            "Master Admin Enclave initialized. Storage: {}",
+            canonical_path.display()
+        );
 
         let enclave = Self {
             connection: Arc::new(Mutex::new(conn)),
@@ -169,7 +175,20 @@ impl MasterEnclave {
         )
         .context("Failed to configure Master Admin")?;
 
-        info!("Master admin {} successfully configured.", username);
+        // Verificación inmediata de persistencia
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM master_admin WHERE username = ?1",
+            [&username],
+            |row| row.get(0),
+        )?;
+        if count == 0 {
+            anyhow::bail!("Critical persistence failure: Master Admin was not saved to disk.");
+        }
+
+        info!(
+            "Master admin {} successfully configured and verified in storage.",
+            username
+        );
         Ok(())
     }
 
