@@ -2,6 +2,13 @@
 
 
 
+## [0.1.5](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.4...ank-http-v0.1.5) (2026-04-14)
+
+
+### Bug Fixes
+
+* **shell:** store version 2 + BootstrapSetup correct endpoint + engine CitadelAuthenticated ([#22](https://github.com/Gustavo324234/Aegis-Core/issues/22)) ([357b28e](https://github.com/Gustavo324234/Aegis-Core/commit/357b28efe195fb35a7bfe7eb2217db275110ff45))
+
 ## [0.1.4](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.3...ank-http-v0.1.4) (2026-04-14)
 
 
