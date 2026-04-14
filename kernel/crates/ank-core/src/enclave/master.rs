@@ -82,10 +82,19 @@ impl MasterEnclave {
         .context("Failed to init tenants table")?;
 
         // SRE Migrations — idempotentes, fallan silenciosamente si la columna ya existe
-        let _ = conn.execute("ALTER TABLE tenants ADD COLUMN username TEXT NOT NULL DEFAULT ''", []);
-        let _ = conn.execute("ALTER TABLE tenants ADD COLUMN role TEXT NOT NULL DEFAULT 'user'", []);
+        let _ = conn.execute(
+            "ALTER TABLE tenants ADD COLUMN username TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE tenants ADD COLUMN role TEXT NOT NULL DEFAULT 'user'",
+            [],
+        );
         let _ = conn.execute("ALTER TABLE tenants ADD COLUMN last_active DATETIME", []);
-        let _ = conn.execute("ALTER TABLE tenants ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''", []);
+        let _ = conn.execute(
+            "ALTER TABLE tenants ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''",
+            [],
+        );
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS setup_tokens (
@@ -235,7 +244,10 @@ impl MasterEnclave {
                 Ok(is_valid)
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(e) => Err(anyhow::anyhow!("Database tenant authentication error: {}", e)),
+            Err(e) => Err(anyhow::anyhow!(
+                "Database tenant authentication error: {}",
+                e
+            )),
         }
     }
 
@@ -246,7 +258,11 @@ impl MasterEnclave {
         let max_port: Option<u32> = stmt.query_row([], |row| row.get(0)).unwrap_or(Some(50051));
 
         let next_port = if let Some(p) = max_port {
-            if p >= 50052 { p + 1 } else { 50052 }
+            if p >= 50052 {
+                p + 1
+            } else {
+                50052
+            }
         } else {
             50052
         };
@@ -260,7 +276,10 @@ impl MasterEnclave {
             rusqlite::params![tenant_id, next_port, hash],
         ).with_context(|| format!("Failed to create tenant {}", tenant_id))?;
 
-        info!("Created tenant {} assigned to port {}", tenant_id, next_port);
+        info!(
+            "Created tenant {} assigned to port {}",
+            tenant_id, next_port
+        );
         Ok((next_port, temp_passphrase))
     }
 
@@ -450,7 +469,9 @@ mod tests {
         assert!(e.to_string().contains("PASSWORD_MUST_CHANGE"));
 
         let sha256_new = format!("{:x}", Sha256::digest("new_secure_pass".as_bytes()));
-        enclave.reset_tenant_password("testuser", &sha256_new).await?;
+        enclave
+            .reset_tenant_password("testuser", &sha256_new)
+            .await?;
         assert!(enclave.authenticate_tenant("testuser", &sha256_new).await?);
 
         Ok(())
