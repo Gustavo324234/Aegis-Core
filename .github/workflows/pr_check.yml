@@ -17,10 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # SRE-FIX: Usar PAT en lugar de GITHUB_TOKEN para que el auto-commit
-          # de fmt/clippy dispare el workflow en el nuevo commit.
-          # Con GITHUB_TOKEN, GitHub bloquea el re-trigger y el PR queda en
-          # "Waiting for status to be reported" indefinidamente.
+          # SRE-FIX: PAT en lugar de GITHUB_TOKEN para que el auto-commit de fmt/clippy
+          # dispare el workflow en el nuevo HEAD. Con GITHUB_TOKEN, GitHub bloquea el
+          # re-trigger y el PR queda en "Waiting for status to be reported" indefinidamente.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
       - name: Install system dependencies
