@@ -102,27 +102,55 @@ pub async fn setup_token(
     Json(body): Json<SetupTokenRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let hash = hash_passphrase(&body.password);
-    let citadel = state.citadel.lock().await;
 
-    // Validar token
-    let valid = citadel
-        .enclave
-        .validate_and_consume_setup_token(&body.setup_token)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    // SRE-FIX (CORE-090 follow-up): Operaciones en pasos separados con locks independientes.
+    //
+    // BUG ANTERIOR:
+    //   1. validate_and_consume_setup_token()  ← token quemado
+    //   2. initialize_master()                 ← si falla: token quemado, admin nunca creado
+    //      → sistema queda sin token ni admin, requiere reinstalación
+    //
+    // FIX:
+    //   1. Validar token (sin consumir)
+    //   2. initialize_master()
+    //   3. Consumir token SOLO si initialize_master fue exitoso
+    //   4. Si initialize_master falla: token sigue válido, usuario puede reintentar
 
-    if !valid {
-        return Err(AegisHttpError::Kernel(
-            "Invalid or expired setup token".to_string(),
-        ));
-    }
+    // Paso 1: Validar que el token existe y no está expirado (sin consumirlo todavía)
+    {
+        let citadel = state.citadel.lock().await;
+        let valid = citadel
+            .enclave
+            .validate_setup_token_only(&body.setup_token)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    // Inicializar master
-    citadel
-        .enclave
-        .initialize_master(&body.username, &hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+        if !valid {
+            return Err(AegisHttpError::Kernel(
+                "Invalid or expired setup token".to_string(),
+            ));
+        }
+    } // lock liberado
+
+    // Paso 2: Crear el Master Admin
+    {
+        let citadel = state.citadel.lock().await;
+        citadel
+            .enclave
+            .initialize_master(&body.username, &hash)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    } // lock liberado
+
+    // Paso 3: Consumir el token SOLO después de que initialize_master fue exitoso
+    {
+        let citadel = state.citadel.lock().await;
+        citadel
+            .enclave
+            .consume_setup_token(&body.setup_token)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    } // lock liberado
 
     Ok(Json(json!({
         "success": true,
