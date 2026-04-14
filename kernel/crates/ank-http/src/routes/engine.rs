@@ -1,4 +1,4 @@
-use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
+use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
 use axum::{
     extract::State,
     routing::{get, post},
@@ -16,8 +16,6 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize)]
 pub struct EngineConfig {
-    pub tenant_id: String,
-    pub session_key: String,
     pub api_url: String,
     pub model_name: String,
     pub api_key: String,
@@ -36,33 +34,17 @@ pub async fn get_status(State(state): State<AppState>) -> Result<Json<Value>, Ae
             return Ok(Json(val));
         }
     }
-
     Ok(Json(json!({ "configured": false })))
 }
 
 pub async fn configure(
     State(state): State<AppState>,
+    auth: CitadelAuthenticated,
     Json(body): Json<EngineConfig>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let hash = hash_passphrase(&body.session_key);
+    // Auth ya validada por CitadelAuthenticated extractor (headers x-citadel-tenant / x-citadel-key)
 
-    // 1. Validar contra Citadel
-    {
-        let citadel = state.citadel.lock().await;
-        let is_auth = citadel
-            .enclave
-            .authenticate_tenant(&body.tenant_id, &hash)
-            .await
-            .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-
-        if !is_auth {
-            return Err(AegisHttpError::Citadel(
-                crate::citadel::CitadelError::Unauthorized,
-            ));
-        }
-    }
-
-    // 2. Actualizar HAL
+    // Actualizar HAL en memoria
     {
         let mut hal = state.hal.write().await;
         hal.update_cloud_credentials(
@@ -72,12 +54,13 @@ pub async fn configure(
         );
     }
 
-    // 3. Persistir config
+    // Persistir config en data_dir (CORE-075)
     let config_to_save = json!({
         "configured": true,
         "provider": body.provider,
         "api_url": body.api_url,
         "model_name": body.model_name,
+        "configured_by": auth.tenant_id,
     });
 
     let config_json = serde_json::to_string_pretty(&config_to_save)

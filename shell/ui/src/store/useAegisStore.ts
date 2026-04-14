@@ -93,11 +93,16 @@ interface WindowWithWebkit extends Window {
 }
 
 const buildWsUrl = (path: string) => {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}${path}`;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}${path}`;
 };
 
 let telemetryInterval: number | null = null;
+
+// SRE-FIX: Incrementar STORE_VERSION cuando cambie el schema de partialize.
+// Zustand descarta automáticamente el localStorage viejo cuando la versión no coincide,
+// evitando el crash "Cannot convert undefined or null to object" por estado corrupto.
+const STORE_VERSION = 2;
 
 export const useAegisStore = create<AegisState>()(
     persist(
@@ -136,10 +141,10 @@ export const useAegisStore = create<AegisState>()(
                     try {
                         const sessionKey = get().sessionKey;
                         if (!sessionKey || !tenantId) return;
-                        const response = await fetch(`/api/status`, {
-                            headers: { 
+                        const response = await fetch('/api/status', {
+                            headers: {
                                 'x-citadel-tenant': tenantId,
-                                'x-citadel-key': sessionKey 
+                                'x-citadel-key': sessionKey,
                             }
                         });
                         if (response.ok) {
@@ -165,9 +170,6 @@ export const useAegisStore = create<AegisState>()(
                         const data = await response.json();
                         set({ systemState: data.state });
                     } else if (response.status === 401) {
-                        // SRE-FIX: A 401 here is EXPECTED when the system is operational.
-                        // This endpoint is called without credentials to determine the public
-                        // system state. We must NOT logout — the session is still valid.
                         set({ systemState: 'STATE_OPERATIONAL' });
                     }
                 } catch (error) {
@@ -181,17 +183,19 @@ export const useAegisStore = create<AegisState>()(
                 if (!tenantId || !sessionKey) return;
                 set({ isFetchingTenants: true, tenantsError: null });
                 try {
-                    const res = await fetch(`/api/admin/tenants`, {
+                    const res = await fetch('/api/admin/tenants', {
                         headers: {
                             'Content-Type': 'application/json',
                             'x-citadel-tenant': tenantId,
-                            'x-citadel-key': sessionKey
+                            'x-citadel-key': sessionKey,
                         }
                     });
                     if (res.ok) {
                         const data = await res.json();
                         const rawTenants = data.tenants || [];
-                        const ids = rawTenants.map((t: string | { tenant_id: string }) => typeof t === 'string' ? t : t.tenant_id).filter((id: string) => !!id && id !== 'root');
+                        const ids = rawTenants
+                            .map((t: string | { tenant_id: string }) => typeof t === 'string' ? t : t.tenant_id)
+                            .filter((id: string) => !!id && id !== 'root');
                         set({ tenants: ids, lastTenantsUpdate: new Date().toLocaleTimeString() });
                     } else {
                         const err = await res.json().catch(() => ({ detail: 'Servidor no respondió con JSON válido' }));
@@ -199,7 +203,7 @@ export const useAegisStore = create<AegisState>()(
                     }
                 } catch (e) {
                     console.error('🛡️ Citadel Fetch Error:', e);
-                    set({ tenantsError: 'Fallo de conexión con el BFF (Network Error)' });
+                    set({ tenantsError: 'Fallo de conexión (Network Error)' });
                 } finally {
                     set({ isFetchingTenants: false });
                 }
@@ -211,10 +215,10 @@ export const useAegisStore = create<AegisState>()(
                 try {
                     const res = await fetch('/api/admin/tenant', {
                         method: 'POST',
-                        headers: { 
+                        headers: {
                             'Content-Type': 'application/json',
-                            'x-citadel-tenant': tenantId!,
-                            'x-citadel-key': sessionKey!
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
                         },
                         body: JSON.stringify({ username: targetUsername })
                     });
@@ -224,7 +228,8 @@ export const useAegisStore = create<AegisState>()(
                         return { success: true, temporary_passphrase: data.temporary_passphrase };
                     } else {
                         let errMsg = data.detail || 'Error desconocido al crear Tenant';
-                        if (errMsg.includes('already exists') || errMsg.includes('Duplicate')) errMsg = `El Tenant "${targetUsername}" ya existe en el Ring 0.`;
+                        if (errMsg.includes('already exists') || errMsg.includes('Duplicate'))
+                            errMsg = `El Tenant "${targetUsername}" ya existe en el Ring 0.`;
                         return { success: false, message: errMsg };
                     }
                 } catch (e) {
@@ -237,12 +242,12 @@ export const useAegisStore = create<AegisState>()(
                 const { tenantId, sessionKey } = get();
                 if (!tenantId || !sessionKey) return false;
                 try {
-                    const res = await fetch(`/api/admin/tenant/${encodeURIComponent(targetId)}`, { 
+                    const res = await fetch(`/api/admin/tenant/${encodeURIComponent(targetId)}`, {
                         method: 'DELETE',
-                        headers: { 
+                        headers: {
                             'Content-Type': 'application/json',
                             'x-citadel-tenant': tenantId,
-                            'x-citadel-key': sessionKey
+                            'x-citadel-key': sessionKey,
                         }
                     });
                     if (res.ok) { get().fetchTenants(); return true; }
@@ -256,18 +261,15 @@ export const useAegisStore = create<AegisState>()(
                 try {
                     const res = await fetch('/api/admin/reset_password', {
                         method: 'POST',
-                        headers: { 
+                        headers: {
                             'Content-Type': 'application/json',
-                            'x-citadel-tenant': tenantId!,
-                            'x-citadel-key': sessionKey!
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
                         },
                         body: JSON.stringify({ tenant_id: targetId, new_passphrase: newPass })
                     });
                     if (res.ok) {
-                        // Very important: if we reset our own password during the force reset flow, update the current active session key!
-                        if (tenantId === targetId) {
-                            set({ sessionKey: newPass });
-                        }
+                        if (tenantId === targetId) set({ sessionKey: newPass });
                         return true;
                     }
                     return false;
@@ -282,40 +284,40 @@ export const useAegisStore = create<AegisState>()(
                 const socket = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
                 socket.onopen = () => { set({ socket, status: 'idle' }); get().startTelemetryPolling(tenantId); };
                 socket.onmessage = (event) => {
-                    console.log('DEBUG_SHELL: Incoming message:', event.data);
-                    const msg = JSON.parse(event.data);
-                    const { event: type, data, pid } = msg;
+                    const msg = JSON.parse(event.data as string);
+                    const { event: type, data, pid } = msg as { event: string; data: unknown; pid?: string };
                     switch (type) {
                         case 'syslog':
-                            set((state) => ({ messages: [...state.messages, { id: `sys-${Date.now()}`, role: 'system', content: data, type: 'system', timestamp: Date.now() }] }));
+                            set((state) => ({ messages: [...state.messages, { id: `sys-${Date.now()}`, role: 'system', content: data as string, type: 'system', timestamp: Date.now() }] }));
                             break;
                         case 'status':
                             set({ status: 'thinking' });
                             if (pid) set({ activePid: pid });
                             break;
                         case 'kernel_event': {
-                            const payload = data;
+                            const payload = data as Record<string, unknown>;
                             if (payload.routing_info) get().setLastRoutingInfo(payload.routing_info as RoutingInfo);
-                            if (payload.thought) { get().appendToken(payload.pid, payload.thought, 'thought'); set({ status: 'thinking' }); }
-                            else if (payload.output) { get().appendToken(payload.pid, payload.output, 'text'); set({ status: 'thinking' }); }
-                            else if (payload.error) { get().appendToken(payload.pid, payload.error, 'error'); set({ status: 'error' }); }
-                            else if (payload.status_update) { if (payload.status_update.state === 'STATE_COMPLETED') set({ status: 'idle', activePid: null }); }
+                            if (payload.thought) { get().appendToken(payload.pid as string, payload.thought as string, 'thought'); set({ status: 'thinking' }); }
+                            else if (payload.output) { get().appendToken(payload.pid as string, payload.output as string, 'text'); set({ status: 'thinking' }); }
+                            else if (payload.error) { get().appendToken(payload.pid as string, payload.error as string, 'error'); set({ status: 'error' }); }
+                            else if (payload.status_update) {
+                                const su = payload.status_update as { state: string };
+                                if (su.state === 'STATE_COMPLETED') set({ status: 'idle', activePid: null });
+                            }
                             break;
                         }
-                        case 'error': 
-                            set({ status: 'error', lastError: data || 'Unknown Kernel Panic' }); 
-                            console.error('BFF Error:', data);
-                            if (data === 'PASSWORD_MUST_CHANGE') {
+                        case 'error': {
+                            const errData = data as string;
+                            set({ status: 'error', lastError: errData || 'Unknown Kernel Panic' });
+                            if (errData === 'PASSWORD_MUST_CHANGE') {
                                 set({ needsPasswordReset: true });
-                            } else if (data && data.includes('AUTH_FAILURE: Access Denied')) {
-                                // SRE-FIX: Do NOT reconnect after auth failure.
-                                // Close socket manually, keep status='error' so App.tsx won't reconnect.
-                                console.error('Citadel Auth Failure on WebSocket — closing connection.');
+                            } else if (errData?.includes('AUTH_FAILURE: Access Denied')) {
                                 const sock = get().socket;
                                 if (sock) sock.close();
                                 set({ socket: null, status: 'error' });
                             }
                             break;
+                        }
                     }
                 };
                 socket.onclose = () => {
@@ -328,11 +330,7 @@ export const useAegisStore = create<AegisState>()(
 
             sendMessage: (prompt) => {
                 const { socket, messages } = get();
-                console.log('DEBUG_SHELL: Attempting to send message:', prompt);
-                if (!socket || socket.readyState !== WebSocket.OPEN) {
-                    console.error('DEBUG_SHELL: WebSocket not open, state:', socket?.readyState);
-                    return;
-                }
+                if (!socket || socket.readyState !== WebSocket.OPEN) return;
                 ttsPlayer.initialize();
                 set({ messages: [...messages, { id: `user-${Date.now()}`, role: 'user', content: prompt, type: 'text', timestamp: Date.now() }] });
                 socket.send(JSON.stringify({ prompt, task_type: get().taskType }));
@@ -341,7 +339,7 @@ export const useAegisStore = create<AegisState>()(
             appendToken: (pid, token, type) => {
                 set((state) => {
                     const lastMessage = state.messages[state.messages.length - 1];
-                    if (lastMessage && lastMessage.role === 'assistant' && lastMessage.type === type && lastMessage.id === pid) {
+                    if (lastMessage?.role === 'assistant' && lastMessage.type === type && lastMessage.id === pid) {
                         const updatedMessages = [...state.messages];
                         updatedMessages[updatedMessages.length - 1] = { ...lastMessage, content: lastMessage.content + token };
                         return { messages: updatedMessages };
@@ -382,22 +380,17 @@ export const useAegisStore = create<AegisState>()(
                 const { socket, sirenSocket } = get();
                 if (socket) socket.close();
                 if (sirenSocket) sirenSocket.close();
-                
-                set({ 
-                    isAuthenticated: false, 
-                    isAdmin: false, 
-                    tenantId: null, 
-                    sessionKey: null, 
-                    socket: null, 
+                set({
+                    isAuthenticated: false,
+                    isAdmin: false,
+                    tenantId: null,
+                    sessionKey: null,
+                    socket: null,
                     sirenSocket: null,
-                    messages: [], 
-                    needsPasswordReset: false 
+                    messages: [],
+                    needsPasswordReset: false,
                 });
-
-                if (telemetryInterval) {
-                    clearInterval(telemetryInterval);
-                    telemetryInterval = null;
-                }
+                if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
             },
 
             startSirenStream: async () => {
@@ -436,19 +429,22 @@ export const useAegisStore = create<AegisState>()(
                     sirenWs.binaryType = 'arraybuffer';
                     sirenWs.onopen = () => { set({ isRecording: true, sirenSocket: sirenWs }); requestAnimationFrame(checkSilence); };
                     sirenWs.onmessage = (event) => {
-                        const msg = JSON.parse(event.data);
+                        const msg = JSON.parse(event.data as string) as Record<string, unknown>;
                         if (msg.event === 'siren_event') {
-                            const sirenEvent = msg.data;
-                            if (sirenEvent.tts_audio_chunk) { try { ttsPlayer.playChunk(sirenEvent.tts_audio_chunk, sirenEvent.sample_rate || 22050); } catch (e) { console.error("TTS Playback error:", e); } }
+                            const sirenEvent = msg.data as Record<string, unknown>;
+                            if (sirenEvent.tts_audio_chunk) {
+                                try { ttsPlayer.playChunk(sirenEvent.tts_audio_chunk as string, (sirenEvent.sample_rate as number) || 22050); }
+                                catch (e) { console.error('TTS Playback error:', e); }
+                            }
                             if (sirenEvent.event_type === 'VAD_START') set({ status: 'listening' });
                             else if (sirenEvent.event_type === 'STT_START') set({ status: 'transcribing' });
                             else if (sirenEvent.event_type === 'STT_DONE') {
                                 try {
-                                    const payload = JSON.parse(sirenEvent.message);
+                                    const payload = JSON.parse(sirenEvent.message as string) as { transcript: string; pid: string };
                                     set((state) => ({ messages: [...state.messages, { id: `voice-${Date.now()}`, role: 'user', content: payload.transcript, type: 'text', timestamp: Date.now() }], activePid: payload.pid, status: 'thinking' }));
                                     const chatSocket = get().socket;
-                                    if (chatSocket && chatSocket.readyState === WebSocket.OPEN) chatSocket.send(JSON.stringify({ action: "watch", pid: payload.pid }));
-                                } catch (e) { console.error("Failed to parse STT_DONE payload", e); set({ status: 'idle' }); }
+                                    if (chatSocket?.readyState === WebSocket.OPEN) chatSocket.send(JSON.stringify({ action: 'watch', pid: payload.pid }));
+                                } catch (e) { console.error('Failed to parse STT_DONE payload', e); set({ status: 'idle' }); }
                             } else if (sirenEvent.event_type === 'STT_ERROR') set({ status: 'error' });
                         } else if (msg.error) { console.error('❌ Siren Kernel Error:', msg.error); get().stopSirenStream(); }
                     };
@@ -457,7 +453,10 @@ export const useAegisStore = create<AegisState>()(
                         if (sirenWs.readyState !== WebSocket.OPEN) return;
                         const inputData = audioEvent.inputBuffer.getChannelData(0);
                         const pcmBuffer = new Int16Array(inputData.length);
-                        for (let i = 0; i < inputData.length; i++) { const s = Math.max(-1, Math.min(1, inputData[i])); pcmBuffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF; }
+                        for (let i = 0; i < inputData.length; i++) {
+                            const s = Math.max(-1, Math.min(1, inputData[i]));
+                            pcmBuffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                        }
                         sirenWs.send(pcmBuffer.buffer);
                     };
                     source.connect(scriptNode);
@@ -471,8 +470,8 @@ export const useAegisStore = create<AegisState>()(
 
             stopSirenStream: () => {
                 const { sirenSocket } = get();
-                if (sirenSocket && sirenSocket.readyState === WebSocket.OPEN) {
-                    sirenSocket.send(JSON.stringify({ sequence_number: 9999, data: "", format: "VAD_END_SIGNAL", sample_rate: 16000 }));
+                if (sirenSocket?.readyState === WebSocket.OPEN) {
+                    sirenSocket.send(JSON.stringify({ sequence_number: 9999, data: '', format: 'VAD_END_SIGNAL', sample_rate: 16000 }));
                     setTimeout(() => { if (sirenSocket.readyState === WebSocket.OPEN) sirenSocket.close(); }, 100);
                 } else if (sirenSocket) sirenSocket.close();
                 set({ sirenSocket: null });
@@ -493,10 +492,10 @@ export const useAegisStore = create<AegisState>()(
                 try {
                     const response = await fetch('/api/engine/configure', {
                         method: 'POST',
-                        headers: { 
+                        headers: {
                             'Content-Type': 'application/json',
-                            'x-citadel-tenant': tenantId!,
-                            'x-citadel-key': sessionKey!
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
                         },
                         body: JSON.stringify({ api_url: apiUrl, model_name: model, api_key: apiKey, provider })
                     });
@@ -507,13 +506,18 @@ export const useAegisStore = create<AegisState>()(
         }),
         {
             name: 'aegis-storage',
-            onRehydrateStorage: (state) => {
-                return () => state?.setHydrated(true);
+            // SRE-FIX: version hace que Zustand descarte localStorage viejo automáticamente
+            // cuando el schema de partialize cambia. Incrementar cada vez que cambie partialize.
+            version: STORE_VERSION,
+            onRehydrateStorage: () => (state) => {
+                // state puede ser undefined si el localStorage está vacío o es de otra versión
+                if (state) state.setHydrated(true);
             },
             partialize: (state) => ({
                 isAuthenticated: state.isAuthenticated,
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
+                // sessionKey NO se persiste — seguridad (CORE-073)
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
                 messages: state.messages,
