@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
 """
 Aegis OS — Local Deploy Script
 ================================
@@ -22,7 +27,6 @@ Requisitos:
 import argparse
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -116,19 +120,70 @@ def build_ui(root: Path) -> Path:
     ok(f"UI compilada → {dist}")
     return dist
 
+
+def find_openssl_dirs() -> tuple[str, str, str] | None:
+    """
+    Detecta la instalación de OpenSSL en Windows (Shining Light Win64 installer).
+
+    El instalador pone los headers en <root>/include/ y las .lib de MSVC en:
+        <root>/lib/VC/x64/MD   (MD = MultiDynamic, matches Rust release CRT)
+
+    Retorna (root, lib_dir, include_dir) o None si no se encuentra OpenSSL.
+    """
+    candidates = [
+        Path("C:/Program Files/OpenSSL-Win64"),
+        Path("C:/OpenSSL-Win64"),
+        Path("C:/Program Files/OpenSSL"),
+    ]
+    # Subdirectorios de lib en orden de preferencia (MSVC release primero)
+    lib_subdirs = ["lib/VC/x64/MD", "lib/VC/x64/MDd", "lib/VC/MD", "lib/VC/MDd", "lib"]
+
+    for base in candidates:
+        if not base.exists():
+            continue
+        for subdir in lib_subdirs:
+            lib_dir = base / subdir
+            if (lib_dir / "libcrypto.lib").exists():
+                include_dir = base / "include"
+                return (str(base), str(lib_dir), str(include_dir))
+    return None
+
+
 def build_kernel(root: Path) -> Path:
     """Compila el kernel Rust. Retorna el path al binario."""
     header("Compilando Kernel (Rust)...")
     log("cargo build --release -p ank-server ...")
 
+    # ── OpenSSL / SQLCipher (sólo necesario en Windows) ──────────────────────
+    # libsqlite3-sys con feature "sqlcipher" busca libcrypto.lib via los env
+    # vars OPENSSL_LIB_DIR / OPENSSL_INCLUDE_DIR. Sin ellos usa OPENSSL_DIR
+    # y busca en lib/ (raíz), pero la instalación Win64 pone las .lib en
+    # lib/VC/x64/MD — de ahí el LNK1181.
+    extra_env: dict = {}
+    openssl = find_openssl_dirs()
+    if openssl:
+        openssl_root, openssl_lib_dir, openssl_include_dir = openssl
+        log(f"OpenSSL root       : {openssl_root}")
+        log(f"OpenSSL lib dir    : {openssl_lib_dir}")
+        log(f"OpenSSL include dir: {openssl_include_dir}")
+        extra_env["OPENSSL_DIR"]         = openssl_root
+        extra_env["OPENSSL_LIB_DIR"]     = openssl_lib_dir
+        extra_env["OPENSSL_INCLUDE_DIR"] = openssl_include_dir
+    else:
+        warn("OpenSSL no detectado en rutas estándar — el build puede fallar.")
+
     run(
         ["cargo", "build", "--release", "-p", "ank-server"],
-        cwd=root
+        cwd=root,
+        env=extra_env,
     )
 
-    binary = root / "target" / "release" / "ank-server"
+    binary = root / "target" / "release" / "ank-server.exe"
     if not binary.exists():
-        die(f"Build del kernel falló: no se encontró {binary}")
+        # En Linux el binario no tiene extensión
+        binary = root / "target" / "release" / "ank-server"
+    if not binary.exists():
+        die(f"Build del kernel falló: no se encontró el binario en target/release/")
 
     size_mb = binary.stat().st_size / (1024 * 1024)
     ok(f"Binario compilado → {binary} ({size_mb:.1f} MB)")
@@ -240,7 +295,7 @@ def show_token(host: str, user: str, key: str) -> None:
     )
     if "STATE_INITIALIZING" in result.stdout:
         token_result = ssh(host, user, key,
-            "sudo journalctl -u aegis -n 50 --no-pager 2>/dev/null | grep -oP '(?<=setup_token=)\\S+' | tail -1"
+            r"sudo journalctl -u aegis -n 50 --no-pager 2>/dev/null | grep -oP '(?<=setup_token=)\S+' | tail -1"
         )
         token = token_result.stdout.strip()
         ip_result = ssh(host, user, key, "hostname -I | awk '{print $1}'")
@@ -264,9 +319,9 @@ def main():
 
     root = find_project_root()
 
-    print(f"\n{C.BOLD}{C.CYAN}{'═' * 50}")
-    print(f"  AEGIS OS — LOCAL DEPLOY")
-    print(f"{'═' * 50}{C.RESET}")
+    print(f"\n{C.BOLD}{C.CYAN}{'=' * 50}")
+    print(f"  AEGIS OS - LOCAL DEPLOY")
+    print(f"{'=' * 50}{C.RESET}")
     print(f"  Proyecto : {root}")
     print(f"  Servidor : {args.user}@{args.host}")
     print(f"  SSH Key  : {args.key}")
@@ -287,9 +342,11 @@ def main():
     else:
         warn("--no-build: usando artefactos existentes")
         if not args.ui_only:
-            binary = root / "target" / "release" / "ank-server"
+            binary = root / "target" / "release" / "ank-server.exe"
             if not binary.exists():
-                die(f"Binario no encontrado en {binary}. Compilá primero.")
+                binary = root / "target" / "release" / "ank-server"
+            if not binary.exists():
+                die(f"Binario no encontrado en target/release/. Compilá primero.")
         if not args.kernel_only:
             dist = root / "shell" / "ui" / "dist"
             if not dist.exists():
