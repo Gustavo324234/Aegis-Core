@@ -30,7 +30,8 @@ const BootstrapSetup: React.FC<BootstrapSetupProps> = ({ token, onComplete }) =>
         setError(null);
 
         try {
-            const res = await fetch('/api/admin/setup-token', {
+            // FIX: ruta correcta es /api/auth/setup-token, no /api/admin/setup-token
+            const res = await fetch('/api/auth/setup-token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -47,11 +48,11 @@ const BootstrapSetup: React.FC<BootstrapSetupProps> = ({ token, onComplete }) =>
                     onComplete();
                 }, 3000);
             } else {
-                const data = await res.json();
+                const data = await res.json().catch(() => ({}));
                 if (res.status === 401) {
                     setError(t('token_expired_error'));
                 } else {
-                    setError(data.detail || t('bootstrap_error'));
+                    setError((data as { detail?: string }).detail || t('bootstrap_error'));
                 }
             }
         } catch (err) {
@@ -83,7 +84,6 @@ const BootstrapSetup: React.FC<BootstrapSetupProps> = ({ token, onComplete }) =>
 
     return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-black p-6 relative overflow-hidden">
-            {/* Background Effects */}
             <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-aegis-cyan/5 rounded-full blur-[120px]" />
                 <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.03)_0%,transparent_100%)]" />
