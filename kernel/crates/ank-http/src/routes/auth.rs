@@ -36,7 +36,6 @@ pub async fn login(
     let hash = hash_passphrase(&body.session_key);
     let citadel = state.citadel.lock().await;
 
-    // Master Admin check first — determines role = "admin"
     let is_master = citadel
         .enclave
         .authenticate_master(&body.tenant_id, &hash)
@@ -51,7 +50,6 @@ pub async fn login(
         })));
     }
 
-    // Regular tenant check — role = "tenant"
     let is_auth = citadel
         .enclave
         .authenticate_tenant(&body.tenant_id, &hash)
@@ -102,27 +100,55 @@ pub async fn setup_token(
     Json(body): Json<SetupTokenRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let hash = hash_passphrase(&body.password);
-    let citadel = state.citadel.lock().await;
 
-    // Validar token
-    let valid = citadel
-        .enclave
-        .validate_and_consume_setup_token(&body.setup_token)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    // SRE-FIX (CORE-090): El token se consume DESPUÉS de initialize_master exitoso.
+    //
+    // ANTES (bug):
+    //   1. consume_token()      ← token quemado
+    //   2. initialize_master()  ← si falla: sin token + sin admin = sistema muerto
+    //
+    // AHORA (fix):
+    //   1. validate_only()      ← verifica sin tocar el token
+    //   2. initialize_master()  ← crea el admin
+    //   3. consume_token()      ← quema el token SOLO si paso 2 fue exitoso
+    //
+    // Si initialize_master falla, el token sigue válido y el usuario puede reintentar.
 
-    if !valid {
-        return Err(AegisHttpError::Kernel(
-            "Invalid or expired setup token".to_string(),
-        ));
+    // Paso 1: Verificar que el token es válido (sin consumirlo)
+    {
+        let citadel = state.citadel.lock().await;
+        let valid = citadel
+            .enclave
+            .validate_setup_token_only(&body.setup_token)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+        if !valid {
+            return Err(AegisHttpError::Kernel(
+                "Invalid or expired setup token".to_string(),
+            ));
+        }
     }
 
-    // Inicializar master
-    citadel
-        .enclave
-        .initialize_master(&body.username, &hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    // Paso 2: Crear el Master Admin
+    {
+        let citadel = state.citadel.lock().await;
+        citadel
+            .enclave
+            .initialize_master(&body.username, &hash)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    }
+
+    // Paso 3: Consumir el token solo tras éxito de initialize_master
+    {
+        let citadel = state.citadel.lock().await;
+        citadel
+            .enclave
+            .consume_setup_token(&body.setup_token)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    }
 
     Ok(Json(json!({
         "success": true,
