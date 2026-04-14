@@ -15,20 +15,27 @@ use serde_json::{json, Value};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/tenant", post(create_tenant))
-        .route("/tenant/create", post(create_tenant)) // Alias
+        .route("/tenant/create", post(create_tenant))
         .route("/tenants", get(list_tenants))
         .route("/tenant/:id", delete(delete_tenant_path))
         .route("/tenant/delete", post(delete_tenant_body))
         .route("/reset_password", post(reset_password))
 }
 
+/// Body para crear tenant — auth viene de headers Citadel
 #[derive(Deserialize)]
 pub struct TenantCreateRequest {
-    pub admin_tenant_id: String,
-    pub admin_session_key: String,
     pub username: String,
 }
 
+/// Body para reset de contraseña — auth viene de headers Citadel
+#[derive(Deserialize)]
+pub struct PasswordResetRequest {
+    pub tenant_id: String,
+    pub new_passphrase: String,
+}
+
+/// Body legacy para delete por body (mantener compatibilidad)
 #[derive(Deserialize)]
 pub struct TenantDeleteAction {
     pub admin_tenant_id: String,
@@ -36,17 +43,12 @@ pub struct TenantDeleteAction {
     pub target_tenant_id: String,
 }
 
-#[derive(Deserialize)]
-pub struct PasswordResetRequest {
-    pub tenant_id: String,
-    pub admin_tenant_id: String,
-    pub admin_session_key: String,
-    pub new_passphrase: String,
-}
-
-/// Extrae credenciales admin de los headers Citadel.
-/// Retorna `(admin_tenant_id, raw_key)` o error si faltan headers.
-fn extract_admin_auth(headers: &HeaderMap) -> Result<(String, String), AegisHttpError> {
+/// Extrae y valida credenciales Master Admin desde headers Citadel.
+/// Retorna el tenant_id autenticado o error.
+async fn require_master_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<String, AegisHttpError> {
     let tenant_id = headers
         .get("x-citadel-tenant")
         .and_then(|v| v.to_str().ok())
@@ -59,32 +61,33 @@ fn extract_admin_auth(headers: &HeaderMap) -> Result<(String, String), AegisHttp
         .map(|s| s.to_string())
         .ok_or(AegisHttpError::Citadel(CitadelError::MissingKey))?;
 
-    Ok((tenant_id, raw_key))
-}
-
-pub async fn create_tenant(
-    State(state): State<AppState>,
-    Json(body): Json<TenantCreateRequest>,
-) -> Result<Json<Value>, AegisHttpError> {
-    let admin_hash = hash_passphrase(&body.admin_session_key);
+    let hash = hash_passphrase(&raw_key);
     let citadel = state.citadel.lock().await;
 
-    // TODO(ANK-SEC-044): Validador centralizado de admin
     let is_auth = citadel
         .enclave
-        .authenticate_master(&body.admin_tenant_id, &admin_hash)
+        .authenticate_master(&tenant_id, &hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
     if !is_auth {
-        return Err(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::Unauthorized,
-        ));
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
     }
 
+    Ok(tenant_id)
+}
+
+pub async fn create_tenant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<TenantCreateRequest>,
+) -> Result<Json<Value>, AegisHttpError> {
+    require_master_auth(&state, &headers).await?;
+
+    let citadel = state.citadel.lock().await;
     let (port, temp_pass) = citadel
         .enclave
-        .create_tenant(&body.username) // Enclave usa username como tenant_id
+        .create_tenant(&body.username)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
@@ -99,20 +102,9 @@ pub async fn list_tenants(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let (admin_tenant_id, raw_key) = extract_admin_auth(&headers)?;
-    let admin_hash = hash_passphrase(&raw_key);
+    require_master_auth(&state, &headers).await?;
+
     let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(&admin_tenant_id, &admin_hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-    }
-
     let tenants = citadel
         .enclave
         .list_tenants()
@@ -133,7 +125,8 @@ pub async fn list_tenants(
         })
         .collect();
 
-    Ok(Json(json!(tenants_json)))
+    // Envolver en objeto { "tenants": [...] } para que el frontend pueda hacer data.tenants
+    Ok(Json(json!({ "tenants": tenants_json })))
 }
 
 pub async fn delete_tenant_path(
@@ -141,13 +134,29 @@ pub async fn delete_tenant_path(
     headers: HeaderMap,
     Path(target_id): Path<String>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let (admin_tenant_id, raw_key) = extract_admin_auth(&headers)?;
-    let admin_hash = hash_passphrase(&raw_key);
+    require_master_auth(&state, &headers).await?;
+
+    let citadel = state.citadel.lock().await;
+    citadel
+        .enclave
+        .delete_tenant(&target_id)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    Ok(Json(json!({ "success": true, "message": format!("Tenant {} deleted.", target_id) })))
+}
+
+pub async fn delete_tenant_body(
+    State(state): State<AppState>,
+    Json(body): Json<TenantDeleteAction>,
+) -> Result<Json<Value>, AegisHttpError> {
+    // Endpoint legacy — mantiene auth por body para compatibilidad con clientes viejos
+    let admin_hash = hash_passphrase(&body.admin_session_key);
     let citadel = state.citadel.lock().await;
 
     let is_auth = citadel
         .enclave
-        .authenticate_master(&admin_tenant_id, &admin_hash)
+        .authenticate_master(&body.admin_tenant_id, &admin_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
@@ -157,64 +166,22 @@ pub async fn delete_tenant_path(
 
     citadel
         .enclave
-        .delete_tenant(&target_id)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    Ok(Json(
-        json!({ "success": true, "message": format!("Tenant {} deleted.", target_id) }),
-    ))
-}
-
-pub async fn delete_tenant_body(
-    State(state): State<AppState>,
-    Json(body): Json<TenantDeleteAction>,
-) -> Result<Json<Value>, AegisHttpError> {
-    let admin_hash = hash_passphrase(&body.admin_session_key);
-    let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(&body.admin_tenant_id, &admin_hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::Unauthorized,
-        ));
-    }
-
-    citadel
-        .enclave
         .delete_tenant(&body.target_tenant_id)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    Ok(Json(
-        json!({ "success": true, "message": "Tenant deleted successfully" }),
-    ))
+    Ok(Json(json!({ "success": true, "message": "Tenant deleted successfully" })))
 }
 
 pub async fn reset_password(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<PasswordResetRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
+    require_master_auth(&state, &headers).await?;
+
     let new_hash = hash_passphrase(&body.new_passphrase);
-    let admin_hash = hash_passphrase(&body.admin_session_key);
     let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(&body.admin_tenant_id, &admin_hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::Unauthorized,
-        ));
-    }
 
     citadel
         .enclave
@@ -222,7 +189,5 @@ pub async fn reset_password(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    Ok(Json(
-        json!({ "success": true, "message": "Password reset successful" }),
-    ))
+    Ok(Json(json!({ "success": true, "message": "Password reset successful" })))
 }
