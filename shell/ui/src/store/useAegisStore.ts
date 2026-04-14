@@ -99,10 +99,8 @@ const buildWsUrl = (path: string) => {
 
 let telemetryInterval: number | null = null;
 
-// SRE-FIX: Incrementar STORE_VERSION cuando cambie el schema de partialize.
-// Zustand descarta automáticamente el localStorage viejo cuando la versión no coincide,
-// evitando el crash "Cannot convert undefined or null to object" por estado corrupto.
-const STORE_VERSION = 2;
+// Incrementar cuando cambie el schema de partialize para descartar localStorage viejo.
+const STORE_VERSION = 3;
 
 export const useAegisStore = create<AegisState>()(
     persist(
@@ -389,6 +387,7 @@ export const useAegisStore = create<AegisState>()(
                     sirenSocket: null,
                     messages: [],
                     needsPasswordReset: false,
+                    adminActiveTab: 'users', // resetear tab al hacer logout
                 });
                 if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
             },
@@ -506,11 +505,8 @@ export const useAegisStore = create<AegisState>()(
         }),
         {
             name: 'aegis-storage',
-            // SRE-FIX: version hace que Zustand descarte localStorage viejo automáticamente
-            // cuando el schema de partialize cambia. Incrementar cada vez que cambie partialize.
             version: STORE_VERSION,
             onRehydrateStorage: () => (state) => {
-                // state puede ser undefined si el localStorage está vacío o es de otra versión
                 if (state) state.setHydrated(true);
             },
             partialize: (state) => ({
@@ -518,12 +514,12 @@ export const useAegisStore = create<AegisState>()(
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
                 // sessionKey NO se persiste — seguridad (CORE-073)
+                // adminActiveTab NO se persiste — evita crash al recargar en tabs que requieren sessionKey
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
                 messages: state.messages,
                 lastError: state.lastError,
                 needsPasswordReset: state.needsPasswordReset,
-                adminActiveTab: state.adminActiveTab,
                 lastTenantsUpdate: state.lastTenantsUpdate,
             }),
         }
