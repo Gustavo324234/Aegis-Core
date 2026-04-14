@@ -1,11 +1,10 @@
 use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::HeaderMap,
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 pub fn router() -> Router<AppState> {
@@ -21,40 +20,52 @@ pub fn system_router() -> Router<AppState> {
         .route("/hw_profile", post(crate::routes::engine::set_hw_profile))
 }
 
-#[derive(Deserialize)]
-pub struct StatusQuery {
-    pub tenant_id: String,
-}
-
 pub async fn get_system_status(
     State(state): State<AppState>,
-    Query(query): Query<StatusQuery>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let x_citadel_key = headers
+    // Auth desde headers Citadel — consistente con todos los demás endpoints
+    let tenant_id = headers
+        .get("x-citadel-tenant")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::MissingTenant,
+        ))?;
+
+    let raw_key = headers
         .get("x-citadel-key")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AegisHttpError::Citadel(crate::citadel::CitadelError::MissingKey))?;
+        .ok_or(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::MissingKey,
+        ))?;
 
-    let hash = hash_passphrase(x_citadel_key);
+    let hash = hash_passphrase(raw_key);
 
-    // Validar contra Citadel
     {
         let citadel = state.citadel.lock().await;
-        let is_auth = citadel
-            .enclave
-            .authenticate_tenant(&query.tenant_id, &hash)
-            .await
-            .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
 
-        if !is_auth {
-            return Err(AegisHttpError::Citadel(
-                crate::citadel::CitadelError::Unauthorized,
-            ));
+        // El admin (master) también puede consultar el status
+        let is_master = citadel
+            .enclave
+            .authenticate_master(tenant_id, &hash)
+            .await
+            .unwrap_or(false);
+
+        if !is_master {
+            let is_tenant = citadel
+                .enclave
+                .authenticate_tenant(tenant_id, &hash)
+                .await
+                .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
+
+            if !is_tenant {
+                return Err(AegisHttpError::Citadel(
+                    crate::citadel::CitadelError::Unauthorized,
+                ));
+            }
         }
     }
 
-    // Obtener hardware status del HAL
     let hw_info = {
         let hal = state.hal.write().await;
         let mut monitor = hal
@@ -81,6 +92,8 @@ pub async fn get_system_status(
     if let Some(obj) = res.as_object_mut() {
         obj.insert("hw_profile".to_string(), json!(hw_profile_name));
         obj.insert("state".to_string(), json!("STATE_OPERATIONAL"));
+        obj.insert("total_processes".to_string(), json!(0));
+        obj.insert("active_workers".to_string(), json!(0));
     }
 
     Ok(Json(res))
@@ -89,14 +102,7 @@ pub async fn get_system_status(
 pub async fn get_public_system_state(State(state): State<AppState>) -> Json<Value> {
     let citadel = state.citadel.lock().await;
     let exists = citadel.enclave.admin_exists().await.unwrap_or(false);
-
-    let state_str = if exists {
-        "STATE_OPERATIONAL"
-    } else {
-        "STATE_INITIALIZING"
-    };
-
-    Json(json!({ "state": state_str }))
+    Json(json!({ "state": if exists { "STATE_OPERATIONAL" } else { "STATE_INITIALIZING" } }))
 }
 
 pub async fn get_sync_version() -> Json<Value> {
@@ -104,5 +110,5 @@ pub async fn get_sync_version() -> Json<Value> {
 }
 
 pub async fn health_check() -> Json<Value> {
-    Json(json!({ "status": "Aegis HTTP Online" }))
+    Json(json!({ "status": "Online" }))
 }
