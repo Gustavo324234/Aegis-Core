@@ -69,117 +69,58 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 
 ---
 
-*Creado: 2026-04-08 | Arquitecto IA*
-*Epic 32 cerrada: 2026-04-08 — 33/33 tickets DONE*
-
----
-
 ## 🔧 EPIC 34: Audit Fixes — Post-Consolidación
-**Status:** IN-PROGRESS — 2026-04-13
-**Motivación:** Auditoría post-migración a monorepo detectó bugs de seguridad y correctness
-introducidos durante la consolidación de repos legacy en Aegis-Core.
+**Status:** ✅ DONE — 2026-04-13
+**Resultado:** 20/20 bugs resueltos. Sistema funcional end-to-end.
+Chat conectado al HAL, credenciales migradas a headers Citadel, bypass de seguridad eliminado.
 
-### Shell
-*   **[CORE-070]** Fix: WebSocket URL hardcodeada con puerto 8000 `[DONE — 2026-04-13]`
-*   **[CORE-071]** Fix: Credenciales admin en query params — migrar a headers Citadel `[DONE — 2026-04-13]`
-*   **[CORE-072]** Fix: `isAdmin` determinado en el cliente por nombre de tenant `[DONE — 2026-04-13]`
-*   **[CORE-073]** Fix: `sessionKey` (contraseña) persistida en localStorage `[DONE — 2026-04-13]`
+### Shell — 8 tickets
+*   **[CORE-070]** Fix: WebSocket URL hardcodeada con puerto 8000 `[DONE]`
+*   **[CORE-071]** Fix: Credenciales admin en query params — migrar a headers Citadel `[DONE]`
+*   **[CORE-072]** Fix: `isAdmin` determinado en el cliente por nombre de tenant `[DONE]`
+*   **[CORE-073]** Fix: `sessionKey` (contraseña) persistida en localStorage `[DONE]`
+*   **[CORE-079]** Fix: `SystemTab` pasa `session_key` en query param de `/api/status` `[DONE]`
+*   **[CORE-083]** Fix: `ProvidersTab` usa credenciales hardcodeadas y query params `[DONE]`
+*   **[CORE-088]** Fix: `ChatTerminal` envía `session_key` en FormData del file upload `[DONE]`
 
-### Kernel
-*   **[CORE-074]** Fix: `get_sync_version` usa path relativo `VERSION` — usar `env!("CARGO_PKG_VERSION")` `[DONE — Kernel Engineer]`
-
----
-
-*Epic 34 creada: 2026-04-13 — Arquitecto IA (auditoría post-consolidación)*
-
-## 🏁 UPDATE — 2026-04-13 (EPIC 34 — SEGUNDA RONDA DE AUDITORÍA)
-- CORE-075 creado: engine_config.json con path relativo — motor olvida config en cada restart
-- CORE-076 creado: set_hw_profile sin autenticación real — endpoint vulnerable
-- CORE-077 creado: ws/siren.rs es un mock — voz completamente rota
-- CORE-078 creado: AEGIS_DEV_MASTER_BYPASS documentar y eliminar
-
-### Kernel
+### Kernel — 12 tickets
+*   **[CORE-074]** Fix: `get_sync_version` usa path relativo `VERSION` `[DONE]`
 *   **[CORE-075]** Fix: `engine_config.json` path relativo — persistir en `data_dir` `[DONE]`
 *   **[CORE-076]** Fix: `set_hw_profile` sin autenticación real `[DONE]`
-*   **[CORE-077]** Fix: `ws/siren.rs` mock — conectar al SirenRouter real `[DONE — Kernel Engineer]`
+*   **[CORE-077]** Fix: `ws/siren.rs` mock — conectar al SirenRouter real `[DONE]`
 *   **[CORE-078]** Fix: Eliminar `AEGIS_DEV_MASTER_BYPASS` de producción `[DONE]`
-
-## 🏁 UPDATE — 2026-04-13 (EPIC 34 — TERCERA RONDA DE AUDITORÍA)
-- CORE-079 creado: SystemTab pasa session_key en query param — telemetría admin rota
-- CORE-080 creado: ~15 métodos gRPC con unimplemented!() — CLI no funcional
-- CORE-081 creado: CloudProxyDriver no soporta protocolo nativo de Anthropic
-- CORE-082 creado: auth_interceptor gRPC deja pasar headers Citadel parciales
-
-### Shell
-*   **[CORE-079]** Fix: `SystemTab` pasa `session_key` en query param de `/api/status` `[DONE — 2026-04-13]`
-
-### Kernel
-*   **[CORE-080]** Fix: gRPC `server.rs` — implementar métodos `unimplemented!()` Prioridad 1 y 2 `[DONE — Kernel Engineer]`
-*   **[CORE-081]** Fix: `CloudProxyDriver` no soporta protocolo nativo de Anthropic `[DONE — Kernel Engineer]`
-*   **[CORE-082]** Fix: `auth_interceptor` gRPC deja pasar headers Citadel parciales `[DONE]`
-
-## 🏁 UPDATE — 2026-04-13 (EPIC 34 — CUARTA RONDA DE AUDITORÍA)
-- CORE-083 creado: ProvidersTab usa credenciales hardcodeadas y query params
-- CORE-084 creado: models.yaml tiene providers sin soporte real en el driver
-- CORE-085 creado: Scheduler no conecta al HAL — execution_tx siempre None → CHAT NUNCA FUNCIONA
-
-### Shell
-*   **[CORE-083]** Fix: `ProvidersTab` usa credenciales hardcodeadas y query params `[DONE — 2026-04-13]`
-
-### Kernel
-*   **[CORE-084]** Fix: `models.yaml` providers sin URL explícita en `entry_api_url` `[DONE — Kernel Engineer]`
-*   **[CORE-085]** Fix: Scheduler no conecta al HAL — `execution_tx` siempre `None` — chat nunca responde `[DONE]`
-
-## 🏁 UPDATE — 2026-04-13 (EPIC 34 — QUINTA RONDA DE AUDITORÍA — CIERRE)
-- CORE-086 creado: router_api add_global_key valida admin por nombre hardcodeado y llama authenticate_tenant en lugar de authenticate_master
-- CORE-087 creado: siren_api expone session_key en query params
-- CORE-088 creado: ChatTerminal envía session_key en FormData del file upload
-- CORE-089 creado: providers endpoint sin autenticación ni validación SSRF
-
-### Kernel
-*   **[CORE-086]** Fix: `router_api.rs` — `add_global_key` usa `authenticate_tenant` y nombre `"root"` hardcodeado `[DONE]`
-*   **[CORE-087]** Fix: `siren_api.rs` expone `session_key` en query params `[DONE]`
-*   **[CORE-089]** Fix: `providers.rs` — sin autenticación ni validación SSRF en `api_url` `[DONE]`
-
-### Shell
-*   **[CORE-088]** Fix: `ChatTerminal` envía `session_key` en FormData del file upload `[DONE — 2026-04-13]`
+*   **[CORE-080]** Fix: gRPC `server.rs` — implementar métodos Prioridad 1 y 2 `[DONE]`
+*   **[CORE-081]** Fix: `CloudProxyDriver` — Anthropic via OpenRouter `[DONE]`
+*   **[CORE-082]** Fix: `auth_interceptor` gRPC — headers Citadel parciales `[DONE]`
+*   **[CORE-084]** Fix: `models.yaml` — URLs explícitas por provider `[DONE]`
+*   **[CORE-085]** Fix: Scheduler → HAL via `execution_tx` — chat conectado `[DONE]`
+*   **[CORE-086]** Fix: `router_api.rs` — `authenticate_master` en lugar de `authenticate_tenant` `[DONE]`
+*   **[CORE-087]** Fix: `siren_api.rs` — `session_key` fuera de query params `[DONE]`
+*   **[CORE-089]** Fix: `providers.rs` — autenticación + validación SSRF `[DONE]`
 
 ---
 
-## 📊 EPIC 34 — AUDITORÍA COMPLETA — 2026-04-13
+*Epic 34 cerrada: 2026-04-13 — 20/20 tickets DONE | Arquitecto IA*
 
-**Total tickets:** 21
-**Críticos 🔴:** 10 | **Altos 🟠:** 9 | **Medios 🟡:** 2
+---
 
-#### Fase 0 — CI Integrity (Automatización Centralizada)
-0. **[CORE-090]** CI — Reforzar auto-format/clippy fix en GitHub Actions como fuente de verdad `[DONE]`
+## 🚀 SISTEMA STATUS — 2026-04-13
 
-### Orden de implementación recomendado (por impacto)
+| Componente | Estado |
+|---|---|
+| Epic 32: Monorepo Unificado | ✅ DONE |
+| Epic 34: Audit Fixes | ✅ DONE |
+| Chat end-to-end (Scheduler → HAL → WS) | ✅ OPERATIVO |
+| Protocolo Citadel (headers en todas las rutas) | ✅ COMPLETO |
+| Credenciales en localStorage | ✅ ELIMINADAS |
+| Bypass de seguridad (`AEGIS_DEV_MASTER_BYPASS`) | ✅ ELIMINADO |
+| engine_config persistencia en data_dir | ✅ CORRECTO |
+| gRPC métodos P1+P2 | ✅ IMPLEMENTADOS |
+| Próxima épica | Epic 35 (smoke test en producción) |
 
-#### Fase 1 — El chat debe funcionar (sin esto, nada más importa)
-1. **CORE-085** Kernel — Conectar scheduler al HAL (execution_tx)
-2. **CORE-075** Kernel — engine_config.json en data_dir
-3. **CORE-086** Kernel — router_api authenticate_master
+---
 
-#### Fase 2 — Seguridad de credenciales (viajan en texto plano)
-4. **CORE-070** Shell — WebSocket URL hardcodeada
-5. **CORE-071** Shell + Kernel — admin endpoints migrar a headers `[DONE]`
-6. **CORE-073** Shell — sessionKey fuera de localStorage
-7. **CORE-079** Shell — SystemTab query param
-8. **CORE-083** Shell — ProvidersTab credenciales hardcodeadas `[DONE]`
-9. **CORE-087** Kernel — siren_api query params
-10. **CORE-088** Shell + Kernel — file upload FormData `[DONE]`
+## 🔮 EPIC 33: Linux Distribution — sigue PLANNED
+## 🔮 EPIC 35: Smoke Test en Producción — PRÓXIMA
 
-#### Fase 3 — Seguridad de backend
-11. **CORE-076** Kernel — set_hw_profile sin auth
-12. **CORE-078** Kernel — eliminar AEGIS_DEV_MASTER_BYPASS
-13. **CORE-072** Shell + Kernel — isAdmin por nombre
-14. **CORE-082** Kernel — auth_interceptor gRPC headers parciales
-15. **CORE-089** Kernel — providers SSRF
-
-#### Fase 4 — Funcionalidad y correctness
-16. **CORE-077** Kernel — ws/siren mock → SirenRouter real
-17. **CORE-080** Kernel — gRPC unimplemented métodos
-18. **CORE-081** Kernel — Anthropic URL
-19. **CORE-084** Kernel — models.yaml entry_api_url
-20. **CORE-074** Kernel — get_sync_version path relativo
+*Última actualización: 2026-04-13 | Arquitecto IA*
