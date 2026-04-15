@@ -152,9 +152,9 @@ jobs:
     runs-on: windows-latest
     env:
       VCPKG_ROOT: C:\vcpkg
-      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_ENV_OPENSSL_DIR: C:\vcpkg\installed\x64-windows-static
-      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_ENV_OPENSSL_LIB_DIR: C:\vcpkg\installed\x64-windows-static\lib
-      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_ENV_OPENSSL_INCLUDE_DIR: C:\vcpkg\installed\x64-windows-static\include
+      OPENSSL_DIR: C:\vcpkg\installed\x64-windows-static
+      OPENSSL_LIB_DIR: C:\vcpkg\installed\x64-windows-static\lib
+      OPENSSL_INCLUDE_DIR: C:\vcpkg\installed\x64-windows-static\include
       OPENSSL_STATIC: "1"
     steps:
       - uses: actions/checkout@v4
@@ -168,6 +168,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-x86_64
+      - name: Strip local cargo config
+        shell: bash
+        run: rm -f .cargo/config.toml
       - name: Build
         run: cargo build --release -p ank-server
       - name: Package
