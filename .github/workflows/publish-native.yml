@@ -199,23 +199,45 @@ jobs:
       - build-macos-x86_64
       - build-windows-x86_64
     runs-on: ubuntu-latest
-    # SRE-FIX: publicar si linux-x86_64 y ui pasaron, sin importar macOS/Windows
     if: |
       always() &&
       needs.build-ui.result == 'success' &&
       needs.build-linux-x86_64.result == 'success' &&
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: all-dist
           pattern: "*-pkg-${{ github.run_id }}"
           merge-multiple: true
+
+      - name: Force-update nightly tag to current commit
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          # Mover el tag nightly al commit actual forzosamente
+          git tag -f nightly
+          git push origin nightly --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete existing nightly release (to recreate fresh)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          gh release delete nightly --yes 2>/dev/null || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
           name: ${{ startsWith(github.ref, 'refs/tags/v') && format('Aegis Core {0}', github.ref_name) || 'Aegis Core — Nightly Build' }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+          make_latest: false
           files: all-dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
