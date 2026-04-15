@@ -36,6 +36,7 @@ pub async fn login(
     let hash = hash_passphrase(&body.session_key);
     let citadel = state.citadel.lock().await;
 
+    // Master Admin check primero
     let is_master = citadel
         .enclave
         .authenticate_master(&body.tenant_id, &hash)
@@ -50,30 +51,35 @@ pub async fn login(
         })));
     }
 
-    let is_auth = citadel
+    // Tenant check — PASSWORD_MUST_CHANGE se retorna como 200 con status especial,
+    // no como error 403, para que el frontend pueda distinguirlo del 401.
+    match citadel
         .enclave
         .authenticate_tenant(&body.tenant_id, &hash)
         .await
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("PASSWORD_MUST_CHANGE") {
-                AegisHttpError::Citadel(crate::citadel::CitadelError::PasswordMustChange)
-            } else {
-                AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized)
-            }
-        })?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(
+    {
+        Ok(true) => Ok(Json(json!({
+            "message": "Citadel Handshake Successful",
+            "status": "authenticated",
+            "role": "tenant"
+        }))),
+        Ok(false) => Err(AegisHttpError::Citadel(
             crate::citadel::CitadelError::Unauthorized,
-        ));
+        )),
+        Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => {
+            // Credenciales correctas pero requiere cambio de contraseña.
+            // Retornar 200 con status distinguible para que el frontend redirija
+            // al flujo de cambio de contraseña en lugar de mostrar "credenciales incorrectas".
+            Ok(Json(json!({
+                "message": "Password rotation required",
+                "status": "password_must_change",
+                "role": "tenant"
+            })))
+        }
+        Err(_) => Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        )),
     }
-
-    Ok(Json(json!({
-        "message": "Citadel Handshake Successful",
-        "status": "authenticated",
-        "role": "tenant"
-    })))
 }
 
 pub async fn setup(
@@ -101,20 +107,7 @@ pub async fn setup_token(
 ) -> Result<Json<Value>, AegisHttpError> {
     let hash = hash_passphrase(&body.password);
 
-    // SRE-FIX (CORE-090): El token se consume DESPUÉS de initialize_master exitoso.
-    //
-    // ANTES (bug):
-    //   1. consume_token()      ← token quemado
-    //   2. initialize_master()  ← si falla: sin token + sin admin = sistema muerto
-    //
-    // AHORA (fix):
-    //   1. validate_only()      ← verifica sin tocar el token
-    //   2. initialize_master()  ← crea el admin
-    //   3. consume_token()      ← quema el token SOLO si paso 2 fue exitoso
-    //
-    // Si initialize_master falla, el token sigue válido y el usuario puede reintentar.
-
-    // Paso 1: Verificar que el token es válido (sin consumirlo)
+    // Paso 1: validar token sin consumir
     {
         let citadel = state.citadel.lock().await;
         let valid = citadel
@@ -130,7 +123,7 @@ pub async fn setup_token(
         }
     }
 
-    // Paso 2: Crear el Master Admin
+    // Paso 2: crear admin
     {
         let citadel = state.citadel.lock().await;
         citadel
@@ -140,7 +133,7 @@ pub async fn setup_token(
             .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
     }
 
-    // Paso 3: Consumir el token solo tras éxito de initialize_master
+    // Paso 3: consumir token solo tras éxito
     {
         let citadel = state.citadel.lock().await;
         citadel
