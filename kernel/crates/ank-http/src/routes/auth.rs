@@ -71,13 +71,11 @@ pub async fn login(
         Ok(false) => Err(AegisHttpError::Citadel(
             crate::citadel::CitadelError::Unauthorized,
         )),
-        Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => {
-            Ok(Json(json!({
-                "message": "Password rotation required",
-                "status": "password_must_change",
-                "role": "tenant"
-            })))
-        }
+        Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => Ok(Json(json!({
+            "message": "Password rotation required",
+            "status": "password_must_change",
+            "role": "tenant"
+        }))),
         Err(_) => Err(AegisHttpError::Citadel(
             crate::citadel::CitadelError::Unauthorized,
         )),
