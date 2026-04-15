@@ -220,15 +220,19 @@ export const useAegisStore = create<AegisState>()(
                         },
                         body: JSON.stringify({ username: targetUsername })
                     });
-                    const data = await res.json();
+                    // Safely parse: Axum 422 may return plain text, not JSON
+                    const contentType = res.headers.get('content-type') || '';
+                    const data = contentType.includes('application/json')
+                        ? await res.json()
+                        : { detail: await res.text() };
                     if (res.ok) {
                         get().fetchTenants();
                         return { success: true, temporary_passphrase: data.temporary_passphrase };
                     } else {
-                        let errMsg = data.detail || 'Error desconocido al crear Tenant';
-                        if (errMsg.includes('already exists') || errMsg.includes('Duplicate'))
+                        let errMsg = data.detail || data.error || 'Error desconocido al crear Tenant';
+                        if (typeof errMsg === 'string' && (errMsg.includes('already exists') || errMsg.includes('Duplicate')))
                             errMsg = `El Tenant "${targetUsername}" ya existe en el Ring 0.`;
-                        return { success: false, message: errMsg };
+                        return { success: false, message: String(errMsg) };
                     }
                 } catch (e) {
                     console.error('Create tenant error:', e);

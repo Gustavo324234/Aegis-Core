@@ -1,0 +1,15 @@
+# .cargo/config.toml — Aegis Core workspace configuration
+#
+# Platform-specific environment variables for native dependencies.
+# The [target.x86_64-pc-windows-msvc.env] section is ONLY applied when
+# building with the Windows MSVC toolchain — Linux CI runners never see it.
+
+# ── Windows MSVC (local dev) ──────────────────────────────────────────────────
+# OpenSSL / SQLCipher: the Shining Light Win64 installer places MSVC .lib
+# files under lib/VC/x64/MD (MD = MultiDynamic, matches Rust's default CRT).
+# Without these, libsqlite3-sys (sqlcipher feature) emits a wrong search path
+# and the linker fails with LNK1181: cannot open input file 'libcrypto.lib'.
+[target.x86_64-pc-windows-msvc.env]
+OPENSSL_DIR         = { value = "C:\\Program Files\\OpenSSL-Win64", force = false }
+OPENSSL_LIB_DIR     = { value = "C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD", force = false }
+OPENSSL_INCLUDE_DIR = { value = "C:\\Program Files\\OpenSSL-Win64\\include", force = false }
