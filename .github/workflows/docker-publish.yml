@@ -43,6 +43,7 @@ jobs:
             build-essential \
             libssl-dev \
             libsqlite3-dev \
+            libsqlcipher-dev \
             pkg-config
 
       - name: "🦀 Install Rust stable"
