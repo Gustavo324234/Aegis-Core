@@ -73,6 +73,7 @@ interface AegisState {
     createTenant: (targetUsername: string) => Promise<{ success: boolean; message?: string; temporary_passphrase?: string }>;
     deleteTenant: (targetId: string) => Promise<boolean>;
     resetPassword: (targetId: string, newPass: string) => Promise<boolean>;
+    changeOwnPassword: (newPass: string) => Promise<boolean>;
     startSirenStream: () => Promise<void>;
     stopSirenStream: () => void;
     configureEngine: (apiUrl: string, model: string, apiKey: string, provider?: string) => Promise<boolean>;
@@ -99,7 +100,6 @@ const buildWsUrl = (path: string) => {
 
 let telemetryInterval: number | null = null;
 
-// Incrementar cuando cambie el schema de partialize para descartar localStorage viejo.
 const STORE_VERSION = 3;
 
 export const useAegisStore = create<AegisState>()(
@@ -220,7 +220,6 @@ export const useAegisStore = create<AegisState>()(
                         },
                         body: JSON.stringify({ username: targetUsername })
                     });
-                    // Safely parse: Axum 422 may return plain text, not JSON
                     const contentType = res.headers.get('content-type') || '';
                     const data = contentType.includes('application/json')
                         ? await res.json()
@@ -257,6 +256,7 @@ export const useAegisStore = create<AegisState>()(
                 } catch (e) { console.error('Delete tenant error:', e); return false; }
             },
 
+            // Usado por el admin para resetear contraseña de otro usuario
             resetPassword: async (targetId: string, newPass: string) => {
                 const { tenantId, sessionKey } = get();
                 if (!tenantId || !sessionKey) return false;
@@ -276,6 +276,29 @@ export const useAegisStore = create<AegisState>()(
                     }
                     return false;
                 } catch (e) { console.error('Reset password error:', e); return false; }
+            },
+
+            // Usado por el tenant para cambiar su propia contraseña (ForcePasswordChangeScreen)
+            changeOwnPassword: async (newPass: string) => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return false;
+                try {
+                    const res = await fetch('/api/auth/change_password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            tenant_id: tenantId,
+                            current_password: sessionKey,
+                            new_password: newPass,
+                        })
+                    });
+                    if (res.ok) {
+                        // Actualizar sessionKey en memoria con la nueva contraseña
+                        set({ sessionKey: newPass, needsPasswordReset: false });
+                        return true;
+                    }
+                    return false;
+                } catch (e) { console.error('Change own password error:', e); return false; }
             },
 
             connect: (tenantId, sessionKey) => {
@@ -391,7 +414,7 @@ export const useAegisStore = create<AegisState>()(
                     sirenSocket: null,
                     messages: [],
                     needsPasswordReset: false,
-                    adminActiveTab: 'users', // resetear tab al hacer logout
+                    adminActiveTab: 'users',
                 });
                 if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
             },
@@ -517,8 +540,6 @@ export const useAegisStore = create<AegisState>()(
                 isAuthenticated: state.isAuthenticated,
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
-                // sessionKey NO se persiste — seguridad (CORE-073)
-                // adminActiveTab NO se persiste — evita crash al recargar en tabs que requieren sessionKey
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
                 messages: state.messages,

@@ -8,6 +8,7 @@ pub fn router() -> Router<AppState> {
         .route("/login", post(login))
         .route("/setup", post(setup))
         .route("/setup-token", post(setup_token))
+        .route("/change_password", post(change_password))
 }
 
 #[derive(Deserialize)]
@@ -29,6 +30,13 @@ pub struct SetupTokenRequest {
     pub setup_token: String,
 }
 
+#[derive(Deserialize)]
+pub struct ChangePasswordRequest {
+    pub tenant_id: String,
+    pub current_password: String,
+    pub new_password: String,
+}
+
 pub async fn login(
     State(state): State<AppState>,
     Json(body): Json<AuthRequest>,
@@ -36,7 +44,6 @@ pub async fn login(
     let hash = hash_passphrase(&body.session_key);
     let citadel = state.citadel.lock().await;
 
-    // Master Admin check primero
     let is_master = citadel
         .enclave
         .authenticate_master(&body.tenant_id, &hash)
@@ -51,8 +58,6 @@ pub async fn login(
         })));
     }
 
-    // Tenant check — PASSWORD_MUST_CHANGE se retorna como 200 con status especial,
-    // no como error 403, para que el frontend pueda distinguirlo del 401.
     match citadel
         .enclave
         .authenticate_tenant(&body.tenant_id, &hash)
@@ -67,9 +72,6 @@ pub async fn login(
             crate::citadel::CitadelError::Unauthorized,
         )),
         Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => {
-            // Credenciales correctas pero requiere cambio de contraseña.
-            // Retornar 200 con status distinguible para que el frontend redirija
-            // al flujo de cambio de contraseña en lugar de mostrar "credenciales incorrectas".
             Ok(Json(json!({
                 "message": "Password rotation required",
                 "status": "password_must_change",
@@ -107,7 +109,6 @@ pub async fn setup_token(
 ) -> Result<Json<Value>, AegisHttpError> {
     let hash = hash_passphrase(&body.password);
 
-    // Paso 1: validar token sin consumir
     {
         let citadel = state.citadel.lock().await;
         let valid = citadel
@@ -123,7 +124,6 @@ pub async fn setup_token(
         }
     }
 
-    // Paso 2: crear admin
     {
         let citadel = state.citadel.lock().await;
         citadel
@@ -133,7 +133,6 @@ pub async fn setup_token(
             .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
     }
 
-    // Paso 3: consumir token solo tras éxito
     {
         let citadel = state.citadel.lock().await;
         citadel
@@ -146,5 +145,66 @@ pub async fn setup_token(
     Ok(Json(json!({
         "success": true,
         "factory_reset_applied": true
+    })))
+}
+
+/// Permite a un tenant cambiar su propia contraseña.
+/// Verifica la contraseña actual (incluso si password_must_change=1) antes de aplicar la nueva.
+/// No requiere privilegios de admin.
+pub async fn change_password(
+    State(state): State<AppState>,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<Json<Value>, AegisHttpError> {
+    let current_hash = hash_passphrase(&body.current_password);
+    let new_hash = hash_passphrase(&body.new_password);
+
+    let citadel = state.citadel.lock().await;
+
+    // Verificar contraseña actual — ignorar PASSWORD_MUST_CHANGE, solo verificar credenciales
+    let row: Result<(String, i32), _> = {
+        let conn = citadel.enclave.get_connection();
+        let conn = conn.blocking_lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT password_hash, password_must_change FROM tenants WHERE tenant_id = ?1 LIMIT 1",
+            )
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+        stmt.query_row([&body.tenant_id], |row| Ok((row.get(0)?, row.get(1)?)))
+    };
+
+    match row {
+        Ok((real_hash, _)) => {
+            use argon2::{
+                password_hash::{PasswordHash, PasswordVerifier},
+                Argon2,
+            };
+            let parsed = PasswordHash::new(&real_hash)
+                .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
+            let valid = Argon2::default()
+                .verify_password(current_hash.as_bytes(), &parsed)
+                .is_ok();
+            if !valid {
+                return Err(AegisHttpError::Citadel(
+                    crate::citadel::CitadelError::Unauthorized,
+                ));
+            }
+        }
+        Err(_) => {
+            return Err(AegisHttpError::Citadel(
+                crate::citadel::CitadelError::Unauthorized,
+            ));
+        }
+    }
+
+    // Aplicar nueva contraseña y limpiar password_must_change
+    citadel
+        .enclave
+        .reset_tenant_password(&body.tenant_id, &new_hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Password updated successfully"
     })))
 }
