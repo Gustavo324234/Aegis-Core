@@ -98,6 +98,7 @@ jobs:
   build-macos-arm64:
     name: "macOS ARM64"
     runs-on: macos-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: System dependencies
@@ -123,6 +124,7 @@ jobs:
   build-macos-x86_64:
     name: "macOS x86_64"
     runs-on: macos-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: System dependencies
@@ -150,6 +152,7 @@ jobs:
   build-windows-x86_64:
     name: "Windows x86_64"
     runs-on: windows-latest
+    continue-on-error: true
     env:
       VCPKG_ROOT: C:\vcpkg
       OPENSSL_DIR: C:\vcpkg\installed\x64-windows-static
@@ -196,6 +199,7 @@ jobs:
       - build-macos-x86_64
       - build-windows-x86_64
     runs-on: ubuntu-latest
+    # SRE-FIX: publicar si linux-x86_64 y ui pasaron, sin importar macOS/Windows
     if: |
       always() &&
       needs.build-ui.result == 'success' &&

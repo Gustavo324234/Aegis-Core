@@ -2,25 +2,24 @@
 # ==============================================================================
 # AEGIS OS CLI - UNIFIED CONTROL INTERFACE (SRE GRADE)
 # ==============================================================================
-# Description: Professional management toolkit for Aegis OS
-# Ticket: CORE-043, CORE-090
-# ==============================================================================
 
 set -euo pipefail
 
-# --- Configuration ---
 INSTALL_DIR="/opt/aegis"
 SERVICE_NAME="aegis"
 DOCKER_SERVICE="ank-server"
+BIN_PATH="/usr/local/bin/ank-server"
+UI_PATH="/usr/share/aegis/ui"
+GITHUB_ORG="Gustavo324234"
+GITHUB_REPO="Aegis-Core"
+RELEASE_TAG="nightly"
 
-# Colors
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# --- Detection Logic ---
 detect_mode() {
     if [[ -f "/etc/aegis/mode" ]]; then
         cat "/etc/aegis/mode"
@@ -31,16 +30,22 @@ detect_mode() {
     fi
 }
 
-AEGIS_MODE=$(detect_mode)
+detect_arch() {
+    case "$(uname -m)" in
+        x86_64)  echo "x86_64" ;;
+        aarch64) echo "arm64" ;;
+        *)       echo "x86_64" ;;
+    esac
+}
 
-# --- Commands ---
+AEGIS_MODE=$(detect_mode)
 
 cmd_start() {
     echo -e "${CYAN}Starting Aegis OS (${AEGIS_MODE})...${NC}"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" && docker compose up -d)
     else
-        systemctl start "$SERVICE_NAME"
+        sudo systemctl start "$SERVICE_NAME"
     fi
 }
 
@@ -49,7 +54,7 @@ cmd_stop() {
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" && docker compose down)
     else
-        systemctl stop "$SERVICE_NAME"
+        sudo systemctl stop "$SERVICE_NAME"
     fi
 }
 
@@ -58,9 +63,8 @@ cmd_status() {
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" && docker compose ps) || echo "Docker not running."
     else
-        systemctl status "$SERVICE_NAME" --no-pager || true
+        sudo systemctl status "$SERVICE_NAME" --no-pager || true
     fi
-    
     echo -e "\n${CYAN}--- API Health Check ---${NC}"
     if curl -s -f --connect-timeout 2 http://localhost:8000/health > /dev/null; then
         echo -e "${GREEN}API is UP (http://localhost:8000)${NC}"
@@ -74,13 +78,13 @@ cmd_logs() {
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" && docker compose logs -f --tail "$n" "$DOCKER_SERVICE")
     else
-        journalctl -u "$SERVICE_NAME" -f -n "$n"
+        sudo journalctl -u "$SERVICE_NAME" -f -n "$n"
     fi
 }
 
 cmd_diag() {
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "${CYAN}   AEGIS OS - SRE DIAGNOSTIC REPORT                             ${NC}"
+    echo -e "${CYAN}   AEGIS OS - SRE DIAGNOSTIC REPORT${NC}"
     echo -e "${CYAN}================================================================${NC}"
     echo ""
     echo -e "${YELLOW}[1] SYSTEM RESOURCE USAGE${NC}"
@@ -93,7 +97,7 @@ cmd_diag() {
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" && docker compose logs --tail 20 "$DOCKER_SERVICE" | grep -i "error") || echo "No recent errors found."
     else
-        journalctl -u "$SERVICE_NAME" -n 50 --no-pager | grep -i "error" | tail -n 10 || echo "No recent errors found."
+        sudo journalctl -u "$SERVICE_NAME" -n 50 --no-pager | grep -i "error" | tail -n 10 || echo "No recent errors found."
     fi
     echo ""
     echo -e "${YELLOW}[4] CONFIGURATION${NC}"
@@ -103,33 +107,82 @@ cmd_diag() {
 }
 
 cmd_update() {
-    echo -e "${YELLOW}Updating Aegis OS (${AEGIS_MODE})...${NC}"
-    # Re-use the installer as it handles updates gracefully
-    curl -sSL "https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh" | sudo bash
+    local ARCH
+    ARCH=$(detect_arch)
+    local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
+
+    echo -e "${YELLOW}Updating Aegis OS to latest nightly...${NC}"
+
+    # Verificar que hay una versión nueva disponible
+    local remote_date
+    remote_date=$(curl -s "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
+        | grep '"published_at"' | head -1 | grep -oP '"\K[^"]+(?=")' || echo "unknown")
+    echo -e "  → Release: ${remote_date}"
+
+    # Detener servicio
+    echo -e "  → Deteniendo servicio..."
+    sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+
+    # Actualizar binario
+    echo -e "  → Descargando ank-server (${ARCH})..."
+    curl -L --fail --progress-bar \
+        "${RELEASE_URL}/ank-server-linux-${ARCH}.tar.gz" \
+        -o /tmp/ank-update.tar.gz \
+        || { echo -e "${RED}Error descargando binario${NC}"; sudo systemctl start "$SERVICE_NAME"; exit 1; }
+
+    tar -xzf /tmp/ank-update.tar.gz -C /tmp/
+    sudo mv "/tmp/ank-server-linux-${ARCH}" "$BIN_PATH"
+    sudo chmod +x "$BIN_PATH"
+    rm -f /tmp/ank-update.tar.gz
+
+    # Actualizar UI
+    echo -e "  → Descargando UI..."
+    curl -L --fail --progress-bar \
+        "${RELEASE_URL}/ui-dist.tar.gz" \
+        -o /tmp/ui-update.tar.gz \
+        || { echo -e "${YELLOW}UI download failed, keeping current${NC}"; }
+
+    if [[ -f /tmp/ui-update.tar.gz ]]; then
+        sudo mkdir -p "$UI_PATH"
+        sudo tar -xzf /tmp/ui-update.tar.gz -C "$UI_PATH"
+        sudo chown -R aegis:aegis "$UI_PATH" 2>/dev/null || true
+        rm -f /tmp/ui-update.tar.gz
+    fi
+
+    # Reiniciar servicio
+    echo -e "  → Iniciando servicio..."
+    sudo systemctl start "$SERVICE_NAME"
+
+    sleep 3
+    if curl -s --connect-timeout 5 http://localhost:8000/health 2>/dev/null | grep -q "Online"; then
+        echo -e "${GREEN}  ✓ Actualización completada — Aegis OS está UP${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Servicio iniciado, esperando health check...${NC}"
+        echo -e "    Verificá con: aegis status"
+    fi
 }
 
 cmd_token() {
     echo -e "${CYAN}Retrieving Setup Token...${NC}"
-    local token
-    token=""
+    local token=""
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         token=$(cd "$INSTALL_DIR" && docker compose logs "$DOCKER_SERVICE" 2>&1 | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || echo "")
     else
-        token=$(journalctl -u "$SERVICE_NAME" -n 2000 --no-pager | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || echo "")
+        token=$(sudo journalctl -u "$SERVICE_NAME" -n 2000 --no-pager | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || echo "")
     fi
 
     if [[ -z "$token" ]]; then
-        echo -e "${YELLOW}No setup token found. If the system is initialized, token is disabled.${NC}"
+        echo -e "${YELLOW}No setup token found. System may already be initialized.${NC}"
     else
-        echo -e "\n${GREEN}Setup URL: http://$(hostname -I | awk '{print $1}'):8000?setup_token=$token${NC}"
+        local ip
+        ip=$(hostname -I | awk '{print $1}')
+        echo -e "\n${GREEN}Setup URL: http://${ip}:8000?setup_token=${token}${NC}"
     fi
 }
 
 cmd_uninstall() {
     sudo bash -c "$(curl -sSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/uninstall.sh)" -- "$@"
 }
-
-# --- Execution ---
 
 case "${1:-help}" in
     start)     shift; cmd_start "$@" ;;
@@ -149,10 +202,11 @@ case "${1:-help}" in
         echo "Commands:"
         echo "  start       Start Aegis service"
         echo "  stop        Stop Aegis service"
-        echo "  status      Check high-level status"
+        echo "  restart     Restart Aegis service"
+        echo "  status      Check status and health"
         echo "  diag        Run deep diagnostic report"
         echo "  logs [N]    Follow logs (default 100)"
-        echo "  update      Update to latest version"
+        echo "  update      Update to latest nightly"
         echo "  token       Get setup URL"
         echo "  uninstall   Remove Aegis from system"
         exit 1
