@@ -81,7 +81,7 @@ rm -rf /usr/share/aegis
 # Docker cleanup if mode exists
 if [[ -d "/opt/aegis" ]]; then
     echo -e "${CYAN}→ Cleaning up Docker orchestrator...${NC}"
-    (cd /opt/aegis && docker compose down -v) 2>/dev/null || true
+    (cd /opt/aegis || exit; docker compose down -v) 2>/dev/null || true
     rm -rf "/opt/aegis"
 fi
 

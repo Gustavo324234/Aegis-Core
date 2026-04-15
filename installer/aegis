@@ -43,7 +43,7 @@ AEGIS_MODE=$(detect_mode)
 cmd_start() {
     printf "${CYAN}Starting Aegis OS (%s)...${NC}\n" "$AEGIS_MODE"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
-        (cd "$INSTALL_DIR" && docker compose up -d)
+        (cd "$INSTALL_DIR" || exit; docker compose up -d)
     else
         sudo systemctl start "$SERVICE_NAME"
     fi
@@ -52,7 +52,7 @@ cmd_start() {
 cmd_stop() {
     printf "${CYAN}Stopping Aegis OS (%s)...${NC}\n" "$AEGIS_MODE"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
-        (cd "$INSTALL_DIR" && docker compose down)
+        (cd "$INSTALL_DIR" || exit; docker compose down)
     else
         sudo systemctl stop "$SERVICE_NAME"
     fi
@@ -61,7 +61,7 @@ cmd_stop() {
 cmd_status() {
     printf "${CYAN}--- Aegis OS Status (%s) ---${NC}\n" "$AEGIS_MODE"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
-        (cd "$INSTALL_DIR" && docker compose ps) || echo "Docker not running."
+        (cd "$INSTALL_DIR" || exit; docker compose ps) || echo "Docker not running."
     else
         sudo systemctl status "$SERVICE_NAME" --no-pager || true
     fi
@@ -74,9 +74,10 @@ cmd_status() {
 }
 
 cmd_logs() {
-    local n="${1:-100}"
+    local n
+    n="${1:-100}"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
-        (cd "$INSTALL_DIR" && docker compose logs -f --tail "$n" "$DOCKER_SERVICE")
+        (cd "$INSTALL_DIR" || exit; docker compose logs -f --tail "$n" "$DOCKER_SERVICE")
     else
         sudo journalctl -u "$SERVICE_NAME" -f -n "$n"
     fi
@@ -92,7 +93,7 @@ cmd_diag() {
     ss -tulpn | grep -E "8000|50051" || echo "Aegis ports not listening."
     printf "\n${YELLOW}[3] RECENT ERROR LOGS${NC}\n"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
-        (cd "$INSTALL_DIR" && docker compose logs --tail 20 "$DOCKER_SERVICE" | grep -i "error") || echo "No recent errors found."
+        (cd "$INSTALL_DIR" || exit; docker compose logs --tail 20 "$DOCKER_SERVICE" | grep -i "error") || echo "No recent errors found."
     else
         sudo journalctl -u "$SERVICE_NAME" -n 50 --no-pager | grep -i "error" | tail -n 10 || echo "No recent errors found."
     fi
@@ -154,7 +155,7 @@ cmd_token() {
     printf "${CYAN}Retrieving Setup Token...${NC}\n"
     local token=""
     if [[ "$AEGIS_MODE" == "docker" ]]; then
-        token=$(cd "$INSTALL_DIR" && docker compose logs "$DOCKER_SERVICE" 2>&1 | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || true)
+        token=$(cd "$INSTALL_DIR" || exit; docker compose logs "$DOCKER_SERVICE" 2>&1 | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || true)
     else
         token=$(sudo journalctl -u "$SERVICE_NAME" -n 2000 --no-pager | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || true)
     fi
