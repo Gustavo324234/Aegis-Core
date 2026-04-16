@@ -33,7 +33,6 @@ chown "$SERVICE_NAME:$SERVICE_NAME" "$DATA_DIR"
 ENV_FILE="$CONFIG_DIR/aegis.env"
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "→ Generando archivo de configuración inicial en $ENV_FILE..."
-    local ROOT_KEY
     ROOT_KEY=$(openssl rand -hex 32)
     cat > "$ENV_FILE" <<EOF
 AEGIS_ROOT_KEY=${ROOT_KEY}
