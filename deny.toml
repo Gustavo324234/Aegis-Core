@@ -1,6 +1,10 @@
 [advisories]
 ignore = [
     "RUSTSEC-2025-0057",
+    # proc-macro-error es una dependencia transitiva (utoipa y similares).
+    # No hay upgrade disponible; el mantenedor está inactivo pero no hay
+    # vector de ataque conocido — solo se usa en tiempo de compilación (proc-macro).
+    "RUSTSEC-2024-0370",
 ]
 
 [bans]
