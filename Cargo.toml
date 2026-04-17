@@ -94,12 +94,8 @@ arrow-array        = "58"
 arrow-schema       = "58"
 arrow-buffer       = "58"
 
-<<<<<<< Updated upstream
-openssl            = "0.10"
-=======
 # OpenSSL: siempre vendorizado para builds cross-platform sin dependencia del sistema
 openssl            = { version = "0.10", features = ["vendored"] }
->>>>>>> Stashed changes
 
 [profile.release]
 opt-level     = 3
