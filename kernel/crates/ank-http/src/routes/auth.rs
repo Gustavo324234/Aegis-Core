@@ -272,36 +272,19 @@ pub async fn change_password(
 
     let citadel = state.citadel.lock().await;
 
-    // FIX: usar .lock().await en lugar de .blocking_lock() — blocking_lock en un
-    // tokio::sync::Mutex dentro de un handler async deadlockea el runtime.
-    let valid_current = {
-        let conn = citadel.enclave.get_connection();
-        let conn = conn.lock().await;
-        let result: rusqlite::Result<String> = conn
-            .query_row(
-                "SELECT password_hash FROM tenants WHERE tenant_id = ?1 LIMIT 1",
-                [&body.tenant_id],
-                |row| row.get(0),
-            );
-
-        match result {
-            Ok(real_hash) => {
-                use argon2::{
-                    password_hash::{PasswordHash, PasswordVerifier},
-                    Argon2,
-                };
-                match PasswordHash::new(&real_hash) {
-                    Ok(parsed) => Argon2::default()
-                        .verify_password(current_hash.as_bytes(), &parsed)
-                        .is_ok(),
-                    Err(_) => false,
-                }
-            }
-            Err(_) => false,
-        }
+    // Verificar la contraseña actual usando authenticate_tenant (ya implementado en enclave)
+    // Ignoramos PASSWORD_MUST_CHANGE — el usuario está intentando cambiarlo ahora mismo
+    let current_valid = match citadel
+        .enclave
+        .authenticate_tenant(&body.tenant_id, &current_hash)
+        .await
+    {
+        Ok(valid) => valid,
+        Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => true,
+        Err(_) => false,
     };
 
-    if !valid_current {
+    if !current_valid {
         return Err(AegisHttpError::Citadel(
             crate::citadel::CitadelError::Unauthorized,
         ));
