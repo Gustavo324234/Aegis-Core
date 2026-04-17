@@ -72,7 +72,7 @@ rusqlite           = { version = "0.33.0", features = ["bundled-sqlcipher"] }
 
 # System
 sysinfo            = "0.32"
-git2               = "0.20"
+git2               = { version = "0.20", features = ["vendored-openssl"] }
 notify             = "6.1.1"
 notify-debouncer-mini = "0.4.1"
 mdns-sd            = "0.11"
@@ -94,7 +94,8 @@ arrow-array        = "58"
 arrow-schema       = "58"
 arrow-buffer       = "58"
 
-openssl            = "0.10"
+# OpenSSL: siempre vendorizado para builds cross-platform sin dependencia del sistema
+openssl            = { version = "0.10", features = ["vendored"] }
 
 [profile.release]
 opt-level     = 3
