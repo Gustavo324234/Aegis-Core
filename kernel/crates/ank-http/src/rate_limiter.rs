@@ -186,7 +186,12 @@ mod tests {
             let outcome = limiter.check_and_record_failed(ip, "tenant1");
             match outcome {
                 RateLimitOutcome::Allowed { remaining, .. } => {
-                    assert_eq!(remaining, 2 - i, "remaining incorrecto en intento {}", i + 1);
+                    assert_eq!(
+                        remaining,
+                        2 - i,
+                        "remaining incorrecto en intento {}",
+                        i + 1
+                    );
                 }
                 RateLimitOutcome::Blocked { .. } => {
                     panic!("unexpected Blocked at attempt {}", i + 1)
