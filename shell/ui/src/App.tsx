@@ -27,7 +27,6 @@ class AegisErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
     }
 
     handleReset() {
-        // Limpiar localStorage corrupto y recargar
         try { localStorage.removeItem('aegis-storage'); } catch { /* ignore */ }
         window.location.reload();
     }

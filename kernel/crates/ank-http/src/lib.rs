@@ -28,7 +28,13 @@ impl AegisHttpServer {
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
         tracing::info!("Aegis HTTP server listening on {}", addr);
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+        // ConnectInfo<SocketAddr> requiere into_make_service_with_connect_info
+        // para que el extractor esté disponible en los handlers (rate limiter de login)
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
         Ok(())
     }
 }
