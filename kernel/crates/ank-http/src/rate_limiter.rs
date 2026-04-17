@@ -83,6 +83,8 @@ impl AuthRateLimiter {
         });
 
         let e = entry.value_mut();
+
+        // Resetear ventana si expiró
         if now.duration_since(e.window_start) >= window {
             e.attempts = 1;
             e.window_start = now;
@@ -92,13 +94,15 @@ impl AuthRateLimiter {
             };
         }
 
-        if e.attempts >= self.config.max_attempts {
+        // Incrementar primero, luego decidir
+        e.attempts += 1;
+
+        if e.attempts > self.config.max_attempts {
             let elapsed = now.duration_since(e.window_start);
             let retry_after_secs = window.saturating_sub(elapsed).as_secs().max(1);
             return RateLimitOutcome::Blocked { retry_after_secs };
         }
 
-        e.attempts += 1;
         let remaining = self.config.max_attempts - e.attempts;
         let elapsed = now.duration_since(e.window_start);
         let reset_in_secs = window.saturating_sub(elapsed).as_secs();
@@ -177,20 +181,28 @@ mod tests {
         });
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
 
-        for i in 0..2 {
+        // Los primeros max_attempts intentos deben ser Allowed
+        for i in 0..3u32 {
             let outcome = limiter.check_and_record_failed(ip, "tenant1");
             match outcome {
                 RateLimitOutcome::Allowed { remaining, .. } => {
-                    assert_eq!(remaining, 2 - i);
+                    assert_eq!(remaining, 2 - i, "remaining incorrecto en intento {}", i + 1);
                 }
-                RateLimitOutcome::Blocked { .. } => panic!("unexpected Blocked at attempt {}", i),
+                RateLimitOutcome::Blocked { .. } => {
+                    panic!("unexpected Blocked at attempt {}", i + 1)
+                }
             }
         }
 
+        // El intento max_attempts + 1 debe ser Blocked
         let outcome = limiter.check_and_record_failed(ip, "tenant1");
         match outcome {
             RateLimitOutcome::Blocked { retry_after_secs } => {
-                assert!(retry_after_secs >= 1 && retry_after_secs <= 60);
+                assert!(
+                    retry_after_secs >= 1 && retry_after_secs <= 60,
+                    "retry_after_secs fuera de rango: {}",
+                    retry_after_secs
+                );
             }
             RateLimitOutcome::Allowed { .. } => panic!("expected Blocked at max attempts"),
         }
@@ -204,13 +216,16 @@ mod tests {
         });
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
 
+        // Agotar los intentos
         for _ in 0..3 {
             limiter.check_and_record_failed(ip, "tenant1");
         }
 
+        // El siguiente debe estar bloqueado
         let outcome = limiter.check_and_record_failed(ip, "tenant1");
         assert!(matches!(outcome, RateLimitOutcome::Blocked { .. }));
 
+        // Después del reset debe volver a Allowed
         limiter.reset(ip, "tenant1");
 
         let outcome = limiter.check_and_record_failed(ip, "tenant1");
