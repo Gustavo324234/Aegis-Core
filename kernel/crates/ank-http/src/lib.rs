@@ -1,6 +1,7 @@
 pub mod citadel;
 pub mod config;
 pub mod error;
+pub mod rate_limiter;
 pub mod routes;
 pub mod state;
 mod static_files;

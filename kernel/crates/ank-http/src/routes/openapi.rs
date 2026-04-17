@@ -1,0 +1,76 @@
+use utoipa::OpenApi;
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        crate::routes::auth::login,
+        crate::routes::auth::setup,
+        crate::routes::auth::setup_token,
+        crate::routes::auth::change_password,
+        crate::routes::admin::create_tenant,
+        crate::routes::admin::list_tenants,
+        crate::routes::admin::delete_tenant_path,
+        crate::routes::admin::reset_password,
+        crate::routes::engine::get_status,
+        crate::routes::engine::configure,
+        crate::routes::router_api::list_router_models,
+        crate::routes::router_api::list_global_keys,
+        crate::routes::router_api::delete_global_key,
+        crate::routes::router_api::add_global_key,
+        crate::routes::router_api::add_tenant_key,
+        crate::routes::router_api::list_tenant_keys,
+        crate::routes::router_api::delete_tenant_key,
+        crate::routes::router_api::sync_router_catalog,
+        crate::routes::router_api::router_status,
+        crate::routes::status::get_system_status,
+        crate::routes::status::get_public_system_state,
+        crate::routes::status::get_sync_version,
+        crate::routes::status::health_check,
+    ),
+    components(
+        schemas(
+            crate::routes::auth::AuthRequest,
+            crate::routes::auth::LoginResponse,
+            crate::routes::auth::AdminSetupRequest,
+            crate::routes::auth::SetupResponse,
+            crate::routes::auth::SetupTokenRequest,
+            crate::routes::auth::SetupTokenResponse,
+            crate::routes::auth::ChangePasswordRequest,
+            crate::routes::auth::ChangePasswordResponse,
+            crate::routes::admin::TenantCreateRequest,
+            crate::routes::admin::TenantResponse,
+            crate::routes::admin::TenantsListResponse,
+            crate::routes::admin::TenantInfo,
+            crate::routes::admin::TenantDeleteResponse,
+            crate::routes::admin::ErrorResponse,
+            crate::routes::admin::PasswordResetRequest,
+            crate::routes::admin::PasswordResetResponse,
+            crate::routes::engine::EngineConfig,
+            crate::routes::engine::EngineStatusResponse,
+            crate::routes::engine::ConfigureResponse,
+            crate::routes::router_api::KeyAddRequest,
+            crate::routes::router_api::GlobalKeysResponse,
+            crate::routes::router_api::RouterModelsResponse,
+            crate::routes::router_api::RouterKeyResponse,
+            crate::routes::router_api::TenantKeysResponse,
+            crate::routes::router_api::SyncResponse,
+            crate::routes::router_api::RouterStatusResponse,
+            crate::routes::status::SystemStatusResponse,
+            crate::routes::status::PublicSystemStateResponse,
+            crate::routes::status::HealthResponse,
+        )
+    ),
+    tags(
+        (name = "auth", description = "Authentication endpoints"),
+        (name = "admin", description = "Admin tenant management"),
+        (name = "engine", description = "Cognitive Engine configuration"),
+        (name = "router", description = "Cognitive Model Router"),
+        (name = "status", description = "System status and telemetry")
+    ),
+    info(
+        title = "Aegis Core API",
+        version = "0.1.5",
+        description = "Cognitive Operating System — Unified HTTP API. See [Protocol Citadel](https://github.com/Aegis-Aegis/Aegis-Governance/blob/main/ADR/ADR-003.md) for authentication details.",
+    )
+)]
+pub struct ApiDoc;

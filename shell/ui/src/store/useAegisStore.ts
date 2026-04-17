@@ -53,10 +53,12 @@ interface AegisState {
     isFetchingTenants: boolean;
     lastTenantsUpdate: string | null;
     tenantsError: string | null;
+    sttAvailable: boolean;
 
     setHydrated: (val: boolean) => void;
     setNeedsPasswordReset: (val: boolean) => void;
     setAdminActiveTab: (tab: string) => void;
+    fetchSirenConfig: () => Promise<void>;
     connect: (tenantId: string, sessionKey: string) => void;
     disconnect: () => void;
     sendMessage: (prompt: string) => void;
@@ -73,6 +75,7 @@ interface AegisState {
     createTenant: (targetUsername: string) => Promise<{ success: boolean; message?: string; temporary_passphrase?: string }>;
     deleteTenant: (targetId: string) => Promise<boolean>;
     resetPassword: (targetId: string, newPass: string) => Promise<boolean>;
+    changeOwnPassword: (newPass: string) => Promise<boolean>;
     startSirenStream: () => Promise<void>;
     stopSirenStream: () => void;
     configureEngine: (apiUrl: string, model: string, apiKey: string, provider?: string) => Promise<boolean>;
@@ -99,7 +102,6 @@ const buildWsUrl = (path: string) => {
 
 let telemetryInterval: number | null = null;
 
-// Incrementar cuando cambie el schema de partialize para descartar localStorage viejo.
 const STORE_VERSION = 3;
 
 export const useAegisStore = create<AegisState>()(
@@ -128,10 +130,30 @@ export const useAegisStore = create<AegisState>()(
             isFetchingTenants: false,
             lastTenantsUpdate: null,
             tenantsError: null,
+            sttAvailable: true,
 
             setHydrated: (val) => set({ _hydrated: val }),
             setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
             setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
+
+            fetchSirenConfig: async () => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return;
+                try {
+                    const res = await fetch('/api/siren/config', {
+                        headers: {
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        }
+                    });
+                    if (res.ok) {
+                        const data = await res.json() as { stt_available?: boolean };
+                        set({ sttAvailable: data.stt_available ?? true });
+                    }
+                } catch (err) {
+                    console.error('Fetch siren config error:', err);
+                }
+            },
 
             startTelemetryPolling: (tenantId: string) => {
                 if (telemetryInterval) clearInterval(telemetryInterval);
@@ -220,7 +242,6 @@ export const useAegisStore = create<AegisState>()(
                         },
                         body: JSON.stringify({ username: targetUsername })
                     });
-                    // Safely parse: Axum 422 may return plain text, not JSON
                     const contentType = res.headers.get('content-type') || '';
                     const data = contentType.includes('application/json')
                         ? await res.json()
@@ -276,6 +297,27 @@ export const useAegisStore = create<AegisState>()(
                     }
                     return false;
                 } catch (e) { console.error('Reset password error:', e); return false; }
+            },
+
+            changeOwnPassword: async (newPass: string) => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return false;
+                try {
+                    const res = await fetch('/api/auth/change_password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            tenant_id: tenantId,
+                            current_password: sessionKey,
+                            new_password: newPass,
+                        })
+                    });
+                    if (res.ok) {
+                        set({ sessionKey: newPass, needsPasswordReset: false });
+                        return true;
+                    }
+                    return false;
+                } catch (e) { console.error('Change own password error:', e); return false; }
             },
 
             connect: (tenantId, sessionKey) => {
@@ -391,7 +433,7 @@ export const useAegisStore = create<AegisState>()(
                     sirenSocket: null,
                     messages: [],
                     needsPasswordReset: false,
-                    adminActiveTab: 'users', // resetear tab al hacer logout
+                    adminActiveTab: 'users',
                 });
                 if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
             },
@@ -517,8 +559,6 @@ export const useAegisStore = create<AegisState>()(
                 isAuthenticated: state.isAuthenticated,
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
-                // sessionKey NO se persiste — seguridad (CORE-073)
-                // adminActiveTab NO se persiste — evita crash al recargar en tabs que requieren sessionKey
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
                 messages: state.messages,

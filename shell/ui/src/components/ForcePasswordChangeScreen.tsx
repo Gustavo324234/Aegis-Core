@@ -6,7 +6,7 @@ import { useTranslation } from '../i18n';
 
 const ForcePasswordChangeScreen: React.FC<{ onPasswordChanged: () => void }> = ({ onPasswordChanged }) => {
     const { t } = useTranslation();
-    const { tenantId, sessionKey, resetPassword } = useAegisStore();
+    const { sessionKey, changeOwnPassword } = useAegisStore();
     const [newPassphrase, setNewPassphrase] = useState('');
     const [confirmPassphrase, setConfirmPassphrase] = useState('');
     const [isUpdating, setIsUpdating] = useState(false);
@@ -28,7 +28,8 @@ const ForcePasswordChangeScreen: React.FC<{ onPasswordChanged: () => void }> = (
         setError(null);
 
         try {
-            const success = await resetPassword(tenantId!, newPassphrase);
+            // changeOwnPassword usa /api/auth/change_password — no requiere privilegios de admin
+            const success = await changeOwnPassword(newPassphrase);
             if (success) {
                 onPasswordChanged();
             } else {
@@ -43,7 +44,6 @@ const ForcePasswordChangeScreen: React.FC<{ onPasswordChanged: () => void }> = (
 
     return (
         <div className="min-h-screen bg-black flex items-center justify-center p-4 overflow-hidden relative">
-            {/* Background Effect */}
             <div className="absolute inset-0 overflow-hidden pointer-events-none">
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-yellow-500/5 rounded-full blur-[120px]" />
             </div>
@@ -55,7 +55,6 @@ const ForcePasswordChangeScreen: React.FC<{ onPasswordChanged: () => void }> = (
                 className="w-full max-w-md z-10"
             >
                 <div className="glass p-8 rounded-2xl border border-yellow-500/20 shadow-2xl relative overflow-hidden">
-                    {/* Scanline Effect */}
                     <div className="absolute inset-0 bg-gradient-to-b from-transparent via-yellow-500/5 to-transparent h-24 w-full -translate-y-full animate-[scan_4s_linear_infinity] pointer-events-none" />
 
                     <div className="flex flex-col items-center mb-8">
@@ -90,7 +89,7 @@ const ForcePasswordChangeScreen: React.FC<{ onPasswordChanged: () => void }> = (
                                 required
                             />
                         </div>
- 
+
                         <div className="space-y-2">
                             <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">{t('confirm_password_label')}</label>
                             <input
@@ -110,9 +109,7 @@ const ForcePasswordChangeScreen: React.FC<{ onPasswordChanged: () => void }> = (
                                 className="bg-red-500/10 border border-red-500/30 p-3 rounded-lg flex items-center gap-3"
                             >
                                 <Terminal className="w-4 h-4 text-red-500" />
-                                <span className="text-[10px] font-mono text-red-400 leading-tight">
-                                    {error}
-                                </span>
+                                <span className="text-[10px] font-mono text-red-400 leading-tight">{error}</span>
                             </motion.div>
                         )}
 

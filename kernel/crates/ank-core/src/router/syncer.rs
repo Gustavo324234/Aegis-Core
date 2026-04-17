@@ -160,6 +160,7 @@ impl CatalogSyncer {
                     supports_json_mode: supports_json,
                     task_scores: scores,
                     is_local: false,
+                    avg_latency_ms: None,
                 });
             }
         }

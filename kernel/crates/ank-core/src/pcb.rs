@@ -2,6 +2,7 @@ use crate::scheduler::ModelPreference;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -24,6 +25,7 @@ pub enum ProcessState {
     WaitingSyscall,
     Completed,
     Failed,
+    Preempted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,7 +56,7 @@ pub struct ExecutionMetrics {
     pub max_cycles_allowed: u32,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PCB {
     pub pid: String,
     pub parent_pid: Option<String>,
@@ -81,7 +83,40 @@ pub struct PCB {
     pub session_key: Option<String>, // Sensitive: Avoid logging this!
     #[serde(default)]
     pub teleport_token: Option<String>, // OTP for secure node-to-node migration
+
+    #[serde(skip)]
+    pub cancel_token: CancellationToken,
 }
+
+use std::cmp::Ordering;
+
+/// Wrapper para usar PCB en BinaryHeap con ordering por prioridad.
+/// PCB en sí no implementa Ord/PartialOrd porque CancellationToken no lo hace.
+#[derive(Clone)]
+pub struct PcbByPriority(pub PCB);
+
+impl Ord for PcbByPriority {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0
+            .priority
+            .cmp(&other.0.priority)
+            .then_with(|| self.0.created_at.cmp(&other.0.created_at).reverse())
+    }
+}
+
+impl PartialOrd for PcbByPriority {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(Ord::cmp(self, other))
+    }
+}
+
+impl PartialEq for PcbByPriority {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.priority == other.0.priority && self.0.created_at == other.0.created_at
+    }
+}
+
+impl Eq for PcbByPriority {}
 
 impl std::fmt::Debug for PCB {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,6 +175,7 @@ impl PCB {
             public_id: None,
             session_key: None,
             teleport_token: None,
+            cancel_token: CancellationToken::new(),
         }
     }
 
@@ -149,22 +185,6 @@ impl PCB {
 
     pub fn from_json(json: &str) -> anyhow::Result<Self> {
         Ok(serde_json::from_str(json)?)
-    }
-}
-
-// Implementación de ordenamiento para BinaryHeap (Priority Queue)
-// Rust's BinaryHeap es un Max-Heap. Prioridad 10 > Prioridad 0.
-impl Ord for PCB {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.priority
-            .cmp(&other.priority)
-            .then_with(|| self.created_at.cmp(&other.created_at).reverse()) // Si empate, el más antiguo primero
-    }
-}
-
-impl PartialOrd for PCB {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
     }
 }
 
@@ -183,11 +203,9 @@ mod tests {
         assert_eq!(pcb.priority, 5);
         assert!(pcb.pid.starts_with("proc_"));
 
-        // Cambio de estado
         pcb.state = ProcessState::WaitingSyscall;
         assert_eq!(pcb.state, ProcessState::WaitingSyscall);
 
-        // Verificar inmutabilidad de otros campos (manualmente)
         assert_eq!(pcb.priority, 5);
         assert_eq!(pcb.process_name, name);
     }
@@ -212,13 +230,12 @@ mod tests {
         let pcb_low = PCB::new("Low".to_string(), 1, "low".to_string());
         let pcb_high = PCB::new("High".to_string(), 10, "high".to_string());
 
-        // En nuestro BinaryHeap de Rust, el mayor va primero.
-        assert!(pcb_high > pcb_low);
+        // PcbByPriority implementa Ord para BinaryHeap — prioridad 10 > prioridad 1.
+        assert!(PcbByPriority(pcb_high) > PcbByPriority(pcb_low));
     }
 
     #[test]
     fn test_pcb_deserialization_compatibility() -> anyhow::Result<()> {
-        // This JSON is missing task_type and newer fields
         let json = r#"{
             "pid": "proc_old",
             "process_name": "OldProc",
@@ -250,8 +267,8 @@ mod tests {
 
         let pcb: PCB = serde_json::from_str(json).context("Failed to deserialize old PCB")?;
         assert_eq!(pcb.pid, "proc_old");
-        assert_eq!(pcb.task_type, TaskType::Chat); // Should default to Chat
-        assert_eq!(pcb.public_id, None); // Should default to None
+        assert_eq!(pcb.task_type, TaskType::Chat);
+        assert_eq!(pcb.public_id, None);
         Ok(())
     }
 }

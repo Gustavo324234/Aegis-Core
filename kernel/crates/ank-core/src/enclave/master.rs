@@ -213,6 +213,8 @@ impl MasterEnclave {
         }
     }
 
+    /// SECURITY: passphrase arrives pre-hashed as SHA-256.
+    /// Argon2id is applied over the hash. This is intentional — see AEGIS_CONTEXT.md §4.
     pub async fn authenticate_tenant(
         &self,
         tenant_id: &str,

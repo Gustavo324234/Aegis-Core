@@ -80,9 +80,9 @@ run_system_audit() {
     local cpu_cores ram_gb docker_status nvidia_status="Not Detected"
     cpu_cores=$(nproc)
     ram_gb=$(free -g | awk '/^Mem:/{print $2}')
-    docker_status=$(command -v docker &> /dev/null && echo "Installed" || echo "Missing")
+    docker_status=$(command -v docker > /dev/null 2>&1 && echo "Installed" || echo "Missing")
     
-    if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
+    if command -v nvidia-smi > /dev/null 2>&1 && nvidia-smi > /dev/null 2>&1; then
         nvidia_status=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1)
     fi
 
@@ -161,8 +161,10 @@ install_native() {
     chown -R aegis:aegis "$DATA_DIR" "$CONFIG_DIR" "$UI_DIST_PATH"
     chmod -R 750 "$DATA_DIR"
 
-    local release_url="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
-    local bin_file="ank-server-linux-${ARCH}.tar.gz"
+    local release_url
+    release_url="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
+    local bin_file
+    bin_file="ank-server-linux-${ARCH}.tar.gz"
     
     log "Downloading ank-server binary (${RELEASE_TAG})..."
     curl -L --fail --progress-bar "${release_url}/${bin_file}" -o "/tmp/${bin_file}" || error "Download failed"
