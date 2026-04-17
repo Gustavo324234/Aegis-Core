@@ -10,6 +10,7 @@ pub mod scheduler;
 pub mod scribe;
 pub mod swarm; // Added pub mod swarm;
 pub mod syscalls;
+pub mod telemetry;
 pub mod vcm;
 
 // Re-exportar para fácil acceso

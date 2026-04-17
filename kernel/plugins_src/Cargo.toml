@@ -29,9 +29,3 @@ path = "src/bin/std_net.rs"
 [[bin]]
 name = "hello_world"
 path = "src/bin/hello_world.rs"
-
-[profile.release]
-opt-level = "s"
-strip = true
-lto = true
-codegen-units = 1

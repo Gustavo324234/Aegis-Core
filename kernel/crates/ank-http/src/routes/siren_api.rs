@@ -26,6 +26,9 @@ async fn get_siren_config(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<Json<Value>, AegisHttpError> {
+    let stt_model_path = state.config.data_dir.join("models").join("ggml-base.bin");
+    let stt_available = stt_model_path.exists();
+
     let profile = state
         .persistence
         .get_voice_profile(&auth.tenant_id)
@@ -37,12 +40,14 @@ async fn get_siren_config(
             "provider": p.engine_id,
             "voice_id": p.voice_id,
             "configured": true,
-            "settings": p.settings_json
+            "settings": p.settings_json,
+            "stt_available": stt_available
         }))),
         None => Ok(Json(json!({
             "provider": "mock",
             "voice_id": "",
-            "configured": false
+            "configured": false,
+            "stt_available": stt_available
         }))),
     }
 }

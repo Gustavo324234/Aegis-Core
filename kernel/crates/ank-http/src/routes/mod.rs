@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod engine;
+pub mod openapi;
 pub mod providers;
 pub mod router_api;
 pub mod siren_api;
@@ -10,11 +11,17 @@ pub mod workspace;
 use crate::static_files;
 use crate::ws;
 use crate::AppState;
-use axum::Router;
+use axum::{routing::get, Router};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 pub fn build_router(state: AppState) -> Router {
+    let swagger_ui =
+        SwaggerUi::new("/api/docs/:_").url("/api-docs/openapi.json", openapi::ApiDoc::openapi());
+
     Router::new()
-        .route("/health", axum::routing::get(status::health_check))
+        .route("/health", get(status::health_check))
+        .merge(swagger_ui)
         // API Routes
         .nest("/api/auth", auth::router())
         .nest("/api/admin", admin::router())

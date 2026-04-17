@@ -36,6 +36,8 @@ pub struct ModelEntry {
     pub task_scores: TaskScores,
     #[serde(default)]
     pub is_local: bool,
+    #[serde(default)]
+    pub avg_latency_ms: Option<u32>,
 }
 
 impl ModelEntry {

@@ -71,10 +71,8 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 
 ## 🔧 EPIC 34: Audit Fixes — Post-Consolidación
 **Status:** ✅ DONE — 2026-04-13
-**Resultado:** 20/20 bugs resueltos. Sistema funcional end-to-end.
-Chat conectado al HAL, credenciales migradas a headers Citadel, bypass de seguridad eliminado.
 
-### Shell — 8 tickets
+### Shell — 7 tickets
 *   **[CORE-070]** Fix: WebSocket URL hardcodeada con puerto 8000 `[DONE]`
 *   **[CORE-071]** Fix: Credenciales admin en query params — migrar a headers Citadel `[DONE]`
 *   **[CORE-072]** Fix: `isAdmin` determinado en el cliente por nombre de tenant `[DONE]`
@@ -83,7 +81,7 @@ Chat conectado al HAL, credenciales migradas a headers Citadel, bypass de seguri
 *   **[CORE-083]** Fix: `ProvidersTab` usa credenciales hardcodeadas y query params `[DONE]`
 *   **[CORE-088]** Fix: `ChatTerminal` envía `session_key` en FormData del file upload `[DONE]`
 
-### Kernel — 12 tickets
+### Kernel — 13 tickets
 *   **[CORE-074]** Fix: `get_sync_version` usa path relativo `VERSION` `[DONE]`
 *   **[CORE-075]** Fix: `engine_config.json` path relativo — persistir en `data_dir` `[DONE]`
 *   **[CORE-076]** Fix: `set_hw_profile` sin autenticación real `[DONE]`
@@ -97,47 +95,70 @@ Chat conectado al HAL, credenciales migradas a headers Citadel, bypass de seguri
 *   **[CORE-086]** Fix: `router_api.rs` — `authenticate_master` en lugar de `authenticate_tenant` `[DONE]`
 *   **[CORE-087]** Fix: `siren_api.rs` — `session_key` fuera de query params `[DONE]`
 *   **[CORE-089]** Fix: `providers.rs` — autenticación + validación SSRF `[DONE]`
+*   **[CORE-090]** Fix: WAL checkpoint race en `initialize_master` `[DONE]` — 2026-04-14
 
 ---
 
-*Epic 34 cerrada: 2026-04-13 — 20/20 tickets DONE | Arquitecto IA*
+## 🔧 EPIC 35: Hardening Post-Launch — Recomendaciones de Auditorías Multi-Modelo
+**Status:** ✅ DONE — 2026-04-16
+
+### P1 — Seguridad y Estabilidad
+*   **[CORE-091]** Rate Limiting en `/api/auth/login` `[DONE]`
+*   **[CORE-092]** Watchdog HAL Runner `[DONE]` — 2026-04-16 (Arquitecto IA)
+*   **[CORE-093]** Reuse de `CloudProxyDriver` via `Arc<reqwest::Client>` `[DONE]`
+*   **[CORE-094]** `tokio::sync::Mutex` en `CognitiveHAL` `[DONE]`
+*   **[CORE-095]** Retry con Exponential Backoff en `CloudProxyDriver` `[DONE]`
+*   **[CORE-096]** Verificar y documentar flujo SHA-256 + Argon2id `[DONE]`
+
+### P2 — Deuda técnica
+*   **[CORE-097]** Preemption real via `CancellationToken` `[DONE]`
+*   **[CORE-098]** Investigación LanceDB / VCM L3 `[DONE]` — ADR-038: fast-hnsw/usearch
+*   **[CORE-099]** CI: stubs gRPC Python `[N/A]` — no hay `*_pb2.py` en el repo
+*   **[CORE-105]** Telemetría tokens/s y costo estimado `[DONE]`
+*   **[CORE-106]** Latencia real en `CognitiveRouter` `[DONE]`
+*   **[CORE-107]** Documentación OpenAPI/Swagger `[DONE]`
+
+### P3 — Experiencia y mantenibilidad
+*   **[CORE-108]** Indicador UI cuando STT no está disponible `[DONE]`
+
+### Duplicados creados por error — CLOSED
+> Estos tickets fueron creados por el Kernel Engineer durante CORE-098 sin saber
+> que Epic 35 ya los había resuelto. Se registran como cerrados para trazabilidad.
+
+*   **[CORE-110]** = CORE-091 (rate limiting) `[CLOSED/DUPLICATE]`
+*   **[CORE-111]** = CORE-092 (watchdog HAL Runner) `[CLOSED/DUPLICATE]`
+*   **[CORE-112]** = CORE-093 (reuse CloudProxyDriver) `[CLOSED/DUPLICATE]`
+*   **[CORE-113]** = CORE-094 (tokio::sync::Mutex) `[CLOSED/DUPLICATE]`
+*   **[CORE-114]** = CORE-095 (retry backoff) `[CLOSED/DUPLICATE]`
+*   **[CORE-115]** = CORE-097 (preemption CancellationToken) `[CLOSED/DUPLICATE]`
+*   **[CORE-116]** = CORE-096 (SHA-256+Argon2id) `[CLOSED/DUPLICATE]`
+*   **[CORE-117]** = CORE-099 (stubs CI) `[CLOSED/DUPLICATE]`
+*   **[CORE-118]** = CORE-105 (telemetría TPS+costo) `[CLOSED/DUPLICATE]`
+*   **[CORE-119]** = CORE-106 (speed_inv → avg_latency_ms) `[CLOSED/DUPLICATE]`
+*   **[CORE-120]** = CORE-108 (indicador UI STT) `[CLOSED/DUPLICATE]`
 
 ---
 
-## 🚀 SISTEMA STATUS — 2026-04-13
+## 🔮 EPIC 36: Post-Launch Improvements — VCM L3
+**Status:** IN PROGRESS — 2026-04-16
+**Origen:** ADR-038 (CORE-098) — decisión de implementar usearch como motor de vector search
+
+*   **[CORE-109]** Implementar `usearch` en `LanceSwapManager` (VCM L3) `[TODO]` — Kernel Engineer
+
+---
+
+## 🚀 SISTEMA STATUS — 2026-04-16
 
 | Componente | Estado |
 |---|---|
 | Epic 32: Monorepo Unificado | ✅ DONE |
 | Epic 34: Audit Fixes | ✅ DONE |
 | Chat end-to-end (Scheduler → HAL → WS) | ✅ OPERATIVO |
-| Protocolo Citadel (headers en todas las rutas) | ✅ COMPLETO |
-| Credenciales en localStorage | ✅ ELIMINADAS |
-| Bypass de seguridad (`AEGIS_DEV_MASTER_BYPASS`) | ✅ ELIMINADO |
-| engine_config persistencia en data_dir | ✅ CORRECTO |
-| gRPC métodos P1+P2 | ✅ IMPLEMENTADOS |
-| Próxima épica | Epic 35 (smoke test en producción) |
+| Protocolo Citadel | ✅ COMPLETO |
+| Epic 35: Hardening Post-Launch | ✅ DONE — 13/13 |
+| Epic 36: VCM L3 (usearch) | 🔧 IN PROGRESS — 1 ticket TODO |
+| Epic 33: Linux Distribution | 🔮 PLANNED |
 
 ---
 
-## 🔮 EPIC 33: Linux Distribution — sigue PLANNED
-## 🔮 EPIC 35: Smoke Test en Producción — PRÓXIMA
-
-*Última actualización: 2026-04-13 | Arquitecto IA*
-
-## 🐛 CORE-090 — Fix: WAL checkpoint race en `initialize_master`
-**Status:** ✅ DONE — 2026-04-14
-**Agente:** Arquitecto IA (fix directo — bug bloqueante de producción)
-
-**Problema:** `admin_exists()` devolvía `false` inmediatamente después de
-`initialize_master` porque los datos estaban en el WAL pero la conexión
-mantenía un snapshot de lectura anterior. El sistema quedaba en
-`STATE_INITIALIZING` tras el setup, obligando a reiniciar el servicio.
-
-**Fix aplicado en `kernel/crates/ank-core/src/enclave/master.rs`:**
-- `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=1;` en `open()`
-- `PRAGMA wal_checkpoint(TRUNCATE)` en `init_schema()` y nuevo método privado `checkpoint()`
-- `checkpoint()` llamado al final de `initialize_master()` y `store_setup_token()`
-- Nuevo test `test_admin_exists_immediately_after_setup` que reproduce el bug exacto
-
-**Commit:** `fix(ank-core): CORE-090 WAL checkpoint race in initialize_master`
+*Última actualización: 2026-04-16 — Arquitecto IA (clasificación de CORE-109 a CORE-120)*

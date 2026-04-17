@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Settings, AlertCircle, Cpu, Mic, Paperclip, Loader2, LogOut } from 'lucide-react';
+import { Send, Settings, AlertCircle, Cpu, Mic, MicOff, Paperclip, Loader2, LogOut } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { AegisLogo } from './AegisLogo';
@@ -106,7 +106,7 @@ const MessageItem: React.FC<{ message: Message }> = ({ message }) => {
 
 const ChatTerminal: React.FC = () => {
     const { t } = useTranslation();
-    const { messages, sendMessage, status, isRecording, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout } = useAegisStore();
+    const { messages, sendMessage, status, isRecording, sttAvailable, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout, fetchSirenConfig } = useAegisStore();
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const isAtBottom = useRef(true);
@@ -137,6 +137,12 @@ const ChatTerminal: React.FC = () => {
             scrollToBottom('smooth');
         }
     }, [messages]);
+
+    useEffect(() => {
+        if (tenantId && sessionKey) {
+            fetchSirenConfig();
+        }
+    }, [tenantId, sessionKey, fetchSirenConfig]);
 
     const handleSend = () => {
         if (!input.trim()) return;
@@ -351,21 +357,23 @@ const ChatTerminal: React.FC = () => {
 
                             <button
                                 onClick={handleToggleMic}
+                                disabled={!sttAvailable}
                                 className={cn(
                                     "p-2 rounded-lg transition-all",
+                                    !sttAvailable && "opacity-30 cursor-not-allowed",
                                     status === 'listening' 
                                         ? "bg-green-500 text-white shadow-[0_0_15px_rgba(34,197,94,0.5)] animate-pulse"
                                         : status === 'transcribing'
                                             ? "bg-yellow-500 text-black shadow-[0_0_15px_rgba(234,179,8,0.5)]"
-                                            : "bg-white/5 text-white/40 hover:text-white hover:bg-white/10"
+                                            : sttAvailable
+                                                ? "bg-white/5 text-white/40 hover:text-white hover:bg-white/10"
+                                                : "bg-white/5 text-white/20"
                                 )}
-                                title={isRecording ? "Stop Listening" : "Start Voice Interaction"}
+                                title={!sttAvailable ? t('stt_not_available') : isRecording ? "Stop Listening" : "Start Voice Interaction"}
                             >
-                                {status === 'transcribing' ? (
-                                    <Loader2 className="w-5 h-5 animate-spin" />
-                                ) : (
-                                    <Mic className="w-5 h-5" />
-                                )}
+                                {!sttAvailable && <MicOff className="w-5 h-5" />}
+                                {sttAvailable && status === 'transcribing' && <Loader2 className="w-5 h-5 animate-spin" />}
+                                {sttAvailable && status !== 'transcribing' && <Mic className="w-5 h-5" />}
                             </button>
 
                             <button

@@ -6,30 +6,116 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+
+const RETRYABLE_STATUS_CODES: &[u16] = &[429, 502, 503, 504];
+const MAX_RETRIES: u32 = 2;
+const BASE_DELAY_MS: u64 = 1000;
 
 #[derive(Debug, Clone)]
 pub struct CloudProxyDriver {
     pub api_url: String,
     pub api_key: String,
     pub model_id: String,
-    client: Client,
+    client: Arc<Client>,
 }
 
 impl CloudProxyDriver {
-    pub fn new(api_url: String, api_key: String, model_id: String) -> Self {
+    pub fn new(client: Arc<Client>, api_url: String, api_key: String, model_id: String) -> Self {
         Self {
+            client,
             api_url,
             api_key,
             model_id,
-            client: Client::new(),
         }
     }
 
-    pub fn from_env() -> Option<Self> {
+    pub fn from_env(client: Arc<Client>) -> Option<Self> {
         let api_url = env::var("AEGIS_CLOUD_API_URL").ok()?;
         let api_key = env::var("AEGIS_CLOUD_API_KEY").ok()?;
         let model_id = env::var("AEGIS_CLOUD_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
-        Some(Self::new(api_url, api_key, model_id))
+        Some(Self::new(client, api_url, api_key, model_id))
+    }
+
+    fn is_retryable_error(status: reqwest::StatusCode) -> bool {
+        RETRYABLE_STATUS_CODES.contains(&status.as_u16())
+    }
+
+    async fn send_with_retry(
+        &self,
+        request_body: ChatCompletionRequest,
+    ) -> Result<reqwest::Response, SystemError> {
+        let mut last_error = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay_ms = BASE_DELAY_MS * 2u64.pow(attempt - 1);
+                tracing::warn!(
+                    attempt = attempt,
+                    delay_ms = delay_ms,
+                    model = %self.model_id,
+                    "Retrying request after error"
+                );
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+
+            let request = self
+                .client
+                .post(&self.api_url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .timeout(std::time::Duration::from_secs(30))
+                .json(&request_body);
+
+            match request.send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        return Ok(response);
+                    }
+
+                    let status = response.status();
+                    if Self::is_retryable_error(status) && attempt < MAX_RETRIES {
+                        let text = response
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Unknown".to_string());
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            status = %status,
+                            "Retryable error received"
+                        );
+                        last_error = Some(SystemError::HardwareFailure(format!(
+                            "API Error {}: {}",
+                            status, text
+                        )));
+                        continue;
+                    }
+
+                    return Ok(response);
+                }
+                Err(e) => {
+                    if attempt < MAX_RETRIES {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            error = %e,
+                            "Request failed, will retry"
+                        );
+                        last_error = Some(SystemError::HardwareFailure(format!(
+                            "Reqwest error: {}",
+                            e
+                        )));
+                        continue;
+                    }
+                    last_error = Some(SystemError::HardwareFailure(format!(
+                        "Reqwest error after {} retries: {}",
+                        attempt, e
+                    )));
+                }
+            }
+        }
+
+        Err(last_error
+            .unwrap_or_else(|| SystemError::HardwareFailure("Max retries exceeded".to_string())))
     }
 }
 
@@ -96,29 +182,7 @@ impl InferenceDriver for CloudProxyDriver {
             });
         }
 
-        let request = self
-            .client
-            .post(&self.api_url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .timeout(std::time::Duration::from_secs(30))
-            .json(&request_body);
-
-        let response = request
-            .send()
-            .await
-            .map_err(|e| SystemError::HardwareFailure(format!("Reqwest error: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(SystemError::HardwareFailure(format!(
-                "API Error {}: {}",
-                status, text
-            )));
-        }
+        let response = self.send_with_retry(request_body).await?;
 
         let stream = response.bytes_stream();
         let state = (stream, String::new());
