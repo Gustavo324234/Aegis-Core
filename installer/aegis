@@ -65,11 +65,11 @@ cmd_status() {
     else
         sudo systemctl status "$SERVICE_NAME" --no-pager || true
     fi
-    printf "\n${CYAN}--- API Health Check ---${NC}\n"
+    printf '\n%s--- API Health Check ---%s\n' "$CYAN" "$NC"
     if curl -s -f --connect-timeout 2 http://localhost:8000/health > /dev/null; then
-        printf "${GREEN}API is UP (http://localhost:8000)${NC}\n"
+        printf '%sAPI is UP (http://localhost:8000)%s\n' "$GREEN" "$NC"
     else
-        printf "${RED}API is DOWN or unreachable${NC}\n"
+        printf '%sAPI is DOWN or unreachable%s\n' "$RED" "$NC"
     fi
 }
 
@@ -84,22 +84,22 @@ cmd_logs() {
 }
 
 cmd_diag() {
-    printf "${CYAN}================================================================${NC}\n"
-    printf "${CYAN}   AEGIS OS - SRE DIAGNOSTIC REPORT${NC}\n"
-    printf "${CYAN}================================================================${NC}\n\n"
-    printf "${YELLOW}[1] SYSTEM RESOURCE USAGE${NC}\n"
+    printf '%s================================================================%s\n' "$CYAN" "$NC"
+    printf '%s   AEGIS OS - SRE DIAGNOSTIC REPORT%s\n' "$CYAN" "$NC"
+    printf '%s================================================================%s\n\n' "$CYAN" "$NC"
+    printf '%s[1] SYSTEM RESOURCE USAGE%s\n' "$YELLOW" "$NC"
     ps -u aegis -o %cpu,%mem,cmd 2>/dev/null || echo "Aegis process not found."
-    printf "\n${YELLOW}[2] NETWORK & PORTS${NC}\n"
+    printf '\n%s[2] NETWORK & PORTS%s\n' "$YELLOW" "$NC"
     ss -tulpn | grep -E "8000|50051" || echo "Aegis ports not listening."
-    printf "\n${YELLOW}[3] RECENT ERROR LOGS${NC}\n"
+    printf '\n%s[3] RECENT ERROR LOGS%s\n' "$YELLOW" "$NC"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" || exit; docker compose logs --tail 20 "$DOCKER_SERVICE" | grep -i "error") || echo "No recent errors found."
     else
         sudo journalctl -u "$SERVICE_NAME" -n 50 --no-pager | grep -i "error" | tail -n 10 || echo "No recent errors found."
     fi
-    printf "\n${YELLOW}[4] CONFIGURATION${NC}\n"
+    printf '\n%s[4] CONFIGURATION%s\n' "$YELLOW" "$NC"
     ls -l /etc/aegis/aegis.env 2>/dev/null || echo "Config file missing."
-    printf "\n${CYAN}================================================================${NC}\n"
+    printf '\n%s================================================================%s\n' "$CYAN" "$NC"
 }
 
 cmd_update() {
@@ -107,7 +107,7 @@ cmd_update() {
     ARCH=$(detect_arch)
     local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
 
-    printf "${YELLOW}Updating Aegis OS to latest nightly...${NC}\n"
+    printf '%sUpdating Aegis OS to latest nightly...%s\n' "$YELLOW" "$NC"
 
     local remote_date
     remote_date=$(curl -s "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
@@ -121,7 +121,7 @@ cmd_update() {
     curl -L --fail --progress-bar \
         "${RELEASE_URL}/ank-server-linux-${ARCH}.tar.gz" \
         -o /tmp/ank-update.tar.gz \
-        || { printf "${RED}Error descargando binario${NC}\n"; sudo systemctl start "$SERVICE_NAME"; exit 1; }
+        || { printf '%sError descargando binario%s\n' "$RED" "$NC"; sudo systemctl start "$SERVICE_NAME"; exit 1; }
 
     tar -xzf /tmp/ank-update.tar.gz -C /tmp/
     sudo mv "/tmp/ank-server-linux-${ARCH}" "$BIN_PATH"
@@ -137,7 +137,7 @@ cmd_update() {
         sudo chown -R aegis:aegis "$UI_PATH" 2>/dev/null || true
         rm -f /tmp/ui-update.tar.gz
     else
-        printf "${YELLOW}  UI download failed, keeping current${NC}\n"
+        printf '%s  UI download failed, keeping current%s\n' "$YELLOW" "$NC"
     fi
 
     printf "  → Iniciando servicio...\n"
@@ -145,14 +145,14 @@ cmd_update() {
 
     sleep 3
     if curl -s --connect-timeout 5 http://localhost:8000/health 2>/dev/null | grep -q "Online"; then
-        printf "${GREEN}  ✓ Actualización completada — Aegis OS está UP${NC}\n"
+        printf '%s  Actualizacion completada - Aegis OS esta UP%s\n' "$GREEN" "$NC"
     else
-        printf "${YELLOW}  ⚠ Servicio iniciado, verificá con: aegis status${NC}\n"
+        printf '%s  Servicio iniciado, verificar con: aegis status%s\n' "$YELLOW" "$NC"
     fi
 }
 
 cmd_token() {
-    printf "${CYAN}Retrieving Setup Token...${NC}\n"
+    printf '%sRetrieving Setup Token...%s\n' "$CYAN" "$NC"
     local token=""
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         token=$(cd "$INSTALL_DIR" || exit; docker compose logs "$DOCKER_SERVICE" 2>&1 | grep -oP 'setup_token=\K[a-f0-9]{32}' | tail -n 1 || true)
@@ -161,7 +161,7 @@ cmd_token() {
     fi
 
     if [[ -z "$token" ]]; then
-        printf "${YELLOW}No setup token found. System may already be initialized.${NC}\n"
+        printf '%sNo setup token found. System may already be initialized.%s\n' "$YELLOW" "$NC"
     else
         local ip
         ip=$(hostname -I | awk '{print $1}')
