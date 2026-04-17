@@ -3,7 +3,7 @@ pub mod graph;
 pub mod persistence;
 
 use crate::dag::{DagNodeStatus, ExecutionGraph, GraphManager, NodeResult};
-use crate::pcb::{ProcessState, PCB, PcbByPriority};
+use crate::pcb::{PcbByPriority, ProcessState, PCB};
 use crate::scheduler::persistence::StatePersistor;
 use crate::swarm::client::SwarmClient;
 use crate::swarm::{NodeStatus, SwarmManager};
