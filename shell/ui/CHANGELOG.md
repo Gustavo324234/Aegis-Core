@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.3...shell-ui-v1.0.4) (2026-04-17)
+
+
+### Bug Fixes
+
+* **ank-http:** ConnectInfo missing — use into_make_service_with_connect_info ([#36](https://github.com/Gustavo324234/Aegis-Core/issues/36)) ([cde193f](https://github.com/Gustavo324234/Aegis-Core/commit/cde193fb49e283660c7350c716222508db3fb4b0))
+
 ## [1.0.3](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.2...shell-ui-v1.0.3) (2026-04-17)
 
 
