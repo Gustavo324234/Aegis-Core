@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.2...shell-ui-v1.0.3) (2026-04-17)
+
+
+### Bug Fixes
+
+* **ank-http:** CORE-107 correct clippy errors - utoipa schema and type mismatches ([75e990b](https://github.com/Gustavo324234/Aegis-Core/commit/75e990b54c255f676d2853c1e0ffa530e91ea298))
+
 ## [1.0.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.1...shell-ui-v1.0.2) (2026-04-14)
 
 
