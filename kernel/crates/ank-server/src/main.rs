@@ -1,11 +1,15 @@
 use ank_core::plugins::watcher::watch_plugins_dir;
 use ank_core::plugins::PluginManager;
+use ank_core::telemetry::{CompletedInference, TelemetryState};
 use ank_core::{
     citadel::identity::Citadel, enclave::master::MasterEnclave, router::CognitiveRouter,
     router::SirenRouter, CognitiveHAL, CognitiveScheduler, SQLCipherPersistor, SchedulerEvent,
     StatePersistor, PCB,
 };
-use ank_http::{AegisHttpServer, AppState, HttpConfig};
+use ank_http::{
+    rate_limiter::{AuthRateLimiter, RateLimitConfig},
+    AegisHttpServer, AppState, HttpConfig,
+};
 use ank_proto::v1::kernel_service_server::KernelServiceServer;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -118,7 +122,7 @@ async fn main() -> Result<()> {
     });
 
     // 9. HAL
-    let hal = Arc::new(RwLock::new(CognitiveHAL::new(Arc::clone(&plugin_manager))));
+    let hal = Arc::new(RwLock::new(CognitiveHAL::new(Arc::clone(&plugin_manager))?));
 
     // 10. Router & Catalog
     let catalog = Arc::new(ank_core::router::catalog::ModelCatalog::load_bundled()?);
@@ -144,19 +148,23 @@ async fn main() -> Result<()> {
 
     // 11. AppState
     let event_broker = Arc::new(RwLock::new(HashMap::new()));
+    let telemetry = TelemetryState::new();
 
-    // 11.5. HAL Runner — connects Scheduler → CognitiveHAL → event_broker → WebSocket
+    // 11.5. HAL Runner — Scheduler → CognitiveHAL → event_broker → WebSocket
+    // CORE-092: Al cerrarse execution_rx, notifica al scheduler via HalRunnerDied
+    // para que limpie current_running y evite un deadlock silencioso.
     {
         let hal_runner = Arc::clone(&hal);
         let event_broker_runner = Arc::clone(&event_broker);
         let scheduler_tx_runner = scheduler_tx.clone();
+        let scheduler_tx_watchdog = scheduler_tx.clone();
+        let telemetry_runner = telemetry.clone();
 
         tokio::spawn(async move {
             while let Some(pcb) = execution_rx.recv().await {
                 let pid = pcb.pid.clone();
                 let shared_pcb = Arc::new(RwLock::new(*pcb));
 
-                // Obtener o crear el sender del event_broker para este PID
                 let event_tx = {
                     let mut broker = event_broker_runner.write().await;
                     broker
@@ -168,13 +176,65 @@ async fn main() -> Result<()> {
                         .clone()
                 };
 
+                let started_at = std::time::Instant::now();
                 let hal_read = hal_runner.read().await;
+
+                // CORE-097: Extraer cancel_token del PCB para soportar preemption
+                let cancel_token = {
+                    let pcb_lock = shared_pcb.read().await;
+                    pcb_lock.cancel_token.clone()
+                };
+
+                // Resolver model_id para telemetría (best-effort, no bloquea ejecución)
+                let model_id = {
+                    if let Some(ref router_rw) = hal_read.router {
+                        let router = router_rw.read().await;
+                        let pcb_snapshot = shared_pcb.read().await;
+                        router
+                            .decide(&pcb_snapshot)
+                            .await
+                            .ok()
+                            .map(|d| d.model_id)
+                            .unwrap_or_else(|| "unknown".to_string())
+                    } else {
+                        "unknown".to_string()
+                    }
+                };
+
                 match hal_read.route_and_execute(Arc::clone(&shared_pcb)).await {
                     Ok(mut stream) => {
                         use tokio_stream::StreamExt as _;
+                        let mut tokens_emitted: u32 = 0;
+
                         while let Some(token_result) = stream.next().await {
+                            // CORE-097: Verificar cancelación en cada chunk
+                            if cancel_token.is_cancelled() {
+                                tracing::warn!(pid = %pid, "Process preempted via CancellationToken");
+                                let cancel_event = ank_proto::v1::TaskEvent {
+                                    pid: pid.clone(),
+                                    timestamp: None,
+                                    payload: Some(
+                                        ank_proto::v1::task_event::Payload::StatusUpdate(Box::new(
+                                            ank_proto::v1::Pcb {
+                                                state: 5, // STATE_PREEMPTED
+                                                ..Default::default()
+                                            },
+                                        )),
+                                    ),
+                                };
+                                let _ = event_tx.send(cancel_event);
+                                let _ = scheduler_tx_runner
+                                    .send(SchedulerEvent::ProcessCompleted {
+                                        pid: pid.clone(),
+                                        output: "preempted".to_string(),
+                                    })
+                                    .await;
+                                break;
+                            }
+
                             match token_result {
                                 Ok(token) => {
+                                    tokens_emitted = tokens_emitted.saturating_add(1);
                                     let event = ank_proto::v1::TaskEvent {
                                         pid: pid.clone(),
                                         timestamp: None,
@@ -197,12 +257,31 @@ async fn main() -> Result<()> {
                                 }
                             }
                         }
+
+                        // CORE-105: Registrar telemetría de la inferencia completada
+                        let duration_ms = started_at.elapsed().as_millis() as u64;
+                        let tokens_per_second = if duration_ms > 0 {
+                            (tokens_emitted as f64 / (duration_ms as f64 / 1000.0)).min(1_000_000.0)
+                        } else {
+                            0.0
+                        };
+
+                        let inference = CompletedInference {
+                            tokens_per_second,
+                            tokens_emitted,
+                            model_id: model_id.clone(),
+                            duration_ms,
+                            cost_usd: None,
+                        };
+                        telemetry_runner.add_inference(inference).await;
+
                         let _ = scheduler_tx_runner
                             .send(SchedulerEvent::ProcessCompleted {
                                 pid: pid.clone(),
                                 output: "stream_complete".to_string(),
                             })
                             .await;
+
                         let done_event = ank_proto::v1::TaskEvent {
                             pid: pid.clone(),
                             timestamp: None,
@@ -214,6 +293,14 @@ async fn main() -> Result<()> {
                             )),
                         };
                         let _ = event_tx.send(done_event);
+
+                        tracing::debug!(
+                            pid = %pid,
+                            model = %model_id,
+                            tokens = tokens_emitted,
+                            tps = %format!("{:.2}", tokens_per_second),
+                            "Inference completed"
+                        );
                     }
                     Err(e) => {
                         tracing::error!(pid = %pid, "HAL execution failed: {}", e);
@@ -232,11 +319,22 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+
+            // CORE-092: El canal execution_rx se cerró — el Scheduler debe saberlo
+            // para limpiar current_running y evitar que quede bloqueado indefinidamente.
+            warn!("HAL Runner: execution_rx channel closed. Notifying scheduler.");
+            let _ = scheduler_tx_watchdog
+                .send(SchedulerEvent::HalRunnerDied {
+                    reason: "execution_rx channel closed unexpectedly".to_string(),
+                })
+                .await;
         });
     }
 
     let mut config = HttpConfig::from_env();
-    config.port = 8000; // Force 8000 as per ticket
+    config.port = 8000;
+
+    let auth_rate_limiter = AuthRateLimiter::new(RateLimitConfig::from_env());
 
     let state = AppState {
         scheduler_tx: scheduler_tx.clone(),
@@ -248,6 +346,8 @@ async fn main() -> Result<()> {
         catalog_syncer: Some(catalog_syncer),
         persistence: Arc::clone(&persistence) as Arc<dyn StatePersistor>,
         config,
+        auth_rate_limiter,
+        telemetry,
     };
 
     // 12. Tonic Server
@@ -257,7 +357,6 @@ async fn main() -> Result<()> {
     let grpc_addr = "0.0.0.0:50051".parse()?;
     let mut tonic_builder = Server::builder();
 
-    // TLS Logic
     match (
         std::env::var("AEGIS_TLS_CERT"),
         std::env::var("AEGIS_TLS_KEY"),

@@ -53,10 +53,12 @@ interface AegisState {
     isFetchingTenants: boolean;
     lastTenantsUpdate: string | null;
     tenantsError: string | null;
+    sttAvailable: boolean;
 
     setHydrated: (val: boolean) => void;
     setNeedsPasswordReset: (val: boolean) => void;
     setAdminActiveTab: (tab: string) => void;
+    fetchSirenConfig: () => Promise<void>;
     connect: (tenantId: string, sessionKey: string) => void;
     disconnect: () => void;
     sendMessage: (prompt: string) => void;
@@ -128,10 +130,30 @@ export const useAegisStore = create<AegisState>()(
             isFetchingTenants: false,
             lastTenantsUpdate: null,
             tenantsError: null,
+            sttAvailable: true,
 
             setHydrated: (val) => set({ _hydrated: val }),
             setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
             setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
+
+            fetchSirenConfig: async () => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return;
+                try {
+                    const res = await fetch('/api/siren/config', {
+                        headers: {
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        }
+                    });
+                    if (res.ok) {
+                        const data = await res.json() as { stt_available?: boolean };
+                        set({ sttAvailable: data.stt_available ?? true });
+                    }
+                } catch (err) {
+                    console.error('Fetch siren config error:', err);
+                }
+            },
 
             startTelemetryPolling: (tenantId: string) => {
                 if (telemetryInterval) clearInterval(telemetryInterval);
@@ -256,7 +278,6 @@ export const useAegisStore = create<AegisState>()(
                 } catch (e) { console.error('Delete tenant error:', e); return false; }
             },
 
-            // Usado por el admin para resetear contraseña de otro usuario
             resetPassword: async (targetId: string, newPass: string) => {
                 const { tenantId, sessionKey } = get();
                 if (!tenantId || !sessionKey) return false;
@@ -278,7 +299,6 @@ export const useAegisStore = create<AegisState>()(
                 } catch (e) { console.error('Reset password error:', e); return false; }
             },
 
-            // Usado por el tenant para cambiar su propia contraseña (ForcePasswordChangeScreen)
             changeOwnPassword: async (newPass: string) => {
                 const { tenantId, sessionKey } = get();
                 if (!tenantId || !sessionKey) return false;
@@ -293,7 +313,6 @@ export const useAegisStore = create<AegisState>()(
                         })
                     });
                     if (res.ok) {
-                        // Actualizar sessionKey en memoria con la nueva contraseña
                         set({ sessionKey: newPass, needsPasswordReset: false });
                         return true;
                     }

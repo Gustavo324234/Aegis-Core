@@ -3,7 +3,7 @@ pub mod graph;
 pub mod persistence;
 
 use crate::dag::{DagNodeStatus, ExecutionGraph, GraphManager, NodeResult};
-use crate::pcb::{ProcessState, PCB};
+use crate::pcb::{ProcessState, PCB, PcbByPriority};
 use crate::scheduler::persistence::StatePersistor;
 use crate::swarm::client::SwarmClient;
 use crate::swarm::{NodeStatus, SwarmManager};
@@ -29,7 +29,7 @@ impl ModelPreference {
     pub fn is_complex(&self) -> bool {
         match self {
             ModelPreference::CloudOnly => true,
-            ModelPreference::HybridSmart => true, // Por defecto, Hybrid intenta lo mejor
+            ModelPreference::HybridSmart => true,
             ModelPreference::LocalOnly => false,
         }
     }
@@ -45,16 +45,15 @@ impl PCB {
 #[derive(Debug)]
 pub enum SchedulerEvent {
     ScheduleTask(Box<PCB>),
-    /// Like ScheduleTask but replies with the confirmed PID (which may differ from the
-    /// incoming PCB's PID if a collision is resolved) via the oneshot sender.
+    /// Like ScheduleTask but replies with the confirmed PID via the oneshot sender.
     ScheduleTaskConfirmed(Box<PCB>, tokio::sync::oneshot::Sender<String>),
-    DispatchLocal(Box<PCB>), // Nuevo: Re-encolado forzado para ejecución local
+    DispatchLocal(Box<PCB>),
     SyscallCompleted {
         pid: String,
         result: String,
     },
-    RemoteEvent(String, ank_proto::v1::TaskEvent), // Nuevo: Evento interceptado de un nodo remoto
-    RegisterGraph(Box<ExecutionGraph>),            // Nuevo: Registro y validación de un S-DAG
+    RemoteEvent(String, ank_proto::v1::TaskEvent),
+    RegisterGraph(Box<ExecutionGraph>),
     ProcessCompleted {
         pid: String,
         output: String,
@@ -62,26 +61,26 @@ pub enum SchedulerEvent {
     PreemptCurrent,
     TerminateProcess(String),
     ListProcesses(tokio::sync::oneshot::Sender<Vec<PCB>>),
+    /// CORE-092: Notificación de que el HAL Runner cerró su canal.
+    /// El scheduler limpia `current_running` y marca el proceso como Failed.
+    HalRunnerDied {
+        reason: String,
+    },
 }
 
 /// --- COGNITIVE SCHEDULER ---
 pub struct CognitiveScheduler {
-    pub ready_queue: BinaryHeap<PCB>,
+    pub ready_queue: BinaryHeap<PcbByPriority>,
     pub waiting_queue: HashMap<String, PCB>,
     pub process_table: HashMap<String, PCB>,
     pub current_running: Option<String>,
     pub last_activity: DateTime<Utc>,
 
-    // Infraestructura del Enjambre
     pub swarm_manager: Option<Arc<SwarmManager>>,
     pub swarm_client: Arc<SwarmClient>,
-    // Canal para auto-enviarse eventos de recovery
     pub internal_tx: Option<mpsc::Sender<SchedulerEvent>>,
-    // Grafo de ejecución S-DAG
     pub graph_manager: Arc<RwLock<GraphManager>>,
-    // Persistencia de estado (SQLCipher)
     pub persistence: Arc<dyn StatePersistor>,
-    // Canal para notificar el inicio de ejecución local (ANK-2505)
     pub execution_tx: Option<mpsc::Sender<Box<PCB>>>,
 }
 
@@ -115,24 +114,24 @@ impl CognitiveScheduler {
 
         loop {
             tokio::select! {
-                // Prioridad 1: Procesar eventos externos
                 Some(event) = event_rx.recv() => {
                     use anyhow::Context;
                     self.handle_event(event).await.context("Error handling scheduler event")?;
                 }
 
-                // Prioridad 2: Ciclo de despacho (Reconcile)
                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
                     use anyhow::Context;
                     self.reconcile().await.context("Error during state reconciliation")?;
                 }
 
-                // Prioridad 3: GC Pasivo
                 _ = gc_interval.tick() => {
                     let now = chrono::Utc::now();
                     let five_mins = chrono::Duration::minutes(5);
                     self.process_table.retain(|_, pcb| {
-                        let is_finished = matches!(pcb.state, crate::pcb::ProcessState::Completed | crate::pcb::ProcessState::Failed);
+                        let is_finished = matches!(
+                            pcb.state,
+                            crate::pcb::ProcessState::Completed | crate::pcb::ProcessState::Failed
+                        );
                         let is_old = (now - pcb.created_at) > five_mins;
                         !(is_finished && is_old)
                     });
@@ -154,7 +153,6 @@ impl CognitiveScheduler {
                 info!(pid = %pcb_box.pid, prio = pcb_box.priority, "Task queued (ScheduleTask).");
                 let mut pcb = *pcb_box;
 
-                // Persistencia atómica antes de cambiar estado a Ready
                 self.persistence
                     .save_pcb(&pcb)
                     .await
@@ -162,13 +160,12 @@ impl CognitiveScheduler {
 
                 pcb.state = ProcessState::Ready;
                 self.process_table.insert(pcb.pid.clone(), pcb.clone());
-                self.ready_queue.push(pcb);
+                self.ready_queue.push(PcbByPriority(pcb));
             }
             SchedulerEvent::ScheduleTaskConfirmed(pcb_box, confirm_tx) => {
                 info!(pid = %pcb_box.pid, prio = pcb_box.priority, "Task queued (ScheduleTaskConfirmed).");
                 let mut pcb = *pcb_box;
 
-                // Persistencia atómica antes de cambiar estado a Ready
                 self.persistence
                     .save_pcb(&pcb)
                     .await
@@ -177,9 +174,8 @@ impl CognitiveScheduler {
                 let confirmed_pid = pcb.pid.clone();
                 pcb.state = ProcessState::Ready;
                 self.process_table.insert(pcb.pid.clone(), pcb.clone());
-                self.ready_queue.push(pcb);
+                self.ready_queue.push(PcbByPriority(pcb));
 
-                // Notify the caller of the confirmed PID (best-effort; ignore send error)
                 let _ = confirm_tx.send(confirmed_pid);
             }
             SchedulerEvent::RegisterGraph(graph_box) => {
@@ -187,9 +183,8 @@ impl CognitiveScheduler {
                 let mut lock = self.graph_manager.write().await;
                 crate::scheduler::graph::GraphIntegrator::validate_and_register(&mut lock, graph);
 
-                // Disparar primer tick para arrancar nodos iniciales
                 let new_pcbs = lock.tick();
-                drop(lock); // Soltamos el lock antes de encolar
+                drop(lock);
 
                 for mut pcb in new_pcbs {
                     self.persistence
@@ -198,7 +193,7 @@ impl CognitiveScheduler {
                         .context("Failed to persist initial DAG task")?;
                     pcb.state = ProcessState::Ready;
                     self.process_table.insert(pcb.pid.clone(), pcb.clone());
-                    self.ready_queue.push(pcb);
+                    self.ready_queue.push(PcbByPriority(pcb));
                 }
             }
             SchedulerEvent::DispatchLocal(pcb_box) => {
@@ -212,7 +207,7 @@ impl CognitiveScheduler {
 
                 pcb.state = ProcessState::Ready;
                 self.process_table.insert(pcb.pid.clone(), pcb.clone());
-                self.ready_queue.push(pcb);
+                self.ready_queue.push(PcbByPriority(pcb));
             }
             SchedulerEvent::SyscallCompleted { pid, result } => {
                 if let Some(mut pcb) = self.waiting_queue.remove(&pid) {
@@ -227,12 +222,11 @@ impl CognitiveScheduler {
                         .context("Failed to persist SyscallCompleted")?;
 
                     pcb.state = ProcessState::Ready;
-                    self.ready_queue.push(pcb);
+                    self.ready_queue.push(PcbByPriority(pcb));
                 }
             }
             SchedulerEvent::RemoteEvent(pid, remote_event) => {
                 info!(pid = %pid, "Received remote execution event from Swarm.");
-                // Extraemos el payload de Protobuf y disparamos lógica local
                 if let Some(payload) = remote_event.payload {
                     match payload {
                         ank_proto::v1::task_event::Payload::Output(result) => {
@@ -249,7 +243,6 @@ impl CognitiveScheduler {
                                 pcb.state = ProcessState::Completed;
                             }
 
-                            // Anti-Deadlock: Bloqueo super corto para reportar resultado
                             {
                                 let mut lock = self.graph_manager.write().await;
                                 let _ = lock.handle_result(NodeResult {
@@ -259,7 +252,6 @@ impl CognitiveScheduler {
                                 });
                             }
 
-                            // Extraemos nuevos procesos listos
                             let new_pcbs = {
                                 let mut lock = self.graph_manager.write().await;
                                 lock.tick()
@@ -272,11 +264,11 @@ impl CognitiveScheduler {
                                     .context("Failed to persist DAG next-ready task")?;
                                 pcb.state = ProcessState::Ready;
                                 self.process_table.insert(pcb.pid.clone(), pcb.clone());
-                                self.ready_queue.push(pcb);
+                                self.ready_queue.push(PcbByPriority(pcb));
                             }
                         }
                         ank_proto::v1::task_event::Payload::Syscall(syscall) => {
-                            info!(pid = %pid, "Remote process requires Syscall executing on Host: {}", syscall.name);
+                            info!(pid = %pid, "Remote process requires Syscall on Host: {}", syscall.name);
                         }
                         _ => {
                             info!(pid = %pid, "Ignored remote status payload.");
@@ -298,7 +290,6 @@ impl CognitiveScheduler {
                     pcb.state = ProcessState::Completed;
                 }
 
-                // Anti-Deadlock: Bloqueo super corto
                 {
                     let mut lock = self.graph_manager.write().await;
                     let _ = lock.handle_result(NodeResult {
@@ -308,7 +299,6 @@ impl CognitiveScheduler {
                     });
                 }
 
-                // Anti-Deadlock: Nuevo bloqueo para ver si hay tareas hijas listas
                 let new_pcbs = {
                     let mut lock = self.graph_manager.write().await;
                     lock.tick()
@@ -321,13 +311,22 @@ impl CognitiveScheduler {
                         .context("Failed to persist DAG next-ready task (local)")?;
                     pcb.state = ProcessState::Ready;
                     self.process_table.insert(pcb.pid.clone(), pcb.clone());
-                    self.ready_queue.push(pcb);
+                    self.ready_queue.push(PcbByPriority(pcb));
+                }
+
+                // Liberar current_running si era este proceso
+                if self.current_running.as_deref() == Some(&pid) {
+                    self.current_running = None;
                 }
             }
             SchedulerEvent::PreemptCurrent => {
                 if let Some(pid) = self.current_running.take() {
-                    warn!(pid = %pid, "Hard preemption triggered. Interrupting ALU.");
-                    // FUTURE(ANK-2501): Send interrupt signal to cHAL to cancel ongoing inference
+                    warn!(pid = %pid, "Preemption triggered. Cancelling current process.");
+                    if let Some(pcb) = self.process_table.get_mut(&pid) {
+                        pcb.cancel_token.cancel();
+                        pcb.state = ProcessState::Preempted;
+                        let _ = self.persistence.save_pcb(pcb).await;
+                    }
                 }
             }
             SchedulerEvent::TerminateProcess(pid) => {
@@ -338,6 +337,34 @@ impl CognitiveScheduler {
                     self.current_running = None;
                 }
             }
+            // CORE-092: HAL Runner watchdog — limpia estado huerfano si el canal cierra
+            SchedulerEvent::HalRunnerDied { reason } => {
+                warn!("CORE-092: HAL Runner terminated: {}", reason);
+                if let Some(pid) = self.current_running.take() {
+                    error!(
+                        pid = %pid,
+                        reason = %reason,
+                        "Cleaning up orphaned Running process after HAL Runner death"
+                    );
+                    if let Some(pcb) = self.process_table.get_mut(&pid) {
+                        pcb.state = ProcessState::Failed;
+                        pcb.registers
+                            .temp_vars
+                            .insert("failure_reason".to_string(), reason.clone());
+                        if let Err(e) = self.persistence.save_pcb(pcb).await {
+                            error!(pid = %pid, error = %e, "Failed to persist Failed state after HAL death");
+                        }
+                    }
+                    // El event_broker vive en AppState (ank-http), no en el scheduler.
+                    // El WebSocket detectará la desconexión cuando el broadcast channel
+                    // ya no reciba eventos y el timeout de inactividad expire.
+                    // No se requiere acción adicional aquí — el estado del PCB es suficiente
+                    // para que la próxima consulta devuelva state=Failed.
+                    info!(pid = %pid, "Scheduler ready to accept new tasks after HAL Runner recovery.");
+                } else {
+                    info!("HAL Runner died with no active process — no cleanup needed.");
+                }
+            }
             SchedulerEvent::ListProcesses(reply_channel) => {
                 let processes = self.process_table.values().cloned().collect();
                 let _ = reply_channel.send(processes);
@@ -346,15 +373,12 @@ impl CognitiveScheduler {
         Ok(())
     }
 
-    /// Despacha procesos de la cola de Listos a la "CPU" (ALU/LLM) local o al Swarm si es complejo.
     async fn reconcile(&mut self) -> anyhow::Result<()> {
         if self.current_running.is_none() && !self.ready_queue.is_empty() {
-            if let Some(pcb) = self.ready_queue.pop() {
-                // LÓGICA DE TELEPORTACIÓN
+            if let Some(PcbByPriority(pcb)) = self.ready_queue.pop() {
                 if pcb.model_pref.is_complex() {
                     if let Some(swarm) = &self.swarm_manager {
                         let nodes = swarm.active_nodes.read().await;
-                        // Buscamos un nodo con Tier > 1 que esté Ready
                         let target_node = nodes
                             .values()
                             .find(|n| n.hardware_tier > 1 && n.status == NodeStatus::Ready);
@@ -368,10 +392,7 @@ impl CognitiveScheduler {
                             let recovery_tx = self.internal_tx.clone();
                             let swarm_mgr_ref = swarm.clone();
 
-                            // Spawn de Teleportación para no bloquear el bucle del Scheduler
                             tokio::spawn(async move {
-                                // Extraemos el canal de eventos de la instancia local si existe,
-                                // sino usamos un dummy channel como resiliencia.
                                 let event_tx = if let Some(tx) = &recovery_tx {
                                     tx.clone()
                                 } else {
@@ -385,7 +406,6 @@ impl CognitiveScheduler {
                                 {
                                     error!(pid = %pcb.pid, error = %e, "Teleportation failed. Initiating Fallback.");
 
-                                    // Marcar nodo como sospechoso
                                     {
                                         let mut nodes = swarm_mgr_ref.active_nodes.write().await;
                                         if let Some(meta) =
@@ -395,7 +415,6 @@ impl CognitiveScheduler {
                                         }
                                     }
 
-                                    // RESILIENCIA EXTREMA: Devolver el PCB a la cola local
                                     if let Some(tx) = recovery_tx {
                                         let _ = tx
                                             .send(SchedulerEvent::DispatchLocal(Box::new(pcb)))
@@ -403,23 +422,20 @@ impl CognitiveScheduler {
                                     }
                                 }
                             });
-                            return Ok(()); // Despachado al Swarm (asíncronamente)
+                            return Ok(());
                         }
                     }
                 }
 
-                // FALLBACK O EJECUCIÓN SIMPLE: Despacho local
                 self.current_running = Some(pcb.pid.clone());
                 let pcb_to_run = pcb.clone();
                 self.process_table.insert(pcb.pid.clone(), pcb);
 
-                // Disparar Trigger de Ejecución si el canal está configurado
                 if let Some(tx) = &self.execution_tx {
                     info!(pid = %pcb_to_run.pid, "Execution trigger sent to local runner.");
                     let pid = pcb_to_run.pid.clone();
                     if let Err(e) = tx.try_send(Box::new(pcb_to_run)) {
-                        error!(pid = %pid, error = %e, "SCHEDULER ERROR: Failed to dispatch to local runner. Queue full or runner dead.");
-                        // Rollback: No marcar como running si no se pudo enviar
+                        error!(pid = %pid, error = %e, "Failed to dispatch to local runner.");
                         self.current_running = None;
                         return Err(anyhow::anyhow!("Local runner dispatch failed: {}", e));
                     }
@@ -445,7 +461,6 @@ mod tests {
         let p5a = PCB::new("task-low-1".into(), 5, "mock".into());
         let p5b = PCB::new("task-low-2".into(), 5, "mock".into());
 
-        // Inyectamos fuera de orden
         scheduler
             .handle_event(SchedulerEvent::ScheduleTask(Box::new(p5a)))
             .await?;
@@ -456,13 +471,12 @@ mod tests {
             .handle_event(SchedulerEvent::ScheduleTask(Box::new(p5b)))
             .await?;
 
-        // Verificamos orden de salida
         let first = scheduler
             .ready_queue
             .pop()
             .context("Ready queue should not be empty (first)")?;
         assert_eq!(
-            first.process_name, "task-high",
+            first.0.process_name, "task-high",
             "Prioridad 10 debe salir primero"
         );
 
@@ -471,7 +485,7 @@ mod tests {
             .pop()
             .context("Ready queue should not be empty (second)")?;
         assert_eq!(
-            second.process_name, "task-low-1",
+            second.0.process_name, "task-low-1",
             "FCFS para prioridad 5 (1)"
         );
 
@@ -480,9 +494,46 @@ mod tests {
             .pop()
             .context("Ready queue should not be empty (third)")?;
         assert_eq!(
-            third.process_name, "task-low-2",
+            third.0.process_name, "task-low-2",
             "FCFS para prioridad 5 (2)"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hal_runner_died_cleans_current_running() -> anyhow::Result<()> {
+        let mut scheduler = CognitiveScheduler::new(Arc::new(persistence::MockPersistor));
+
+        // Simular un proceso en ejecución
+        let pcb = PCB::new("running-task".into(), 5, "mock".into());
+        let pid = pcb.pid.clone();
+        scheduler.process_table.insert(pid.clone(), pcb);
+        scheduler.current_running = Some(pid.clone());
+
+        // Disparar HalRunnerDied
+        scheduler
+            .handle_event(SchedulerEvent::HalRunnerDied {
+                reason: "test: channel closed".to_string(),
+            })
+            .await?;
+
+        // current_running debe estar limpio
+        assert!(
+            scheduler.current_running.is_none(),
+            "current_running debe ser None después de HalRunnerDied"
+        );
+
+        // El PCB debe estar marcado como Failed
+        let pcb = scheduler
+            .process_table
+            .get(&pid)
+            .context("PCB debe existir")?;
+        assert_eq!(
+            pcb.state,
+            crate::pcb::ProcessState::Failed,
+            "PCB debe estar en estado Failed"
+        );
+
         Ok(())
     }
 }

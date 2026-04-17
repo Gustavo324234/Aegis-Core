@@ -5,7 +5,33 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde_json::{json, Value};
+use serde_json::json;
+use utoipa::ToSchema;
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct SystemStatusResponse {
+    pub cpu_load: f32,
+    pub vram_allocated_mb: u64,
+    pub vram_total_mb: u64,
+    pub hw_profile: String,
+    pub state: String,
+    pub total_processes: u32,
+    pub active_workers: u32,
+    pub tokens_per_second: f64,
+    pub total_tokens_session: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct PublicSystemStateResponse {
+    pub state: String,
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct HealthResponse {
+    pub status: String,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -20,10 +46,23 @@ pub fn system_router() -> Router<AppState> {
         .route("/hw_profile", post(crate::routes::engine::set_hw_profile))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/status",
+    tag = "status",
+    responses(
+        (status = 200, description = "System status", body = SystemStatusResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
 pub async fn get_system_status(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<SystemStatusResponse>, AegisHttpError> {
     // Auth desde headers Citadel — consistente con todos los demás endpoints
     let tenant_id = headers
         .get("x-citadel-tenant")
@@ -66,20 +105,6 @@ pub async fn get_system_status(
         }
     }
 
-    let hw_info = {
-        let hal = state.hal.write().await;
-        let mut monitor = hal
-            .hardware
-            .lock()
-            .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e.to_string())))?;
-        let status = monitor.get_status();
-        json!({
-            "cpu_load": status.cpu_usage,
-            "vram_allocated_mb": status.used_mem_mb,
-            "vram_total_mb": status.total_mem_mb,
-        })
-    };
-
     let hw_profile = std::env::var("HW_PROFILE").unwrap_or_else(|_| "1".to_string());
     let hw_profile_name = match hw_profile.as_str() {
         "1" => "cloud",
@@ -88,27 +113,73 @@ pub async fn get_system_status(
         _ => "cloud",
     };
 
-    let mut res = hw_info;
-    if let Some(obj) = res.as_object_mut() {
-        obj.insert("hw_profile".to_string(), json!(hw_profile_name));
-        obj.insert("state".to_string(), json!("STATE_OPERATIONAL"));
-        obj.insert("total_processes".to_string(), json!(0));
-        obj.insert("active_workers".to_string(), json!(0));
-    }
+    let (cpu_load, vram_allocated_mb, vram_total_mb) = {
+        let hal = state.hal.read().await;
+        let mut monitor = hal.hardware.lock().await;
+        let status = monitor.get_status();
+        (status.cpu_usage, status.used_mem_mb, status.total_mem_mb)
+    };
 
-    Ok(Json(res))
+    let metrics = state.telemetry.metrics().await;
+
+    Ok(Json(SystemStatusResponse {
+        cpu_load,
+        vram_allocated_mb,
+        vram_total_mb,
+        hw_profile: hw_profile_name.to_string(),
+        state: "STATE_OPERATIONAL".to_string(),
+        total_processes: 0,
+        active_workers: 0,
+        tokens_per_second: metrics.tokens_per_second,
+        total_tokens_session: metrics.total_tokens_session,
+        estimated_cost_usd: metrics.estimated_cost_usd,
+    }))
 }
 
-pub async fn get_public_system_state(State(state): State<AppState>) -> Json<Value> {
+#[utoipa::path(
+    get,
+    path = "/api/system/state",
+    tag = "status",
+    responses(
+        (status = 200, description = "Public system state", body = PublicSystemStateResponse)
+    )
+)]
+pub async fn get_public_system_state(
+    State(state): State<AppState>,
+) -> Json<PublicSystemStateResponse> {
     let citadel = state.citadel.lock().await;
     let exists = citadel.enclave.admin_exists().await.unwrap_or(false);
-    Json(json!({ "state": if exists { "STATE_OPERATIONAL" } else { "STATE_INITIALIZING" } }))
+    Json(PublicSystemStateResponse {
+        state: if exists {
+            "STATE_OPERATIONAL".to_string()
+        } else {
+            "STATE_INITIALIZING".to_string()
+        },
+    })
 }
 
-pub async fn get_sync_version() -> Json<Value> {
-    Json(json!({ "version": env!("CARGO_PKG_VERSION") }))
+#[utoipa::path(
+    get,
+    path = "/api/system/sync_version",
+    tag = "status",
+    responses(
+        (status = 200, description = "Sync version")
+    )
+)]
+pub async fn get_sync_version() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }))
 }
 
-pub async fn health_check() -> Json<Value> {
-    Json(json!({ "status": "Online" }))
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "status",
+    responses(
+        (status = 200, description = "Health check", body = HealthResponse)
+    )
+)]
+pub async fn health_check() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "Online".to_string(),
+    })
 }

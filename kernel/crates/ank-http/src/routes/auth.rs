@@ -1,7 +1,15 @@
-use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
-use axum::{extract::State, routing::post, Json, Router};
+use crate::{
+    citadel::hash_passphrase, error::AegisHttpError, rate_limiter::RateLimitOutcome,
+    state::AppState,
+};
+use axum::{
+    extract::{ConnectInfo, State},
+    routing::post,
+    Json, Router,
+};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use std::net::SocketAddr;
+use utoipa::ToSchema;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -11,36 +19,109 @@ pub fn router() -> Router<AppState> {
         .route("/change_password", post(change_password))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct AuthRequest {
+    #[schema(example = "admin", description = "Tenant identifier")]
     pub tenant_id: String,
+    #[schema(
+        format = "password",
+        description = "Session passphrase (plaintext, will be hashed)"
+    )]
     pub session_key: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct AdminSetupRequest {
+    #[schema(example = "admin", description = "Admin username")]
     pub username: String,
+    #[schema(format = "password", description = "Initial passphrase")]
     pub passphrase: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct SetupTokenRequest {
+    #[schema(example = "admin", description = "Admin username")]
     pub username: String,
+    #[schema(format = "password", description = "Admin password")]
     pub password: String,
+    #[schema(example = "SETUP-XXXX-XXXX", description = "One-time setup token")]
     pub setup_token: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct ChangePasswordRequest {
+    #[schema(example = "tenant_001", description = "Tenant identifier")]
     pub tenant_id: String,
+    #[schema(format = "password", description = "Current passphrase")]
     pub current_password: String,
+    #[schema(format = "password", description = "New passphrase")]
     pub new_password: String,
 }
 
+#[derive(serde::Serialize, ToSchema)]
+pub struct LoginResponse {
+    pub message: String,
+    pub status: String,
+    pub role: String,
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct SetupResponse {
+    pub status: String,
+    pub message: String,
+    pub factory_reset_applied: bool,
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct SetupTokenResponse {
+    pub success: bool,
+    pub factory_reset_applied: bool,
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct ChangePasswordResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/login",
+    tag = "auth",
+    request_body = AuthRequest,
+    responses(
+        (status = 200, description = "Authentication successful", body = LoginResponse),
+        (status = 401, description = "Invalid credentials"),
+        (status = 429, description = "Rate limit exceeded")
+    )
+)]
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(body): Json<AuthRequest>,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<LoginResponse>, AegisHttpError> {
+    let ip = addr.ip();
+
+    match state
+        .auth_rate_limiter
+        .check_and_record_failed(ip, &body.tenant_id)
+    {
+        RateLimitOutcome::Blocked { retry_after_secs } => {
+            return Err(AegisHttpError::RateLimitExceeded(retry_after_secs));
+        }
+        RateLimitOutcome::Allowed {
+            remaining,
+            reset_in_secs: _,
+        } => {
+            tracing::warn!(
+                ip = %ip,
+                tenant_id = %body.tenant_id,
+                remaining_attempts = remaining,
+                "Auth attempt recorded"
+            );
+        }
+    }
+
     let hash = hash_passphrase(&body.session_key);
     let citadel = state.citadel.lock().await;
 
@@ -48,14 +129,15 @@ pub async fn login(
         .enclave
         .authenticate_master(&body.tenant_id, &hash)
         .await
-        .unwrap_or(false);
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
     if is_master {
-        return Ok(Json(json!({
-            "message": "Citadel Handshake Successful",
-            "status": "authenticated",
-            "role": "admin"
-        })));
+        state.auth_rate_limiter.reset(ip, &body.tenant_id);
+        return Ok(Json(LoginResponse {
+            message: "Citadel Handshake Successful".to_string(),
+            status: "authenticated".to_string(),
+            role: "admin".to_string(),
+        }));
     }
 
     match citadel
@@ -63,29 +145,45 @@ pub async fn login(
         .authenticate_tenant(&body.tenant_id, &hash)
         .await
     {
-        Ok(true) => Ok(Json(json!({
-            "message": "Citadel Handshake Successful",
-            "status": "authenticated",
-            "role": "tenant"
-        }))),
+        Ok(true) => {
+            state.auth_rate_limiter.reset(ip, &body.tenant_id);
+            Ok(Json(LoginResponse {
+                message: "Citadel Handshake Successful".to_string(),
+                status: "authenticated".to_string(),
+                role: "tenant".to_string(),
+            }))
+        }
         Ok(false) => Err(AegisHttpError::Citadel(
             crate::citadel::CitadelError::Unauthorized,
         )),
-        Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => Ok(Json(json!({
-            "message": "Password rotation required",
-            "status": "password_must_change",
-            "role": "tenant"
-        }))),
+        Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => {
+            state.auth_rate_limiter.reset(ip, &body.tenant_id);
+            Ok(Json(LoginResponse {
+                message: "Password rotation required".to_string(),
+                status: "password_must_change".to_string(),
+                role: "tenant".to_string(),
+            }))
+        }
         Err(_) => Err(AegisHttpError::Citadel(
             crate::citadel::CitadelError::Unauthorized,
         )),
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/setup",
+    tag = "auth",
+    request_body = AdminSetupRequest,
+    responses(
+        (status = 200, description = "Master admin initialized", body = SetupResponse),
+        (status = 500, description = "Kernel error")
+    )
+)]
 pub async fn setup(
     State(state): State<AppState>,
     Json(body): Json<AdminSetupRequest>,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<SetupResponse>, AegisHttpError> {
     let hash = hash_passphrase(&body.passphrase);
     let citadel = state.citadel.lock().await;
     citadel
@@ -94,17 +192,28 @@ pub async fn setup(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    Ok(Json(json!({
-        "status": "success",
-        "message": "Master Admin initialized",
-        "factory_reset_applied": true
-    })))
+    Ok(Json(SetupResponse {
+        status: "success".to_string(),
+        message: "Master Admin initialized".to_string(),
+        factory_reset_applied: true,
+    }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/setup-token",
+    tag = "auth",
+    request_body = SetupTokenRequest,
+    responses(
+        (status = 200, description = "Setup completed", body = SetupTokenResponse),
+        (status = 400, description = "Invalid or expired setup token"),
+        (status = 500, description = "Kernel error")
+    )
+)]
 pub async fn setup_token(
     State(state): State<AppState>,
     Json(body): Json<SetupTokenRequest>,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<SetupTokenResponse>, AegisHttpError> {
     let hash = hash_passphrase(&body.password);
 
     {
@@ -140,25 +249,32 @@ pub async fn setup_token(
             .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
     }
 
-    Ok(Json(json!({
-        "success": true,
-        "factory_reset_applied": true
-    })))
+    Ok(Json(SetupTokenResponse {
+        success: true,
+        factory_reset_applied: true,
+    }))
 }
 
-/// Permite a un tenant cambiar su propia contraseña.
-/// Verifica la contraseña actual (incluso si password_must_change=1) antes de aplicar la nueva.
-/// No requiere privilegios de admin.
+#[utoipa::path(
+    post,
+    path = "/api/auth/change_password",
+    tag = "auth",
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 200, description = "Password changed", body = ChangePasswordResponse),
+        (status = 401, description = "Invalid current password"),
+        (status = 500, description = "Kernel error")
+    )
+)]
 pub async fn change_password(
     State(state): State<AppState>,
     Json(body): Json<ChangePasswordRequest>,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<ChangePasswordResponse>, AegisHttpError> {
     let current_hash = hash_passphrase(&body.current_password);
     let new_hash = hash_passphrase(&body.new_password);
 
     let citadel = state.citadel.lock().await;
 
-    // Verificar contraseña actual — ignorar PASSWORD_MUST_CHANGE, solo verificar credenciales
     let row: Result<(String, i32), _> = {
         let conn = citadel.enclave.get_connection();
         let conn = conn.blocking_lock();
@@ -194,15 +310,14 @@ pub async fn change_password(
         }
     }
 
-    // Aplicar nueva contraseña y limpiar password_must_change
     citadel
         .enclave
         .reset_tenant_password(&body.tenant_id, &new_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
-    Ok(Json(json!({
-        "success": true,
-        "message": "Password updated successfully"
-    })))
+    Ok(Json(ChangePasswordResponse {
+        success: true,
+        message: "Password updated successfully".to_string(),
+    }))
 }

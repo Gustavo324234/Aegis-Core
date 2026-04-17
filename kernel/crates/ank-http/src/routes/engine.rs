@@ -7,6 +7,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
+use utoipa::ToSchema;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -14,12 +15,25 @@ pub fn router() -> Router<AppState> {
         .route("/configure", post(configure))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct EngineConfig {
+    #[schema(
+        example = "https://openrouter.ai/api/v1",
+        description = "API endpoint URL"
+    )]
     pub api_url: String,
+    #[schema(
+        example = "anthropic/claude-3-5-sonnet",
+        description = "Model identifier"
+    )]
     pub model_name: String,
+    #[schema(format = "password", description = "API key for the provider")]
     pub api_key: String,
     #[serde(default = "default_provider")]
+    #[schema(
+        example = "openrouter",
+        description = "Provider name (openrouter, anthropic, etc.)"
+    )]
     pub provider: String,
 }
 
@@ -27,24 +41,86 @@ fn default_provider() -> String {
     "custom".to_string()
 }
 
-pub async fn get_status(State(state): State<AppState>) -> Result<Json<Value>, AegisHttpError> {
-    let config_path = state.config.data_dir.join("engine_config.json");
-    if let Ok(content) = fs::read_to_string(&config_path) {
-        if let Ok(val) = serde_json::from_str::<Value>(&content) {
-            return Ok(Json(val));
-        }
-    }
-    Ok(Json(json!({ "configured": false })))
+#[derive(serde::Serialize, ToSchema)]
+pub struct EngineStatusResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configured: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
 }
 
+#[derive(serde::Serialize, ToSchema)]
+pub struct ConfigureResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/engine/status",
+    tag = "engine",
+    responses(
+        (status = 200, description = "Engine configuration status", body = EngineStatusResponse)
+    )
+)]
+pub async fn get_status(
+    State(state): State<AppState>,
+) -> Result<Json<EngineStatusResponse>, AegisHttpError> {
+    let config_path = state.config.data_dir.join("engine_config.json");
+    if let Ok(content) = fs::read_to_string(&config_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            let configured = val.get("configured").and_then(|v| v.as_bool());
+            let provider = val
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let api_url = val
+                .get("api_url")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let model_name = val
+                .get("model_name")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            return Ok(Json(EngineStatusResponse {
+                configured,
+                provider,
+                api_url,
+                model_name,
+            }));
+        }
+    }
+    Ok(Json(EngineStatusResponse {
+        configured: Some(false),
+        provider: None,
+        api_url: None,
+        model_name: None,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/engine/configure",
+    tag = "engine",
+    request_body = EngineConfig,
+    responses(
+        (status = 200, description = "Engine configured", body = ConfigureResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
 pub async fn configure(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
     Json(body): Json<EngineConfig>,
-) -> Result<Json<Value>, AegisHttpError> {
-    // Auth ya validada por CitadelAuthenticated extractor (headers x-citadel-tenant / x-citadel-key)
-
-    // Actualizar HAL en memoria
+) -> Result<Json<ConfigureResponse>, AegisHttpError> {
     {
         let mut hal = state.hal.write().await;
         hal.update_cloud_credentials(
@@ -54,7 +130,6 @@ pub async fn configure(
         );
     }
 
-    // Persistir config en data_dir (CORE-075)
     let config_to_save = json!({
         "configured": true,
         "provider": body.provider,
@@ -70,10 +145,10 @@ pub async fn configure(
     fs::write(&config_path, config_json)
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    Ok(Json(json!({
-        "success": true,
-        "message": "Cognitive Engine dynamically configured."
-    })))
+    Ok(Json(ConfigureResponse {
+        success: true,
+        message: "Cognitive Engine dynamically configured.".to_string(),
+    }))
 }
 
 #[derive(Deserialize)]

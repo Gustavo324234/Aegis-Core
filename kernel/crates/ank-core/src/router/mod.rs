@@ -176,8 +176,18 @@ impl CognitiveRouter {
             1.0
         };
 
-        // speed_inv: placeholder — future metric
-        let speed_inv = 0.5_f64;
+        // speed_inv: lower latency = higher score. Normalize within candidates seen so far.
+        let latency = entry.avg_latency_ms.unwrap_or(1500) as f64;
+        let max_latency = already_scored
+            .iter()
+            .map(|(_, e)| e.avg_latency_ms.unwrap_or(1500) as f64)
+            .fold(latency, f64::max);
+
+        let speed_inv = if max_latency > 0.0 {
+            1.0 - (latency / max_latency)
+        } else {
+            1.0
+        };
 
         quality * 0.40 + avail * 0.30 + cost_inv * 0.20 + speed_inv * 0.10
     }

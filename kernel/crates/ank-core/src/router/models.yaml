@@ -7,6 +7,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 1800
   task_scores:
     chat: 5
     coding: 5
@@ -24,6 +25,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 3000
   task_scores:
     chat: 5
     coding: 5
@@ -41,6 +43,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 1500
   task_scores:
     chat: 5
     coding: 5
@@ -58,6 +61,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 600
   task_scores:
     chat: 4
     coding: 3
@@ -75,6 +79,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 1500
   task_scores:
     chat: 3
     coding: 5
@@ -92,6 +97,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 600
   task_scores:
     chat: 4
     coding: 3
@@ -109,6 +115,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 400
   task_scores:
     chat: 4
     coding: 4
@@ -126,6 +133,7 @@
   supports_tools: false
   supports_json_mode: false
   is_local: false
+  avg_latency_ms: 350
   task_scores:
     chat: 3
     coding: 3
@@ -143,6 +151,7 @@
   supports_tools: false
   supports_json_mode: false
   is_local: false
+  avg_latency_ms: 2000
   task_scores:
     chat: 4
     coding: 5
@@ -160,6 +169,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 1500
   task_scores:
     chat: 4
     coding: 4
@@ -177,6 +187,7 @@
   supports_tools: true
   supports_json_mode: true
   is_local: false
+  avg_latency_ms: 1500
   task_scores:
     chat: 4
     coding: 4
@@ -194,6 +205,7 @@
   supports_tools: true
   supports_json_mode: false
   is_local: false
+  avg_latency_ms: 1500
   task_scores:
     chat: 4
     coding: 4
@@ -211,6 +223,7 @@
   supports_tools: true
   supports_json_mode: false
   is_local: false
+  avg_latency_ms: 1500
   task_scores:
     chat: 4
     coding: 3
@@ -228,6 +241,7 @@
   supports_tools: false
   supports_json_mode: false
   is_local: true
+  avg_latency_ms: 500
   task_scores:
     chat: 3
     coding: 2
@@ -245,6 +259,7 @@
   supports_tools: false
   supports_json_mode: false
   is_local: true
+  avg_latency_ms: 800
   task_scores:
     chat: 3
     coding: 2

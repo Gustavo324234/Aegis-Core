@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2 } from 'lucide-react';
+import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2, AlertTriangle } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 
@@ -18,7 +18,7 @@ interface Voice {
 
 const SirenConfigTab: React.FC = () => {
     const { t } = useTranslation();
-    const { tenantId, sessionKey } = useAegisStore();
+    const { tenantId, sessionKey, sttAvailable } = useAegisStore();
     const providersList = SIREN_PROVIDERS(t);
     const [provider, setProvider] = useState('voxtral');
     const [apiKey, setApiKey] = useState('');
@@ -204,6 +204,30 @@ const SirenConfigTab: React.FC = () => {
                         <span className="text-white/60">~120ms (LAN)</span>
                     </div>
                 </div>
+                {!sttAvailable && (
+                    <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mt-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg"
+                    >
+                        <div className="flex items-start gap-3">
+                            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                            <div className="space-y-2">
+                                <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest">{t('stt_not_available')}</p>
+                                <p className="text-[9px] font-mono text-white/40">{t('stt_unavailable_instructions')}</p>
+                                <code className="block mt-2 p-2 bg-black/40 rounded text-[9px] font-mono text-white/60">
+                                    mkdir -p $AEGIS_DATA_DIR/models &amp;&amp; wget -O $AEGIS_DATA_DIR/models/ggml-base.bin &lt;url&gt;
+                                </code>
+                            </div>
+                        </div>
+                    </motion.div>
+                )}
+                {sttAvailable && (
+                    <div className="mt-4 flex items-center gap-2 text-[10px] font-mono text-green-400/60">
+                        <Check className="w-3 h-3" />
+                        <span>{t('stt_available')}</span>
+                    </div>
+                )}
             </div>
         </div>
     );

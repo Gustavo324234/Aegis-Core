@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tokio_stream::Stream;
 use tracing::{info, warn};
 
@@ -84,26 +84,38 @@ pub struct CognitiveHAL {
     pub plugin_manager: Arc<RwLock<PluginManager>>,
     pub mcp_registry: Arc<ank_mcp::registry::McpToolRegistry>,
     pub router: Option<Arc<RwLock<CognitiveRouter>>>,
-    pub hardware: std::sync::Mutex<hardware::HardwareMonitor>,
+    pub hardware: TokioMutex<hardware::HardwareMonitor>,
+    pub http_client: Arc<reqwest::Client>,
 }
 
 impl CognitiveHAL {
-    pub fn new(plugin_manager: Arc<RwLock<PluginManager>>) -> Self {
+    pub fn new(plugin_manager: Arc<RwLock<PluginManager>>) -> Result<Self, SystemError> {
+        let http_client = Arc::new(
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| {
+                    SystemError::HardwareFailure(format!("reqwest::Client::builder failed: {}", e))
+                })?,
+        );
+
         let mut drivers: HashMap<String, Box<dyn InferenceDriver>> = HashMap::new();
 
-        // Auto-Register CloudDriver if environment variables are populated
-        if let Some(cloud_driver) = crate::chal::drivers::CloudProxyDriver::from_env() {
+        if let Some(cloud_driver) =
+            crate::chal::drivers::CloudProxyDriver::from_env(Arc::clone(&http_client))
+        {
             drivers.insert("cloud-driver".to_string(), Box::new(cloud_driver));
             tracing::info!("CloudProxyDriver initialized via ENV vars and registered.");
         }
 
-        Self {
+        Ok(Self {
             drivers,
             plugin_manager,
             mcp_registry: Arc::new(ank_mcp::registry::McpToolRegistry::new()),
             router: None,
-            hardware: std::sync::Mutex::new(hardware::HardwareMonitor::new()),
-        }
+            hardware: TokioMutex::new(hardware::HardwareMonitor::new()),
+            http_client,
+        })
     }
 
     pub fn set_router(&mut self, router: Arc<RwLock<CognitiveRouter>>) {
@@ -116,8 +128,12 @@ impl CognitiveHAL {
     }
 
     pub fn update_cloud_credentials(&mut self, api_url: String, model: String, api_key: String) {
-        let cloud_driver =
-            crate::chal::drivers::CloudProxyDriver::new(api_url, api_key, model.clone());
+        let cloud_driver = crate::chal::drivers::CloudProxyDriver::new(
+            Arc::clone(&self.http_client),
+            api_url,
+            api_key,
+            model.clone(),
+        );
         self.drivers
             .insert("cloud-driver".to_string(), Box::new(cloud_driver));
         tracing::info!(model = %model, "CloudProxyDriver credentials updated dynamically and driver re-registered in HAL.");
@@ -237,6 +253,7 @@ impl CognitiveHAL {
         );
 
         let driver = CloudProxyDriver::new(
+            Arc::clone(&self.http_client),
             decision.api_url.clone(),
             decision.api_key.clone(),
             decision.model_id.clone(),
@@ -247,7 +264,6 @@ impl CognitiveHAL {
         match driver.generate_stream(&final_prompt, None).await {
             Ok(stream) => Ok(stream),
             Err(e) => {
-                // Try fallback chain
                 for fallback in &decision.fallback_chain {
                     warn!(
                         pid = %pid,
@@ -255,6 +271,7 @@ impl CognitiveHAL {
                         "CognitiveRouter: primary failed, trying fallback"
                     );
                     let fallback_driver = CloudProxyDriver::new(
+                        Arc::clone(&self.http_client),
                         fallback.api_url.clone(),
                         fallback.api_key.clone(),
                         fallback.model_id.clone(),
@@ -325,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_smart_routing_high_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let mut hal = CognitiveHAL::new(pm);
+        let mut hal = CognitiveHAL::new(pm)?;
 
         hal.register_driver(
             "local-driver",
@@ -361,7 +378,7 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_smart_routing_low_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let mut hal = CognitiveHAL::new(pm);
+        let mut hal = CognitiveHAL::new(pm)?;
 
         hal.register_driver(
             "local-driver",

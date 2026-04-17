@@ -72,9 +72,8 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 ## 🔧 EPIC 34: Audit Fixes — Post-Consolidación
 **Status:** ✅ DONE — 2026-04-13
 **Resultado:** 20/20 bugs resueltos. Sistema funcional end-to-end.
-Chat conectado al HAL, credenciales migradas a headers Citadel, bypass de seguridad eliminado.
 
-### Shell — 8 tickets
+### Shell — 7 tickets
 *   **[CORE-070]** Fix: WebSocket URL hardcodeada con puerto 8000 `[DONE]`
 *   **[CORE-071]** Fix: Credenciales admin en query params — migrar a headers Citadel `[DONE]`
 *   **[CORE-072]** Fix: `isAdmin` determinado en el cliente por nombre de tenant `[DONE]`
@@ -83,7 +82,7 @@ Chat conectado al HAL, credenciales migradas a headers Citadel, bypass de seguri
 *   **[CORE-083]** Fix: `ProvidersTab` usa credenciales hardcodeadas y query params `[DONE]`
 *   **[CORE-088]** Fix: `ChatTerminal` envía `session_key` en FormData del file upload `[DONE]`
 
-### Kernel — 12 tickets
+### Kernel — 13 tickets
 *   **[CORE-074]** Fix: `get_sync_version` usa path relativo `VERSION` `[DONE]`
 *   **[CORE-075]** Fix: `engine_config.json` path relativo — persistir en `data_dir` `[DONE]`
 *   **[CORE-076]** Fix: `set_hw_profile` sin autenticación real `[DONE]`
@@ -97,47 +96,50 @@ Chat conectado al HAL, credenciales migradas a headers Citadel, bypass de seguri
 *   **[CORE-086]** Fix: `router_api.rs` — `authenticate_master` en lugar de `authenticate_tenant` `[DONE]`
 *   **[CORE-087]** Fix: `siren_api.rs` — `session_key` fuera de query params `[DONE]`
 *   **[CORE-089]** Fix: `providers.rs` — autenticación + validación SSRF `[DONE]`
+*   **[CORE-090]** Fix: WAL checkpoint race en `initialize_master` `[DONE]` — 2026-04-14
 
 ---
 
-*Epic 34 cerrada: 2026-04-13 — 20/20 tickets DONE | Arquitecto IA*
+## 🔧 EPIC 35: Hardening Post-Launch — Recomendaciones de Auditorías Multi-Modelo
+**Status:** ✅ DONE — 2026-04-16
+**Origen:** `auditorias/RECOMENDACIONES_CONSOLIDADAS.md`
+**Resultado:** 13/13 implementados. CORE-099 N/A (sin stubs .py en repo). CORE-107 DONE.
+
+### P1 — Seguridad y Estabilidad
+*   **[CORE-091]** Rate Limiting en `/api/auth/login` `[DONE]` — `ank-http/src/rate_limiter.rs`
+*   **[CORE-092]** Watchdog HAL Runner — `HalRunnerDied` en scheduler + notificación en main.rs `[DONE]` — 2026-04-16 (Arquitecto IA)
+*   **[CORE-093]** Reuse de `CloudProxyDriver` via `Arc<reqwest::Client>` `[DONE]`
+*   **[CORE-094]** `tokio::sync::Mutex` en `CognitiveHAL` `[DONE]`
+*   **[CORE-095]** Retry con Exponential Backoff en `CloudProxyDriver` `[DONE]`
+*   **[CORE-096]** Verificar y documentar flujo SHA-256 + Argon2id `[DONE]`
+
+### P2 — Deuda técnica
+*   **[CORE-097]** Preemption real via `CancellationToken` en PCB + HAL Runner `[DONE]`
+*   **[CORE-098]** Investigación LanceDB / VCM L3 `[DONE]` — ADR-038: fast-hnsw
+*   **[CORE-099]** CI: stubs gRPC Python `[N/A]` — no hay archivos `*_pb2.py` en el repo
+*   **[CORE-105]** Telemetría tokens/s y costo estimado `[DONE]` — `ank-core/src/telemetry/mod.rs` + `/api/status`
+*   **[CORE-106]** Latencia real en `CognitiveRouter` — `avg_latency_ms` en `ModelEntry` y `models.yaml` `[DONE]`
+*   **[CORE-107]** Documentación OpenAPI/Swagger `[DONE]` — 2026-04-16
+
+### P3 — Experiencia y mantenibilidad
+*   **[CORE-108]** Indicador UI cuando STT no está disponible `[DONE]` — `stt_available` en `/api/siren/config` + UI en ChatTerminal y SirenConfigTab
 
 ---
 
-## 🚀 SISTEMA STATUS — 2026-04-13
+## 🚀 SISTEMA STATUS — 2026-04-16
 
 | Componente | Estado |
 |---|---|
 | Epic 32: Monorepo Unificado | ✅ DONE |
 | Epic 34: Audit Fixes | ✅ DONE |
 | Chat end-to-end (Scheduler → HAL → WS) | ✅ OPERATIVO |
-| Protocolo Citadel (headers en todas las rutas) | ✅ COMPLETO |
-| Credenciales en localStorage | ✅ ELIMINADAS |
-| Bypass de seguridad (`AEGIS_DEV_MASTER_BYPASS`) | ✅ ELIMINADO |
-| engine_config persistencia en data_dir | ✅ CORRECTO |
-| gRPC métodos P1+P2 | ✅ IMPLEMENTADOS |
-| Próxima épica | Epic 35 (smoke test en producción) |
+| Protocolo Citadel | ✅ COMPLETO |
+| Epic 35: Hardening Post-Launch | ✅ 13/13 DONE |
+| CORE-092: Watchdog HAL Runner | ✅ DONE (2026-04-16, Arquitecto IA) |
+| CORE-098: LanceDB investigación | ✅ DONE — ADR-038 documentado |
+| CORE-107: OpenAPI/Swagger | ✅ DONE |
+| CORE-108: Indicador UI STT | ✅ DONE |
 
 ---
 
-## 🔮 EPIC 33: Linux Distribution — sigue PLANNED
-## 🔮 EPIC 35: Smoke Test en Producción — PRÓXIMA
-
-*Última actualización: 2026-04-13 | Arquitecto IA*
-
-## 🐛 CORE-090 — Fix: WAL checkpoint race en `initialize_master`
-**Status:** ✅ DONE — 2026-04-14
-**Agente:** Arquitecto IA (fix directo — bug bloqueante de producción)
-
-**Problema:** `admin_exists()` devolvía `false` inmediatamente después de
-`initialize_master` porque los datos estaban en el WAL pero la conexión
-mantenía un snapshot de lectura anterior. El sistema quedaba en
-`STATE_INITIALIZING` tras el setup, obligando a reiniciar el servicio.
-
-**Fix aplicado en `kernel/crates/ank-core/src/enclave/master.rs`:**
-- `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint=1;` en `open()`
-- `PRAGMA wal_checkpoint(TRUNCATE)` en `init_schema()` y nuevo método privado `checkpoint()`
-- `checkpoint()` llamado al final de `initialize_master()` y `store_setup_token()`
-- Nuevo test `test_admin_exists_immediately_after_setup` que reproduce el bug exacto
-
-**Commit:** `fix(ank-core): CORE-090 WAL checkpoint race in initialize_master`
+*Última actualización: 2026-04-16 — Arquitecto IA*

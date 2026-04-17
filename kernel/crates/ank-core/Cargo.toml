@@ -44,6 +44,7 @@ arrow-buffer.workspace     = true
 notify.workspace           = true
 notify-debouncer-mini.workspace = true
 dirs.workspace             = true
+tokio-util.workspace       = true
 encoding_rs                = "0.8.35"
 
 llama-cpp-2 = { workspace = true, optional = true }

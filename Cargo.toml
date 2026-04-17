@@ -16,6 +16,7 @@ members = [
 # Async runtime
 tokio              = { version = "1.41", features = ["full", "tracing"] }
 tokio-stream       = "0.1"
+tokio-util         = { version = "0.7", features = ["codec"] }
 futures            = "0.3"
 futures-util       = "0.3"
 async-trait        = "0.1"
@@ -77,6 +78,10 @@ notify-debouncer-mini = "0.4.1"
 mdns-sd            = "0.11"
 encoding_rs        = "0.8.35"
 
+# OpenAPI / Swagger
+utoipa              = { version = "4", features = ["axum_extras"] }
+utoipa-swagger-ui  = { version = "7", features = ["axum"] }
+
 # AI / Wasm
 llama-cpp-2        = "0.1"
 wasmtime           = { version = "36", features = ["async"] }
@@ -89,7 +94,7 @@ arrow-array        = "58"
 arrow-schema       = "58"
 arrow-buffer       = "58"
 
-openssl            = { version = "0.10", features = ["vendored"] }
+openssl            = "0.10"
 
 [profile.release]
 opt-level     = 3

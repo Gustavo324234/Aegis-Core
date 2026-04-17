@@ -10,8 +10,9 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use utoipa::ToSchema;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -26,12 +27,60 @@ pub fn router() -> Router<AppState> {
         .route("/status", get(router_status))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct KeyAddRequest {
+    #[schema(example = "openrouter", description = "Provider name")]
     pub provider: String,
+    #[schema(format = "password", description = "API key for the provider")]
     pub api_key: String,
+    #[schema(
+        example = "https://openrouter.ai/api/v1",
+        description = "Optional custom API URL"
+    )]
     pub api_url: Option<String>,
+    #[schema(
+        example = "production-key-1",
+        description = "Optional label for this key"
+    )]
     pub label: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RouterKeyResponse {
+    pub key_id: String,
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub is_active: bool,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct GlobalKeysResponse {
+    pub keys: Vec<RouterKeyResponse>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TenantKeysResponse {
+    pub keys: Vec<RouterKeyResponse>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RouterModelsResponse {
+    pub models: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct SyncResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RouterStatusResponse {
+    pub status: String,
+    pub catalog_syncer: String,
 }
 
 async fn require_master_auth(
@@ -66,11 +115,25 @@ async fn require_master_auth(
     Ok(tenant_id)
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/router/keys/global",
+    tag = "router",
+    request_body = KeyAddRequest,
+    responses(
+        (status = 200, description = "Key added"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin session key (plaintext)")
+    )
+)]
 async fn add_global_key(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<KeyAddRequest>,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<SyncResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
 
     let entry = ApiKeyEntry {
@@ -89,26 +152,55 @@ async fn add_global_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    Ok(Json(json!({ "success": true })))
+    Ok(Json(SyncResponse {
+        success: true,
+        message: "Global key added".to_string(),
+    }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/router/keys/global",
+    tag = "router",
+    responses(
+        (status = 200, description = "List of global keys", body = GlobalKeysResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin session key (plaintext)")
+    )
+)]
 async fn list_global_keys(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<GlobalKeysResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
 
     let router = state.router.read().await;
     let keys = router.list_global_keys().await;
-    // Envolver en objeto { "keys": [...] } para que el frontend pueda hacer data.keys
-    Ok(Json(json!({ "keys": keys })))
+    Ok(Json(GlobalKeysResponse { keys }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/router/keys/global/{id}",
+    tag = "router",
+    responses(
+        (status = 200, description = "Key deleted"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("id" = String, Path, description = "Key ID to delete"),
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin session key (plaintext)")
+    )
+)]
 async fn delete_global_key(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<SyncResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
 
     let router = state.router.read().await;
@@ -117,14 +209,31 @@ async fn delete_global_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    Ok(Json(json!({ "success": true })))
+    Ok(Json(SyncResponse {
+        success: true,
+        message: "Key deleted".to_string(),
+    }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/router/keys/tenant",
+    tag = "router",
+    request_body = KeyAddRequest,
+    responses(
+        (status = 200, description = "Key added"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
 async fn add_tenant_key(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
     Json(req): Json<KeyAddRequest>,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<SyncResponse>, AegisHttpError> {
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
         provider: req.provider,
@@ -141,51 +250,122 @@ async fn add_tenant_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    Ok(Json(json!({ "success": true })))
+    Ok(Json(SyncResponse {
+        success: true,
+        message: "Tenant key added".to_string(),
+    }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/router/keys/tenant",
+    tag = "router",
+    responses(
+        (status = 200, description = "List of tenant keys", body = TenantKeysResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
 async fn list_tenant_keys(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<TenantKeysResponse>, AegisHttpError> {
     let router = state.router.read().await;
     let keys = router.list_tenant_keys(&auth.tenant_id).await;
-    Ok(Json(json!({ "keys": keys })))
+    Ok(Json(TenantKeysResponse { keys }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/router/keys/tenant/{id}",
+    tag = "router",
+    responses(
+        (status = 200, description = "Key deleted"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("id" = String, Path, description = "Key ID to delete"),
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
 async fn delete_tenant_key(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
     Path(id): Path<String>,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<SyncResponse>, AegisHttpError> {
     let router = state.router.read().await;
     router
         .delete_key(&id, Some(&auth.tenant_id))
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    Ok(Json(json!({ "success": true })))
+    Ok(Json(SyncResponse {
+        success: true,
+        message: "Key deleted".to_string(),
+    }))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/router/models",
+    tag = "router",
+    responses(
+        (status = 200, description = "List of router models", body = RouterModelsResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
 async fn list_router_models(
     State(state): State<AppState>,
     _auth: CitadelAuthenticated,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<RouterModelsResponse>, AegisHttpError> {
     let router = state.router.read().await;
     let models = router.list_models_for_catalog().await;
-    Ok(Json(json!(models)))
+    Ok(Json(RouterModelsResponse { models }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/router/sync",
+    tag = "router",
+    responses(
+        (status = 200, description = "Sync triggered", body = SyncResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin session key (plaintext)")
+    )
+)]
 async fn sync_router_catalog(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Value>, AegisHttpError> {
+) -> Result<Json<SyncResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
-    Ok(Json(
-        json!({ "success": true, "message": "Catalog synchronization triggered" }),
-    ))
+    Ok(Json(SyncResponse {
+        success: true,
+        message: "Catalog synchronization triggered".to_string(),
+    }))
 }
 
-async fn router_status() -> Json<Value> {
-    Json(json!({ "status": "operational", "catalog_syncer": "active" }))
+#[utoipa::path(
+    get,
+    path = "/api/router/status",
+    tag = "router",
+    responses(
+        (status = 200, description = "Router status", body = RouterStatusResponse)
+    )
+)]
+async fn router_status() -> Json<RouterStatusResponse> {
+    Json(RouterStatusResponse {
+        status: "operational".to_string(),
+        catalog_syncer: "active".to_string(),
+    })
 }
