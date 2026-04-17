@@ -272,39 +272,39 @@ pub async fn change_password(
 
     let citadel = state.citadel.lock().await;
 
-    let row: Result<(String, i32), _> = {
+    // FIX: usar .lock().await en lugar de .blocking_lock() — blocking_lock en un
+    // tokio::sync::Mutex dentro de un handler async deadlockea el runtime.
+    let valid_current = {
         let conn = citadel.enclave.get_connection();
-        let conn = conn.blocking_lock();
-        let mut stmt = conn
-            .prepare(
-                "SELECT password_hash, password_must_change FROM tenants WHERE tenant_id = ?1 LIMIT 1",
-            )
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        stmt.query_row([&body.tenant_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        let conn = conn.lock().await;
+        let result: rusqlite::Result<String> = conn
+            .query_row(
+                "SELECT password_hash FROM tenants WHERE tenant_id = ?1 LIMIT 1",
+                [&body.tenant_id],
+                |row| row.get(0),
+            );
+
+        match result {
+            Ok(real_hash) => {
+                use argon2::{
+                    password_hash::{PasswordHash, PasswordVerifier},
+                    Argon2,
+                };
+                match PasswordHash::new(&real_hash) {
+                    Ok(parsed) => Argon2::default()
+                        .verify_password(current_hash.as_bytes(), &parsed)
+                        .is_ok(),
+                    Err(_) => false,
+                }
+            }
+            Err(_) => false,
+        }
     };
 
-    match row {
-        Ok((real_hash, _)) => {
-            use argon2::{
-                password_hash::{PasswordHash, PasswordVerifier},
-                Argon2,
-            };
-            let parsed = PasswordHash::new(&real_hash)
-                .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-            let valid = Argon2::default()
-                .verify_password(current_hash.as_bytes(), &parsed)
-                .is_ok();
-            if !valid {
-                return Err(AegisHttpError::Citadel(
-                    crate::citadel::CitadelError::Unauthorized,
-                ));
-            }
-        }
-        Err(_) => {
-            return Err(AegisHttpError::Citadel(
-                crate::citadel::CitadelError::Unauthorized,
-            ));
-        }
+    if !valid_current {
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
     }
 
     citadel
