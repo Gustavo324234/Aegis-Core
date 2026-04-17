@@ -90,6 +90,8 @@ pub struct PCB {
 
 use std::cmp::Ordering;
 
+/// Wrapper para usar PCB en BinaryHeap con ordering por prioridad.
+/// PCB en sí no implementa Ord/PartialOrd porque CancellationToken no lo hace.
 #[derive(Clone)]
 pub struct PcbByPriority(pub PCB);
 
@@ -201,11 +203,9 @@ mod tests {
         assert_eq!(pcb.priority, 5);
         assert!(pcb.pid.starts_with("proc_"));
 
-        // Cambio de estado
         pcb.state = ProcessState::WaitingSyscall;
         assert_eq!(pcb.state, ProcessState::WaitingSyscall);
 
-        // Verificar inmutabilidad de otros campos (manualmente)
         assert_eq!(pcb.priority, 5);
         assert_eq!(pcb.process_name, name);
     }
@@ -230,13 +230,12 @@ mod tests {
         let pcb_low = PCB::new("Low".to_string(), 1, "low".to_string());
         let pcb_high = PCB::new("High".to_string(), 10, "high".to_string());
 
-        // En nuestro BinaryHeap de Rust, el mayor va primero.
-        assert!(pcb_high > pcb_low);
+        // PcbByPriority implementa Ord para BinaryHeap — prioridad 10 > prioridad 1.
+        assert!(PcbByPriority(pcb_high) > PcbByPriority(pcb_low));
     }
 
     #[test]
     fn test_pcb_deserialization_compatibility() -> anyhow::Result<()> {
-        // This JSON is missing task_type and newer fields
         let json = r#"{
             "pid": "proc_old",
             "process_name": "OldProc",
@@ -268,8 +267,8 @@ mod tests {
 
         let pcb: PCB = serde_json::from_str(json).context("Failed to deserialize old PCB")?;
         assert_eq!(pcb.pid, "proc_old");
-        assert_eq!(pcb.task_type, TaskType::Chat); // Should default to Chat
-        assert_eq!(pcb.public_id, None); // Should default to None
+        assert_eq!(pcb.task_type, TaskType::Chat);
+        assert_eq!(pcb.public_id, None);
         Ok(())
     }
 }
