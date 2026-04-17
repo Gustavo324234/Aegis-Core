@@ -198,6 +198,7 @@ impl KernelService for AnkRpcServer {
                     }
                     ank_core::ProcessState::Completed => ProtoProcessState::StateCompleted as i32,
                     ank_core::ProcessState::Failed => ProtoProcessState::StateTerminated as i32,
+                    ank_core::ProcessState::Preempted => ProtoProcessState::StateBlocked as i32,
                 },
                 ..Default::default()
             })

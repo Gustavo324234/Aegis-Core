@@ -11,7 +11,6 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 pub fn router() -> Router<AppState> {
@@ -29,19 +28,13 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize, ToSchema)]
 pub struct KeyAddRequest {
-    #[schema(example = "openrouter", description = "Provider name")]
+    #[schema(example = "openrouter")]
     pub provider: String,
-    #[schema(format = "password", description = "API key for the provider")]
+    #[schema(format = "password")]
     pub api_key: String,
-    #[schema(
-        example = "https://openrouter.ai/api/v1",
-        description = "Optional custom API URL"
-    )]
+    #[schema(example = "https://openrouter.ai/api/v1")]
     pub api_url: Option<String>,
-    #[schema(
-        example = "production-key-1",
-        description = "Optional label for this key"
-    )]
+    #[schema(example = "production-key-1")]
     pub label: Option<String>,
 }
 
@@ -178,7 +171,17 @@ async fn list_global_keys(
     require_master_auth(&state, &headers).await?;
 
     let router = state.router.read().await;
-    let keys = router.list_global_keys().await;
+    let raw_keys = router.list_global_keys().await;
+    let keys: Vec<RouterKeyResponse> = raw_keys
+        .into_iter()
+        .map(|k| RouterKeyResponse {
+            key_id: k.key_id,
+            provider: k.provider,
+            api_url: k.api_url,
+            label: k.label,
+            is_active: k.is_active,
+        })
+        .collect();
     Ok(Json(GlobalKeysResponse { keys }))
 }
 
@@ -274,7 +277,17 @@ async fn list_tenant_keys(
     auth: CitadelAuthenticated,
 ) -> Result<Json<TenantKeysResponse>, AegisHttpError> {
     let router = state.router.read().await;
-    let keys = router.list_tenant_keys(&auth.tenant_id).await;
+    let raw_keys = router.list_tenant_keys(&auth.tenant_id).await;
+    let keys: Vec<RouterKeyResponse> = raw_keys
+        .into_iter()
+        .map(|k| RouterKeyResponse {
+            key_id: k.key_id,
+            provider: k.provider,
+            api_url: k.api_url,
+            label: k.label,
+            is_active: k.is_active,
+        })
+        .collect();
     Ok(Json(TenantKeysResponse { keys }))
 }
 
@@ -327,7 +340,20 @@ async fn list_router_models(
     _auth: CitadelAuthenticated,
 ) -> Result<Json<RouterModelsResponse>, AegisHttpError> {
     let router = state.router.read().await;
-    let models = router.list_models_for_catalog().await;
+    let raw_models = router.list_models_for_catalog().await;
+    let models: Vec<serde_json::Value> = raw_models
+        .into_iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.model_id,
+                "name": m.display_name,
+                "provider": m.provider,
+                "context_length": m.context_window,
+                "input_cost_per_mtok": m.cost_input_per_mtok,
+                "output_cost_per_mtok": m.cost_output_per_mtok,
+            })
+        })
+        .collect();
     Ok(Json(RouterModelsResponse { models }))
 }
 

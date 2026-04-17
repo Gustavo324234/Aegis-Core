@@ -5,7 +5,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde_json::json;
 use utoipa::ToSchema;
 
 #[derive(serde::Serialize, ToSchema)]

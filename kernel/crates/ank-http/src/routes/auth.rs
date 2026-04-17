@@ -21,40 +21,37 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize, ToSchema)]
 pub struct AuthRequest {
-    #[schema(example = "admin", description = "Tenant identifier")]
+    #[schema(example = "admin")]
     pub tenant_id: String,
-    #[schema(
-        format = "password",
-        description = "Session passphrase (plaintext, will be hashed)"
-    )]
+    #[schema(format = "password")]
     pub session_key: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct AdminSetupRequest {
-    #[schema(example = "admin", description = "Admin username")]
+    #[schema(example = "admin")]
     pub username: String,
-    #[schema(format = "password", description = "Initial passphrase")]
+    #[schema(format = "password")]
     pub passphrase: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct SetupTokenRequest {
-    #[schema(example = "admin", description = "Admin username")]
+    #[schema(example = "admin")]
     pub username: String,
-    #[schema(format = "password", description = "Admin password")]
+    #[schema(format = "password")]
     pub password: String,
-    #[schema(example = "SETUP-XXXX-XXXX", description = "One-time setup token")]
+    #[schema(example = "SETUP-XXXX-XXXX")]
     pub setup_token: String,
 }
 
 #[derive(Deserialize, ToSchema)]
 pub struct ChangePasswordRequest {
-    #[schema(example = "tenant_001", description = "Tenant identifier")]
+    #[schema(example = "tenant_001")]
     pub tenant_id: String,
-    #[schema(format = "password", description = "Current passphrase")]
+    #[schema(format = "password")]
     pub current_password: String,
-    #[schema(format = "password", description = "New passphrase")]
+    #[schema(format = "password")]
     pub new_password: String,
 }
 

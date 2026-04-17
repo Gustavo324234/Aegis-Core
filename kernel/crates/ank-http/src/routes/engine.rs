@@ -17,23 +17,14 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize, ToSchema)]
 pub struct EngineConfig {
-    #[schema(
-        example = "https://openrouter.ai/api/v1",
-        description = "API endpoint URL"
-    )]
+    #[schema(example = "https://openrouter.ai/api/v1")]
     pub api_url: String,
-    #[schema(
-        example = "anthropic/claude-3-5-sonnet",
-        description = "Model identifier"
-    )]
+    #[schema(example = "anthropic/claude-3-5-sonnet")]
     pub model_name: String,
-    #[schema(format = "password", description = "API key for the provider")]
+    #[schema(format = "password")]
     pub api_key: String,
     #[serde(default = "default_provider")]
-    #[schema(
-        example = "openrouter",
-        description = "Provider name (openrouter, anthropic, etc.)"
-    )]
+    #[schema(example = "openrouter")]
     pub provider: String,
 }
 

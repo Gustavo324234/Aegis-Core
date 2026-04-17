@@ -10,7 +10,6 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
 use utoipa::ToSchema;
 
 pub fn router() -> Router<AppState> {
@@ -25,7 +24,7 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Deserialize, ToSchema)]
 pub struct TenantCreateRequest {
-    #[schema(example = "new_user", description = "Username for the new tenant")]
+    #[schema(example = "new_user")]
     pub username: String,
 }
 
@@ -53,9 +52,9 @@ pub struct TenantsListResponse {
 
 #[derive(Deserialize, ToSchema)]
 pub struct PasswordResetRequest {
-    #[schema(example = "tenant_001", description = "Tenant identifier")]
+    #[schema(example = "tenant_001")]
     pub tenant_id: String,
-    #[schema(format = "password", description = "New passphrase")]
+    #[schema(format = "password")]
     pub new_passphrase: String,
 }
 
@@ -78,11 +77,11 @@ pub struct ErrorResponse {
 
 #[derive(Deserialize, ToSchema)]
 pub struct TenantDeleteAction {
-    #[schema(example = "admin", description = "Admin tenant identifier")]
+    #[schema(example = "admin")]
     pub admin_tenant_id: String,
-    #[schema(format = "password", description = "Admin session key")]
+    #[schema(format = "password")]
     pub admin_session_key: String,
-    #[schema(example = "tenant_001", description = "Target tenant to delete")]
+    #[schema(example = "tenant_001")]
     pub target_tenant_id: String,
 }
 
@@ -151,7 +150,7 @@ pub async fn create_tenant(
     Ok(Json(TenantResponse {
         tenant_id: body.username,
         temporary_passphrase: temp_pass,
-        network_port: port,
+        network_port: port as u16,
     }))
 }
 
@@ -188,8 +187,8 @@ pub async fn list_tenants(
             username: t.username,
             role: t.role,
             created_at: t.created_at,
-            last_active: t.last_active,
-            port: t.port,
+            last_active: Some(t.last_active),
+            port: t.port as u16,
         })
         .collect();
 
