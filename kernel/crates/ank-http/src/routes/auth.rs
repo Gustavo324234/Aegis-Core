@@ -272,39 +272,22 @@ pub async fn change_password(
 
     let citadel = state.citadel.lock().await;
 
-    let row: Result<(String, i32), _> = {
-        let conn = citadel.enclave.get_connection();
-        let conn = conn.blocking_lock();
-        let mut stmt = conn
-            .prepare(
-                "SELECT password_hash, password_must_change FROM tenants WHERE tenant_id = ?1 LIMIT 1",
-            )
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        stmt.query_row([&body.tenant_id], |row| Ok((row.get(0)?, row.get(1)?)))
+    // Verificar la contraseña actual usando authenticate_tenant (ya implementado en enclave)
+    // Ignoramos PASSWORD_MUST_CHANGE — el usuario está intentando cambiarlo ahora mismo
+    let current_valid = match citadel
+        .enclave
+        .authenticate_tenant(&body.tenant_id, &current_hash)
+        .await
+    {
+        Ok(valid) => valid,
+        Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => true,
+        Err(_) => false,
     };
 
-    match row {
-        Ok((real_hash, _)) => {
-            use argon2::{
-                password_hash::{PasswordHash, PasswordVerifier},
-                Argon2,
-            };
-            let parsed = PasswordHash::new(&real_hash)
-                .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-            let valid = Argon2::default()
-                .verify_password(current_hash.as_bytes(), &parsed)
-                .is_ok();
-            if !valid {
-                return Err(AegisHttpError::Citadel(
-                    crate::citadel::CitadelError::Unauthorized,
-                ));
-            }
-        }
-        Err(_) => {
-            return Err(AegisHttpError::Citadel(
-                crate::citadel::CitadelError::Unauthorized,
-            ));
-        }
+    if !current_valid {
+        return Err(AegisHttpError::Citadel(
+            crate::citadel::CitadelError::Unauthorized,
+        ));
     }
 
     citadel
