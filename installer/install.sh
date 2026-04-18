@@ -16,6 +16,7 @@ DATA_DIR="/var/lib/aegis"
 UI_DIST_PATH="/usr/share/aegis/ui"
 ENV_FILE="$CONFIG_DIR/aegis.env"
 LOG_FILE="/root/aegis_install.log"
+INSTALL_ROOT="/opt/aegis"
 
 GITHUB_ORG="Gustavo324234"
 GITHUB_REPO="Aegis-Core"
@@ -182,7 +183,22 @@ install_native() {
     rm "/tmp/ui-dist.tar.gz"
     success "UI assets ready at ${UI_DIST_PATH}"
 
-    # Generate environment and systemd
+    # Install aegis CLI
+    log "Installing aegis CLI..."
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "${script_dir}/aegis" ]]; then
+        cp "${script_dir}/aegis" "${BIN_DIR}/aegis"
+    else
+        curl -L --fail --silent \
+            "https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/aegis" \
+            -o "${BIN_DIR}/aegis" >> "$LOG_FILE" 2>&1 \
+            || warn "Could not download aegis CLI"
+    fi
+    chmod +x "${BIN_DIR}/aegis"
+    success "aegis CLI installed → ${BIN_DIR}/aegis"
+
+    # Generate environment file
     if [[ ! -f "$ENV_FILE" ]]; then
         local root_key
         root_key=$(openssl rand -hex 32)
@@ -194,8 +210,17 @@ UI_DIST_PATH=${UI_DIST_PATH}
 EOF
         chmod 640 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
+        success "Environment file created → ${ENV_FILE}"
+    else
+        warn "Environment file already exists — preserving existing keys."
+        grep -q "UI_DIST_PATH" "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}" >> "$ENV_FILE"
     fi
 
+    # Write mode file
+    echo "native" > "$CONFIG_DIR/mode"
+
+    # Install systemd service
+    log "Installing systemd service..."
     cat > /etc/systemd/system/aegis.service <<EOF
 [Unit]
 Description=Aegis OS — Cognitive Operating System
@@ -222,19 +247,103 @@ ProtectHome=true
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable aegis.service
-    systemctl start aegis.service
-    
-    # CLI
-    cp "$(dirname "$0")/aegis" "${BIN_DIR}/aegis" 2>/dev/null || \
-    curl -L --fail --silent "https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/aegis" -o "${BIN_DIR}/aegis"
-    chmod +x "${BIN_DIR}/aegis"
-    
+    systemctl daemon-reload >> "$LOG_FILE" 2>&1
+    systemctl enable aegis.service >> "$LOG_FILE" 2>&1
+    systemctl start aegis.service >> "$LOG_FILE" 2>&1
     success "Systemd service and CLI installed."
 }
 
-# --- Main Flow ---
+install_docker() {
+    log "Starting Docker installation..."
+    mkdir -p "$INSTALL_ROOT"
+
+    local raw_url="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/docker-compose.yml"
+    log "Fetching docker-compose.yml..."
+    curl -L --fail --silent \
+        "$raw_url" \
+        -o "${INSTALL_ROOT}/docker-compose.yml" >> "$LOG_FILE" 2>&1 \
+        || error "Failed to download docker-compose.yml"
+
+    if [[ ! -f "${INSTALL_ROOT}/.env" ]]; then
+        local root_key
+        root_key=$(openssl rand -hex 32)
+        cat > "${INSTALL_ROOT}/.env" <<EOF
+AEGIS_ROOT_KEY=${root_key}
+AEGIS_MTLS_STRICT=false
+EOF
+        chmod 600 "${INSTALL_ROOT}/.env"
+        success "Docker .env created → ${INSTALL_ROOT}/.env"
+    else
+        warn ".env already exists — preserving existing keys."
+    fi
+
+    mkdir -p "$CONFIG_DIR"
+    echo "docker" > "$CONFIG_DIR/mode"
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "${script_dir}/aegis" ]]; then
+        cp "${script_dir}/aegis" "${BIN_DIR}/aegis"
+        chmod +x "${BIN_DIR}/aegis"
+    fi
+
+    log "Pulling image and starting containers..."
+    (cd "$INSTALL_ROOT" && docker compose up -d >> "$LOG_FILE" 2>&1) \
+        || error "Docker Compose failed. Check ${LOG_FILE} for details."
+
+    success "Docker installation complete."
+}
+
+wait_and_show() {
+    log "Waiting for Aegis to initialize (max 60s)..."
+    local attempts=0
+    while [[ $attempts -lt 30 ]]; do
+        if curl -s "http://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
+            break
+        fi
+        sleep 2
+        attempts=$((attempts + 1))
+    done
+
+    if curl -s "http://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
+        success "Aegis is UP at http://localhost:8000"
+
+        local token=""
+        if [[ "${INSTALL_MODE}" == "1" ]]; then
+            token=$(journalctl -u aegis --since "5 min ago" --no-pager 2>/dev/null \
+                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || true)
+        else
+            token=$(docker compose -f "${INSTALL_ROOT}/docker-compose.yml" logs ank-server 2>&1 \
+                | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || true)
+        fi
+
+        echo ""
+        echo -e "${GREEN}################################################################${NC}"
+        echo -e "${GREEN}#          AEGIS OS — INSTALLATION COMPLETE                    #${NC}"
+        echo -e "${GREEN}################################################################${NC}"
+        echo ""
+        local ip
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}') || ip="localhost"
+
+        if [[ -n "$token" ]]; then
+            echo -e "${CYAN}  First-time setup URL:${NC}"
+            echo -e "  ${GREEN}http://${ip}:8000?setup_token=${token}${NC}"
+            echo ""
+            echo -e "  Token expires in 30 minutes."
+            echo -e "  To regenerate: ${CYAN}sudo aegis token${NC}"
+        else
+            echo -e "  Access URL: ${CYAN}http://${ip}:8000${NC}"
+            echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
+        fi
+        echo -e "${GREEN}################################################################${NC}"
+        echo ""
+        echo -e "  Log file: ${LOG_FILE}"
+    else
+        warn "Health check timed out. Check: journalctl -u aegis -n 50"
+    fi
+}
+
+# --- Main ---
 check_root
 detect_arch
 print_banner
@@ -244,20 +353,8 @@ install_dependencies
 
 if [[ "$INSTALL_MODE" == "1" ]]; then
     install_native
+    wait_and_show
 else
-    # Docker mode omitted for brevity in this example but follows same logic
-    error "Docker mode implementation pending refinement."
+    install_docker
+    wait_and_show
 fi
-
-# Success Feedback
-clear
-print_banner
-ip=$(hostname -I | awk '{print $1}')
-echo -e "${GREEN}################################################################${NC}"
-echo -e "${GREEN}#          AEGIS OS — INSTALLATION COMPLETE                    #${NC}"
-echo -e "${GREEN}################################################################${NC}"
-echo -e ""
-echo -e "  Access URL: ${CYAN}http://${ip}:8000${NC}"
-echo -e "  To get setup token: ${YELLOW}sudo aegis token${NC}"
-echo -e ""
-echo -e "${GREEN}################################################################${NC}"
