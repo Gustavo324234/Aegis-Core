@@ -182,10 +182,19 @@ impl MasterEnclave {
             anyhow::bail!("Critical persistence failure: Master Admin was not saved to disk.");
         }
 
-        info!(
-            "Master admin {} successfully configured and verified in storage.",
-            username
-        );
+        // SRE-FIX (CORE-090): checkpoint inmediato — admin_exists() visible de inmediato.
+        self.checkpoint()
+            .await
+            .context("Failed to checkpoint WAL after initialize_master")?;
+
+        info!("Master admin {} successfully configured.", username);
+        Ok(())
+    }
+
+    async fn checkpoint(&self) -> Result<()> {
+        let conn = self.connection.lock().await;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|e| anyhow::anyhow!("WAL checkpoint failed: {}", e))?;
         Ok(())
     }
 
@@ -273,11 +282,7 @@ impl MasterEnclave {
         let max_port: Option<u32> = stmt.query_row([], |row| row.get(0)).unwrap_or(Some(50051));
 
         let next_port = if let Some(p) = max_port {
-            if p >= 50052 {
-                p + 1
-            } else {
-                50052
-            }
+            if p >= 50052 { p + 1 } else { 50052 }
         } else {
             50052
         };
