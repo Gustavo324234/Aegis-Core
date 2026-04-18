@@ -67,9 +67,18 @@ pub async fn get_status(
             if val.get("configured").and_then(|v| v.as_bool()) == Some(true) {
                 return Ok(Json(EngineStatusResponse {
                     configured: true,
-                    provider: val.get("provider").and_then(|v| v.as_str()).map(String::from),
-                    api_url: val.get("api_url").and_then(|v| v.as_str()).map(String::from),
-                    model_name: val.get("model_name").and_then(|v| v.as_str()).map(String::from),
+                    provider: val
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    api_url: val
+                        .get("api_url")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    model_name: val
+                        .get("model_name")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                 }));
             }
         }
