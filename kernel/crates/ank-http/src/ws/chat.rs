@@ -26,18 +26,39 @@ pub async fn ws_chat_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let session_key = extract_session_key(&headers);
+    let (session_key, protocol_header) = extract_session_key_and_protocol(&headers);
 
-    ws.protocols(["session-key"])
-        .on_upgrade(move |socket| handle_chat(socket, tenant_id, session_key, state))
+    // Confirmar el subprotocolo exacto que mandó el cliente para que el browser
+    // no rechace el handshake por mismatch de Sec-WebSocket-Protocol.
+    let ws = if let Some(proto) = protocol_header {
+        ws.protocols([proto])
+    } else {
+        ws.protocols(["session-key"])
+    };
+
+    ws.on_upgrade(move |socket| handle_chat(socket, tenant_id, session_key, state))
 }
 
-fn extract_session_key(headers: &HeaderMap) -> Option<String> {
-    headers
+fn extract_session_key_and_protocol(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+    let header_val = headers
         .get("sec-websocket-protocol")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').find(|p| p.trim().starts_with("session-key.")))
-        .map(|p| p.trim().replace("session-key.", ""))
+        .and_then(|v| v.to_str().ok());
+
+    let Some(val) = header_val else {
+        return (None, None);
+    };
+
+    // Buscar el protocolo que empieza con "session-key."
+    let proto = val
+        .split(',')
+        .find(|p| p.trim().starts_with("session-key."))
+        .map(|p| p.trim().to_string());
+
+    let session_key = proto
+        .as_ref()
+        .map(|p| p.replace("session-key.", ""));
+
+    (session_key, proto)
 }
 
 #[derive(Deserialize)]
@@ -259,7 +280,6 @@ async fn stream_task_events(socket: &mut WebSocket, pid: &str, state: &AppState)
 
             if let ank_proto::v1::task_event::Payload::StatusUpdate(ref s) = payload {
                 if s.state == 4 || s.state == 5 {
-                    // Completed o Failed
                     break;
                 }
             }
