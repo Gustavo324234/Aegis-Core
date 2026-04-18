@@ -210,10 +210,6 @@ UI_DIST_PATH=${UI_DIST_PATH}
 EOF
         chmod 640 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
-        success "Environment file created → ${ENV_FILE}"
-    else
-        warn "Environment file already exists — preserving existing keys."
-        grep -q "UI_DIST_PATH" "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}" >> "$ENV_FILE"
     fi
 
     # Write mode file
