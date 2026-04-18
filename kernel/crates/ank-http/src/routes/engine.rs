@@ -34,8 +34,7 @@ fn default_provider() -> String {
 
 #[derive(serde::Serialize, ToSchema)]
 pub struct EngineStatusResponse {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub configured: Option<bool>,
+    pub configured: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,32 +60,48 @@ pub struct ConfigureResponse {
 pub async fn get_status(
     State(state): State<AppState>,
 ) -> Result<Json<EngineStatusResponse>, AegisHttpError> {
+    // Primero verificar el archivo de configuración legacy
     let config_path = state.config.data_dir.join("engine_config.json");
     if let Ok(content) = fs::read_to_string(&config_path) {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-            let configured = val.get("configured").and_then(|v| v.as_bool());
-            let provider = val
-                .get("provider")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let api_url = val
-                .get("api_url")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            let model_name = val
-                .get("model_name")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            return Ok(Json(EngineStatusResponse {
-                configured,
-                provider,
-                api_url,
-                model_name,
-            }));
+            if val.get("configured").and_then(|v| v.as_bool()) == Some(true) {
+                return Ok(Json(EngineStatusResponse {
+                    configured: true,
+                    provider: val
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    api_url: val
+                        .get("api_url")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    model_name: val
+                        .get("model_name")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                }));
+            }
         }
     }
+
+    // Si no hay engine_config.json, verificar si hay keys en el KeyPool global.
+    // Si el admin configuró providers via IA Tools, el sistema está listo para los tenants.
+    let has_global_keys = {
+        let router = state.router.read().await;
+        !router.list_global_keys().await.is_empty()
+    };
+
+    if has_global_keys {
+        return Ok(Json(EngineStatusResponse {
+            configured: true,
+            provider: Some("router".to_string()),
+            api_url: None,
+            model_name: None,
+        }));
+    }
+
     Ok(Json(EngineStatusResponse {
-        configured: Some(false),
+        configured: false,
         provider: None,
         api_url: None,
         model_name: None,
