@@ -288,7 +288,7 @@ EOF
     fi
 
     log "Pulling image and starting containers..."
-    (cd "$INSTALL_ROOT" && docker compose up -d >> "$LOG_FILE" 2>&1) \
+    { cd "$INSTALL_ROOT" && docker compose up -d; } >> "$LOG_FILE" 2>&1 \
         || error "Docker Compose failed. Check ${LOG_FILE} for details."
 
     success "Docker installation complete."
