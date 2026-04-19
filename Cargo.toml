@@ -71,7 +71,7 @@ clap               = { version = "4", features = ["derive"] }
 rusqlite           = { version = "0.33.0", features = ["bundled-sqlcipher"] }
 
 # System
-sysinfo            = "0.32"
+sysinfo            = "0.38"
 git2               = { version = "0.20", features = ["vendored-openssl"] }
 notify             = "6.1.1"
 notify-debouncer-mini = "0.4.1"
