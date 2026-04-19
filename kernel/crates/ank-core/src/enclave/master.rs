@@ -186,7 +186,6 @@ impl MasterEnclave {
         Ok(())
     }
 
-    /// Checkpoint TRUNCATE — fuerza visibilidad inmediata del WAL
     async fn checkpoint(&self) -> Result<()> {
         let conn = self.connection.lock().await;
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
