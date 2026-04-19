@@ -48,9 +48,7 @@ fn extract_session_key_and_protocol(headers: &HeaderMap) -> (Option<String>, Opt
         .find(|p| p.trim().starts_with("session-key."))
         .map(|p| p.trim().to_string());
 
-    let session_key = proto
-        .as_ref()
-        .map(|p| p.replace("session-key.", ""));
+    let session_key = proto.as_ref().map(|p| p.replace("session-key.", ""));
 
     (session_key, proto)
 }

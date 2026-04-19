@@ -165,9 +165,19 @@ impl MasterEnclave {
                 [&username, &hash.as_str()],
             )
             .context("Failed to configure Master Admin")?;
+
+            // Verificación inmediata de persistencia
+            let count: i64 = conn.query_row(
+                "SELECT count(*) FROM master_admin WHERE username = ?1",
+                [&username],
+                |row| row.get(0),
+            )?;
+            if count == 0 {
+                anyhow::bail!("Critical persistence failure: Master Admin was not saved to disk.");
+            }
         }
 
-        // Checkpoint inmediato — admin_exists() visible de inmediato sin restart
+        // SRE-FIX (CORE-090): checkpoint inmediato — admin_exists() visible de inmediato.
         self.checkpoint()
             .await
             .context("Failed to checkpoint WAL after initialize_master")?;
