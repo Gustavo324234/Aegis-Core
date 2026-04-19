@@ -559,6 +559,8 @@ export const useAegisStore = create<AegisState>()(
                 isAuthenticated: state.isAuthenticated,
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
+                // sessionKey NO se persiste — seguridad (CORE-073)
+                // adminActiveTab NO se persiste — evita crash al recargar en tabs que requieren sessionKey
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
                 messages: state.messages,

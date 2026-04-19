@@ -23,18 +23,34 @@ pub async fn ws_siren_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let session_key = extract_session_key(&headers);
+    let (session_key, protocol_header) = extract_session_key_and_protocol(&headers);
 
-    ws.protocols(["session-key"])
-        .on_upgrade(move |socket| handle_siren(socket, tenant_id, session_key, state))
+    let ws = if let Some(proto) = protocol_header {
+        ws.protocols([proto])
+    } else {
+        ws.protocols(["session-key"])
+    };
+
+    ws.on_upgrade(move |socket| handle_siren(socket, tenant_id, session_key, state))
 }
 
-fn extract_session_key(headers: &HeaderMap) -> Option<String> {
-    headers
+fn extract_session_key_and_protocol(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+    let header_val = headers
         .get("sec-websocket-protocol")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').find(|p| p.trim().starts_with("session-key.")))
-        .map(|p| p.trim().replace("session-key.", ""))
+        .and_then(|v| v.to_str().ok());
+
+    let Some(val) = header_val else {
+        return (None, None);
+    };
+
+    let proto = val
+        .split(',')
+        .find(|p| p.trim().starts_with("session-key."))
+        .map(|p| p.trim().to_string());
+
+    let session_key = proto.as_ref().map(|p| p.replace("session-key.", ""));
+
+    (session_key, proto)
 }
 
 async fn handle_siren(
@@ -85,10 +101,8 @@ async fn handle_siren(
     while let Some(msg_res) = socket.next().await {
         match msg_res {
             Ok(Message::Binary(data)) => {
-                // Acumular audio PCM
                 audio_buffer.extend_from_slice(&data);
                 if audio_buffer.len() > 10 * 1024 * 1024 {
-                    // Safety cap: 10MB
                     warn!("Siren: Audio buffer exceeded safety cap, clearing.");
                     audio_buffer.clear();
                 }
@@ -115,7 +129,6 @@ async fn handle_siren(
                         ))
                         .await;
 
-                    // Procesar audio real vía SirenRouter
                     let pcm_data = std::mem::take(&mut audio_buffer);
                     let transcript =
                         match state.siren_router.process_audio(&tenant_id, pcm_data).await {
