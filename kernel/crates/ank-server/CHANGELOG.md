@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.9...ank-server-v0.1.10) (2026-04-20)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-092 fix silent cloud errors and implement provide… ([#52](https://github.com/Gustavo324234/Aegis-Core/issues/52)) ([a236021](https://github.com/Gustavo324234/Aegis-Core/commit/a2360213a99cd0ff582ab58d1c632b80a4754fd6))
+
 ## [0.1.9](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.8...ank-server-v0.1.9) (2026-04-20)
 
 ## [0.1.8](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.7...ank-server-v0.1.8) (2026-04-20)
