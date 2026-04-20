@@ -176,8 +176,7 @@ async fn handle_chat(
 
             let _ = socket
                 .send(Message::Text(
-                    json!({ "event": "status", "data": "Submitting task to ANK..." })
-                        .to_string(),
+                    json!({ "event": "status", "data": "Submitting task to ANK..." }).to_string(),
                 ))
                 .await;
 
