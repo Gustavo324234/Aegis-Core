@@ -20,6 +20,8 @@ pub struct ApiKeyEntry {
     pub is_active: bool,
     #[serde(default)]
     pub rate_limited_until: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub active_models: Option<Vec<String>>,
 }
 
 // Custom Debug to redact the api_key
@@ -105,15 +107,27 @@ impl KeyPool {
         Ok(())
     }
 
-    /// Get an available key for a provider, checking tenant override first, then global pool.
-    pub async fn get_available_key(&self, provider: &str, tenant_id: &str) -> Option<ApiKeyEntry> {
+    /// Get an available key for a provider and model, checking tenant override first, then global pool.
+    pub async fn get_available_key(
+        &self,
+        provider: &str,
+        model_id: &str,
+        tenant_id: &str,
+    ) -> Option<ApiKeyEntry> {
         // 1. Try tenant override
         {
             let tenants = self.tenant_keys.read().await;
             if let Some(keys) = tenants.get(tenant_id) {
                 let available: Vec<&ApiKeyEntry> = keys
                     .iter()
-                    .filter(|k| k.provider == provider && k.is_available())
+                    .filter(|k| {
+                        k.provider == provider
+                            && k.is_available()
+                            && k.active_models
+                                .as_ref()
+                                .map(|m| m.contains(&model_id.to_string()))
+                                .unwrap_or(true)
+                    })
                     .collect();
                 if !available.is_empty() {
                     let idx = self.next_rr_index(provider).await;
@@ -126,7 +140,14 @@ impl KeyPool {
             let global = self.global_keys.read().await;
             let available: Vec<&ApiKeyEntry> = global
                 .iter()
-                .filter(|k| k.provider == provider && k.is_available())
+                .filter(|k| {
+                    k.provider == provider
+                        && k.is_available()
+                        && k.active_models
+                            .as_ref()
+                            .map(|m| m.contains(&model_id.to_string()))
+                            .unwrap_or(true)
+                })
                 .collect();
             if !available.is_empty() {
                 let idx = self.next_rr_index(provider).await;
@@ -233,12 +254,39 @@ impl KeyPool {
         Ok(())
     }
 
-    /// Check if at least one key is available for a given provider (across global + all tenants)
-    pub async fn has_key_for_provider(&self, provider: &str) -> bool {
+    /// Check if at least one key is available for a given provider and model
+    pub async fn has_key_for_model(&self, provider: &str, model_id: &str) -> bool {
+        let global = self.global_keys.read().await;
+        if global.iter().any(|k| {
+            k.provider == provider
+                && k.is_available()
+                && k.active_models
+                    .as_ref()
+                    .map(|m| m.contains(&model_id.to_string()))
+                    .unwrap_or(true)
+        }) {
+            return true;
+        }
+        drop(global);
+        let tenants = self.tenant_keys.read().await;
+        tenants.values().any(|keys| {
+            keys.iter().any(|k| {
+                k.provider == provider
+                    && k.is_available()
+                    && k.active_models
+                        .as_ref()
+                        .map(|m| m.contains(&model_id.to_string()))
+                        .unwrap_or(true)
+            })
+        })
+    }
+
+    /// Check if there's an OpenRouter key available (used by CatalogSyncer)
+    pub async fn has_openrouter_key(&self) -> bool {
         let global = self.global_keys.read().await;
         if global
             .iter()
-            .any(|k| k.provider == provider && k.is_available())
+            .any(|k| k.provider == "openrouter" && k.is_available())
         {
             return true;
         }
@@ -246,13 +294,8 @@ impl KeyPool {
         let tenants = self.tenant_keys.read().await;
         tenants.values().any(|keys| {
             keys.iter()
-                .any(|k| k.provider == provider && k.is_available())
+                .any(|k| k.provider == "openrouter" && k.is_available())
         })
-    }
-
-    /// Check if there's an OpenRouter key available (used by CatalogSyncer)
-    pub async fn has_openrouter_key(&self) -> bool {
-        self.has_key_for_provider("openrouter").await
     }
 
     fn make_pcb(&self, pid: &str, json: &str) -> crate::pcb::PCB {
@@ -307,6 +350,7 @@ mod tests {
                 label: Some(format!("Key {}", i)),
                 is_active: true,
                 rate_limited_until: None,
+                active_models: None,
             };
             pool.add_global_key(entry).await?;
         }
@@ -317,7 +361,9 @@ mod tests {
         pool.mark_rate_limited("key-2", future).await;
 
         // Only key-3 should be returned
-        let key = pool.get_available_key("anthropic", "tenant-x").await;
+        let key = pool
+            .get_available_key("anthropic", "any-model", "tenant-x")
+            .await;
         assert!(key.is_some(), "Should return the available key");
         assert_eq!(key.map(|k| k.key_id), Some("key-3".to_string()));
 
@@ -337,6 +383,7 @@ mod tests {
             label: None,
             is_active: true,
             rate_limited_until: None,
+            active_models: None,
         })
         .await?;
 
@@ -351,11 +398,14 @@ mod tests {
                 label: None,
                 is_active: true,
                 rate_limited_until: None,
+                active_models: None,
             },
         )
         .await?;
 
-        let key = pool.get_available_key("openai", "tenant-a").await;
+        let key = pool
+            .get_available_key("openai", "any-model", "tenant-a")
+            .await;
         assert!(key.is_some());
         assert_eq!(
             key.map(|k| k.key_id),
