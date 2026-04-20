@@ -57,10 +57,19 @@ async fn set_siren_config(
     auth: CitadelAuthenticated,
     Json(req): Json<SirenConfigBody>,
 ) -> Result<Json<Value>, AegisHttpError> {
+    let existing = state
+        .persistence
+        .get_voice_profile(&auth.tenant_id)
+        .await
+        .unwrap_or(None);
+
     let profile = VoiceProfile {
         tenant_id: auth.tenant_id.clone(),
         engine_id: req.provider,
         voice_id: req.voice_id,
+        model_pref: existing
+            .map(|p| p.model_pref)
+            .unwrap_or_else(|| "HybridSmart".to_string()),
         settings_json: json!({ "api_key": req.api_key }).to_string(),
     };
 

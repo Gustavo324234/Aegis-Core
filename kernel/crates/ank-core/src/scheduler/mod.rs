@@ -21,6 +21,18 @@ pub enum ModelPreference {
     HybridSmart,
 }
 
+impl std::str::FromStr for ModelPreference {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "LocalOnly" => Ok(ModelPreference::LocalOnly),
+            "CloudOnly" => Ok(ModelPreference::CloudOnly),
+            "HybridSmart" => Ok(ModelPreference::HybridSmart),
+            _ => Ok(ModelPreference::HybridSmart), // Fallback sensible
+        }
+    }
+}
+
 pub type SharedPCB = Arc<RwLock<PCB>>;
 
 impl ModelPreference {
