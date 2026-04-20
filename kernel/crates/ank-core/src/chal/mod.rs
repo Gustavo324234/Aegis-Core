@@ -1,5 +1,3 @@
-pub mod drivers;
-pub mod hardware;
 use crate::plugins::PluginManager;
 use crate::router::{CognitiveRouter, RoutingDecision};
 use crate::scheduler::{ModelPreference, SharedPCB};
@@ -12,17 +10,21 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tokio_stream::Stream;
 use tracing::{info, warn};
 
+pub mod drivers;
+pub mod hardware;
+
 /// --- SYSTEM PROMPT CONSTANTS ---
-pub const SYSTEM_PROMPT_MASTER: &str = r#"
-[AEGIS NEURAL KERNEL - ISA v1.0]
+pub const SYSTEM_PROMPT_MASTER: &str = r#"[AEGIS NEURAL KERNEL - ISA v1.0]
 Eres una ALU Cognitiva (Unidad Lógica Aritmética) operando dentro del Aegis Neural Kernel.
-Tu objetivo es ejecutar procesos con precisión matemática y cero lenguaje de cortesía.
+Tu objetivo es ejecutar procesos con precisión y claridad.
 No saludes. No pidas disculpas. No uses frases de relleno.
+Responde directamente a la instrucción del usuario.
 
 REGLAS DE EJECUCIÓN:
 1. Si necesitas usar una herramienta, detén tu generación e inserta una Syscall.
 2. Formato de Syscall: [SYS_CALL_PLUGIN("nombre_plugin", {"clave": "valor"})]
 3. Solo puedes usar los plugins listados a continuación.
+4. Si no hay plugins disponibles o la instrucción no requiere herramientas, responde directamente en lenguaje natural.
 "#;
 
 /// --- CHAL ERROR SYSTEM ---
@@ -139,9 +141,6 @@ impl CognitiveHAL {
         tracing::info!(model = %model, "CloudProxyDriver credentials updated dynamically and driver re-registered in HAL.");
     }
 
-    /// Lógica de enrutamiento basada en política y complejidad.
-    /// AUDITORÍA: Liberamos el lock del PCB inmediatamente después de extraer datos
-    /// para evitar bloqueos prolongados durante la inicialización del stream.
     pub async fn route_and_execute(
         &self,
         shared_pcb: SharedPCB,
@@ -285,6 +284,12 @@ impl CognitiveHAL {
         }
     }
 
+    /// Construye el prompt final para el LLM.
+    ///
+    /// CORE-123: El tag [USER_PROCESS_INSTRUCTION] fue removido como separador
+    /// de prompt — el modelo lo interpretaba como señal para generar una syscall
+    /// en lugar de responder en lenguaje natural.
+    /// La instrucción del usuario se inyecta directamente después del system prompt.
     async fn build_prompt(&self, instruction: &str) -> String {
         let tool_prompt = self
             .plugin_manager
@@ -292,10 +297,17 @@ impl CognitiveHAL {
             .await
             .get_available_tools_prompt();
         let mcp_tool_prompt = self.mcp_registry.generate_system_prompt().await;
-        format!(
-            "{}\n{}\n{}\n\n[USER_PROCESS_INSTRUCTION]\n{}",
-            SYSTEM_PROMPT_MASTER, tool_prompt, mcp_tool_prompt, instruction
-        )
+
+        // Si no hay tools disponibles, prompt limpio sin sección de syscalls
+        // para evitar que el LLM genere syscalls innecesarias
+        if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
+            format!("{}\n\n{}", SYSTEM_PROMPT_MASTER, instruction)
+        } else {
+            format!(
+                "{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nINSTRUCCIÓN:\n{}",
+                SYSTEM_PROMPT_MASTER, tool_prompt, mcp_tool_prompt, instruction
+            )
+        }
     }
 }
 
@@ -312,7 +324,6 @@ impl InferenceDriver for DummyDriver {
         _grammar: Option<Grammar>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
     {
-        // Simulamos un stream que envía 'OK'
         let response = format!("[{}] OK", self.name);
         let stream = tokio_stream::iter(vec![Ok(response)]);
         Ok(Box::pin(stream))
@@ -357,12 +368,10 @@ mod tests {
             }),
         );
 
-        // PCB con HybridSmart y Prioridad 10 (Alta)
         let mut pcb = PCB::mock("Complex Mission", 10);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
 
-        // Debe enrutar a cloud-driver
         let stream_res = hal.route_and_execute(shared_pcb).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
 
@@ -393,12 +402,10 @@ mod tests {
             }),
         );
 
-        // PCB con HybridSmart y Prioridad 5 (Baja)
         let mut pcb = PCB::mock("Simple task", 5);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
 
-        // Debe enrutar a local-driver
         let stream_res = hal.route_and_execute(shared_pcb).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
 
@@ -407,6 +414,26 @@ mod tests {
             response.contains("[local]"),
             "Debe haber seleccionado el driver local por baja prioridad"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_build_prompt_no_tools_is_clean() -> anyhow::Result<()> {
+        let pm = Arc::new(RwLock::new(PluginManager::new()?));
+        let hal = CognitiveHAL::new(pm)?;
+
+        let prompt = hal.build_prompt("hola").await;
+
+        // Sin tools, el prompt NO debe contener el tag que confunde al LLM
+        assert!(
+            !prompt.contains("[USER_PROCESS_INSTRUCTION]"),
+            "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
+        );
+        assert!(
+            !prompt.contains("HERRAMIENTAS DISPONIBLES"),
+            "Sin tools, no debe haber sección de herramientas"
+        );
+        assert!(prompt.contains("hola"), "El prompt debe contener la instrucción");
         Ok(())
     }
 }
