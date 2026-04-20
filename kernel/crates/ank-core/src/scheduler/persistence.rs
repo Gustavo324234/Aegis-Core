@@ -12,6 +12,7 @@ pub struct VoiceProfile {
     pub tenant_id: String,
     pub engine_id: String,
     pub voice_id: String,
+    pub model_pref: String, // "LocalOnly", "CloudOnly", "HybridSmart"
     pub settings_json: String,
 }
 
@@ -55,18 +56,22 @@ impl SQLCipherPersistor {
         )
         .context("Failed to initialize PCB table")?;
 
-        // Esquema para perfiles de voz de Siren (Aislamiento Citadel)
+        // Esquema para perfiles de voz y preferencias de ANK (Aislamiento Citadel)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS tenant_voice_profiles (
                 tenant_id TEXT PRIMARY KEY,
                 engine_id TEXT NOT NULL,
                 voice_id TEXT NOT NULL,
+                model_pref TEXT NOT NULL DEFAULT 'HybridSmart',
                 settings_json TEXT NOT NULL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
             [],
         )
         .context("Failed to initialize tenant_voice_profiles table")?;
+
+        // Migración CORE-112: Añadir model_pref si no existe (para instalaciones previas)
+        let _ = conn.execute("ALTER TABLE tenant_voice_profiles ADD COLUMN model_pref TEXT NOT NULL DEFAULT 'HybridSmart'", []);
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -180,7 +185,7 @@ impl StatePersistor for SQLCipherPersistor {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Mutex poison error"))?;
             let mut stmt = lock.prepare(
-                "SELECT engine_id, voice_id, settings_json FROM tenant_voice_profiles WHERE tenant_id = ?1"
+                "SELECT engine_id, voice_id, model_pref, settings_json FROM tenant_voice_profiles WHERE tenant_id = ?1"
             )?;
             let mut rows = stmt.query([&tenant_id])?;
 
@@ -189,7 +194,8 @@ impl StatePersistor for SQLCipherPersistor {
                     tenant_id,
                     engine_id: row.get(0)?,
                     voice_id: row.get(1)?,
-                    settings_json: row.get(2)?,
+                    model_pref: row.get(2)?,
+                    settings_json: row.get(3)?,
                 }))
             } else {
                 Ok(None)
@@ -214,9 +220,9 @@ impl StatePersistor for SQLCipherPersistor {
             }
 
             lock.execute(
-                "INSERT OR REPLACE INTO tenant_voice_profiles (tenant_id, engine_id, voice_id, settings_json, updated_at) 
-                 VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)",
-                (&profile.tenant_id, &profile.engine_id, &profile.voice_id, &profile.settings_json),
+                "INSERT OR REPLACE INTO tenant_voice_profiles (tenant_id, engine_id, voice_id, model_pref, settings_json, updated_at) 
+                 VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)",
+                (&profile.tenant_id, &profile.engine_id, &profile.voice_id, &profile.model_pref, &profile.settings_json),
             )
             .context("Failed to execute INSERT/REPLACE on tenant_voice_profiles table")?;
 
