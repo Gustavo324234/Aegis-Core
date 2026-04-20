@@ -170,3 +170,4 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 *   **[CORE-121]** Fix: `openrouter/free` ausente en `models.yaml` — CognitiveRouter no podía matchear la key del KeyPool, caía a Ollama y fallaba en servidores cloud-only `[DONE — Arquitecto IA]`
 *   **[CORE-122]** Installer: pregunta de perfil de inferencia (Cloud / Local / Hybrid) — inyecta `AEGIS_MODEL_PROFILE` en `.env` y el Kernel filtra el catálogo al arrancar `[TODO — DevOps Engineer + Kernel Engineer]`
 *   **[CORE-122]** Installer: perfil de inferencia (Cloud/Local/Hybrid) + `ModelProfile` en Kernel — `AEGIS_MODEL_PROFILE` en `.env`, catálogo filtrado al arrancar `[DONE — Arquitecto IA — 2026-04-20]`
+*   **[CORE-123]** Fix: LLM generaba syscalls en lugar de responder — `[USER_PROCESS_INSTRUCTION]` en prompt confundía al modelo. `build_prompt()` ahora limpio sin tools `[DONE — Arquitecto IA — 2026-04-20]`

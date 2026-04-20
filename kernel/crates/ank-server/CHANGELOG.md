@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.12](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.11...ank-server-v0.1.12) (2026-04-20)
+
+## [0.1.11](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.10...ank-server-v0.1.11) (2026-04-20)
+
+
+### Bug Fixes
+
+* **ank-core,installer:** CORE-121 CORE-122 ([#56](https://github.com/Gustavo324234/Aegis-Core/issues/56)) ([35dea95](https://github.com/Gustavo324234/Aegis-Core/commit/35dea954612095ccc3442033f72228853e0e8b41))
+
 ## [0.1.10](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.9...ank-server-v0.1.10) (2026-04-20)
 
 

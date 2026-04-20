@@ -498,7 +498,7 @@ impl PluginManager {
     /// Genera la "Tarjeta de Habilidades" (Tool Discovery) para inyectar en el System Prompt.
     pub fn get_available_tools_prompt(&self) -> String {
         if self.plugins.is_empty() {
-            return "No hay plugins Wasm cargados actualmente.".to_string();
+            return String::new();
         }
 
         let mut prompt = String::from("HERRAMIENTAS (PLUGINS) DISPONIBLES:\n");
