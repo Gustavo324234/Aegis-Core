@@ -137,7 +137,7 @@ async fn main() -> Result<()> {
     info!("Model profile: {:?}", model_profile);
 
     let catalog = Arc::new(
-        ank_core::router::catalog::ModelCatalog::load_bundled_with_profile(model_profile)?
+        ank_core::router::catalog::ModelCatalog::load_bundled_with_profile(model_profile)?,
     );
     let key_pool = Arc::new(ank_core::router::key_pool::KeyPool::new(
         Arc::clone(&persistence) as Arc<dyn StatePersistor>,
