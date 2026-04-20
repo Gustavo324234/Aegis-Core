@@ -33,6 +33,13 @@ fn resolve_data_dir() -> std::path::PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 0. Handle immediate flags
+    let args: Vec<String> = std::env::args().collect();
+    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+        println!("Aegis Core v{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // 1. Inicializar tracing
     let data_dir = resolve_data_dir();
     let logs_dir = data_dir.join("logs");
