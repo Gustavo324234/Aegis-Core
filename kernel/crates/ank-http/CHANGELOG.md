@@ -2,6 +2,13 @@
 
 
 
+## [0.1.9](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.8...ank-http-v0.1.9) (2026-04-20)
+
+
+### Bug Fixes
+
+* **ank-http:** subscribe to broadcast channel before scheduler dispat… ([#50](https://github.com/Gustavo324234/Aegis-Core/issues/50)) ([302c25c](https://github.com/Gustavo324234/Aegis-Core/commit/302c25cad8a80ebeeeb27b40a04bbf64d94af64f))
+
 ## [0.1.8](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.7...ank-http-v0.1.8) (2026-04-20)
 
 
