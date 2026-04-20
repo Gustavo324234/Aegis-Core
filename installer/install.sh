@@ -112,24 +112,44 @@ run_system_audit() {
 
 # --- UI Menus ---
 show_main_menu() {
+    # RECONEXIÓN A TTY: Si estamos en un pipe (curl | bash), reconectamos stdin para ser interactivos
     if [ ! -t 0 ]; then
         log "Non-interactive shell detected. Defaulting to Native mode."
         return
     fi
 
     print_banner
-    echo "┌─────────────────────────────────────────────────┐"
-    echo "│           AEGIS OS — INSTALLATION MODE          │"
-    echo "├─────────────────────────────────────────────────┤"
-    echo "│  [1] Native (recommended)  — systemd binary     │"
-    echo "│  [2] Docker                — containerized       │"
-    echo "└─────────────────────────────────────────────────┘"
-    echo ""
-    read -rp "Selection [1-2, default 1]: " choice
-    case "${choice:-1}" in
+    echo -e "${YELLOW}--- CONFIGURACIÓN DE DESPLIEGUE ---${NC}"
+    echo "Seleccione el modo de instalación:"
+    echo "  [1] Nativo (Directo en el Host, máximo rendimiento) [DEFAULT]"
+    echo "  [2] Docker (Aisla dependencias, más limpio)"
+    read -rp "Selección [1-2]: " mode_choice
+    case "${mode_choice:-1}" in
         2) INSTALL_MODE="2" ;;
         *) INSTALL_MODE="1" ;;
     esac
+
+    echo ""
+    echo -e "${YELLOW}--- PREFERENCIA COGNITIVA (IA) ---${NC}"
+    echo "Aegis necesita saber cómo procesar instrucciones:"
+    echo "  [1] Cloud Only     (Usa OpenRouter/OpenAI, requiere internet, muy inteligente) [DEFAULT]"
+    echo "  [2] Local Only     (Usa Ollama/Llama.cpp local, privacidad total, requiere GPU/RAM)"
+    echo "  [3] Hybrid Smart   (Aegis decide: local para tareas simples, nube para complejas)"
+    read -rp "Selección [1-3]: " ia_choice
+    case "${ia_choice:-1}" in
+        2) export AEGIS_INIT_PREF="LocalOnly" ;;
+        3) export AEGIS_INIT_PREF="HybridSmart" ;;
+        *) export AEGIS_INIT_PREF="CloudOnly" ;;
+    esac
+
+    echo ""
+    echo -e "${YELLOW}--- PERFIL DE HARDWARE ---${NC}"
+    echo "Defina la potencia de este nodo:"
+    echo "  [1] Tier 1 (Low End / Laptop / VPS) [DEFAULT]"
+    echo "  [2] Tier 2 (Workstation / RTX 3060+)"
+    echo "  [3] Tier 3 (SRE Grade / A100 / H100 Cluster)"
+    read -rp "Selección [1-3]: " hw_choice
+    export HW_PROFILE="${hw_choice:-1}"
 }
 
 show_inference_profile_menu() {
@@ -241,6 +261,8 @@ AEGIS_DATA_DIR=${DATA_DIR}
 AEGIS_MTLS_STRICT=false
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 UI_DIST_PATH=${UI_DIST_PATH}
+HW_PROFILE=${HW_PROFILE:-1}
+DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
 EOF
         chmod 640 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
