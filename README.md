@@ -78,6 +78,21 @@ make build
     ./target/release/ank-server
     ```
 
+## Operation
+
+Once Aegis is installed (via `installer/install.sh`), use the unified CLI for all management tasks:
+
+```bash
+# Check version and status
+aegis version
+aegis status
+
+# Update to latest nightly/beta
+aegis update --beta
+```
+
+See [installer/README.md](installer/README.md) for a full command reference.
+
 ## Philosophy
 
 - **LLMs as ALUs** — not oracles. Deterministic execution engine over probabilistic compute.

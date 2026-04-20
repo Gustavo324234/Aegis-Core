@@ -12,7 +12,6 @@ BIN_PATH="/usr/local/bin/ank-server"
 UI_PATH="/usr/share/aegis/ui"
 GITHUB_ORG="Gustavo324234"
 GITHUB_REPO="Aegis-Core"
-RELEASE_TAG="nightly"
 
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
@@ -102,26 +101,55 @@ cmd_diag() {
     printf '\n%s================================================================%s\n' "$CYAN" "$NC"
 }
 
+cmd_version() {
+    if [[ -f "$BIN_PATH" ]]; then
+        "$BIN_PATH" --version
+    else
+        printf "${RED}%s${NC}\n" "Aegis binario no encontrado en $BIN_PATH"
+    fi
+}
+
 cmd_update() {
+    local CHANNEL="stable"
+    local TAG="latest"
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --beta) CHANNEL="beta"; TAG="nightly"; shift ;;
+            --stable) CHANNEL="stable"; TAG="latest"; shift ;;
+            *) shift ;;
+        esac
+    done
+
     local ARCH
     ARCH=$(detect_arch)
-    local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
+    local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${TAG}"
 
-    printf '%sUpdating Aegis OS to latest nightly...%s\n' "$YELLOW" "$NC"
+    printf "${CYAN}%s${NC}\n" "--- Aegis OS Upgrade Tool ---"
+    printf "Canal: ${YELLOW}%s${NC} (Tag: %s)\n" "$CHANNEL" "$TAG"
+    
+    printf "Versión actual: "
+    cmd_version || true
 
+    # Obtener info de la release remota
+    local remote_info
+    remote_info=$(curl -s "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${TAG}")
     local remote_date
-    remote_date=$(curl -s "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${RELEASE_TAG}" \
-        | grep '"published_at"' | head -1 | grep -oP '"\K[^"]+(?=")' || echo "unknown")
-    printf "  → Release: %s\n" "$remote_date"
+    remote_date=$(echo "$remote_info" | grep '"published_at"' | head -1 | grep -oP '"\K[^"]+(?=")' || echo "unknown")
+    
+    printf "Última disponible: ${GREEN}%s${NC}\n\n" "$remote_date"
 
     printf "  → Deteniendo servicio...\n"
     sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
 
-    printf "  → Descargando ank-server (%s)...\n" "$ARCH"
-    curl -L --fail --progress-bar \
+    printf "  → Descargando binario (%s)...\n" "$ARCH"
+    if ! curl -L --fail --progress-bar \
         "${RELEASE_URL}/ank-server-linux-${ARCH}.tar.gz" \
-        -o /tmp/ank-update.tar.gz \
-        || { printf '%sError descargando binario%s\n' "$RED" "$NC"; sudo systemctl start "$SERVICE_NAME"; exit 1; }
+        -o /tmp/ank-update.tar.gz; then
+        printf "${RED}Error: No se pudo descargar el binario para el canal %s.${NC}\n" "$CHANNEL"
+        sudo systemctl start "$SERVICE_NAME"
+        exit 1
+    fi
 
     tar -xzf /tmp/ank-update.tar.gz -C /tmp/
     sudo mv "/tmp/ank-server-linux-${ARCH}" "$BIN_PATH"
@@ -137,18 +165,15 @@ cmd_update() {
         sudo chown -R aegis:aegis "$UI_PATH" 2>/dev/null || true
         rm -f /tmp/ui-update.tar.gz
     else
-        printf '%s  UI download failed, keeping current%s\n' "$YELLOW" "$NC"
+        printf "${YELLOW}%s${NC}\n" "  Aviso: UI no disponible en este canal, manteniendo actual."
     fi
 
     printf "  → Iniciando servicio...\n"
     sudo systemctl start "$SERVICE_NAME"
 
-    sleep 3
-    if curl -s --connect-timeout 5 http://localhost:8000/health 2>/dev/null | grep -q "Online"; then
-        printf '%s  Actualizacion completada - Aegis OS esta UP%s\n' "$GREEN" "$NC"
-    else
-        printf '%s  Servicio iniciado, verificar con: aegis status%s\n' "$YELLOW" "$NC"
-    fi
+    printf "\n${GREEN}%s${NC}\n" "Actualización completada."
+    printf "Nueva versión: "
+    cmd_version
 }
 
 cmd_token() {
@@ -181,6 +206,7 @@ case "${1:-help}" in
     diag)      shift; cmd_diag "$@" ;;
     logs)      shift; cmd_logs "$@" ;;
     update)    shift; cmd_update "$@" ;;
+    version)   shift; cmd_version "$@" ;;
     token)     shift; cmd_token "$@" ;;
     uninstall) shift; cmd_uninstall "$@" ;;
     help|*)
@@ -194,8 +220,9 @@ case "${1:-help}" in
         echo "  restart     Restart Aegis service"
         echo "  status      Check status and health"
         echo "  diag        Run deep diagnostic report"
+        echo "  version     Show installed core version"
         echo "  logs [N]    Follow logs (default 100)"
-        echo "  update      Update to latest nightly"
+        echo "  update      Update Aegis (options: --beta, --stable)"
         echo "  token       Get setup URL"
         echo "  uninstall   Remove Aegis from system"
         ;;
