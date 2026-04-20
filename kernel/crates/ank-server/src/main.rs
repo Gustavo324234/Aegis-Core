@@ -1,5 +1,6 @@
 use ank_core::plugins::watcher::watch_plugins_dir;
 use ank_core::plugins::PluginManager;
+use ank_core::router::catalog::ModelProfile;
 use ank_core::telemetry::{CompletedInference, TelemetryState};
 use ank_core::{
     citadel::identity::Citadel, enclave::master::MasterEnclave, router::CognitiveRouter,
@@ -131,8 +132,13 @@ async fn main() -> Result<()> {
     // 9. HAL
     let hal = Arc::new(RwLock::new(CognitiveHAL::new(Arc::clone(&plugin_manager))?));
 
-    // 10. Router & Catalog
-    let catalog = Arc::new(ank_core::router::catalog::ModelCatalog::load_bundled()?);
+    // 10. Router & Catalog — filtrado por AEGIS_MODEL_PROFILE
+    let model_profile = ModelProfile::from_env();
+    info!("Model profile: {:?}", model_profile);
+
+    let catalog = Arc::new(
+        ank_core::router::catalog::ModelCatalog::load_bundled_with_profile(model_profile)?,
+    );
     let key_pool = Arc::new(ank_core::router::key_pool::KeyPool::new(
         Arc::clone(&persistence) as Arc<dyn StatePersistor>,
     ));

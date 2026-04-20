@@ -198,6 +198,7 @@ fn infer_task_scores(model_id: &str) -> TaskScores {
 mod tests {
     use super::*;
     use crate::pcb::PCB;
+    use crate::router::catalog::ModelProfile;
     use crate::scheduler::persistence::{StatePersistor, VoiceProfile};
 
     struct NoopPersistor;
@@ -229,7 +230,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_sync_without_openrouter_key() -> anyhow::Result<()> {
-        let catalog = Arc::new(ModelCatalog::load_bundled()?);
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
         let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
         let syncer = CatalogSyncer::new(catalog.clone(), key_pool);
 

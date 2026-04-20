@@ -232,6 +232,24 @@
     summarization: 4
     extraction: 3
 
+- model_id: "openrouter/free"
+  provider: "openrouter"
+  display_name: "OpenRouter Free Tier"
+  context_window: 131072
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: false
+  supports_json_mode: false
+  is_local: false
+  avg_latency_ms: 2000
+  task_scores:
+    chat: 3
+    coding: 3
+    planning: 3
+    analysis: 3
+    summarization: 3
+    extraction: 3
+
 - model_id: "meta-llama/llama-3.1-8b-instruct"
   provider: "ollama"
   display_name: "Llama 3.1 8B (local)"
