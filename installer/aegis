@@ -12,7 +12,6 @@ BIN_PATH="/usr/local/bin/ank-server"
 UI_PATH="/usr/share/aegis/ui"
 GITHUB_ORG="Gustavo324234"
 GITHUB_REPO="Aegis-Core"
-RELEASE_TAG="nightly"
 
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
@@ -106,7 +105,7 @@ cmd_version() {
     if [[ -f "$BIN_PATH" ]]; then
         "$BIN_PATH" --version
     else
-        printf "${RED}Aegis binario no encontrado en $BIN_PATH${NC}\n"
+        printf "${RED}%s${NC}\n" "Aegis binario no encontrado en $BIN_PATH"
     fi
 }
 
@@ -126,7 +125,7 @@ cmd_update() {
     ARCH=$(detect_arch)
     local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${TAG}"
 
-    printf "${CYAN}--- Aegis OS Upgrade Tool ---${NC}\n"
+    printf "${CYAN}%s${NC}\n" "--- Aegis OS Upgrade Tool ---"
     printf "Canal: ${YELLOW}%s${NC} (Tag: %s)\n" "$CHANNEL" "$TAG"
     
     printf "Versión actual: "
@@ -166,13 +165,13 @@ cmd_update() {
         sudo chown -R aegis:aegis "$UI_PATH" 2>/dev/null || true
         rm -f /tmp/ui-update.tar.gz
     else
-        printf "${YELLOW}  Aviso: UI no disponible en este canal, manteniendo actual.${NC}\n"
+        printf "${YELLOW}%s${NC}\n" "  Aviso: UI no disponible en este canal, manteniendo actual."
     fi
 
     printf "  → Iniciando servicio...\n"
     sudo systemctl start "$SERVICE_NAME"
 
-    printf "\n${GREEN}Actualización completada.${NC}\n"
+    printf "\n${GREEN}%s${NC}\n" "Actualización completada."
     printf "Nueva versión: "
     cmd_version
 }
