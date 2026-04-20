@@ -198,6 +198,7 @@ fn infer_task_scores(model_id: &str) -> TaskScores {
 mod tests {
     use super::*;
     use crate::pcb::PCB;
+    use crate::router::catalog::ModelProfile;
     use crate::scheduler::persistence::{StatePersistor, VoiceProfile};
 
     struct NoopPersistor;
