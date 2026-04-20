@@ -184,6 +184,16 @@ impl InferenceDriver for CloudProxyDriver {
 
         let response = self.send_with_retry(request_body).await?;
 
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            tracing::error!(status = %status, body = %text, "Cloud API returned error status");
+            return Err(SystemError::HardwareFailure(format!(
+                "Cloud API Error {}: {}",
+                status, text
+            )));
+        }
+
         let stream = response.bytes_stream();
         let state = (stream, String::new());
 

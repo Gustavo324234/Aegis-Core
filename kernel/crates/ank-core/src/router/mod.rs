@@ -99,7 +99,7 @@ impl CognitiveRouter {
 
         for entry in filtered {
             let has_key =
-                self.key_pool.has_key_for_provider(&entry.provider).await || entry.is_local; // local models don't need a key
+                self.key_pool.has_key_for_model(&entry.provider, &entry.model_id).await || entry.is_local; // local models don't need a key
 
             if !has_key {
                 continue;
@@ -207,10 +207,11 @@ impl CognitiveRouter {
                 label: None,
                 is_active: true,
                 rate_limited_until: None,
+                active_models: None,
             });
         }
         self.key_pool
-            .get_available_key(&entry.provider, tenant_id)
+            .get_available_key(&entry.provider, &entry.model_id, tenant_id)
             .await
     }
 }

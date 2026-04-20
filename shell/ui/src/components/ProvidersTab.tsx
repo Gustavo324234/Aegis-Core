@@ -149,17 +149,33 @@ const ModelSelector: React.FC<{
     );
 };
 
-const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, tenantId, sessionKey }) => {
+const ProviderModal: React.FC<{
+    onClose: () => void;
+    onSaved: () => void;
+    tenantId: string;
+    sessionKey: string;
+    initialProvider?: ProviderEntry;
+}> = ({ onClose, onSaved, tenantId, sessionKey, initialProvider }) => {
+    const isEdit = !!initialProvider;
     const { t } = useTranslation();
-    const [selectedProvider, setSelectedProvider] = useState<ProviderType>('openai');
+    const [selectedProvider, setSelectedProvider] = useState<ProviderType>(
+        (initialProvider?.provider as ProviderType) || 'openai'
+    );
     const [apiKey, setApiKey] = useState('');
     const [showKey, setShowKey] = useState(false);
     const [isVerifying, setIsVerifying] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [models, setModels] = useState<string[]>([]);
-    const [selectedModels, setSelectedModels] = useState<string[]>([]);
+    const [selectedModels, setSelectedModels] = useState<string[]>(initialProvider?.active_models || []);
     const [verifyError, setVerifyError] = useState<string | null>(null);
-    const [step, setStep] = useState<'config' | 'models'>('config');
+    const [step, setStep] = useState<'config' | 'models'>(isEdit ? 'models' : 'config');
+
+    // Fetch models if in edit mode and models are empty
+    React.useEffect(() => {
+        if (isEdit && models.length === 0) {
+            handleVerify();
+        }
+    }, [isEdit]);
 
     const handleVerify = async () => {
         setIsVerifying(true);
@@ -174,14 +190,14 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                 },
                 body: JSON.stringify({
                     provider: selectedProvider,
-                    api_key: apiKey,
+                    api_key: apiKey || 'redacted', // Use placeholder if editing and key not changed
                     api_url: PROVIDER_PRESETS[selectedProvider].url
                 })
             });
             if (res.ok) {
                 const data = await res.json();
                 setModels(data.models);
-                setSelectedModels(data.models); // All selected by default
+                if (!isEdit) setSelectedModels(data.models); 
                 setStep('models');
             } else {
                 const errData = await res.json();
@@ -197,8 +213,12 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
     const handleSave = async () => {
         setIsSaving(true);
         try {
-            const res = await fetch('/api/router/keys/global', {
-                method: 'POST',
+            const url = isEdit 
+                ? `/api/router/keys/global/${initialProvider.key_id}`
+                : '/api/router/keys/global';
+            
+            const res = await fetch(url, {
+                method: isEdit ? 'PUT' : 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
                     'x-citadel-tenant': tenantId!,
@@ -212,11 +232,7 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                 })
             });
             if (res.ok) {
-                onSaved({
-                    key_id: Math.random().toString(36).substr(2, 9),
-                    provider: selectedProvider,
-                    is_active: true
-                });
+                onSaved();
                 onClose();
             } else {
                 const err = await res.json();
@@ -247,11 +263,15 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                 <div className="p-8">
                     <div className="flex items-center gap-4 mb-8">
                         <div className="p-3 rounded-2xl bg-aegis-cyan/10 border border-aegis-cyan/20">
-                            <Plus className="w-6 h-6 text-aegis-cyan" />
+                            {isEdit ? <Settings className="w-6 h-6 text-aegis-cyan" /> : <Plus className="w-6 h-6 text-aegis-cyan" />}
                         </div>
                         <div>
-                            <h2 className="text-xl font-bold tracking-[0.2em] uppercase text-white">{t('link_provider')}</h2>
-                            <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mt-1">{t('secure_neural_link')}</p>
+                            <h2 className="text-xl font-bold tracking-[0.2em] uppercase text-white">
+                                {isEdit ? t('edit_provider') : t('link_provider')}
+                            </h2>
+                            <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest mt-1">
+                                {isEdit ? initialProvider.label || selectedProvider : t('secure_neural_link')}
+                            </p>
                         </div>
                     </div>
 
@@ -271,11 +291,12 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                                         return (
                                             <button 
                                                 key={key} 
+                                                disabled={isEdit}
                                                 onClick={() => {
                                                     setSelectedProvider(key);
                                                     setVerifyError(null);
                                                 }} 
-                                                className={`p-3 rounded-xl border transition-all duration-300 flex flex-col items-center gap-2 group ${isSelected ? 'bg-aegis-cyan/20 border-aegis-cyan shadow-[0_0_15px_rgba(0,186,211,0.2)] scale-110' : 'bg-white/5 border-white/10 hover:border-white/30 hover:bg-white/10 opacity-60 hover:opacity-100'}`}
+                                                className={`p-3 rounded-xl border transition-all duration-300 flex flex-col items-center gap-2 group ${isSelected ? 'bg-aegis-cyan/20 border-aegis-cyan shadow-[0_0_15px_rgba(0,186,211,0.2)] scale-110' : 'bg-white/5 border-white/10 hover:border-white/30 hover:bg-white/10 opacity-60 hover:opacity-100'} ${isEdit && !isSelected ? 'hidden' : ''}`}
                                                 title={preset.label}
                                             >
                                                 <div className={`p-1.5 rounded-lg ${isSelected ? 'text-aegis-cyan' : 'text-white/40 group-hover:text-white/70'}`}>
@@ -308,7 +329,7 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                                                 type={showKey ? 'text' : 'password'} 
                                                 value={apiKey} 
                                                 onChange={(e) => setApiKey(e.target.value)} 
-                                                placeholder="sk-..." 
+                                                placeholder={isEdit ? "••••••••••••••••" : "sk-..."} 
                                                 className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 pr-10 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10 tracking-widest" 
                                             />
                                             <button 
@@ -319,6 +340,7 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                                                 {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                                             </button>
                                         </div>
+                                        {isEdit && <p className="text-[9px] font-mono text-white/20 uppercase ml-1 italic">{t('leave_empty_to_keep')}</p>}
                                     </div>
 
                                     {verifyError && (
@@ -330,7 +352,7 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
 
                                     <button 
                                         onClick={handleVerify}
-                                        disabled={isVerifying || !apiKey}
+                                        disabled={isVerifying || (!apiKey && !isEdit)}
                                         className={`w-full group relative overflow-hidden rounded-xl py-4 transition-all duration-500 ${isVerifying ? "bg-aegis-cyan/20 cursor-wait" : "bg-aegis-cyan/10 hover:bg-aegis-cyan/20 border border-aegis-cyan/30"}`}
                                     >
                                         <div className="relative z-10 flex items-center justify-center gap-3">
@@ -358,7 +380,7 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                                         disabled={isSaving}
                                         className="flex-1 px-4 py-3 border border-white/10 rounded-xl text-[10px] font-mono text-white/40 hover:bg-white/5 transition-colors uppercase tracking-widest"
                                     >
-                                        ← {t('cancel')}
+                                        ← {isEdit ? t('edit_key') : t('cancel')}
                                     </button>
                                     <button 
                                         onClick={handleSave}
@@ -366,7 +388,7 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
                                         className="flex-2 px-8 py-3 bg-aegis-cyan/20 border border-aegis-cyan/30 rounded-xl text-[10px] font-mono text-aegis-cyan hover:bg-aegis-cyan/30 transition-colors uppercase tracking-widest font-bold flex items-center justify-center gap-2"
                                     >
                                         {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                                        {isSaving ? t('saving') : t('activate_provider')}
+                                        {isSaving ? t('saving') : isEdit ? t('update_provider') : t('activate_provider')}
                                     </button>
                                 </div>
                             </motion.div>
@@ -380,7 +402,8 @@ const AddProviderPanel: React.FC<AddProviderPanelProps> = ({ onClose, onSaved, t
 
 const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | null }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
-    const [showAddPanel, setShowAddPanel] = useState(false);
+    const [showModal, setShowModal] = useState(false);
+    const [editingProvider, setEditingProvider] = useState<ProviderEntry | null>(null);
     const [providers, setProviders] = useState<ProviderEntry[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -441,7 +464,10 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
                     </div>
                 </div>
                 <button 
-                    onClick={() => setShowAddPanel(true)}
+                    onClick={() => {
+                        setEditingProvider(null);
+                        setShowModal(true);
+                    }}
                     className="flex items-center gap-2 px-5 py-2.5 bg-aegis-cyan text-black rounded-xl font-bold text-[10px] uppercase tracking-widest hover:bg-aegis-cyan/80 transition-all hover:shadow-[0_0_20px_rgba(0,186,211,0.4)] active:scale-95"
                 >
                     <Plus className="w-4 h-4" /> {t('add_provider')}
@@ -466,12 +492,16 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
                             provider={provider} 
                             onDelete={handleDelete}
                             onEdit={(p) => {
-                                console.log("Edit provider:", p);
+                                setEditingProvider(p);
+                                setShowModal(true);
                             }}
                         />
                     ))}
                     <button 
-                        onClick={() => setShowAddPanel(true)}
+                        onClick={() => {
+                            setEditingProvider(null);
+                            setShowModal(true);
+                        }}
                         className="glass p-5 rounded-2xl border border-dashed border-white/10 hover:border-aegis-cyan/30 hover:bg-aegis-cyan/5 transition-all flex flex-col items-center justify-center gap-3 group"
                     >
                         <div className="p-2 rounded-full bg-white/5 group-hover:bg-aegis-cyan/10 text-white/20 group-hover:text-aegis-cyan">
@@ -483,14 +513,15 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
             )}
 
             <AnimatePresence>
-                {showAddPanel && (
-                    <AddProviderPanel 
-                        onClose={() => setShowAddPanel(false)} 
+                {showModal && (
+                    <ProviderModal 
+                        onClose={() => setShowModal(false)} 
                         tenantId={tenantId!}
                         sessionKey={sessionKey!}
-                        onSaved={(p) => {
-                            setProviders(prev => [...prev, p]);
-                            setShowAddPanel(false);
+                        initialProvider={editingProvider || undefined}
+                        onSaved={() => {
+                            fetchProviders();
+                            setShowModal(false);
                         }} 
                     />
                 )}

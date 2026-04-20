@@ -7,7 +7,7 @@ use ank_core::router::key_pool::ApiKeyEntry;
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -17,9 +17,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/keys/global", post(add_global_key))
         .route("/keys/global", get(list_global_keys))
+        .route("/keys/global/:id", put(update_global_key))
         .route("/keys/global/:id", delete(delete_global_key))
         .route("/keys/tenant", post(add_tenant_key))
         .route("/keys/tenant", get(list_tenant_keys))
+        .route("/keys/tenant/:id", put(update_tenant_key))
         .route("/keys/tenant/:id", delete(delete_tenant_key))
         .route("/models", get(list_router_models))
         .route("/sync", post(sync_router_catalog))
@@ -36,6 +38,8 @@ pub struct KeyAddRequest {
     pub api_url: Option<String>,
     #[schema(example = "production-key-1")]
     pub label: Option<String>,
+    #[schema(example = "[\"openai/gpt-4o\"]")]
+    pub models: Option<Vec<String>>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -47,6 +51,8 @@ pub struct RouterKeyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub is_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_models: Option<Vec<String>>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -137,6 +143,7 @@ async fn add_global_key(
         label: req.label,
         is_active: true,
         rate_limited_until: None,
+        active_models: req.models,
     };
 
     let router = state.router.read().await;
@@ -286,6 +293,7 @@ async fn list_tenant_keys(
             api_url: k.api_url,
             label: k.label,
             is_active: k.is_active,
+            active_models: k.active_models,
         })
         .collect();
     Ok(Json(TenantKeysResponse { keys }))
@@ -378,6 +386,96 @@ async fn sync_router_catalog(
     Ok(Json(SyncResponse {
         success: true,
         message: "Catalog synchronization triggered".to_string(),
+    }))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/router/keys/global/{id}",
+    tag = "router",
+    request_body = KeyAddRequest,
+    responses(
+        (status = 200, description = "Key updated"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("id" = String, Path, description = "Key ID to update"),
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin session key (plaintext)")
+    )
+)]
+async fn update_global_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<KeyAddRequest>,
+) -> Result<Json<SyncResponse>, AegisHttpError> {
+    require_master_auth(&state, &headers).await?;
+
+    let entry = ApiKeyEntry {
+        key_id: id,
+        provider: req.provider,
+        api_key: req.api_key,
+        api_url: req.api_url,
+        label: req.label,
+        is_active: true,
+        rate_limited_until: None,
+        active_models: req.models,
+    };
+
+    let router = state.router.read().await;
+    router
+        .add_global_key(entry)
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+    Ok(Json(SyncResponse {
+        success: true,
+        message: "Global key updated".to_string(),
+    }))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/router/keys/tenant/{id}",
+    tag = "router",
+    request_body = KeyAddRequest,
+    responses(
+        (status = 200, description = "Key updated"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("id" = String, Path, description = "Key ID to update"),
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
+async fn update_tenant_key(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Path(id): Path<String>,
+    Json(req): Json<KeyAddRequest>,
+) -> Result<Json<SyncResponse>, AegisHttpError> {
+    let entry = ApiKeyEntry {
+        key_id: id,
+        provider: req.provider,
+        api_key: req.api_key,
+        api_url: req.api_url,
+        label: req.label,
+        is_active: true,
+        rate_limited_until: None,
+        active_models: req.models,
+    };
+
+    let router = state.router.read().await;
+    router
+        .add_tenant_key(&auth.tenant_id, entry)
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+    Ok(Json(SyncResponse {
+        success: true,
+        message: "Tenant key updated".to_string(),
     }))
 }
 
