@@ -19,7 +19,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "aegis-sdk"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-supervisor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "ank-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ank-proto",
  "anyhow",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "ank-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ank-mcp",
  "ank-proto",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "ank-http"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "ank-core",
  "ank-proto",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "ank-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "ank-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "prost",
  "prost-build",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "ank-server"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "ank-core",
  "ank-http",
@@ -3216,7 +3216,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "plugins_src"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aegis-sdk",
  "anyhow",
