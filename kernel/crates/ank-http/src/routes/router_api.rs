@@ -187,6 +187,7 @@ async fn list_global_keys(
             api_url: k.api_url,
             label: k.label,
             is_active: k.is_active,
+            active_models: k.active_models,
         })
         .collect();
     Ok(Json(GlobalKeysResponse { keys }))
@@ -252,6 +253,7 @@ async fn add_tenant_key(
         label: req.label,
         is_active: true,
         rate_limited_until: None,
+        active_models: req.models,
     };
 
     let router = state.router.read().await;

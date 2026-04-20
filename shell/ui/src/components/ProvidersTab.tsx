@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Shield, Globe, Zap, Box, Server, Activity, Terminal, Eye, EyeOff, Cpu, X, Loader2, Check, Search, Trash2, Settings } from 'lucide-react';
 import { useTranslation } from '../i18n';
@@ -169,9 +169,9 @@ const ProviderModal: React.FC<{
         if (isEdit && models.length === 0) {
             handleVerify();
         }
-    }, [isEdit]);
+    }, [isEdit, models.length, handleVerify]);
 
-    const handleVerify = async () => {
+    const handleVerify = useCallback(async () => {
         setIsVerifying(true);
         setVerifyError(null);
         try {
@@ -202,7 +202,7 @@ const ProviderModal: React.FC<{
         } finally {
             setIsVerifying(false);
         }
-    };
+    }, [apiKey, isEdit, selectedProvider, sessionKey, t, tenantId]);
 
     const handleSave = async () => {
         setIsSaving(true);
