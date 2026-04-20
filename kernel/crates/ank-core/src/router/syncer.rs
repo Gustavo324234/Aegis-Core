@@ -1,4 +1,4 @@
-use crate::router::catalog::{ModelCatalog, ModelEntry, TaskScores};
+use crate::router::catalog::{ModelCatalog, ModelEntry, ModelProfile, TaskScores};
 use crate::router::key_pool::KeyPool;
 use anyhow::Context;
 use reqwest::Client;
@@ -229,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_sync_without_openrouter_key() -> anyhow::Result<()> {
-        let catalog = Arc::new(ModelCatalog::load_bundled()?);
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(ModelProfile::Hybrid)?);
         let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
         let syncer = CatalogSyncer::new(catalog.clone(), key_pool);
 

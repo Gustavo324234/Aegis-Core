@@ -245,7 +245,7 @@ fn entry_api_url(entry: &ModelEntry) -> String {
 mod tests {
     use super::*;
     use crate::pcb::PCB;
-    use crate::router::catalog::ModelCatalog;
+    use crate::router::catalog::{ModelCatalog, ModelProfile};
     use crate::router::key_pool::ApiKeyEntry;
     use crate::scheduler::persistence::{StatePersistor, VoiceProfile};
 
@@ -278,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_decide_returns_decision_for_chat() -> anyhow::Result<()> {
-        let catalog = Arc::new(ModelCatalog::load_bundled()?);
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(ModelProfile::Hybrid)?);
         let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
 
         // Add an anthropic key
@@ -309,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_only_never_returns_cloud() -> anyhow::Result<()> {
-        let catalog = Arc::new(ModelCatalog::load_bundled()?);
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(ModelProfile::Hybrid)?);
         let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
 
         // No keys needed for local models
@@ -327,7 +327,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_keys_returns_error() -> anyhow::Result<()> {
-        let catalog = Arc::new(ModelCatalog::load_bundled()?);
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(ModelProfile::Hybrid)?);
         let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
 
         let router = CognitiveRouter::new(catalog, key_pool);
