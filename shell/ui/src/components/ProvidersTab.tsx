@@ -164,12 +164,6 @@ const ProviderModal: React.FC<{
     const [verifyError, setVerifyError] = useState<string | null>(null);
     const [step, setStep] = useState<'config' | 'models'>(isEdit ? 'models' : 'config');
 
-    // Fetch models if in edit mode and models are empty
-    React.useEffect(() => {
-        if (isEdit && models.length === 0) {
-            handleVerify();
-        }
-    }, [isEdit, models.length, handleVerify]);
 
     const handleVerify = useCallback(async () => {
         setIsVerifying(true);
@@ -203,6 +197,13 @@ const ProviderModal: React.FC<{
             setIsVerifying(false);
         }
     }, [apiKey, isEdit, selectedProvider, sessionKey, t, tenantId]);
+
+    // Fetch models if in edit mode and models are empty
+    React.useEffect(() => {
+        if (isEdit && models.length === 0) {
+            handleVerify();
+        }
+    }, [isEdit, models.length, handleVerify]);
 
     const handleSave = async () => {
         setIsSaving(true);
