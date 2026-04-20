@@ -180,20 +180,21 @@ async fn handle_chat(
                 ))
                 .await;
 
-            let pref = if let Ok(Some(profile)) = state.persistence.get_voice_profile(&tenant_id).await {
-                use std::str::FromStr;
-                ank_core::scheduler::ModelPreference::from_str(&profile.model_pref)
-                    .unwrap_or(ank_core::scheduler::ModelPreference::HybridSmart)
-            } else {
-                // Fallback a variable de entorno configurada por el instalador
-                std::env::var("DEFAULT_MODEL_PREF")
-                    .ok()
-                    .and_then(|s| {
-                        use std::str::FromStr;
-                        ank_core::scheduler::ModelPreference::from_str(&s).ok()
-                    })
-                    .unwrap_or(ank_core::scheduler::ModelPreference::HybridSmart)
-            };
+            let pref =
+                if let Ok(Some(profile)) = state.persistence.get_voice_profile(&tenant_id).await {
+                    use std::str::FromStr;
+                    ank_core::scheduler::ModelPreference::from_str(&profile.model_pref)
+                        .unwrap_or(ank_core::scheduler::ModelPreference::HybridSmart)
+                } else {
+                    // Fallback a variable de entorno configurada por el instalador
+                    std::env::var("DEFAULT_MODEL_PREF")
+                        .ok()
+                        .and_then(|s| {
+                            use std::str::FromStr;
+                            ank_core::scheduler::ModelPreference::from_str(&s).ok()
+                        })
+                        .unwrap_or(ank_core::scheduler::ModelPreference::HybridSmart)
+                };
 
             let mut pcb = PCB::new(tenant_id.clone(), 5, prompt);
             pcb.model_pref = pref;
