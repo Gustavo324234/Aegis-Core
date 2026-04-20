@@ -361,7 +361,9 @@ mod tests {
         pool.mark_rate_limited("key-2", future).await;
 
         // Only key-3 should be returned
-        let key = pool.get_available_key("anthropic", "any-model", "tenant-x").await;
+        let key = pool
+            .get_available_key("anthropic", "any-model", "tenant-x")
+            .await;
         assert!(key.is_some(), "Should return the available key");
         assert_eq!(key.map(|k| k.key_id), Some("key-3".to_string()));
 
@@ -401,7 +403,9 @@ mod tests {
         )
         .await?;
 
-        let key = pool.get_available_key("openai", "any-model", "tenant-a").await;
+        let key = pool
+            .get_available_key("openai", "any-model", "tenant-a")
+            .await;
         assert!(key.is_some());
         assert_eq!(
             key.map(|k| k.key_id),
