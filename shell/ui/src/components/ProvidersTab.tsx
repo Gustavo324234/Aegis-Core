@@ -77,12 +77,6 @@ const ProviderCard: React.FC<{
     );
 };
 
-interface AddProviderPanelProps {
-    onClose: () => void;
-    onSaved: (provider: ProviderEntry) => void;
-    tenantId: string;
-    sessionKey: string;
-}
 
 const ModelSelector: React.FC<{ 
     models: string[]; 
