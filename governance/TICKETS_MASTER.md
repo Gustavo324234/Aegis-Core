@@ -162,3 +162,9 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 ---
 
 *Última actualización: 2026-04-16 — Arquitecto IA (clasificación de CORE-109 a CORE-120)*
+
+---
+
+## 🐛 SMOKE TEST BUGS — 2026-04-20
+
+*   **[CORE-121]** Fix: `openrouter/free` ausente en `models.yaml` — CognitiveRouter no podía matchear la key del KeyPool, caía a Ollama y fallaba en servidores cloud-only `[DONE — Arquitecto IA]`
