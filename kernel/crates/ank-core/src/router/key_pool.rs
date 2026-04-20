@@ -350,6 +350,7 @@ mod tests {
                 label: Some(format!("Key {}", i)),
                 is_active: true,
                 rate_limited_until: None,
+                active_models: None,
             };
             pool.add_global_key(entry).await?;
         }
@@ -380,6 +381,7 @@ mod tests {
             label: None,
             is_active: true,
             rate_limited_until: None,
+            active_models: None,
         })
         .await?;
 
@@ -394,6 +396,7 @@ mod tests {
                 label: None,
                 is_active: true,
                 rate_limited_until: None,
+                active_models: None,
             },
         )
         .await?;

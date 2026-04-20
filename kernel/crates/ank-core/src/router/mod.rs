@@ -288,6 +288,7 @@ mod tests {
                 label: None,
                 is_active: true,
                 rate_limited_until: None,
+                active_models: None,
             })
             .await?;
 
