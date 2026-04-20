@@ -433,7 +433,10 @@ mod tests {
             !prompt.contains("HERRAMIENTAS DISPONIBLES"),
             "Sin tools, no debe haber sección de herramientas"
         );
-        assert!(prompt.contains("hola"), "El prompt debe contener la instrucción");
+        assert!(
+            prompt.contains("hola"),
+            "El prompt debe contener la instrucción"
+        );
         Ok(())
     }
 }
