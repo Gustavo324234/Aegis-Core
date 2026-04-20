@@ -28,8 +28,6 @@ pub async fn ws_chat_handler(
 ) -> impl IntoResponse {
     let (session_key, protocol_header) = extract_session_key_and_protocol(&headers);
 
-    // Confirmar el subprotocolo exacto que mandó el cliente para que el browser
-    // no rechace el handshake por mismatch de Sec-WebSocket-Protocol.
     let ws = if let Some(proto) = protocol_header {
         ws.protocols([proto])
     } else {
@@ -48,7 +46,6 @@ fn extract_session_key_and_protocol(headers: &HeaderMap) -> (Option<String>, Opt
         return (None, None);
     };
 
-    // Buscar el protocolo que empieza con "session-key."
     let proto = val
         .split(',')
         .find(|p| p.trim().starts_with("session-key."))
@@ -179,21 +176,28 @@ async fn handle_chat(
 
             let _ = socket
                 .send(Message::Text(
-                    json!({
-                        "event": "status",
-                        "data": "Submitting task to ANK..."
-                    })
-                    .to_string(),
+                    json!({ "event": "status", "data": "Submitting task to ANK..." }).to_string(),
                 ))
                 .await;
 
-            // Enviar al scheduler
             let mut pcb = PCB::new(tenant_id.clone(), 5, prompt);
             pcb.tenant_id = Some(tenant_id.clone());
             pcb.session_key = Some(hash.clone());
+            let pid = pcb.pid.clone();
+
+            // CORE-FIX: Suscribirse al broadcast channel ANTES de enviar la tarea
+            // al scheduler para evitar el race condition donde el HAL Runner termina
+            // la inferencia antes de que el WebSocket esté escuchando.
+            let receiver = {
+                let mut broker = state.event_broker.write().await;
+                let sender = broker.entry(pid.clone()).or_insert_with(|| {
+                    let (tx, _) = tokio::sync::broadcast::channel(512);
+                    tx
+                });
+                sender.subscribe()
+            };
 
             let (tx, rx) = oneshot::channel();
-            let pid_guess = pcb.pid.clone();
 
             if let Err(e) = state
                 .scheduler_tx
@@ -202,33 +206,29 @@ async fn handle_chat(
             {
                 let _ = socket
                     .send(Message::Text(
-                        json!({
-                            "event": "error",
-                            "data": format!("Scheduler down: {}", e)
-                        })
-                        .to_string(),
+                        json!({ "event": "error", "data": format!("Scheduler down: {}", e) })
+                            .to_string(),
                     ))
                     .await;
                 continue;
             }
 
-            let pid = match rx.await {
-                Ok(p) => p,
-                Err(_) => pid_guess,
-            };
+            // Esperar confirmación del PID (best-effort)
+            let confirmed_pid = rx.await.unwrap_or(pid);
 
             let _ = socket
                 .send(Message::Text(
                     json!({
                         "event": "status",
-                        "data": format!("Task accepted. PID: {}", pid),
-                        "pid": pid
+                        "data": format!("Task accepted. PID: {}", confirmed_pid),
+                        "pid": confirmed_pid
                     })
                     .to_string(),
                 ))
                 .await;
 
-            stream_task_events(&mut socket, &pid, &state).await;
+            // Streamear con el receiver ya suscrito antes del dispatch
+            stream_with_receiver(&mut socket, receiver).await;
         }
     }
 }
@@ -237,12 +237,18 @@ async fn stream_task_events(socket: &mut WebSocket, pid: &str, state: &AppState)
     let receiver = {
         let mut broker = state.event_broker.write().await;
         let sender = broker.entry(pid.to_string()).or_insert_with(|| {
-            let (tx, _) = tokio::sync::broadcast::channel(100);
+            let (tx, _) = tokio::sync::broadcast::channel(512);
             tx
         });
         sender.subscribe()
     };
+    stream_with_receiver(socket, receiver).await;
+}
 
+async fn stream_with_receiver(
+    socket: &mut WebSocket,
+    receiver: tokio::sync::broadcast::Receiver<ank_proto::v1::TaskEvent>,
+) {
     let mut stream = BroadcastStream::new(receiver);
 
     while let Some(Ok(proto_event)) = stream.next().await {
@@ -268,11 +274,7 @@ async fn stream_task_events(socket: &mut WebSocket, pid: &str, state: &AppState)
 
             let _ = socket
                 .send(Message::Text(
-                    json!({
-                        "event": "kernel_event",
-                        "data": data
-                    })
-                    .to_string(),
+                    json!({ "event": "kernel_event", "data": data }).to_string(),
                 ))
                 .await;
 
