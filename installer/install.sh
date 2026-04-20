@@ -3,7 +3,7 @@
 # AEGIS OS — UNIFIED INSTALLER (SRE GRADE)
 # ==============================================================================
 # OS: Ubuntu / Debian
-# Tickets: CORE-040
+# Tickets: CORE-040, CORE-122
 # ==============================================================================
 
 set -euo pipefail
@@ -29,6 +29,7 @@ NC='\033[0m'
 
 INSTALL_MODE="1"
 ARCH="x86_64"
+INFERENCE_PROFILE="cloud"
 
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
@@ -71,27 +72,27 @@ detect_arch() {
 # --- System Audit ---
 run_system_audit() {
     log "Performing System Audit..."
-    
+
     local cpu_cores ram_gb docker_status nvidia_status="Not Detected"
     cpu_cores=$(nproc)
     ram_gb=$(free -g | awk '/^Mem:/{print $2}')
     docker_status=$(command -v docker > /dev/null 2>&1 && echo "Installed" || echo "Missing")
-    
+
     if command -v nvidia-smi > /dev/null 2>&1 && nvidia-smi > /dev/null 2>&1; then
         nvidia_status=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1)
     fi
 
-    if [ "$USE_TUI" = true ]; then
+    if [ "${USE_TUI:-false}" = true ]; then
         if ! command -v dialog &> /dev/null; then
             apt-get update -qq && apt-get install -y dialog -qq >> "$LOG_FILE" 2>&1
         fi
-        
+
         local report="System Audit Results:\n\n"
         report+="CPU Cores:    $cpu_cores\n"
         report+="Total RAM:    ${ram_gb}GB\n"
         report+="Docker:       $docker_status\n"
         report+="GPU:          $nvidia_status\n\n"
-        
+
         if [ "$ram_gb" -lt 2 ]; then
             report+="[WARNING] Low RAM detected. Installation might be unstable."
         fi
@@ -111,25 +112,74 @@ run_system_audit() {
 
 # --- UI Menus ---
 show_main_menu() {
+    # RECONEXIÓN A TTY: Si estamos en un pipe (curl | bash), reconectamos stdin para ser interactivos
     if [ ! -t 0 ]; then
-        USE_TUI=false
         log "Non-interactive shell detected. Defaulting to Native mode."
         return
     fi
 
     print_banner
-    echo "┌─────────────────────────────────────────────────┐"
-    echo "│           AEGIS OS — INSTALLATION MODE          │"
-    echo "├─────────────────────────────────────────────────┤"
-    echo "│  [1] Native (recommended)  — systemd binary     │"
-    echo "│  [2] Docker                — containerized       │"
-    echo "└─────────────────────────────────────────────────┘"
-    echo ""
-    read -rp "Selection [1-2, default 1]: " choice
-    case "${choice:-1}" in
+    echo -e "${YELLOW}--- CONFIGURACIÓN DE DESPLIEGUE ---${NC}"
+    echo "Seleccione el modo de instalación:"
+    echo "  [1] Nativo (Directo en el Host, máximo rendimiento) [DEFAULT]"
+    echo "  [2] Docker (Aisla dependencias, más limpio)"
+    read -rp "Selección [1-2]: " mode_choice
+    case "${mode_choice:-1}" in
         2) INSTALL_MODE="2" ;;
         *) INSTALL_MODE="1" ;;
     esac
+
+    echo ""
+    echo -e "${YELLOW}--- PREFERENCIA COGNITIVA (IA) ---${NC}"
+    echo "Aegis necesita saber cómo procesar instrucciones:"
+    echo "  [1] Cloud Only     (Usa OpenRouter/OpenAI, requiere internet, muy inteligente) [DEFAULT]"
+    echo "  [2] Local Only     (Usa Ollama/Llama.cpp local, privacidad total, requiere GPU/RAM)"
+    echo "  [3] Hybrid Smart   (Aegis decide: local para tareas simples, nube para complejas)"
+    read -rp "Selección [1-3]: " ia_choice
+    case "${ia_choice:-1}" in
+        2) export AEGIS_INIT_PREF="LocalOnly" ;;
+        3) export AEGIS_INIT_PREF="HybridSmart" ;;
+        *) export AEGIS_INIT_PREF="CloudOnly" ;;
+    esac
+
+    echo ""
+    echo -e "${YELLOW}--- PERFIL DE HARDWARE ---${NC}"
+    echo "Defina la potencia de este nodo:"
+    echo "  [1] Tier 1 (Low End / Laptop / VPS) [DEFAULT]"
+    echo "  [2] Tier 2 (Workstation / RTX 3060+)"
+    echo "  [3] Tier 3 (SRE Grade / A100 / H100 Cluster)"
+    read -rp "Selección [1-3]: " hw_choice
+    export HW_PROFILE="${hw_choice:-1}"
+}
+
+show_inference_profile_menu() {
+    if [ ! -t 0 ]; then
+        log "Non-interactive shell. Defaulting to inference profile: cloud."
+        INFERENCE_PROFILE="cloud"
+        return
+    fi
+
+    echo ""
+    echo "┌─────────────────────────────────────────────────────────────┐"
+    echo "│              AEGIS OS — INFERENCE PROFILE                   │"
+    echo "├─────────────────────────────────────────────────────────────┤"
+    echo "│  [1] Cloud only  — API keys (OpenRouter, OpenAI, etc.)      │"
+    echo "│      Recommended for VPS/servers without local GPU          │"
+    echo "│                                                             │"
+    echo "│  [2] Local only  — Ollama / local models (no API keys)     │"
+    echo "│      Recommended for air-gapped or GPU-equipped machines    │"
+    echo "│                                                             │"
+    echo "│  [3] Hybrid      — Cloud + local fallback                  │"
+    echo "│      Best of both worlds if you have GPU + API keys        │"
+    echo "└─────────────────────────────────────────────────────────────┘"
+    echo ""
+    read -rp "Selection [1-3, default 1]: " choice
+    case "${choice:-1}" in
+        2) INFERENCE_PROFILE="local" ;;
+        3) INFERENCE_PROFILE="hybrid" ;;
+        *) INFERENCE_PROFILE="cloud" ;;
+    esac
+    log "Inference profile: ${INFERENCE_PROFILE}"
 }
 
 install_dependencies() {
@@ -166,10 +216,10 @@ install_native() {
     release_url="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${RELEASE_TAG}"
     local bin_file
     bin_file="ank-server-linux-${ARCH}.tar.gz"
-    
+
     log "Downloading ank-server binary (${RELEASE_TAG})..."
     curl -L --fail --progress-bar "${release_url}/${bin_file}" -o "/tmp/${bin_file}" || error "Download failed"
-    
+
     tar -xzf "/tmp/${bin_file}" -C "/tmp/"
     mv "/tmp/ank-server-linux-${ARCH}" "${BIN_DIR}/ank-server"
     chmod +x "${BIN_DIR}/ank-server"
@@ -209,16 +259,21 @@ install_native() {
 AEGIS_ROOT_KEY=${root_key}
 AEGIS_DATA_DIR=${DATA_DIR}
 AEGIS_MTLS_STRICT=false
+AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 UI_DIST_PATH=${UI_DIST_PATH}
+HW_PROFILE=${HW_PROFILE:-1}
+DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
 EOF
         chmod 640 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
         success "Environment file → ${ENV_FILE}"
+        success "Inference profile: ${INFERENCE_PROFILE}"
     else
         warn "Existing ${ENV_FILE} preserved."
-        # Ensure required vars are present
-        grep -q "UI_DIST_PATH"  "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}"  >> "$ENV_FILE"
-        grep -q "AEGIS_DATA_DIR" "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"   >> "$ENV_FILE"
+        # Asegurar que las vars requeridas están presentes
+        grep -q "UI_DIST_PATH"          "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}"               >> "$ENV_FILE"
+        grep -q "AEGIS_DATA_DIR"        "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                 >> "$ENV_FILE"
+        grep -q "AEGIS_MODEL_PROFILE"   "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"   >> "$ENV_FILE"
     fi
 
     # Write mode file
@@ -278,11 +333,15 @@ install_docker() {
         cat > "${INSTALL_ROOT}/.env" <<EOF
 AEGIS_ROOT_KEY=${root_key}
 AEGIS_MTLS_STRICT=false
+AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 EOF
         chmod 600 "${INSTALL_ROOT}/.env"
         success "Docker .env created → ${INSTALL_ROOT}/.env"
+        success "Inference profile: ${INFERENCE_PROFILE}"
     else
         warn ".env already exists — preserving existing keys."
+        grep -q "AEGIS_MODEL_PROFILE" "${INSTALL_ROOT}/.env" \
+            || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}" >> "${INSTALL_ROOT}/.env"
     fi
 
     mkdir -p "$CONFIG_DIR"
@@ -333,6 +392,9 @@ wait_and_show() {
         local ip
         ip=$(hostname -I 2>/dev/null | awk '{print $1}') || ip="localhost"
 
+        echo -e "  Inference profile: ${CYAN}${INFERENCE_PROFILE}${NC}"
+        echo ""
+
         if [[ -n "$token" ]]; then
             echo -e "${CYAN}  First-time setup URL:${NC}"
             echo -e "  ${GREEN}http://${ip}:8000?setup_token=${token}${NC}"
@@ -355,6 +417,7 @@ wait_and_show() {
 check_root
 detect_arch
 show_main_menu
+show_inference_profile_menu
 install_dependencies
 
 if [[ "$INSTALL_MODE" == "1" ]]; then
