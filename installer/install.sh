@@ -354,7 +354,7 @@ wait_and_show() {
 # --- Main ---
 check_root
 detect_arch
-show_menu
+show_main_menu
 install_dependencies
 
 if [[ "$INSTALL_MODE" == "1" ]]; then
