@@ -41,7 +41,7 @@ pub async fn receive_tokens(
     }
 
     let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
 
     db.set_oauth_token(
         &body.provider,
@@ -50,7 +50,7 @@ pub async fn receive_tokens(
         body.expires_in,
         &body.scope,
     )
-    .map_err(|e| AegisHttpError::Internal(e))?;
+    .map_err(AegisHttpError::Internal)?;
 
     tracing::info!(
         tenant = %auth.tenant_id,
@@ -66,21 +66,21 @@ pub async fn get_status(
     auth: CitadelAuthenticated,
 ) -> Result<Json<OAuthStatusResponse>, AegisHttpError> {
     let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
 
     let google_connected = db
         .is_oauth_connected("google")
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
     let google_scope = db
         .get_oauth_scope("google")
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
 
     let spotify_connected = db
         .is_oauth_connected("spotify")
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
     let spotify_scope = db
         .get_oauth_scope("spotify")
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
 
     Ok(Json(OAuthStatusResponse {
         google: ProviderStatus {
@@ -104,10 +104,10 @@ pub async fn disconnect_provider(
     }
 
     let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
 
     db.revoke_oauth(&provider)
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
 
     tracing::info!(
         tenant = %auth.tenant_id,
