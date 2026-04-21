@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.14](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.13...ank-server-v0.1.14) (2026-04-21)
+
+
+### Features
+
+* **core:** Epic 38-39-40 — Agent Persona, Music, Connected Accounts ([#76](https://github.com/Gustavo324234/Aegis-Core/issues/76)) ([b4ceb7d](https://github.com/Gustavo324234/Aegis-Core/commit/b4ceb7d77884109570e07fbf0577d88a113c4842))
+
 ## [0.1.13](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.12...ank-server-v0.1.13) (2026-04-21)
 
 ## [0.1.12](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.11...ank-server-v0.1.12) (2026-04-20)
