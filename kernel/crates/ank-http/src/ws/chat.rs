@@ -195,7 +195,6 @@ async fn handle_chat(
                         })
                         .unwrap_or(ank_core::scheduler::ModelPreference::HybridSmart)
                 };
-
             let mut pcb = PCB::new(tenant_id.clone(), 5, prompt);
             pcb.model_pref = pref;
             pcb.tenant_id = Some(tenant_id.clone());

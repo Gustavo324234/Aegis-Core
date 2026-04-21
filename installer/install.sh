@@ -151,6 +151,7 @@ show_main_menu() {
     echo "  [3] Tier 3 (SRE Grade / A100 / H100 Cluster)"
     read -rp "Selección [1-3]: " hw_choice
     export HW_PROFILE="${hw_choice:-1}"
+
 }
 
 show_inference_profile_menu() {
@@ -214,6 +215,7 @@ setup_tls() {
         chmod 640 "$CONFIG_DIR"/*.pem
         success "Certificado TLS creado en $CONFIG_DIR"
     fi
+
 }
 
 install_dependencies() {
@@ -372,6 +374,8 @@ install_docker() {
 AEGIS_ROOT_KEY=${root_key}
 AEGIS_MTLS_STRICT=false
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
+HW_PROFILE=${HW_PROFILE:-1}
+DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
 EOF
         chmod 600 "${INSTALL_ROOT}/.env"
         success "Docker .env created → ${INSTALL_ROOT}/.env"
