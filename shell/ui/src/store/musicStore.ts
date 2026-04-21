@@ -5,6 +5,7 @@ export interface MusicTrack {
     title: string;
     channel: string;
     thumbnail: string;
+    provider: string;
 }
 
 interface MusicState {
