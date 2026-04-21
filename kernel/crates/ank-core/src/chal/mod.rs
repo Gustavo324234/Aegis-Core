@@ -312,7 +312,7 @@ impl CognitiveHAL {
 
         let music_section = if std::env::var("YOUTUBE_API_KEY").is_ok() {
             "\n\nMÚSICA — INSTRUCCIONES:\
-             \n- Para reproducir: [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista canción>\", \"max_results\": 1})] y luego [MUSIC_PLAY:<video_id>]\
+             \n- Para reproducir: [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista canción>\", \"max_results\": 1})] y luego [MUSIC_PLAY:youtube:<video_id>] (o spotify si usas Spotify)\
              \n- Para pausar: responde brevemente y termina con [MUSIC_PAUSE]\
              \n- Para continuar: responde brevemente y termina con [MUSIC_RESUME]\
              \n- Para detener: responde brevemente y termina con [MUSIC_STOP]\

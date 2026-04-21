@@ -75,8 +75,11 @@ impl PluginManager {
     /// y medidas de seguridad (Fuel consumption, WASI, CPU limits).
     pub fn new() -> Result<Self, PluginError> {
         // En un entorno real, AEGIS_ROOT_KEY vendría de enclave/vault.
-        let public_key = [0u8; 32];
-        let signer = PluginSigner::new(&public_key)
+        // Por ahora lo dejamos como [0; 32] pero permitiremos cargarlo vía env.
+        let public_key_hex =
+            std::env::var("AEGIS_PLUGIN_ROOT_KEY").unwrap_or_else(|_| "0".repeat(64));
+        let public_key = hex::decode(public_key_hex).unwrap_or_else(|_| vec![0u8; 32]);
+        let signer = PluginSigner::new(&public_key[..32].try_into().unwrap_or([0u8; 32]))
             .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?;
         Self::new_with_signer(signer)
     }
@@ -145,7 +148,10 @@ impl PluginManager {
 
         let metadata_input = r#"{"action": "get_metadata"}"#;
         // system tenant no se marca como tainted fácilmente pero usamos error logging
-        match self.execute_plugin("system", &name, metadata_input).await {
+        match self
+            .execute_plugin("system", &name, metadata_input, None)
+            .await
+        {
             Ok(json_out) => {
                 if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&json_out) {
                     if let Some(data) = resp.get("data").and_then(|d| d.as_object()) {
@@ -225,7 +231,10 @@ impl PluginManager {
 
         // 2. Discover metadata running the plugin
         let metadata_input = r#"{"action": "get_metadata"}"#;
-        match self.execute_plugin("system", &name, metadata_input).await {
+        match self
+            .execute_plugin("system", &name, metadata_input, None)
+            .await
+        {
             Ok(json_out) => {
                 if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&json_out) {
                     if let Some(data) = resp.get("data").and_then(|d| d.as_object()) {
@@ -305,6 +314,7 @@ impl PluginManager {
         tenant_id: &str,
         plugin_name: &str,
         input_json: &str,
+        session_key: Option<&str>,
     ) -> Result<String, PluginError> {
         let plugin = self.plugins.get(plugin_name).ok_or_else(|| {
             PluginError::FunctionNotFound(format!("Plugin {} not loaded", plugin_name))
@@ -392,9 +402,11 @@ impl PluginManager {
                     wasmtime::Trap::MemoryOutOfBounds => {
                         error!("SECURITY VIOLATION (OOB) in plugin {} for tenant {}. Marking as TAINTED.", plugin_name, tenant_id);
                         // TAINTED POLICY: Mark in TenantDB
-                        // En un entorno real, AEGIS_SESSION_KEY vendría del contexto.
-                        if let Ok(db) = TenantDB::open(tenant_id, "default_internal_key") {
-                            let _ = db.set_kv(&format!("plugin_status:{}", plugin_name), "TAINTED");
+                        if let Some(key) = session_key {
+                            if let Ok(db) = TenantDB::open(tenant_id, key) {
+                                let _ =
+                                    db.set_kv(&format!("plugin_status:{}", plugin_name), "TAINTED");
+                            }
                         }
                         return Err(PluginError::SecurityViolation(
                             "Memory Out Of Bounds (Potential Buffer Overflow Attack)".to_string(),
@@ -562,7 +574,9 @@ mod tests {
         std::fs::write(&sig_path, signature.to_bytes()).context("Failed to write signature")?;
 
         manager.load_plugin(path).await?;
-        let res = manager.execute_plugin("test_tenant", "test", "{}").await;
+        let res = manager
+            .execute_plugin("test_tenant", "test", "{}", None)
+            .await;
 
         assert!(res.is_err());
 
