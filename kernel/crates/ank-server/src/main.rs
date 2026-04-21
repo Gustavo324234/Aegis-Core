@@ -95,6 +95,17 @@ async fn main() -> Result<()> {
     // 6. Setup Token
     {
         let c = citadel.lock().await;
+        if let Ok(Some(enabled)) = c.enclave.get_config("tls_enabled").await {
+            if enabled == "true" {
+                if let Ok(Some(cert)) = c.enclave.get_config("tls_cert_path").await {
+                    std::env::set_var("AEGIS_TLS_CERT", cert);
+                }
+                if let Ok(Some(key_path)) = c.enclave.get_config("tls_key_path").await {
+                    std::env::set_var("AEGIS_TLS_KEY", key_path);
+                }
+            }
+        }
+
         if !c.enclave.admin_exists().await? {
             let token = uuid::Uuid::new_v4().to_string().replace("-", "");
             c.enclave.store_setup_token(&token, 30).await?;

@@ -1,8 +1,8 @@
 # AEGIS_CONTEXT.md — Aegis Core
 
-> **Versión:** 1.1.0
-> **Actualizado:** 2026-04-13
-> **Estado:** EPIC 34 COMPLETE — sistema funcional end-to-end, audit fixes aplicados
+> **Versión:** 1.2.0
+> **Actualizado:** 2026-04-21
+> **Estado:** EPIC 38 IN PROGRESS — Agent Persona System
 
 ---
 
@@ -55,7 +55,7 @@ aegis-app         →  cliente mobile (HTTP/WS — ADR-022)
 ank-cli           →  CLI administrativa (gRPC directo)
 ```
 
-### Flujo de inferencia (Epic 34 — CORE-085)
+### Flujo de inferencia con Persona (Epic 38)
 
 ```
 WebSocket /ws/chat
@@ -65,15 +65,16 @@ CognitiveScheduler (ready_queue)
     │  execution_tx — canal mpsc
     ▼
 HAL Runner (tokio::spawn en main.rs)
-    │  hal.route_and_execute(shared_pcb)
+    │  Lee Persona del enclave SQLCipher del tenant (best-effort)
+    │  hal.route_and_execute(shared_pcb, persona: Option<String>)
+    ▼
+CognitiveHAL::build_prompt(instruction, persona)
+    │  SYSTEM_PROMPT_MASTER + [IDENTIDAD CONFIGURADA] + instrucción
     ▼
 CognitiveRouter → CloudProxyDriver → LLM API
     │  token stream
     ▼
-event_broker (broadcast::Sender por PID)
-    │
-    ▼
-WebSocket → Browser
+event_broker → WebSocket → Browser
 ```
 
 ---
@@ -142,7 +143,7 @@ Flujo idéntico al HTTP: SHA-256(passphrase) → Argon2id → verificación.
 | `GET` | `/api/router/models` | Tenant (CitadelAuthenticated) | Catálogo de modelos |
 | `POST` | `/api/router/sync` | Admin (CitadelAuthenticated) | Forzar sync catálogo |
 
-#### Workspace y Voz
+#### Workspace, Voz y Persona
 | Método | Path | Auth | Descripción |
 |---|---|---|---|
 | `POST` | `/api/workspace/upload` | Tenant (CitadelAuthenticated en headers) | Subir archivo |
@@ -150,6 +151,9 @@ Flujo idéntico al HTTP: SHA-256(passphrase) → Argon2id → verificación.
 | `GET` | `/api/siren/config` | Tenant (CitadelAuthenticated) | Config de voz |
 | `POST` | `/api/siren/config` | Tenant (CitadelAuthenticated) | Actualizar config de voz |
 | `GET` | `/api/siren/voices` | — | Voces disponibles |
+| `GET` | `/api/persona` | Tenant (CitadelAuthenticated) | Leer Persona del agente (Epic 38) |
+| `POST` | `/api/persona` | Tenant (CitadelAuthenticated) | Guardar Persona — body: `{ "persona": "..." }` |
+| `DELETE` | `/api/persona` | Tenant (CitadelAuthenticated) | Eliminar Persona (restaura default) |
 
 #### WebSocket
 | Path | Protocolo | Descripción |
@@ -191,10 +195,11 @@ Flujo idéntico al HTTP: SHA-256(passphrase) → Argon2id → verificación.
 | ADR-031 | BFF Python es legacy — no existe en Core | Activo |
 | ADR-032 | Monorepo aegis-core | Activo |
 | ADR-033 | distro/ reservado para futura distro Linux | Planificado |
-| ADR-034 | Citadel credentials via HTTP headers únicamente — nunca query params ni body | **Activo (Epic 34)** |
-| ADR-035 | HAL Runner: goroutine dedicada en main.rs conecta Scheduler → HAL → event_broker | **Activo (Epic 34)** |
-| ADR-036 | Anthropic/DeepSeek/Mistral/Qwen se acceden via OpenRouter (protocolo OpenAI-compatible) | **Activo (Epic 34)** |
-| ADR-038 | VCM L3: `fast-hnsw` como motor de vector search embebido (pure Rust, zero dependencies) | **Activo (CORE-098)** |
+| ADR-034 | Citadel credentials via HTTP headers únicamente — nunca query params ni body | Activo |
+| ADR-035 | HAL Runner: goroutine dedicada en main.rs conecta Scheduler → HAL → event_broker | Activo |
+| ADR-036 | Anthropic/DeepSeek/Mistral/Qwen se acceden via OpenRouter (protocolo OpenAI-compatible) | Activo |
+| ADR-038 | VCM L3: `fast-hnsw` como motor de vector search embebido (pure Rust, zero dependencies) | Activo |
+| ADR-039 | Agent Persona: almacenada en `kv_store` del enclave SQLCipher del tenant, clave `"agent_persona"`, máx. 4000 chars | **Activo (Epic 38)** |
 
 ---
 
@@ -229,6 +234,50 @@ Flujo idéntico al HTTP: SHA-256(passphrase) → Argon2id → verificación.
 *v1.0.0 — 2026-04-08: Epic 32 completa*
 *v1.1.0 — 2026-04-13: Epic 34 completa — audit fixes, flujo de inferencia conectado*
 *v1.2.0 — 2026-04-16: ADR-038 — VCM L3 con fast-hnsw (CORE-098)*
+*v1.3.0 — 2026-04-21: Epic 38 iniciada — ADR-039 Agent Persona, endpoints /api/persona*
+
+---
+
+## ADR-039: Agent Persona — Identidad configurable por tenant
+
+**Fecha:** 2026-04-21
+**Status:** ACEPTADA
+**Tickets:** CORE-128, CORE-129, CORE-130, CORE-131
+
+### Problema
+
+El `SYSTEM_PROMPT_MASTER` sin contexto de identidad produce:
+1. Alucinación de acciones no ejecutadas ("He registrado ese gasto")
+2. Identidad genérica inventada en lugar de una presentación honesta
+3. Formato lista innecesario en respuestas conversacionales
+
+### Decisión
+
+**La Persona es un atributo del enclave del tenant.** Se persiste en la `kv_store`
+del `TenantDB` bajo la clave `"agent_persona"`. Máximo 4000 caracteres. Vacía por
+defecto — el agente se presenta como "Aegis" y no inventa capacidades.
+
+**No se añade tabla nueva en SQLCipher.** El `kv_store` genérico ya existe y tiene
+exactamente la semántica requerida: clave → valor persistido, acceso by key.
+
+**Lectura en el WebSocket handler (best-effort).** Al recibir cada mensaje de chat,
+el handler intenta leer la persona del enclave. Si falla (error de IO, enclave
+corrompido), continúa sin persona en lugar de rechazar la inferencia.
+
+**La Persona NO viaja en el PCB ni en el TaskRequest.** Es responsabilidad del
+handler HTTP/WS leerla del enclave antes de llamar al HAL. El Kernel no expone
+la Persona hacia el exterior.
+
+### Consecuencias positivas
+- Sin cambios en Protobuf — cero impacto en gRPC
+- Sin nueva tabla SQLCipher — cero migración de esquema
+- Retrocompatible — tenants sin persona no ven cambio alguno
+- El operador puede personalizar completamente el agente sin tocar código
+
+### Consecuencias negativas
+- Leer el enclave en cada mensaje de chat añade latencia de disco (SQLite, ~1ms)
+- Si el enclave del tenant cambia de passphrase, la persona se vuelve inaccesible
+  hasta que el tenant se re-autentique (comportamiento esperado — enclave bloqueado)
 
 ---
 
@@ -250,58 +299,8 @@ para `LanceSwapManager` pero la persistencia está marcada como `FUTURE(ANK-2402
 - LanceDB requiere Arrow como dependencia, cuyas versiones frecuentemente entran en conflicto
 - El workspace usa Arrow 58 (especifico para compatibilidad con prost/prost-types)
 
-### Análisis de alternativas
-
-| Opción | Dependencias | Madurez | API | Compatibilidad Arrow 58 | Veredicto |
-|---|---|---|---|---|---|
-| **LanceDB** | Arrow, object_store | Alta | Excelente | Conflicto frecuente | RECHAZADO |
-| **qdrant-client** | Servidor externo | Alta | Excelente | N/A (no embebido) | RECHAZADO (añade dependencia externa) |
-| **usearch** | C++ via cxx-build | Alta | Buena | N/A (C++ puro) | ALTERNATIVA (bindings C++) |
-| **hnsw_rs** | parking_lot, serde | Media | Media | Compatible | CONSIDERADO |
-| **fast-hnsw** | memmap2 (pure Rust) | Alta (Feb 2026) | Excelente | Compatible | **ELEGIDO** |
-
 ### Decisión
 
-**Elegir `fast-hnsw`** por las siguientes razones:
+Elegir `fast-hnsw` — pure Rust, zero Arrow conflicts, API ideal para payloads, persistencia built-in.
 
-1. **Zero dependencies externas** — Solo `memmap2` (pure Rust), sin bindings C++ ni Arrow
-2. **API ideal para payloads** — `LabeledIndex<T>` permite almacenar `MemoryFragment` completo
-3. **Persistencia built-in** — `save()`/`load()` con mmap para datasets grandes
-4. **Pure Rust** — Cumple con las Laws SRE del CLAUDE.md (zero panic, manejo de errores via Result)
-5. **Benchmarks** — 1.5-3.7x más rápido que hnsw_rs en búsqueda
-6. **Activamente mantenido** — v1.0.0 released Feb 2026
-7. **Licencia MIT** — Permisiva para el proyecto
-
-### API requerida vs. fast-hnsw
-
-El VCM requiere:
-- `insert(vector, id)` → `store_fragment()` ✅
-- `search(query_vector, k)` → `search()` ✅
-- `delete(id)` → pendiente de implementar en swap.rs
-- Persistencia por tenant → un índice por `tenant_id`
-
-`fast-hnsw` soporta:
-- `insert(Vec<f32>) -> usize` (id automático)
-- `search(&[f32], k, ef) -> Vec<(usize, f32)>` ✅
-- `LabeledIndex<T>` para payload con `encode`/`decode` ✅
-- `save()`/`load()`/`load_mmap()` ✅
-
-### Implementación (ticket separado CORE-109)
-
-Este ticket (CORE-098) es de investigación. La implementación real requiere:
-1. Agregar `fast-hnsw = "1.0"` a workspace dependencies
-2. Refactorizar `LanceSwapManager` para usar `LabeledIndex<MemoryFragment>`
-3. Implementar `delete` para cumplir con la API del VCM
-4. Tests de round-trip (insert → persist → load → search)
-5. Integration test con `assemble_context()` del VCM
-
-### Consecuencias
-
-**Positivas:**
-- L3 del VCM operativo para memoria a largo plazo
-- Zero Arrow conflicts — mantiene compatibilidad prost 0.13
-- Sin dependencias externas de runtime
-
-**Negativas:**
-- Learning curve de API nueva
-- Migration del stub existente en `swap.rs`
+Ver documento completo en v1.2.0.
