@@ -149,4 +149,19 @@ export async function uploadFile(
   return response.json();
 }
 
+export async function fetchPersona(
+  serverUrl: string,
+  tenantId: string,
+  sessionKey: string
+): Promise<{ persona: string; is_configured: boolean }> {
+  const res = await fetch(buildUrl(serverUrl, '/api/persona'), {
+    headers: {
+      'x-citadel-tenant': tenantId,
+      'x-citadel-key': sessionKey,
+    },
+  });
+  if (!res.ok) return { persona: '', is_configured: false };
+  return res.json();
+}
+
 export { buildUrl, buildWsUrl };
