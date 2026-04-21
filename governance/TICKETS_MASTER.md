@@ -76,6 +76,15 @@
 
 ---
 
+## 🛠️ Maintenance & Technical Debt
+
+*   **[CORE-144]** Security: `rustls-pemfile` unmaintained (RUSTSEC-2025-0134) `[BLOCKED — upstream axum-server]`
+    *   *Detalle:* La dependencia `axum-server` usa `rustls-pemfile`, que fue archivada en agosto 2025.
+    *   *Solución parcial:* Se ignoró en `deny.toml` para permitir CI.
+    *   *Plan:* Migrar a `axum-tls` nativo o esperar a que `axum-server` se actualice.
+
+---
+
 ## 🔮 EPIC 33: Linux Distribution — PLANNED post-producción
 
 ---
@@ -92,7 +101,7 @@
 | Siren desde LAN | ✅ TLS CONFIGURADO — merged |
 | OAuth / Música integrada | ✅ COMPLETO — Spotify (CORE-140) + Google (CORE-141) |
 
-**Total tickets pendientes: 0**
+**Total tickets pendientes: 1 (CORE-144)**
 **Ticket fundación: CORE-142 — DONE**
 **Acción de Tavo antes de CORE-143: completar — apps Google + Spotify registradas y placeholders reemplazados**
 
