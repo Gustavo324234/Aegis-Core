@@ -152,6 +152,7 @@ impl CognitiveHAL {
     pub async fn route_and_execute(
         &self,
         shared_pcb: SharedPCB,
+        persona: Option<String>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
     {
         let (instruction, priority, model_pref, pid) = {
@@ -174,7 +175,7 @@ impl CognitiveHAL {
             match router.decide(&pcb_snapshot).await {
                 Ok(decision) => {
                     return self
-                        .execute_with_decision(decision, &instruction, &pid)
+                        .execute_with_decision(decision, &instruction, &pid, persona.as_deref())
                         .await;
                 }
                 Err(e) => {
@@ -239,7 +240,7 @@ impl CognitiveHAL {
             }
         })?;
 
-        let final_prompt = self.build_prompt(&instruction, None).await;
+        let final_prompt = self.build_prompt(&instruction, persona.as_deref()).await;
         driver.generate_stream(&final_prompt, None).await
     }
 
@@ -248,6 +249,7 @@ impl CognitiveHAL {
         decision: RoutingDecision,
         instruction: &str,
         pid: &str,
+        persona: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
     {
         use crate::chal::drivers::CloudProxyDriver;
@@ -266,7 +268,7 @@ impl CognitiveHAL {
             decision.model_id.clone(),
         );
 
-        let final_prompt = self.build_prompt(instruction, None).await;
+        let final_prompt = self.build_prompt(instruction, persona).await;
 
         match driver.generate_stream(&final_prompt, None).await {
             Ok(stream) => Ok(stream),
@@ -308,15 +310,29 @@ impl CognitiveHAL {
             _ => String::new(),
         };
 
+        let music_section = if std::env::var("YOUTUBE_API_KEY").is_ok() {
+            "\n\nMÚSICA: Cuando el usuario pida reproducir música, usa exactamente:\
+             [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista y canción>\", \"max_results\": 1})]\
+             Cuando recibas el resultado, responde brevemente confirmando qué vas a reproducir\
+             y termina con [MUSIC_PLAY:<video_id>] en una línea separada. Sin explicaciones adicionales.\n"
+        } else {
+            ""
+        };
+
         if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
-                "{}{}\n\n{}",
-                SYSTEM_PROMPT_MASTER, persona_section, instruction
+                "{}{}{}\n\n{}",
+                SYSTEM_PROMPT_MASTER, persona_section, music_section, instruction
             )
         } else {
             format!(
-                "{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nMENSAJE DEL USUARIO:\n{}",
-                SYSTEM_PROMPT_MASTER, persona_section, tool_prompt, mcp_tool_prompt, instruction
+                "{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nMENSAJE DEL USUARIO:\n{}",
+                SYSTEM_PROMPT_MASTER,
+                persona_section,
+                music_section,
+                tool_prompt,
+                mcp_tool_prompt,
+                instruction
             )
         }
     }
@@ -380,7 +396,7 @@ mod tests {
         let mut pcb = PCB::mock("Complex Mission", 10);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
-        let stream_res = hal.route_and_execute(shared_pcb).await?;
+        let stream_res = hal.route_and_execute(shared_pcb, None).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
         assert_eq!(tokens.len(), 1);
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -410,7 +426,7 @@ mod tests {
         let mut pcb = PCB::mock("Simple task", 5);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
-        let stream_res = hal.route_and_execute(shared_pcb).await?;
+        let stream_res = hal.route_and_execute(shared_pcb, None).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
         assert!(

@@ -1,5 +1,6 @@
 use crate::{citadel::hash_passphrase, state::AppState};
-use ank_core::{pcb::PCB, scheduler::SchedulerEvent};
+use ank_core::{enclave::TenantDB, pcb::PCB, scheduler::SchedulerEvent};
+use ank_proto::v1::TaskEvent;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -11,10 +12,17 @@ use axum::{
     Router,
 };
 use futures::StreamExt;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::LazyLock;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
+
+#[allow(clippy::expect_used)]
+static MUSIC_PLAY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[MUSIC_PLAY:([A-Za-z0-9_-]{11})\]").expect("FATAL: music play regex is invalid")
+});
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/:tenant_id", get(ws_chat_handler))
@@ -269,6 +277,22 @@ async fn stream_with_receiver(
 
     while let Some(Ok(proto_event)) = stream.next().await {
         if let Some(ref payload) = proto_event.payload {
+            if let ank_proto::v1::task_event::Payload::Output(ref text) = payload {
+                if let Some(caps) = MUSIC_PLAY_RE.captures(text) {
+                    let video_id = caps[1].to_string();
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({
+                                "event": "music_play",
+                                "data": { "video_id": video_id }
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                    continue;
+                }
+            }
+
             let data = match payload {
                 ank_proto::v1::task_event::Payload::Thought(t) => json!({ "thought": t }),
                 ank_proto::v1::task_event::Payload::Output(o) => json!({ "output": o }),
