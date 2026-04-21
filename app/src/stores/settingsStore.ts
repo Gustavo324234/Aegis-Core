@@ -2,18 +2,23 @@ import { create } from 'zustand';
 import * as secureStorage from '@/services/secureStorage';
 import { PROVIDERS } from '@/constants/providers';
 import { Language } from '@/constants/i18n';
+import { fetchPersona } from '@/services/bffClient';
+import { useAuthStore } from './authStore';
 
 interface SettingsState {
   selectedProviderId: string;
   selectedModel: string;
   language: Language;
   apiKeys: Record<string, boolean>;
+  agentPersona: string;
+  isPersonaConfigured: boolean;
   
   loadSettings: () => Promise<void>;
   setProvider: (providerId: string) => Promise<void>;
   setModel: (model: string) => Promise<void>;
   setLanguage: (lang: Language) => Promise<void>;
   refreshApiKeys: () => Promise<void>;
+  fetchAgentPersona: () => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -21,6 +26,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   selectedModel: 'gpt-4o-mini',
   language: 'es',
   apiKeys: {},
+  agentPersona: '',
+  isPersonaConfigured: false,
 
   loadSettings: async () => {
     const providerId = await secureStorage.getActiveProvider() || 'openai';
@@ -57,5 +64,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       keys[p.id] = !!key;
     }
     set({ apiKeys: keys });
+  },
+
+  fetchAgentPersona: async () => {
+    const { serverUrl, tenantId, sessionKey } = useAuthStore.getState();
+    if (!serverUrl || !tenantId || !sessionKey) return;
+    try {
+      const result = await fetchPersona(serverUrl, tenantId, sessionKey);
+      set({ agentPersona: result.persona, isPersonaConfigured: result.is_configured });
+    } catch {
+      // best-effort
+    }
   }
 }));

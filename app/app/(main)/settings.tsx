@@ -22,7 +22,10 @@ export default function SettingsScreen() {
     setLanguage,
     loadSettings,
     refreshApiKeys,
-    apiKeys: hasApiKeys
+    apiKeys: hasApiKeys,
+    agentPersona,
+    isPersonaConfigured,
+    fetchAgentPersona
   } = useSettingsStore();
 
   const t = TRANSLATIONS[language];
@@ -35,6 +38,12 @@ export default function SettingsScreen() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  useEffect(() => {
+    if (mode === 'satellite') {
+      fetchAgentPersona();
+    }
+  }, [mode, fetchAgentPersona]);
 
   const handleSaveKey = async (providerId: string) => {
     if (!keyInput.trim()) return;
@@ -123,6 +132,29 @@ export default function SettingsScreen() {
           <Text style={styles.modeValue}>{mode.toUpperCase()}</Text>
           <Text style={styles.modeDesc}>Operating in {mode} neural link.</Text>
         </View>
+
+        {/* SECTION: AGENT PERSONA (Satellite only) */}
+        {mode === 'satellite' && (
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>IDENTIDAD DEL AGENTE</Text>
+          </View>
+        )}
+        {mode === 'satellite' && (
+          <View style={styles.card}>
+            {isPersonaConfigured ? (
+              <>
+                <View style={styles.personaBadge}>
+                  <Text style={styles.personaBadgeText}>✓ Persona configurada por el operador</Text>
+                </View>
+                <Text style={styles.personaPreview} numberOfLines={2}>
+                  {agentPersona.slice(0, 120)}{agentPersona.length > 120 ? '...' : ''}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.personaEmpty}>Sin identidad personalizada — usando Aegis por defecto</Text>
+            )}
+          </View>
+        )}
 
         {/* SECTION: CLOUD PROVIDERS */}
         <View style={styles.sectionHeader}>
@@ -286,5 +318,9 @@ const styles = StyleSheet.create({
   modelTextActive: { color: '#00E5CC', fontWeight: 'bold' },
   activeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#00E5CC' },
   logoutBtn: { marginTop: 40, marginBottom: 40, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#FF444433', alignItems: 'center' },
-  logoutText: { color: '#FF4444', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 }
+  logoutText: { color: '#FF4444', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 },
+  personaBadge: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  personaBadgeText: { color: '#00E5CC', fontSize: 11, fontWeight: 'bold' },
+  personaPreview: { color: '#888', fontSize: 12, lineHeight: 18 },
+  personaEmpty: { color: '#444', fontSize: 12, fontStyle: 'italic' }
 });
