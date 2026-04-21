@@ -398,7 +398,8 @@ export const useAegisStore = create<AegisState>()(
                             break;
                         }
                         case 'music_control': {
-                            const ctrl = data as { action?: string; value?: string };
+                            const musicData = data as { type: string; payload: { action?: string; level?: number } };
+                            const ctrl = musicData.payload;
                             if (!ctrl.action) break;
                             const { setPlaying, setVolume, closePlayer } = useMusicStore.getState();
                             switch (ctrl.action) {
@@ -406,8 +407,9 @@ export const useAegisStore = create<AegisState>()(
                                 case 'resume': setPlaying(true); break;
                                 case 'stop': closePlayer(); break;
                                 case 'volume': {
-                                    const vol = parseInt(ctrl.value ?? '70', 10);
-                                    if (!isNaN(vol)) setVolume(Math.min(100, Math.max(0, vol)));
+                                    if (ctrl.level !== undefined) {
+                                        setVolume(Math.min(100, Math.max(0, ctrl.level)));
+                                    }
                                     break;
                                 }
                             }
