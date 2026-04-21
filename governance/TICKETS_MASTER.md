@@ -17,7 +17,7 @@
 *   **[CORE-132]** Feature: Onboarding conversacional — primer mensaje sin Persona `[TODO — Kernel Engineer]`
 *   **[CORE-134]** Fix: TLS en Axum puerto 8000 — depende de CORE-142 `[DONE]`
 *   **[CORE-130]** Feature: Tab "Persona" en Admin Dashboard `[TODO — Shell Engineer]`
-*   **[CORE-133]** Feature: Settings Panel expandido — Persona, Motor, Voz, Seguridad, Cuentas `[TODO — Shell Engineer]`
+*   **[CORE-133]** Feature: Settings Panel expandido — Persona, Motor, Voz, Seguridad, Cuentas `[DONE — Shell Engineer]`
 *   **[CORE-131]** Feature: Display Persona en App modo Satélite `[TODO — Shell Engineer]`
 
 **Orden:** CORE-142 → CORE-134 → CORE-128 → CORE-129 → CORE-132 → CORE-130/133/131
@@ -85,7 +85,7 @@
 | Componente | Estado |
 |---|---|
 | Epic 32–37 | ✅ DONE |
-| Epic 38: Agent Persona System | 🔄 IN PROGRESS — 1/7 |
+| Epic 38: Agent Persona System | 🔄 IN PROGRESS — 2/7 |
 | Epic 39: Aegis Music | 📋 PLANNED — 0/3 |
 | Epic 40: Connected Accounts | 📋 PLANNED — 0/6 |
 | Chat end-to-end | ✅ OPERATIVO |
