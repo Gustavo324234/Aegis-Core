@@ -151,7 +151,7 @@ show_main_menu() {
     echo "  [3] Tier 3 (SRE Grade / A100 / H100 Cluster)"
     read -rp "Selección [1-3]: " hw_choice
     export HW_PROFILE="${hw_choice:-1}"
-<<<<<<< HEAD
+
 }
 
 show_inference_profile_menu() {
@@ -215,8 +215,7 @@ setup_tls() {
         chmod 640 "$CONFIG_DIR"/*.pem
         success "Certificado TLS creado en $CONFIG_DIR"
     fi
-=======
->>>>>>> fix/interactive-installer-and-cloud-default
+
 }
 
 install_dependencies() {
