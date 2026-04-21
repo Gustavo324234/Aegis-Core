@@ -30,6 +30,9 @@ pub enum Syscall {
         tool_name: String,
         args_json: String,
     },
+
+    /// Búsqueda de música en YouTube via Data API v3
+    MusicSearch { query: String, max_results: u8 },
 }
 
 /// --- SYSCALL ERROR ---
@@ -61,6 +64,7 @@ pub struct SyscallExecutor {
     #[allow(dead_code)]
     swap: Arc<LanceSwapManager>,
     mcp_registry: Arc<ank_mcp::registry::McpToolRegistry>,
+    http_client: Arc<reqwest::Client>,
 }
 
 impl SyscallExecutor {
@@ -70,6 +74,7 @@ impl SyscallExecutor {
         scribe: Arc<ScribeManager>,
         swap: Arc<LanceSwapManager>,
         mcp_registry: Arc<ank_mcp::registry::McpToolRegistry>,
+        http_client: Arc<reqwest::Client>,
     ) -> Self {
         Self {
             plugin_manager,
@@ -77,6 +82,7 @@ impl SyscallExecutor {
             scribe,
             swap,
             mcp_registry,
+            http_client,
         }
     }
 
@@ -172,6 +178,67 @@ impl SyscallExecutor {
                 .map_err(|e| SyscallError::PluginError(e.to_string()))?;
 
                 Ok(format!("[SYSTEM_RESULT: {}]", result))
+            }
+            Syscall::MusicSearch { query, max_results } => {
+                let api_key = match std::env::var("YOUTUBE_API_KEY") {
+                    Ok(k) if !k.is_empty() => k,
+                    _ => {
+                        return Ok("[SYSTEM_RESULT: No YouTube API key configured. \
+                             Tell the user to add YOUTUBE_API_KEY to configure music search.]"
+                            .to_string());
+                    }
+                };
+
+                let url = format!(
+                    "https://www.googleapis.com/youtube/v3/search\
+                     ?part=snippet&type=video&videoCategoryId=10\
+                     &q={}&maxResults={}&key={}",
+                    urlencoding::encode(&query),
+                    max_results.clamp(1, 5),
+                    api_key
+                );
+
+                let resp = self
+                    .http_client
+                    .get(&url)
+                    .timeout(std::time::Duration::from_secs(5))
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        SyscallError::IOError(format!("YouTube API request failed: {}", e))
+                    })?;
+
+                if !resp.status().is_success() {
+                    return Err(SyscallError::IOError(format!(
+                        "YouTube API error: {}",
+                        resp.status()
+                    )));
+                }
+
+                let data: serde_json::Value = resp
+                    .json()
+                    .await
+                    .map_err(|e| SyscallError::IOError(e.to_string()))?;
+
+                let results: Vec<serde_json::Value> = data["items"]
+                    .as_array()
+                    .map(|items| {
+                        items.iter().map(|item| {
+                            serde_json::json!({
+                                "video_id": item["id"]["videoId"].as_str().unwrap_or(""),
+                                "title": item["snippet"]["title"].as_str().unwrap_or(""),
+                                "channel": item["snippet"]["channelTitle"].as_str().unwrap_or(""),
+                                "thumbnail": item["snippet"]["thumbnails"]["default"]["url"].as_str().unwrap_or("")
+                            })
+                        }).collect()
+                    })
+                    .unwrap_or_default();
+
+                Ok(format!(
+                    "[SYSTEM_RESULT: {}]",
+                    serde_json::to_string(&serde_json::json!({ "results": results }))
+                        .unwrap_or_default()
+                ))
             }
         }
     }
@@ -285,6 +352,11 @@ static MCP_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_MCP_EXEC\("([^"]+)",\s*(\{.*?\})\)\]"#)
         .expect("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug")
 });
+#[allow(clippy::expect_used)]
+static MUSIC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[SYS_CALL_PLUGIN\("music_search",\s*(\{.*?\})\)\]"#)
+        .expect("FATAL: music syscall regex is invalid")
+});
 
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
 pub fn init_syscall_regexes() {}
@@ -328,6 +400,21 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
             tool_name: caps[1].to_string(),
             args_json: caps[2].to_string(),
         });
+    }
+
+    // 5. Check for Music Search
+    if let Some(caps) = MUSIC_RE.captures(text) {
+        if let Ok(args) = serde_json::from_str::<serde_json::Value>(&caps[1]) {
+            let query = args["query"].as_str().unwrap_or("").to_string();
+            let max = args
+                .get("max_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1) as u8;
+            return Some(Syscall::MusicSearch {
+                query,
+                max_results: max.clamp(1, 5),
+            });
+        }
     }
 
     None
@@ -390,7 +477,8 @@ mod tests {
         let scribe = Arc::new(ScribeManager::new("./users_test"));
         let swap = Arc::new(LanceSwapManager::new("./swap_test"));
         let mcp_registry = Arc::new(ank_mcp::registry::McpToolRegistry::new());
-        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry);
+        let http_client = Arc::new(reqwest::Client::new());
+        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client);
 
         let pcb = crate::pcb::PCB::new("test".into(), 5, "test".into());
 
@@ -412,7 +500,8 @@ mod tests {
         let scribe = Arc::new(ScribeManager::new("./users_test"));
         let swap = Arc::new(LanceSwapManager::new("./swap_test"));
         let mcp_registry = Arc::new(ank_mcp::registry::McpToolRegistry::new());
-        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry);
+        let http_client = Arc::new(reqwest::Client::new());
+        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client);
 
         // Intentar acceder a localhost
         let res = executor.fetch_url_safe("http://127.0.0.1:8080/admin").await;

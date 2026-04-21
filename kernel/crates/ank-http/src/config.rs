@@ -68,8 +68,8 @@ impl HttpConfig {
     }
 
     pub fn tls_paths(&self) -> Option<(&PathBuf, &PathBuf)> {
-        self.tls_cert.as_ref().and_then(|c| {
-            self.tls_key.as_ref().map(|k| (c, k))
-        })
+        self.tls_cert
+            .as_ref()
+            .and_then(|c| self.tls_key.as_ref().map(|k| (c, k)))
     }
 }

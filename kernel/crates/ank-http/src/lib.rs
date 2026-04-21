@@ -25,7 +25,11 @@ impl AegisHttpServer {
 
     pub async fn serve(self) -> Result<()> {
         let port = self.state.config.port;
-        let tls_paths = self.state.config.tls_paths().map(|(c, k)| (c.clone(), k.clone()));
+        let tls_paths = self
+            .state
+            .config
+            .tls_paths()
+            .map(|(c, k)| (c.clone(), k.clone()));
         let app = routes::build_router(self.state);
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
 

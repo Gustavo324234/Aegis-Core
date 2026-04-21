@@ -3,9 +3,9 @@ use ank_core::plugins::PluginManager;
 use ank_core::router::catalog::ModelProfile;
 use ank_core::telemetry::{CompletedInference, TelemetryState};
 use ank_core::{
-    citadel::identity::Citadel, enclave::master::MasterEnclave, router::CognitiveRouter,
-    router::SirenRouter, CognitiveHAL, CognitiveScheduler, SQLCipherPersistor, SchedulerEvent,
-    StatePersistor, PCB,
+    citadel::identity::Citadel, enclave::master::MasterEnclave, enclave::TenantDB,
+    router::CognitiveRouter, router::SirenRouter, CognitiveHAL, CognitiveScheduler,
+    SQLCipherPersistor, SchedulerEvent, StatePersistor, PCB,
 };
 use ank_http::{
     rate_limiter::{AuthRateLimiter, RateLimitConfig},
@@ -225,7 +225,28 @@ async fn main() -> Result<()> {
                     }
                 };
 
-                match hal_read.route_and_execute(Arc::clone(&shared_pcb)).await {
+                let (tenant_id, session_key) = {
+                    let pcb = shared_pcb.read().await;
+                    (
+                        pcb.tenant_id.clone().unwrap_or_default(),
+                        pcb.session_key.clone().unwrap_or_default(),
+                    )
+                };
+
+                let persona: Option<String> = if !tenant_id.is_empty() && !session_key.is_empty() {
+                    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &session_key) {
+                        db.get_persona().unwrap_or(None)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                match hal_read
+                    .route_and_execute(Arc::clone(&shared_pcb), persona)
+                    .await
+                {
                     Ok(mut stream) => {
                         use tokio_stream::StreamExt as _;
                         let mut tokens_emitted: u32 = 0;
