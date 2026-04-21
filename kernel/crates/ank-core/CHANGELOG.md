@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.9...ank-core-v0.1.10) (2026-04-21)
+
+
+### Features
+
+* **core:** Epic 38-39-40 — Agent Persona, Music, Connected Accounts ([#76](https://github.com/Gustavo324234/Aegis-Core/issues/76)) ([b4ceb7d](https://github.com/Gustavo324234/Aegis-Core/commit/b4ceb7d77884109570e07fbf0577d88a113c4842))
+
 ## [0.1.9](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.8...ank-core-v0.1.9) (2026-04-21)
 
 

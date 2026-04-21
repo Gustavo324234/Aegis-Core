@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.8...shell-ui-v1.1.0) (2026-04-21)
+
+
+### Features
+
+* **core:** Epic 38-39-40 — Agent Persona, Music, Connected Accounts ([#76](https://github.com/Gustavo324234/Aegis-Core/issues/76)) ([b4ceb7d](https://github.com/Gustavo324234/Aegis-Core/commit/b4ceb7d77884109570e07fbf0577d88a113c4842))
+
 ## [1.0.8](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.7...shell-ui-v1.0.8) (2026-04-21)
 
 
