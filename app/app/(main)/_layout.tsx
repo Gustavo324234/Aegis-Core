@@ -5,6 +5,7 @@ export default function MainLayout() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="chat" />
       <Stack.Screen name="settings" />
+      <Stack.Screen name="connected-accounts" />
     </Stack>
   );
 }

@@ -60,7 +60,7 @@
 *   **[CORE-139]** Feature: Connected Accounts — estado en SettingsPanel, desconectar desde web `[TODO — Shell Engineer]`
 
 ### App
-*   **[CORE-143]** Feature: OAuth via `expo-auth-session` — Google + Spotify desde la app, envía tokens al servidor `[TODO — Shell Engineer]`
+*   **[CORE-143]** Feature: OAuth via `expo-auth-session` — Google + Spotify desde la app, envía tokens al servidor `[DONE — Shell Engineer]`
 
 ### Orden de implementación
 1. **CORE-142** — TLS + SystemConfig (fundación)
@@ -87,7 +87,7 @@
 | Epic 32–37 | ✅ DONE |
 | Epic 38: Agent Persona System | 🔄 IN PROGRESS — 3/7 |
 | Epic 39: Aegis Music | 📋 PLANNED — 0/3 |
-| Epic 40: Connected Accounts | 📋 PLANNED — 0/6 |
+| Epic 40: Connected Accounts | 📋 PLANNED — 1/6 |
 | Chat end-to-end | ✅ OPERATIVO |
 | Siren desde LAN | ✅ TLS CONFIGURADO — awaiting merge |
 | OAuth / Música integrada | ❌ BLOQUEADO — CORE-142 + CORE-138 + CORE-143 |

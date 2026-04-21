@@ -238,6 +238,10 @@ export default function SettingsScreen() {
           <Text style={styles.logoutText}>{t.terminate_session}</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity style={styles.oauthLink} onPress={() => router.push('/(main)/connected-accounts')}>
+          <Text style={styles.oauthLinkText}>CUENTAS CONECTADAS</Text>
+        </TouchableOpacity>
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -285,6 +289,8 @@ const styles = StyleSheet.create({
   modelText: { color: '#444', fontSize: 13 },
   modelTextActive: { color: '#00E5CC', fontWeight: 'bold' },
   activeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#00E5CC' },
-  logoutBtn: { marginTop: 40, marginBottom: 40, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#FF444433', alignItems: 'center' },
-  logoutText: { color: '#FF4444', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 }
+  logoutBtn: { marginTop: 40, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#FF444433', alignItems: 'center' },
+  logoutText: { color: '#FF4444', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 },
+  oauthLink: { marginTop: 16, marginBottom: 40, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#7C6FE044', alignItems: 'center', backgroundColor: '#0A0A0A' },
+  oauthLinkText: { color: '#7C6FE0', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 }
 });
