@@ -2,6 +2,13 @@
 
 
 
+## [0.1.13](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.12...ank-http-v0.1.13) (2026-04-21)
+
+
+### Bug Fixes
+
+* **ank-http:** CORE-107 correct clippy errors - utoipa schema and type mismatches ([b7e76ae](https://github.com/Gustavo324234/Aegis-Core/commit/b7e76ae4486db4071105e274114e942657779502))
+
 ## [0.1.12](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.11...ank-http-v0.1.12) (2026-04-20)
 
 ## [0.1.11](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.10...ank-http-v0.1.11) (2026-04-20)

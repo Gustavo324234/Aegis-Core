@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.8...ank-core-v0.1.9) (2026-04-21)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-128 rewrite system prompt ([#65](https://github.com/Gustavo324234/Aegis-Core/issues/65)) ([0cd7746](https://github.com/Gustavo324234/Aegis-Core/commit/0cd77468502b22dcd1eb0224fce463d090d8ca8f))
+
 ## [0.1.8](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.7...ank-core-v0.1.8) (2026-04-20)
 
 
