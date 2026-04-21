@@ -110,7 +110,7 @@ impl SyscallExecutor {
             } => {
                 let pm = self.plugin_manager.read().await;
                 let result = pm
-                    .execute_plugin(tenant_id, &plugin_name, &args_json)
+                    .execute_plugin(tenant_id, &plugin_name, &args_json, pcb.session_key.as_deref())
                     .await
                     .map_err(|e: crate::plugins::PluginError| {
                         SyscallError::PluginError(e.to_string())

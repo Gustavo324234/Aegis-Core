@@ -123,6 +123,7 @@ dependencies = [
  "futures",
  "futures-util",
  "git2",
+ "hex",
  "hmac",
  "llama-cpp-2",
  "mdns-sd",
