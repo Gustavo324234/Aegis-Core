@@ -317,12 +317,15 @@ async fn stream_with_receiver(
                     let (action, value) = if tag.starts_with("MUSIC_VOLUME:") {
                         ("volume", caps.get(2).map(|m| m.as_str()).unwrap_or("70"))
                     } else {
-                        (match tag {
-                            "MUSIC_PAUSE" => "pause",
-                            "MUSIC_RESUME" => "resume",
-                            "MUSIC_STOP" => "stop",
-                            _ => "unknown",
-                        }, "")
+                        (
+                            match tag {
+                                "MUSIC_PAUSE" => "pause",
+                                "MUSIC_RESUME" => "resume",
+                                "MUSIC_STOP" => "stop",
+                                _ => "unknown",
+                            },
+                            "",
+                        )
                     };
                     let _ = socket
                         .send(Message::Text(

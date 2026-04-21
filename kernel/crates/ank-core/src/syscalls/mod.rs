@@ -542,8 +542,7 @@ impl SyscallExecutor {
 
         Ok(format!(
             "[SYSTEM_RESULT: {}]",
-            serde_json::to_string(&serde_json::json!({ "events": events }))
-                .unwrap_or_default()
+            serde_json::to_string(&serde_json::json!({ "events": events })).unwrap_or_default()
         ))
     }
 
@@ -570,7 +569,10 @@ impl SyscallExecutor {
         let q = if query.is_empty() {
             "trashed=false".to_string()
         } else {
-            format!("name contains '{}' and trashed=false", urlencoding::encode(query))
+            format!(
+                "name contains '{}' and trashed=false",
+                urlencoding::encode(query)
+            )
         };
 
         let url = format!(
@@ -607,34 +609,36 @@ impl SyscallExecutor {
         let files: Vec<serde_json::Value> = data["files"]
             .as_array()
             .map(|items| {
-                items.iter().map(|f| {
-                    let mime = f["mimeType"].as_str().unwrap_or("");
-                    let file_type = match mime {
-                        "application/vnd.google-apps.spreadsheet" => "spreadsheet",
-                        "application/vnd.google-apps.document" => "document",
-                        "application/vnd.google-apps.presentation" => "presentation",
-                        "application/vnd.google-apps.folder" => "folder",
-                        "application/pdf" => "pdf",
-                        _ if mime.starts_with("image/") => "image",
-                        _ if mime.starts_with("video/") => "video",
-                        _ => "file",
-                    };
+                items
+                    .iter()
+                    .map(|f| {
+                        let mime = f["mimeType"].as_str().unwrap_or("");
+                        let file_type = match mime {
+                            "application/vnd.google-apps.spreadsheet" => "spreadsheet",
+                            "application/vnd.google-apps.document" => "document",
+                            "application/vnd.google-apps.presentation" => "presentation",
+                            "application/vnd.google-apps.folder" => "folder",
+                            "application/pdf" => "pdf",
+                            _ if mime.starts_with("image/") => "image",
+                            _ if mime.starts_with("video/") => "video",
+                            _ => "file",
+                        };
 
-                    serde_json::json!({
-                        "id": f["id"].as_str().unwrap_or(""),
-                        "name": f["name"].as_str().unwrap_or(""),
-                        "type": file_type,
-                        "modified": f["modifiedTime"].as_str().unwrap_or(""),
-                        "url": f["webViewLink"].as_str().unwrap_or("")
+                        serde_json::json!({
+                            "id": f["id"].as_str().unwrap_or(""),
+                            "name": f["name"].as_str().unwrap_or(""),
+                            "type": file_type,
+                            "modified": f["modifiedTime"].as_str().unwrap_or(""),
+                            "url": f["webViewLink"].as_str().unwrap_or("")
+                        })
                     })
-                }).collect()
+                    .collect()
             })
             .unwrap_or_default();
 
         Ok(format!(
             "[SYSTEM_RESULT: {}]",
-            serde_json::to_string(&serde_json::json!({ "files": files }))
-                .unwrap_or_default()
+            serde_json::to_string(&serde_json::json!({ "files": files })).unwrap_or_default()
         ))
     }
 
@@ -716,17 +720,23 @@ impl SyscallExecutor {
                     if let Ok(msg_data) = msg_resp.json::<serde_json::Value>().await {
                         let headers = msg_data["payload"]["headers"].as_array();
                         let get_header = |name: &str| -> Option<String> {
-                            headers?.iter()
-                                .find(|h| h["name"].as_str()
-                                    .map(|n| n.to_lowercase() == name.to_lowercase())
-                                    .unwrap_or(false))
+                            headers?
+                                .iter()
+                                .find(|h| {
+                                    h["name"]
+                                        .as_str()
+                                        .map(|n| n.to_lowercase() == name.to_lowercase())
+                                        .unwrap_or(false)
+                                })
                                 .and_then(|h| h["value"].as_str().map(String::from))
                         };
 
                         let from = get_header("from").unwrap_or_default();
                         let subject = get_header("subject").unwrap_or_default();
                         let date = get_header("date").unwrap_or_default();
-                        let unread = get_header("status").map(|s| s.to_lowercase() == "unread").unwrap_or(false);
+                        let unread = get_header("status")
+                            .map(|s| s.to_lowercase() == "unread")
+                            .unwrap_or(false);
 
                         emails.push(serde_json::json!({
                             "from": from,
@@ -742,8 +752,7 @@ impl SyscallExecutor {
 
         Ok(format!(
             "[SYSTEM_RESULT: {}]",
-            serde_json::to_string(&serde_json::json!({ "emails": emails }))
-                .unwrap_or_default()
+            serde_json::to_string(&serde_json::json!({ "emails": emails })).unwrap_or_default()
         ))
     }
 }

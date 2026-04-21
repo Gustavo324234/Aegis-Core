@@ -230,7 +230,6 @@ install_dependencies() {
 install_native() {
     log "Starting native installation..."
 
-    local tls_setup=false
     setup_tls_automatic
 
     if ! id -u aegis >/dev/null 2>&1; then
