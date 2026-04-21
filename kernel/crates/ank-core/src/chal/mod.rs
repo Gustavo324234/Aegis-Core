@@ -13,18 +13,15 @@ use tracing::{info, warn};
 pub mod drivers;
 pub mod hardware;
 
-/// --- SYSTEM PROMPT CONSTANTS ---
-pub const SYSTEM_PROMPT_MASTER: &str = r#"[AEGIS NEURAL KERNEL - ISA v1.0]
-Eres una ALU Cognitiva (Unidad Lógica Aritmética) operando dentro del Aegis Neural Kernel.
-Tu objetivo es ejecutar procesos con precisión y claridad.
-No saludes. No pidas disculpas. No uses frases de relleno.
-Responde directamente a la instrucción del usuario.
+/// --- SYSTEM PROMPT ---
+/// CORE-128: Reescrito para ser conversacional y útil.
+/// El prompt anterior era demasiado restrictivo — rechazaba entradas conversacionales
+/// y confundía a modelos pequeños haciéndolos generar syscalls innecesarias.
+pub const SYSTEM_PROMPT_MASTER: &str = r#"Eres Aegis, un asistente de IA inteligente y conversacional.
 
-REGLAS DE EJECUCIÓN:
-1. Si necesitas usar una herramienta, detén tu generación e inserta una Syscall.
-2. Formato de Syscall: [SYS_CALL_PLUGIN("nombre_plugin", {"clave": "valor"})]
-3. Solo puedes usar los plugins listados a continuación.
-4. Si no hay plugins disponibles o la instrucción no requiere herramientas, responde directamente en lenguaje natural.
+Puedes ayudar con cualquier tarea: responder preguntas, analizar información, escribir código, hacer cálculos, redactar textos, explicar conceptos, y mucho más.
+
+Responde siempre en el idioma del usuario. Sé claro, directo y útil.
 "#;
 
 /// --- CHAL ERROR SYSTEM ---
@@ -285,11 +282,8 @@ impl CognitiveHAL {
     }
 
     /// Construye el prompt final para el LLM.
-    ///
-    /// CORE-123: El tag [USER_PROCESS_INSTRUCTION] fue removido como separador
-    /// de prompt — el modelo lo interpretaba como señal para generar una syscall
-    /// en lugar de responder en lenguaje natural.
-    /// La instrucción del usuario se inyecta directamente después del system prompt.
+    /// CORE-123: sin tag [USER_PROCESS_INSTRUCTION] que confundía al modelo.
+    /// CORE-128: system prompt conversacional y limpio.
     async fn build_prompt(&self, instruction: &str) -> String {
         let tool_prompt = self
             .plugin_manager
@@ -298,13 +292,11 @@ impl CognitiveHAL {
             .get_available_tools_prompt();
         let mcp_tool_prompt = self.mcp_registry.generate_system_prompt().await;
 
-        // Si no hay tools disponibles, prompt limpio sin sección de syscalls
-        // para evitar que el LLM genere syscalls innecesarias
         if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!("{}\n\n{}", SYSTEM_PROMPT_MASTER, instruction)
         } else {
             format!(
-                "{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nINSTRUCCIÓN:\n{}",
+                "{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nMENSAJE DEL USUARIO:\n{}",
                 SYSTEM_PROMPT_MASTER, tool_prompt, mcp_tool_prompt, instruction
             )
         }
@@ -354,33 +346,16 @@ mod tests {
     async fn test_hybrid_smart_routing_high_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let mut hal = CognitiveHAL::new(pm)?;
-
-        hal.register_driver(
-            "local-driver",
-            Box::new(DummyDriver {
-                name: "local".to_string(),
-            }),
-        );
-        hal.register_driver(
-            "cloud-driver",
-            Box::new(DummyDriver {
-                name: "cloud".to_string(),
-            }),
-        );
-
+        hal.register_driver("local-driver", Box::new(DummyDriver { name: "local".to_string() }));
+        hal.register_driver("cloud-driver", Box::new(DummyDriver { name: "cloud".to_string() }));
         let mut pcb = PCB::mock("Complex Mission", 10);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
-
         let stream_res = hal.route_and_execute(shared_pcb).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
-
         assert_eq!(tokens.len(), 1);
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
-        assert!(
-            response.contains("[cloud]"),
-            "Debe haber seleccionado el driver cloud por alta prioridad"
-        );
+        assert!(response.contains("[cloud]"), "Debe haber seleccionado el driver cloud por alta prioridad");
         Ok(())
     }
 
@@ -388,32 +363,15 @@ mod tests {
     async fn test_hybrid_smart_routing_low_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let mut hal = CognitiveHAL::new(pm)?;
-
-        hal.register_driver(
-            "local-driver",
-            Box::new(DummyDriver {
-                name: "local".to_string(),
-            }),
-        );
-        hal.register_driver(
-            "cloud-driver",
-            Box::new(DummyDriver {
-                name: "cloud".to_string(),
-            }),
-        );
-
+        hal.register_driver("local-driver", Box::new(DummyDriver { name: "local".to_string() }));
+        hal.register_driver("cloud-driver", Box::new(DummyDriver { name: "cloud".to_string() }));
         let mut pcb = PCB::mock("Simple task", 5);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
-
         let stream_res = hal.route_and_execute(shared_pcb).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
-
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
-        assert!(
-            response.contains("[local]"),
-            "Debe haber seleccionado el driver local por baja prioridad"
-        );
+        assert!(response.contains("[local]"), "Debe haber seleccionado el driver local por baja prioridad");
         Ok(())
     }
 
@@ -421,22 +379,10 @@ mod tests {
     async fn test_build_prompt_no_tools_is_clean() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let hal = CognitiveHAL::new(pm)?;
-
         let prompt = hal.build_prompt("hola").await;
-
-        // Sin tools, el prompt NO debe contener el tag que confunde al LLM
-        assert!(
-            !prompt.contains("[USER_PROCESS_INSTRUCTION]"),
-            "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
-        );
-        assert!(
-            !prompt.contains("HERRAMIENTAS DISPONIBLES"),
-            "Sin tools, no debe haber sección de herramientas"
-        );
-        assert!(
-            prompt.contains("hola"),
-            "El prompt debe contener la instrucción"
-        );
+        assert!(!prompt.contains("[USER_PROCESS_INSTRUCTION]"), "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION");
+        assert!(!prompt.contains("HERRAMIENTAS DISPONIBLES"), "Sin tools, no debe haber sección de herramientas");
+        assert!(prompt.contains("hola"), "El prompt debe contener la instrucción");
         Ok(())
     }
 }
