@@ -5,6 +5,15 @@
 @layer base {
     body {
         @apply font-sans;
+        /* CORE-126: altura real del viewport sin barras del browser */
+        height: 100vh;
+        height: 100svh;
+        overflow: hidden;
+    }
+
+    #root {
+        height: 100%;
+        overflow: hidden;
     }
 
     code,
@@ -32,6 +41,14 @@
 
     .border-neon-purple {
         @apply border-aegis-purple shadow-[0_0_10px_rgba(191, 0, 255, 0.3)];
+    }
+
+    /* CORE-126: contenedor principal siempre ocupa exactamente la pantalla */
+    .aegis-screen {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
     }
 }
 
