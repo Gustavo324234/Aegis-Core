@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { ttsPlayer } from '../audio/TTSPlayer';
+import { useMusicStore } from './musicStore';
 
 export type MessageType = 'text' | 'thought' | 'system' | 'error';
 export type SystemStatus = 'disconnected' | 'connecting' | 'idle' | 'thinking' | 'executing_syscall' | 'error' | 'listening' | 'transcribing';
@@ -364,6 +365,35 @@ export const useAegisStore = create<AegisState>()(
                             }
                             break;
                         }
+                        case 'music_play': {
+                            const payload = data as { video_id?: string; title?: string; channel?: string; thumbnail?: string };
+                            if (payload.video_id) {
+                                const { playTrack } = useMusicStore.getState();
+                                playTrack({
+                                    videoId: payload.video_id,
+                                    title: payload.title || 'Unknown',
+                                    channel: payload.channel || 'Unknown',
+                                    thumbnail: payload.thumbnail || '',
+                                });
+                            }
+                            break;
+                        }
+                        case 'music_control': {
+                            const ctrl = data as { action?: string; value?: string };
+                            if (!ctrl.action) break;
+                            const { setPlaying, setVolume, closePlayer } = useMusicStore.getState();
+                            switch (ctrl.action) {
+                                case 'pause': setPlaying(false); break;
+                                case 'resume': setPlaying(true); break;
+                                case 'stop': closePlayer(); break;
+                                case 'volume': {
+                                    const vol = parseInt(ctrl.value ?? '70', 10);
+                                    if (!isNaN(vol)) setVolume(Math.min(100, Math.max(0, vol)));
+                                    break;
+                                }
+                            }
+                            break;
+                        }
                     }
                 };
                 socket.onclose = () => {
@@ -378,8 +408,13 @@ export const useAegisStore = create<AegisState>()(
                 const { socket, messages } = get();
                 if (!socket || socket.readyState !== WebSocket.OPEN) return;
                 ttsPlayer.initialize();
+                const musicState = useMusicStore.getState();
+                const musicContext = musicState.isPlayerVisible && musicState.currentTrack
+                    ? `[CONTEXT: Currently playing "${musicState.currentTrack.title}"]\n`
+                    : '';
+                const finalPrompt = musicContext + prompt;
                 set({ messages: [...messages, { id: `user-${Date.now()}`, role: 'user', content: prompt, type: 'text', timestamp: Date.now() }] });
-                socket.send(JSON.stringify({ prompt, task_type: get().taskType }));
+                socket.send(JSON.stringify({ prompt: finalPrompt, task_type: get().taskType }));
             },
 
             appendToken: (pid, token, type) => {
