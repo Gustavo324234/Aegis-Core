@@ -335,7 +335,6 @@ export const useAegisStore = create<AegisState>()(
                     switch (type) {
                         case 'syslog':
                             // CORE-124: no agregar syslog de reconexión al historial persistido
-                            // para no llenar el chat de "bridge established" en cada F5
                             break;
                         case 'status':
                             set({ status: 'thinking' });
@@ -365,23 +364,41 @@ export const useAegisStore = create<AegisState>()(
                             }
                             break;
                         }
+                        // FIX CORE-BUG: music_play y music_control leían data.payload.xxx
+                        // El kernel envía: { event: "music_play", data: { provider, video_id, ... } }
+                        // No existe data.payload — data ES el objeto directamente.
                         case 'music_play': {
-                            const musicData = data as { type: string; payload: { video_id?: string; title?: string; channel?: string; thumbnail?: string } };
-                            const payload = musicData.payload;
-                            if (payload.video_id) {
-                                const { playTrack } = useMusicStore.getState();
+                            const musicData = data as {
+                                provider?: string;
+                                video_id?: string;
+                                track_uri?: string;
+                                track_id?: string;
+                                title?: string;
+                                channel?: string;
+                                thumbnail?: string;
+                            };
+                            const { playTrack } = useMusicStore.getState();
+                            if (musicData.video_id) {
                                 playTrack({
-                                    videoId: payload.video_id,
-                                    title: payload.title || 'Unknown',
-                                    channel: payload.channel || 'Unknown',
-                                    thumbnail: payload.thumbnail || '',
+                                    videoId: musicData.video_id,
+                                    title: musicData.title || 'Unknown',
+                                    channel: musicData.channel || 'Unknown',
+                                    thumbnail: musicData.thumbnail || '',
+                                    provider: 'youtube',
+                                });
+                            } else if (musicData.track_id || musicData.track_uri) {
+                                playTrack({
+                                    videoId: musicData.track_id || musicData.track_uri || '',
+                                    title: musicData.title || 'Unknown',
+                                    channel: musicData.channel || 'Unknown',
+                                    thumbnail: musicData.thumbnail || '',
+                                    provider: 'spotify',
                                 });
                             }
                             break;
                         }
                         case 'music_control': {
-                            const musicData = data as { type: string; payload: { action?: string; level?: number } };
-                            const ctrl = musicData.payload;
+                            const ctrl = data as { action?: string; value?: string };
                             if (!ctrl.action) break;
                             const { setPlaying, setVolume, closePlayer } = useMusicStore.getState();
                             switch (ctrl.action) {
@@ -389,9 +406,8 @@ export const useAegisStore = create<AegisState>()(
                                 case 'resume': setPlaying(true); break;
                                 case 'stop': closePlayer(); break;
                                 case 'volume': {
-                                    if (ctrl.level !== undefined) {
-                                        setVolume(Math.min(100, Math.max(0, ctrl.level)));
-                                    }
+                                    const vol = parseInt(ctrl.value ?? '70', 10);
+                                    if (!isNaN(vol)) setVolume(Math.min(100, Math.max(0, vol)));
                                     break;
                                 }
                             }
@@ -464,8 +480,6 @@ export const useAegisStore = create<AegisState>()(
             },
 
             // CORE-124: logout NO borra el historial de mensajes.
-            // Los mensajes se preservan en localStorage y se restauran al volver a loguearse.
-            // El historial solo se borra con clearHistory() (acción explícita del usuario).
             logout: () => {
                 const { socket, sirenSocket } = get();
                 if (socket) socket.close();
@@ -477,7 +491,6 @@ export const useAegisStore = create<AegisState>()(
                     sessionKey: null,
                     socket: null,
                     sirenSocket: null,
-                    // messages: NO se borra — CORE-124
                     needsPasswordReset: false,
                     adminActiveTab: 'users',
                     status: 'disconnected',
@@ -607,7 +620,6 @@ export const useAegisStore = create<AegisState>()(
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
                 // sessionKey NO se persiste — seguridad (CORE-073)
-                // adminActiveTab NO se persiste — evita crash al recargar en tabs que requieren sessionKey
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
                 messages: state.messages,  // CORE-124: mensajes persisten entre sesiones
