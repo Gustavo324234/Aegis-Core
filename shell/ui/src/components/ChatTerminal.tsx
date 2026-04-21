@@ -10,6 +10,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import TelemetryDashboard from './TelemetryDashboard';
 import SettingsPanel from './SettingsPanel';
+import MusicPlayer from './MusicPlayer';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -266,6 +267,8 @@ const ChatTerminal: React.FC = () => {
                     />
                 )}
             </AnimatePresence>
+
+            <MusicPlayer />
         </div>
     );
 };
