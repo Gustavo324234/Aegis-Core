@@ -106,6 +106,16 @@ impl MasterEnclave {
         )
         .context("Failed to init setup_tokens table")?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .context("Failed to init system_config table")?;
+
         // Vaciar el WAL al inicio para que lecturas posteriores vean estado limpio
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
             .context("Failed to checkpoint WAL after schema init")?;
@@ -424,6 +434,32 @@ impl MasterEnclave {
             |row| row.get(0),
         )?;
         Ok(token)
+    }
+
+    // ── SystemConfig API ─────────────────────────────────────────────────────────────
+
+    pub async fn set_config(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.connection.lock().await;
+        conn.execute(
+            "INSERT OR REPLACE INTO system_config (key, value, updated_at)
+             VALUES (?1, ?2, CURRENT_TIMESTAMP)",
+            rusqlite::params![key, value],
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+        Ok(())
+    }
+
+    pub async fn get_config(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.connection.lock().await;
+        match conn.query_row(
+            "SELECT value FROM system_config WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        ) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!(e)),
+        }
     }
 }
 

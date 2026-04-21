@@ -14,15 +14,26 @@ pub mod drivers;
 pub mod hardware;
 
 /// --- SYSTEM PROMPT ---
-/// CORE-128: Reescrito para ser conversacional y útil.
-/// El prompt anterior era demasiado restrictivo — rechazaba entradas conversacionales
-/// y confundía a modelos pequeños haciéndolos generar syscalls innecesarias.
-pub const SYSTEM_PROMPT_MASTER: &str = r#"Eres Aegis, un asistente de IA inteligente y conversacional.
+/// CORE-128: System prompt base honesto y sin alucinaciones.
+/// - No inventa capacidades que no tiene mediante herramientas activas.
+/// - No inventa acciones que no ejecutó.
+/// - Sin listas innecesarias en respuestas conversacionales.
+/// - Identidad: "Aegis" por defecto; la Persona del tenant la sobreescribe (CORE-129).
+pub const SYSTEM_PROMPT_MASTER: &str = "Eres Aegis, un asistente de IA.\n\
+Responde en el idioma del usuario. Sé directo y conciso.\n\
+REGLAS CRÍTICAS:\n\
+- Solo afirma que hiciste algo si una herramienta te devolvió un resultado concreto. \
+Nunca digas \"he registrado\", \"he guardado\" o \"queda anotado\" si no ejecutaste \
+una herramienta que lo confirme.\n\
+- Describe únicamente las capacidades que tus herramientas activas te permiten ejecutar. \
+Si no hay herramientas de finanzas, no afirmes que podés llevar un registro de gastos.\n\
+- Usa prosa directa. Evita listas numeradas o con viñetas salvo que el usuario \
+las pida explícitamente o el contenido sea inherentemente una lista.\n";
 
-Puedes ayudar con cualquier tarea: responder preguntas, analizar información, escribir código, hacer cálculos, redactar textos, explicar conceptos, y mucho más.
-
-Responde siempre en el idioma del usuario. Sé claro, directo y útil.
-"#;
+/// Template para inyectar la Persona del tenant cuando está configurada (CORE-129).
+/// `{persona}` se reemplaza con el texto libre del operador.
+pub const PERSONA_SECTION_TEMPLATE: &str =
+    "\n\n[IDENTIDAD CONFIGURADA POR EL OPERADOR]\n{persona}\n[FIN DE IDENTIDAD]\n";
 
 /// --- CHAL ERROR SYSTEM ---
 #[derive(Error, Debug, Clone)]
@@ -141,6 +152,7 @@ impl CognitiveHAL {
     pub async fn route_and_execute(
         &self,
         shared_pcb: SharedPCB,
+        persona: Option<String>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
     {
         let (instruction, priority, model_pref, pid) = {
@@ -163,7 +175,7 @@ impl CognitiveHAL {
             match router.decide(&pcb_snapshot).await {
                 Ok(decision) => {
                     return self
-                        .execute_with_decision(decision, &instruction, &pid)
+                        .execute_with_decision(decision, &instruction, &pid, persona.as_deref())
                         .await;
                 }
                 Err(e) => {
@@ -228,7 +240,7 @@ impl CognitiveHAL {
             }
         })?;
 
-        let final_prompt = self.build_prompt(&instruction).await;
+        let final_prompt = self.build_prompt(&instruction, persona.as_deref()).await;
         driver.generate_stream(&final_prompt, None).await
     }
 
@@ -237,6 +249,7 @@ impl CognitiveHAL {
         decision: RoutingDecision,
         instruction: &str,
         pid: &str,
+        persona: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
     {
         use crate::chal::drivers::CloudProxyDriver;
@@ -255,7 +268,7 @@ impl CognitiveHAL {
             decision.model_id.clone(),
         );
 
-        let final_prompt = self.build_prompt(instruction).await;
+        let final_prompt = self.build_prompt(instruction, persona).await;
 
         match driver.generate_stream(&final_prompt, None).await {
             Ok(stream) => Ok(stream),
@@ -283,8 +296,8 @@ impl CognitiveHAL {
 
     /// Construye el prompt final para el LLM.
     /// CORE-123: sin tag [USER_PROCESS_INSTRUCTION] que confundía al modelo.
-    /// CORE-128: system prompt conversacional y limpio.
-    async fn build_prompt(&self, instruction: &str) -> String {
+    /// CORE-128: system prompt honesto sin alucinaciones.
+    pub async fn build_prompt(&self, instruction: &str, persona: Option<&str>) -> String {
         let tool_prompt = self
             .plugin_manager
             .read()
@@ -292,12 +305,38 @@ impl CognitiveHAL {
             .get_available_tools_prompt();
         let mcp_tool_prompt = self.mcp_registry.generate_system_prompt().await;
 
+        let persona_section = match persona {
+            Some(p) if !p.trim().is_empty() => PERSONA_SECTION_TEMPLATE.replace("{persona}", p),
+            _ => String::new(),
+        };
+
+        let music_section = if std::env::var("YOUTUBE_API_KEY").is_ok() {
+            "\n\nMÚSICA — INSTRUCCIONES:\
+             \n- Para reproducir: [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista canción>\", \"max_results\": 1})] y luego [MUSIC_PLAY:<video_id>]\
+             \n- Para pausar: responde brevemente y termina con [MUSIC_PAUSE]\
+             \n- Para continuar: responde brevemente y termina con [MUSIC_RESUME]\
+             \n- Para detener: responde brevemente y termina con [MUSIC_STOP]\
+             \n- Para cambiar volumen: termina con [MUSIC_VOLUME:<0-100>]\
+             \n- Para cambiar canción: haz una nueva búsqueda y usa [MUSIC_PLAY:<nuevo_video_id>]\
+             \nNunca expliques estos tags al usuario. Solo úsalos.\n"
+        } else {
+            ""
+        };
+
         if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
-            format!("{}\n\n{}", SYSTEM_PROMPT_MASTER, instruction)
+            format!(
+                "{}{}{}\n\n{}",
+                SYSTEM_PROMPT_MASTER, persona_section, music_section, instruction
+            )
         } else {
             format!(
-                "{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nMENSAJE DEL USUARIO:\n{}",
-                SYSTEM_PROMPT_MASTER, tool_prompt, mcp_tool_prompt, instruction
+                "{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nMENSAJE DEL USUARIO:\n{}",
+                SYSTEM_PROMPT_MASTER,
+                persona_section,
+                music_section,
+                tool_prompt,
+                mcp_tool_prompt,
+                instruction
             )
         }
     }
@@ -361,7 +400,7 @@ mod tests {
         let mut pcb = PCB::mock("Complex Mission", 10);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
-        let stream_res = hal.route_and_execute(shared_pcb).await?;
+        let stream_res = hal.route_and_execute(shared_pcb, None).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
         assert_eq!(tokens.len(), 1);
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -391,7 +430,7 @@ mod tests {
         let mut pcb = PCB::mock("Simple task", 5);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
-        let stream_res = hal.route_and_execute(shared_pcb).await?;
+        let stream_res = hal.route_and_execute(shared_pcb, None).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
         assert!(
@@ -405,7 +444,7 @@ mod tests {
     async fn test_build_prompt_no_tools_is_clean() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let hal = CognitiveHAL::new(pm)?;
-        let prompt = hal.build_prompt("hola").await;
+        let prompt = hal.build_prompt("hola", None).await;
         assert!(
             !prompt.contains("[USER_PROCESS_INSTRUCTION]"),
             "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
@@ -414,6 +453,21 @@ mod tests {
             !prompt.contains("HERRAMIENTAS DISPONIBLES"),
             "Sin tools, no debe haber sección de herramientas"
         );
+        assert!(
+            prompt.contains("hola"),
+            "El prompt debe contener la instrucción"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_build_prompt_with_persona() -> anyhow::Result<()> {
+        let pm = Arc::new(RwLock::new(PluginManager::new()?));
+        let hal = CognitiveHAL::new(pm)?;
+        let prompt = hal
+            .build_prompt("hola", Some("Eres Eve, asistente de ACME Corp."))
+            .await;
+        assert!(prompt.contains("Eve"), "El prompt debe contener la persona");
         assert!(
             prompt.contains("hola"),
             "El prompt debe contener la instrucción"

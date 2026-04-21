@@ -46,6 +46,70 @@ Aegis-Core/
 
 ---
 
+## 🖥️ Desarrollo local (modo dev — solo para Tavo)
+
+Probar cambios localmente antes de pushear a GitHub.
+
+### Terminal 1 — Kernel (Rust)
+
+```powershell
+cd C:\Aegis\Aegis-Core\kernel
+
+# Variables de entorno mínimas
+$env:AEGIS_ROOT_KEY="dev-key-local-32-chars-minimum!!"
+$env:AEGIS_DATA_DIR="C:\Aegis\dev_data"
+$env:AEGIS_MODEL_PROFILE="cloud"
+$env:RUST_LOG="info"
+
+cargo run -p ank-server
+```
+
+El kernel arranca en `http://localhost:8000`.
+Al primer arranque sin admin, imprime en los logs:
+```
+URL: http://localhost:8000?setup_token=XXXX
+```
+
+### Terminal 2 — UI (React)
+
+```powershell
+cd C:\Aegis\Aegis-Core\shell\ui
+npm install        # solo la primera vez
+npm run dev
+```
+
+Abrís `http://localhost:5173` — hot-reload instantáneo.
+El `vite.config.ts` proxea `/api` y `/ws` a `localhost:8000` automáticamente.
+
+### Gate antes de commitear
+
+```powershell
+cd C:\Aegis\Aegis-Core\kernel
+cargo fmt --all
+cargo clippy --workspace -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+cargo build --workspace
+
+cd C:\Aegis\Aegis-Core\shell\ui
+npm run build
+npm run lint
+```
+
+### Flujo completo
+
+```
+1. Editar código
+2. cargo run / npm run dev → probar en browser
+3. Repetir hasta que funcione
+4. Correr gate (fmt + clippy + build)
+5. git checkout -b fix/core-XXX-descripcion
+6. git commit -m "fix(área): CORE-XXX descripción"
+7. git push origin fix/core-XXX-descripcion
+8. Crear PR en GitHub con título Conventional Commits
+9. Mergear con Squash and merge
+```
+
+---
+
 ## Leyes SRE (no negociables)
 
 ### Zero-Panic (Rust)
@@ -72,15 +136,34 @@ Aegis-Core/
 
 ---
 
-## Reglas absolutas
+## Reglas absolutas (para agentes)
 
 - NUNCA modificar repos legacy
 - NUNCA hardcodear paths — usar crate `dirs` o `AEGIS_DATA_DIR`
 - NUNCA commitear `.env` ni `AEGIS_ROOT_KEY`
-- NUNCA hacer push a git (Tavo lo hace manualmente)
+- NUNCA hacer push directo a `main` — siempre rama + PR
 - NUNCA correr `cargo test` localmente — CI los corre en cada PR
 - NUNCA crear archivos de tickets fuera de `governance/Tickets/`
 - Un ticket = un archivo `.md` — nunca batch
+
+---
+
+## Flujo Git (OBLIGATORIO — agentes y Tavo)
+
+```
+1. git checkout -b fix/core-XXX-descripcion
+   (fix/ bugs · feat/ features · chore/ mantenimiento)
+2. Implementar + correr gate
+3. git commit -m "fix(área): CORE-XXX descripción"
+4. git push origin fix/core-XXX-descripcion
+5. PR en GitHub con título = mensaje del commit
+6. Tavo mergea con Squash and merge
+```
+
+**Prefijos y versión semántica:**
+- `fix:` → patch bump (0.1.12 → 0.1.13)
+- `feat:` → minor bump (0.1.12 → 0.2.0)
+- `chore:` → sin bump
 
 ---
 
@@ -90,4 +173,4 @@ Aegis-Core/
 - Ubicación: `governance/Tickets/CORE-XXX.md`
 - Estado global: `governance/TICKETS_MASTER.md`
 - Al cerrar un ticket: actualizar estado en `TICKETS_MASTER.md`
-- Commits: Conventional Commits con ID del ticket (`feat(ank-http): CORE-012 ...`)
+- Commits: `fix(ank-http): CORE-012 descripción`

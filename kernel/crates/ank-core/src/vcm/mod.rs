@@ -128,8 +128,8 @@ impl VirtualContextManager {
             }
         }
 
-        // L2 CONTEXT / CHAT HISTORY - Lowest Priority (Se trunca desde el más antiguo)
-        let tenant_root = format!("./users/{}/workspace", tenant_id);
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let tenant_root = format!("{}/users/{}/workspace", base_dir, tenant_id);
         let mut has_l2 = false;
         let mut l2_str = String::new();
 
@@ -320,15 +320,28 @@ mod tests {
         let vcm = VirtualContextManager::new();
         let swap = LanceSwapManager::new("./test_users");
 
-        // Crear estructura de directorios para el tenant default
-        let workspace_path = "./users/default/workspace";
-        tokio::fs::create_dir_all(workspace_path)
-            .await
-            .context("Failed to create workspace dir")?;
+        let tenant_id = format!(
+            "test_tenant_vcm_overflow_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
+        let workspace_path = format!("./users/{}/workspace", tenant_id);
+
+        let mut retries = 5;
+        while retries > 0 {
+            if std::fs::create_dir_all(&workspace_path).is_ok() {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            retries -= 1;
+        }
+        std::fs::create_dir_all(&workspace_path).context("Failed to create workspace dir")?;
 
         // Crear un archivo temporal con ruta relativa dentro del workspace del tenant
         let file_name = "test_overflow_dummy.txt";
-        let full_path = std::path::Path::new(workspace_path).join(file_name);
+        let full_path = std::path::Path::new(&workspace_path).join(file_name);
 
         let mut file = std::fs::File::create(&full_path).context("Failed to create test file")?;
         let large_content = "X".repeat(2000); // ~500 tokens
@@ -336,6 +349,7 @@ mod tests {
             .context("Failed to write test content")?;
 
         let mut pcb = PCB::new("HeavyProc".into(), 5, "Small task".into());
+        pcb.tenant_id = Some(tenant_id.clone());
         pcb.memory_pointers
             .l2_context_refs
             .push(format!("file://{}", file_name));
@@ -344,7 +358,7 @@ mod tests {
         let context = vcm.assemble_context(&pcb, &swap, 100).await?;
 
         // Limpiar
-        let _ = std::fs::remove_file(&full_path);
+        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
 
         assert!(
             context.contains("omitido por falta de memoria")

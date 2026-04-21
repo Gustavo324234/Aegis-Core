@@ -95,6 +95,17 @@ async fn main() -> Result<()> {
     // 6. Setup Token
     {
         let c = citadel.lock().await;
+        if let Ok(Some(enabled)) = c.enclave.get_config("tls_enabled").await {
+            if enabled == "true" {
+                if let Ok(Some(cert)) = c.enclave.get_config("tls_cert_path").await {
+                    std::env::set_var("AEGIS_TLS_CERT", cert);
+                }
+                if let Ok(Some(key_path)) = c.enclave.get_config("tls_key_path").await {
+                    std::env::set_var("AEGIS_TLS_KEY", key_path);
+                }
+            }
+        }
+
         if !c.enclave.admin_exists().await? {
             let token = uuid::Uuid::new_v4().to_string().replace("-", "");
             c.enclave.store_setup_token(&token, 30).await?;
@@ -214,7 +225,28 @@ async fn main() -> Result<()> {
                     }
                 };
 
-                match hal_read.route_and_execute(Arc::clone(&shared_pcb)).await {
+                let (tenant_id, session_key) = {
+                    let pcb = shared_pcb.read().await;
+                    (
+                        pcb.tenant_id.clone().unwrap_or_default(),
+                        pcb.session_key.clone().unwrap_or_default(),
+                    )
+                };
+
+                let persona: Option<String> = if !tenant_id.is_empty() && !session_key.is_empty() {
+                    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &session_key) {
+                        db.get_persona().unwrap_or(None)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                match hal_read
+                    .route_and_execute(Arc::clone(&shared_pcb), persona)
+                    .await
+                {
                     Ok(mut stream) => {
                         use tokio_stream::StreamExt as _;
                         let mut tokens_emitted: u32 = 0;

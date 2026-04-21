@@ -13,16 +13,19 @@ import { TRANSLATIONS, Language } from '@/constants/i18n';
 export default function SettingsScreen() {
   const router = useRouter();
   const { logout, mode } = useAuthStore();
-  const { 
-    selectedProviderId, 
-    selectedModel, 
+  const {
+    selectedProviderId,
+    selectedModel,
     language,
-    setProvider, 
-    setModel, 
+    setProvider,
+    setModel,
     setLanguage,
     loadSettings,
     refreshApiKeys,
-    apiKeys: hasApiKeys
+    apiKeys: hasApiKeys,
+    agentPersona,
+    isPersonaConfigured,
+    fetchAgentPersona
   } = useSettingsStore();
 
   const t = TRANSLATIONS[language];
@@ -35,6 +38,12 @@ export default function SettingsScreen() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  useEffect(() => {
+    if (mode === 'satellite') {
+      fetchAgentPersona();
+    }
+  }, [mode, fetchAgentPersona]);
 
   const handleSaveKey = async (providerId: string) => {
     if (!keyInput.trim()) return;
@@ -52,13 +61,13 @@ export default function SettingsScreen() {
   const handleRemoveKey = async (providerId: string) => {
     Alert.alert('Remove Key', 'Are you sure?', [
       { text: 'Cancel' },
-      { 
-        text: 'Remove', 
-        style: 'destructive', 
+      {
+        text: 'Remove',
+        style: 'destructive',
         onPress: async () => {
           await secureStorage.removeApiKey(providerId);
           await refreshApiKeys();
-        } 
+        }
       }
     ]);
   };
@@ -73,13 +82,13 @@ export default function SettingsScreen() {
   const handleLogout = () => {
     Alert.alert('Logout', 'Disconnect and clear session?', [
       { text: 'Cancel', style: 'cancel' },
-      { 
-        text: 'Logout', 
-        style: 'destructive', 
-        onPress: async () => { 
-          await logout(); 
-          router.replace('/(auth)/login'); 
-        } 
+      {
+        text: 'Logout',
+        style: 'destructive',
+        onPress: async () => {
+          await logout();
+          router.replace('/(auth)/login');
+        }
       },
     ]);
   };
@@ -96,7 +105,7 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        
+
         {/* SECTION: LANGUAGE */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>{t.language}</Text>
@@ -124,11 +133,34 @@ export default function SettingsScreen() {
           <Text style={styles.modeDesc}>Operating in {mode} neural link.</Text>
         </View>
 
+        {/* SECTION: AGENT PERSONA (Satellite only) */}
+        {mode === 'satellite' && (
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>IDENTIDAD DEL AGENTE</Text>
+          </View>
+        )}
+        {mode === 'satellite' && (
+          <View style={styles.card}>
+            {isPersonaConfigured ? (
+              <>
+                <View style={styles.personaBadge}>
+                  <Text style={styles.personaBadgeText}>✓ Persona configurada por el operador</Text>
+                </View>
+                <Text style={styles.personaPreview} numberOfLines={2}>
+                  {agentPersona.slice(0, 120)}{agentPersona.length > 120 ? '...' : ''}
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.personaEmpty}>Sin identidad personalizada — usando Aegis por defecto</Text>
+            )}
+          </View>
+        )}
+
         {/* SECTION: CLOUD PROVIDERS */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>{t.cloud_providers}</Text>
         </View>
-        
+
         <View style={styles.providerGrid}>
           {PROVIDERS.map((p) => (
             <TouchableOpacity
@@ -238,6 +270,10 @@ export default function SettingsScreen() {
           <Text style={styles.logoutText}>{t.terminate_session}</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity style={styles.oauthLink} onPress={() => router.push('/(main)/connected-accounts')}>
+          <Text style={styles.oauthLinkText}>CUENTAS CONECTADAS</Text>
+        </TouchableOpacity>
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -286,5 +322,11 @@ const styles = StyleSheet.create({
   modelTextActive: { color: '#00E5CC', fontWeight: 'bold' },
   activeDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#00E5CC' },
   logoutBtn: { marginTop: 40, marginBottom: 40, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#FF444433', alignItems: 'center' },
-  logoutText: { color: '#FF4444', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 }
+  logoutText: { color: '#FF4444', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 },
+  personaBadge: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  personaBadgeText: { color: '#00E5CC', fontSize: 11, fontWeight: 'bold' },
+  personaPreview: { color: '#888', fontSize: 12, lineHeight: 18 },
+  personaEmpty: { color: '#444', fontSize: 12, fontStyle: 'italic' },
+  oauthLink: { marginTop: 10, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#7C6FE033', backgroundColor: '#0A0A0A', alignItems: 'center' },
+  oauthLinkText: { color: '#7C6FE0', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 }
 });

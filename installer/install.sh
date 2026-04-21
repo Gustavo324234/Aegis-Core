@@ -30,7 +30,7 @@ NC='\033[0m'
 INSTALL_MODE="1"
 ARCH="x86_64"
 INFERENCE_PROFILE="cloud"
-ENABLE_TLS="false"
+ENABLE_TLS="true"
 
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
@@ -184,38 +184,30 @@ show_inference_profile_menu() {
     log "Inference profile: ${INFERENCE_PROFILE}"
 }
 
-show_tls_menu() {
-    if [ ! -t 0 ]; then
-        log "Non-interactive shell. Defaulting to no TLS."
-        return
-    fi
-    echo ""
-    echo -e "${YELLOW}--- SEGURIDAD (TLS / HTTPS) ---${NC}"
-    echo "¿Desea generar un certificado TLS self-signed para usar HTTPS?"
-    echo "¡REQUERIDO para que el browser permita usar el micrófono (Siren) fuera de localhost!"
-    echo "  [1] Sí - Generar HTTPS self-signed (Recomendado) [DEFAULT]"
-    echo "  [2] No - Servir solo HTTP"
-    read -rp "Selección [1-2]: " tls_choice
-    case "${tls_choice:-1}" in
-        2) ENABLE_TLS="false" ;;
-        *) ENABLE_TLS="true" ;;
-    esac
-}
+setup_tls_automatic() {
+    log "Generando certificado TLS self-signed (HTTPS activado por defecto)..."
+    mkdir -p "$CONFIG_DIR"
+    local local_ip
+    local_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || local_ip="127.0.0.1"
 
-setup_tls() {
-    if [[ "$ENABLE_TLS" == "true" ]]; then
-        log "Generando certificado TLS self-signed..."
-        mkdir -p "$CONFIG_DIR"
-        openssl req -x509 -newkey rsa:4096 -keyout "$CONFIG_DIR/key.pem" \
-          -out "$CONFIG_DIR/cert.pem" -days 365 -nodes \
-          -subj "/CN=aegis-local" >> "$LOG_FILE" 2>&1
+    openssl req -x509 -newkey rsa:4096 \
+        -keyout "$CONFIG_DIR/key.pem" \
+        -out "$CONFIG_DIR/cert.pem" \
+        -days 365 -nodes \
+        -subj "/CN=aegis-local" \
+        -addext "subjectAltName=IP:${local_ip},IP:127.0.0.1,DNS:localhost" \
+        >> "$LOG_FILE" 2>&1 || warn "TLS generation failed — continuing with HTTP"
+
+    if [[ -f "$CONFIG_DIR/cert.pem" ]]; then
         if id -u aegis >/dev/null 2>&1; then
-            chown aegis:aegis "$CONFIG_DIR"/*.pem
+            chown aegis:aegis "$CONFIG_DIR"/*.pem 2>/dev/null || true
         fi
         chmod 640 "$CONFIG_DIR"/*.pem
-        success "Certificado TLS creado en $CONFIG_DIR"
+        ENABLE_TLS="true"
+        success "Certificado TLS generado para IP ${local_ip}"
+    else
+        ENABLE_TLS="false"
     fi
-
 }
 
 install_dependencies() {
@@ -237,6 +229,8 @@ install_dependencies() {
 
 install_native() {
     log "Starting native installation..."
+
+    setup_tls_automatic
 
     if ! id -u aegis >/dev/null 2>&1; then
         log "Creating 'aegis' system user..."
@@ -358,6 +352,8 @@ EOF
 
 install_docker() {
     log "Starting Docker installation..."
+    mkdir -p "$CONFIG_DIR"
+    setup_tls_automatic
     mkdir -p "$INSTALL_ROOT"
 
     local raw_url="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/docker-compose.yml"
@@ -478,8 +474,6 @@ check_root
 detect_arch
 show_main_menu
 show_inference_profile_menu
-show_tls_menu
-setup_tls
 install_dependencies
 
 if [[ "$INSTALL_MODE" == "1" ]]; then
