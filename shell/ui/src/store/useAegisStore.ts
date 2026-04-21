@@ -102,7 +102,8 @@ const buildWsUrl = (path: string) => {
 
 let telemetryInterval: number | null = null;
 
-const STORE_VERSION = 3;
+// CORE-124: bump version para migrar stores viejos que tenían sessionKey persistida
+const STORE_VERSION = 4;
 
 export const useAegisStore = create<AegisState>()(
     persist(
@@ -332,7 +333,8 @@ export const useAegisStore = create<AegisState>()(
                     const { event: type, data, pid } = msg as { event: string; data: unknown; pid?: string };
                     switch (type) {
                         case 'syslog':
-                            set((state) => ({ messages: [...state.messages, { id: `sys-${Date.now()}`, role: 'system', content: data as string, type: 'system', timestamp: Date.now() }] }));
+                            // CORE-124: no agregar syslog de reconexión al historial persistido
+                            // para no llenar el chat de "bridge established" en cada F5
                             break;
                         case 'status':
                             set({ status: 'thinking' });
@@ -393,7 +395,10 @@ export const useAegisStore = create<AegisState>()(
             },
 
             setStatus: (status) => set({ status }),
+
+            // CORE-124: clearHistory es acción explícita del usuario — borra mensajes intencionalmente
             clearHistory: () => set({ messages: [] }),
+
             addSystemMessage: (content: string) => {
                 set({ messages: [...get().messages, { id: `sys-${Date.now()}`, role: 'system', content, type: 'system', timestamp: Date.now() }] });
             },
@@ -420,6 +425,9 @@ export const useAegisStore = create<AegisState>()(
                 } catch (error) { console.error('🛡️ Citadel Auth Error:', error); return 'failed'; }
             },
 
+            // CORE-124: logout NO borra el historial de mensajes.
+            // Los mensajes se preservan en localStorage y se restauran al volver a loguearse.
+            // El historial solo se borra con clearHistory() (acción explícita del usuario).
             logout: () => {
                 const { socket, sirenSocket } = get();
                 if (socket) socket.close();
@@ -431,9 +439,10 @@ export const useAegisStore = create<AegisState>()(
                     sessionKey: null,
                     socket: null,
                     sirenSocket: null,
-                    messages: [],
+                    // messages: NO se borra — CORE-124
                     needsPasswordReset: false,
                     adminActiveTab: 'users',
+                    status: 'disconnected',
                 });
                 if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
             },
@@ -563,7 +572,7 @@ export const useAegisStore = create<AegisState>()(
                 // adminActiveTab NO se persiste — evita crash al recargar en tabs que requieren sessionKey
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
-                messages: state.messages,
+                messages: state.messages,  // CORE-124: mensajes persisten entre sesiones
                 lastError: state.lastError,
                 needsPasswordReset: state.needsPasswordReset,
                 lastTenantsUpdate: state.lastTenantsUpdate,
