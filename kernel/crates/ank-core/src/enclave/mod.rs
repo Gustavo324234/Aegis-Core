@@ -235,15 +235,17 @@ mod tests {
 
     #[test]
     fn test_persona_set_get_delete() -> anyhow::Result<()> {
-        let dir = tempdir().context("Failed to create tempdir")?;
-        let base_path = dir.path();
-        let tenant_id = "test_persona_user";
+        let tenant_id = format!(
+            "test_persona_user_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
         let correct_key = "test_key_123";
 
-        std::env::set_current_dir(base_path)?;
-
         {
-            let db = TenantDB::open(tenant_id, correct_key)?;
+            let db = TenantDB::open(&tenant_id, correct_key)?;
             db.set_persona("Eres Eve, asistente de ACME Corp.")?;
             let loaded = db.get_persona()?;
             assert!(loaded.is_some(), "Persona should be stored");
@@ -251,7 +253,7 @@ mod tests {
         }
 
         {
-            let db = TenantDB::open(tenant_id, correct_key)?;
+            let db = TenantDB::open(&tenant_id, correct_key)?;
             let loaded = db.get_persona()?;
             assert!(loaded.is_some());
             db.delete_persona()?;
@@ -259,20 +261,23 @@ mod tests {
             assert!(after_delete.is_none(), "Persona should be deleted");
         }
 
+        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
         Ok(())
     }
 
     #[test]
     fn test_persona_max_length() -> anyhow::Result<()> {
-        let dir = tempdir().context("Failed to create tempdir")?;
-        let base_path = dir.path();
-        std::env::set_current_dir(base_path)?;
-
-        let tenant_id = "test_maxlen_user";
+        let tenant_id = format!(
+            "test_maxlen_user_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        );
         let correct_key = "test_key_456";
 
         let too_long = "x".repeat(4001);
-        let db = TenantDB::open(tenant_id, correct_key)?;
+        let db = TenantDB::open(&tenant_id, correct_key)?;
         let result = db.set_persona(&too_long);
         assert!(result.is_err(), "Persona of 4001 chars should fail");
 
@@ -281,6 +286,7 @@ mod tests {
         let loaded = db.get_persona()?;
         assert_eq!(loaded.unwrap().len(), 4000);
 
+        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
         Ok(())
     }
 }
