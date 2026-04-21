@@ -326,5 +326,7 @@ const styles = StyleSheet.create({
   personaBadge: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   personaBadgeText: { color: '#00E5CC', fontSize: 11, fontWeight: 'bold' },
   personaPreview: { color: '#888', fontSize: 12, lineHeight: 18 },
-  personaEmpty: { color: '#444', fontSize: 12, fontStyle: 'italic' }
+  personaEmpty: { color: '#444', fontSize: 12, fontStyle: 'italic' },
+  oauthLink: { marginTop: 10, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#7C6FE033', backgroundColor: '#0A0A0A', alignItems: 'center' },
+  oauthLinkText: { color: '#7C6FE0', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 }
 });
