@@ -195,11 +195,10 @@ impl SyscallExecutor {
 
                 let db = match TenantDB::open(tenant_id, session_key) {
                     Ok(db) => db,
-                    Err(e) => {
-                        return Ok(format!(
-                            "[SYSTEM_RESULT: No music provider connected. \
+                    Err(_) => {
+                        return Ok("[SYSTEM_RESULT: No music provider connected. \
                              Tell the user to connect Spotify or Google in Settings.]"
-                        ));
+                            .to_string());
                     }
                 };
 
