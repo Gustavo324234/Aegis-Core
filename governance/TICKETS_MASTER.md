@@ -12,7 +12,7 @@
 
 ### ADR-039: Persona en `kv_store` SQLCipher del tenant. Máx 4000 chars.
 
-*   **[CORE-128]** Fix: `SYSTEM_PROMPT_MASTER` honesto + `build_prompt(persona)` `[TODO — Kernel Engineer]`
+*   **[CORE-128]** Fix: `SYSTEM_PROMPT_MASTER` honesto + `build_prompt(persona)` `[DONE]`
 *   **[CORE-129]** Feature: Persona en SQLCipher + endpoints `/api/persona` `[TODO — Kernel Engineer]`
 *   **[CORE-132]** Feature: Onboarding conversacional — primer mensaje sin Persona `[TODO — Kernel Engineer]`
 *   **[CORE-134]** Fix: TLS en Axum puerto 8000 — depende de CORE-142 `[TODO — Kernel Engineer]`
