@@ -152,6 +152,7 @@ impl CognitiveHAL {
     pub async fn route_and_execute(
         &self,
         shared_pcb: SharedPCB,
+        persona: Option<String>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
     {
         let (instruction, priority, model_pref, pid) = {
@@ -174,7 +175,7 @@ impl CognitiveHAL {
             match router.decide(&pcb_snapshot).await {
                 Ok(decision) => {
                     return self
-                        .execute_with_decision(decision, &instruction, &pid)
+                        .execute_with_decision(decision, &instruction, &pid, persona.as_deref())
                         .await;
                 }
                 Err(e) => {
@@ -239,7 +240,7 @@ impl CognitiveHAL {
             }
         })?;
 
-        let final_prompt = self.build_prompt(&instruction, None).await;
+        let final_prompt = self.build_prompt(&instruction, persona.as_deref()).await;
         driver.generate_stream(&final_prompt, None).await
     }
 
@@ -248,6 +249,7 @@ impl CognitiveHAL {
         decision: RoutingDecision,
         instruction: &str,
         pid: &str,
+        persona: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
     {
         use crate::chal::drivers::CloudProxyDriver;
@@ -266,7 +268,7 @@ impl CognitiveHAL {
             decision.model_id.clone(),
         );
 
-        let final_prompt = self.build_prompt(instruction, None).await;
+        let final_prompt = self.build_prompt(instruction, persona).await;
 
         match driver.generate_stream(&final_prompt, None).await {
             Ok(stream) => Ok(stream),
@@ -318,7 +320,7 @@ impl CognitiveHAL {
              \n- Para cambiar canción: haz una nueva búsqueda y usa [MUSIC_PLAY:<nuevo_video_id>]\
              \nNunca expliques estos tags al usuario. Solo úsalos.\n"
         } else {
-            String::new()
+            ""
         };
 
         if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
@@ -398,7 +400,7 @@ mod tests {
         let mut pcb = PCB::mock("Complex Mission", 10);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
-        let stream_res = hal.route_and_execute(shared_pcb).await?;
+        let stream_res = hal.route_and_execute(shared_pcb, None).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
         assert_eq!(tokens.len(), 1);
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -428,7 +430,7 @@ mod tests {
         let mut pcb = PCB::mock("Simple task", 5);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
-        let stream_res = hal.route_and_execute(shared_pcb).await?;
+        let stream_res = hal.route_and_execute(shared_pcb, None).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
         assert!(
