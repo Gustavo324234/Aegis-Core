@@ -1,3 +1,4 @@
+use crate::enclave::TenantDB;
 use crate::plugins::PluginManager;
 use crate::scribe::CommitMetadata;
 use regex::Regex;
@@ -180,65 +181,28 @@ impl SyscallExecutor {
                 Ok(format!("[SYSTEM_RESULT: {}]", result))
             }
             Syscall::MusicSearch { query, max_results } => {
-                let api_key = match std::env::var("YOUTUBE_API_KEY") {
-                    Ok(k) if !k.is_empty() => k,
-                    _ => {
-                        return Ok("[SYSTEM_RESULT: No YouTube API key configured. \
-                             Tell the user to add YOUTUBE_API_KEY to configure music search.]"
-                            .to_string());
+                let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+
+                let db = match TenantDB::open(tenant_id, session_key) {
+                    Ok(db) => db,
+                    Err(_) => {
+                        return Ok("[SYSTEM_RESULT: No music provider connected. \
+                            Tell the user to connect Spotify or Google in Settings.]".to_string());
                     }
                 };
 
-                let url = format!(
-                    "https://www.googleapis.com/youtube/v3/search\
-                     ?part=snippet&type=video&videoCategoryId=10\
-                     &q={}&maxResults={}&key={}",
-                    urlencoding::encode(&query),
-                    max_results.clamp(1, 5),
-                    api_key
-                );
-
-                let resp = self
-                    .http_client
-                    .get(&url)
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        SyscallError::IOError(format!("YouTube API request failed: {}", e))
-                    })?;
-
-                if !resp.status().is_success() {
-                    return Err(SyscallError::IOError(format!(
-                        "YouTube API error: {}",
-                        resp.status()
-                    )));
+                if db.is_oauth_connected("spotify").unwrap_or(false) {
+                    return self.search_spotify(&db, &query, max_results).await;
                 }
 
-                let data: serde_json::Value = resp
-                    .json()
-                    .await
-                    .map_err(|e| SyscallError::IOError(e.to_string()))?;
+                if db.is_oauth_connected("google").unwrap_or(false) {
+                    return self.search_youtube_oauth(&db, &query, max_results).await;
+                }
 
-                let results: Vec<serde_json::Value> = data["items"]
-                    .as_array()
-                    .map(|items| {
-                        items.iter().map(|item| {
-                            serde_json::json!({
-                                "video_id": item["id"]["videoId"].as_str().unwrap_or(""),
-                                "title": item["snippet"]["title"].as_str().unwrap_or(""),
-                                "channel": item["snippet"]["channelTitle"].as_str().unwrap_or(""),
-                                "thumbnail": item["snippet"]["thumbnails"]["default"]["url"].as_str().unwrap_or("")
-                            })
-                        }).collect()
-                    })
-                    .unwrap_or_default();
-
-                Ok(format!(
-                    "[SYSTEM_RESULT: {}]",
-                    serde_json::to_string(&serde_json::json!({ "results": results }))
-                        .unwrap_or_default()
-                ))
+                Ok("[SYSTEM_RESULT: No music provider connected. \
+                    Tell the user to connect Spotify or Google in Settings \
+                    (the gear icon → Cuentas tab).]".to_string())
             }
         }
     }
@@ -255,6 +219,142 @@ impl SyscallExecutor {
                 }
                 _ => SyscallError::IOError(e.to_string()),
             })
+    }
+
+    async fn search_spotify(
+        &self,
+        db: &TenantDB,
+        query: &str,
+        max_results: u8,
+    ) -> Result<String, SyscallError> {
+        let token = db
+            .get_valid_access_token("spotify")
+            .map_err(|e| SyscallError::IOError(format!("Spotify token error: {}", e)))?;
+
+        let token = match token {
+            Some(t) => t,
+            None => {
+                return Ok("[SYSTEM_RESULT: Spotify token expired. Please reconnect in Settings.]".to_string());
+            }
+        };
+
+        let url = format!(
+            "https://api.spotify.com/v1/search?q={}&type=track&limit={}",
+            urlencoding::encode(query),
+            max_results.clamp(1, 10)
+        );
+
+        let resp = self
+            .http_client
+            .get(&url)
+            .bearer_auth(&token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| SyscallError::IOError(format!("Spotify API request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(SyscallError::IOError(format!("Spotify API error: {}", resp.status())));
+        }
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| SyscallError::IOError(e.to_string()))?;
+
+        let results: Vec<serde_json::Value> = data["tracks"]["items"]
+            .as_array()
+            .map(|items| {
+                items.iter().map(|t| {
+                    serde_json::json!({
+                        "provider": "spotify",
+                        "track_id": t["id"].as_str().unwrap_or(""),
+                        "track_uri": t["uri"].as_str().unwrap_or(""),
+                        "title": t["name"].as_str().unwrap_or(""),
+                        "artist": t["artists"][0]["name"].as_str().unwrap_or(""),
+                        "album": t["album"]["name"].as_str().unwrap_or(""),
+                        "duration_ms": t["duration_ms"].as_u64().unwrap_or(0),
+                        "thumbnail": t["album"]["images"][0]["url"].as_str().unwrap_or(""),
+                        "preview_url": t["preview_url"].as_str().unwrap_or(""),
+                    })
+                }).collect()
+            })
+            .unwrap_or_default();
+
+        Ok(format!(
+            "[SYSTEM_RESULT: {}]",
+            serde_json::to_string(&serde_json::json!({
+                "results": results,
+                "provider": "spotify"
+            })).unwrap_or_default()
+        ))
+    }
+
+    async fn search_youtube_oauth(
+        &self,
+        db: &TenantDB,
+        query: &str,
+        max_results: u8,
+    ) -> Result<String, SyscallError> {
+        let token = db
+            .get_valid_access_token("google")
+            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?;
+
+        let token = match token {
+            Some(t) => t,
+            None => {
+                return Ok("[SYSTEM_RESULT: Google token expired. Please reconnect in Settings.]".to_string());
+            }
+        };
+
+        let url = format!(
+            "https://www.googleapis.com/youtube/v3/search\
+             ?part=snippet&type=video&videoCategoryId=10\
+             &q={}&maxResults={}",
+            urlencoding::encode(query),
+            max_results.clamp(1, 5)
+        );
+
+        let resp = self
+            .http_client
+            .get(&url)
+            .bearer_auth(&token)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| SyscallError::IOError(format!("YouTube API request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(SyscallError::IOError(format!("YouTube API error: {}", resp.status())));
+        }
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| SyscallError::IOError(e.to_string()))?;
+
+        let results: Vec<serde_json::Value> = data["items"]
+            .as_array()
+            .map(|items| {
+                items.iter().map(|item| {
+                    serde_json::json!({
+                        "provider": "youtube",
+                        "video_id": item["id"]["videoId"].as_str().unwrap_or(""),
+                        "title": item["snippet"]["title"].as_str().unwrap_or(""),
+                        "channel": item["snippet"]["channelTitle"].as_str().unwrap_or(""),
+                        "thumbnail": item["snippet"]["thumbnails"]["default"]["url"].as_str().unwrap_or("")
+                    })
+                }).collect()
+            })
+            .unwrap_or_default();
+
+        Ok(format!(
+            "[SYSTEM_RESULT: {}]",
+            serde_json::to_string(&serde_json::json!({
+                "results": results,
+                "provider": "youtube"
+            })).unwrap_or_default()
+        ))
     }
 }
 
