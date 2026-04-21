@@ -11,10 +11,24 @@ use axum::{
     Router,
 };
 use futures::StreamExt;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::LazyLock;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::BroadcastStream;
+
+#[allow(clippy::expect_used)]
+static MUSIC_PLAY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[MUSIC_PLAY:(spotify|youtube):([A-Za-z0-9_:%-]{5,50})\]")
+        .expect("FATAL: music play regex is invalid")
+});
+
+#[allow(clippy::expect_used)]
+static MUSIC_CTRL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(MUSIC_PAUSE|MUSIC_RESUME|MUSIC_STOP|MUSIC_VOLUME:(\d{1,3}))\]")
+        .expect("FATAL: music control regex is invalid")
+});
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/:tenant_id", get(ws_chat_handler))
@@ -269,6 +283,61 @@ async fn stream_with_receiver(
 
     while let Some(Ok(proto_event)) = stream.next().await {
         if let Some(ref payload) = proto_event.payload {
+            if let ank_proto::v1::task_event::Payload::Output(ref text) = payload {
+                if let Some(caps) = MUSIC_PLAY_RE.captures(text) {
+                    let provider = caps[1].to_string();
+                    let track_id = caps[2].to_string();
+
+                    let (track_uri, title) = if provider == "spotify" {
+                        (track_id.clone(), String::new())
+                    } else {
+                        (String::new(), String::new())
+                    };
+
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({
+                                "event": "music_play",
+                                "data": {
+                                    "provider": provider,
+                                    "track_id": track_id,
+                                    "track_uri": track_uri,
+                                    "title": title
+                                }
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                    continue;
+                }
+                if let Some(caps) = MUSIC_CTRL_RE.captures(text) {
+                    let tag = &caps[1];
+                    let (action, value) = if tag.starts_with("MUSIC_VOLUME:") {
+                        ("volume", caps.get(2).map(|m| m.as_str()).unwrap_or("70"))
+                    } else {
+                        (
+                            match tag {
+                                "MUSIC_PAUSE" => "pause",
+                                "MUSIC_RESUME" => "resume",
+                                "MUSIC_STOP" => "stop",
+                                _ => "unknown",
+                            },
+                            "",
+                        )
+                    };
+                    let _ = socket
+                        .send(Message::Text(
+                            json!({
+                                "event": "music_control",
+                                "data": { "action": action, "value": value }
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                    continue;
+                }
+            }
+
             let data = match payload {
                 ank_proto::v1::task_event::Payload::Thought(t) => json!({ "thought": t }),
                 ank_proto::v1::task_event::Payload::Output(o) => json!({ "output": o }),

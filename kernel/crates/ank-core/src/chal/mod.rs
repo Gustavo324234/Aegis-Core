@@ -308,15 +308,33 @@ impl CognitiveHAL {
             _ => String::new(),
         };
 
+        let music_section = if std::env::var("YOUTUBE_API_KEY").is_ok() {
+            "\n\nMÚSICA — INSTRUCCIONES:\
+             \n- Para reproducir: [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista canción>\", \"max_results\": 1})] y luego [MUSIC_PLAY:<video_id>]\
+             \n- Para pausar: responde brevemente y termina con [MUSIC_PAUSE]\
+             \n- Para continuar: responde brevemente y termina con [MUSIC_RESUME]\
+             \n- Para detener: responde brevemente y termina con [MUSIC_STOP]\
+             \n- Para cambiar volumen: termina con [MUSIC_VOLUME:<0-100>]\
+             \n- Para cambiar canción: haz una nueva búsqueda y usa [MUSIC_PLAY:<nuevo_video_id>]\
+             \nNunca expliques estos tags al usuario. Solo úsalos.\n"
+        } else {
+            String::new()
+        };
+
         if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
-                "{}{}\n\n{}",
-                SYSTEM_PROMPT_MASTER, persona_section, instruction
+                "{}{}{}\n\n{}",
+                SYSTEM_PROMPT_MASTER, persona_section, music_section, instruction
             )
         } else {
             format!(
-                "{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nMENSAJE DEL USUARIO:\n{}",
-                SYSTEM_PROMPT_MASTER, persona_section, tool_prompt, mcp_tool_prompt, instruction
+                "{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nMENSAJE DEL USUARIO:\n{}",
+                SYSTEM_PROMPT_MASTER,
+                persona_section,
+                music_section,
+                tool_prompt,
+                mcp_tool_prompt,
+                instruction
             )
         }
     }

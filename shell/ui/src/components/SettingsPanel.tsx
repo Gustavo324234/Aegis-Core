@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Save, User, Cpu, Volume2, Shield, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle } from 'lucide-react';
+import { Settings, X, Save, User, Cpu, Volume2, Shield, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Link2 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
 import TenantKeyManager from './RouterConfig/TenantKeyManager';
 import UserPasswordChange from './UserPasswordChange';
+import ConnectedAccountsTab from './ConnectedAccountsTab';
 
 interface SettingsPanelProps {
     onClose: () => void;
@@ -13,13 +14,14 @@ interface SettingsPanelProps {
     sessionKey: string;
 }
 
-type TabId = 'persona' | 'motor' | 'voz' | 'seguridad';
+type TabId = 'persona' | 'motor' | 'voz' | 'seguridad' | 'accounts';
 
 const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: React.ReactNode }[] => [
     { id: 'persona', label: t('tab_persona'), icon: <User className="w-4 h-4" /> },
     { id: 'motor', label: t('tab_motor'), icon: <Cpu className="w-4 h-4" /> },
     { id: 'voz', label: t('tab_voz'), icon: <Volume2 className="w-4 h-4" /> },
     { id: 'seguridad', label: t('tab_seguridad'), icon: <Shield className="w-4 h-4" /> },
+    { id: 'accounts', label: 'Cuentas', icon: <Link2 className="w-4 h-4" /> },
 ];
 
 interface EngineStatus {
@@ -714,6 +716,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, tenantId, sessio
                             {activeTab === 'motor' && <MotorTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'voz' && <VozTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'seguridad' && <SeguridadTab tenantId={tenantId} sessionKey={sessionKey} />}
+                            {activeTab === 'accounts' && <ConnectedAccountsTab tenantId={tenantId} sessionKey={sessionKey} />}
                         </motion.div>
                     </AnimatePresence>
                 </div>

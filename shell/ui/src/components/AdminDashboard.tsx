@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, Plus, Key, Terminal, LogOut, Check, Users, Activity, Trash2, RefreshCw, Cpu, HardDrive, Clock, Server, Mic } from 'lucide-react';
+import { Shield, Plus, Key, Terminal, LogOut, Check, Users, Activity, Trash2, RefreshCw, Cpu, HardDrive, Clock, Server, Mic, Bot } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 
 // Aegis Shell UI Core Components
 import ProvidersTab from './ProvidersTab';
 import SirenConfigTab from './SirenConfigTab';
+import PersonaTab from './PersonaTab';
 import UserPasswordChange from './UserPasswordChange';
 
 interface NewTenant {
@@ -15,7 +16,7 @@ interface NewTenant {
     network_port: number;
 }
 
-type TabId = 'users' | 'system' | 'providers' | 'siren';
+type TabId = 'users' | 'system' | 'providers' | 'siren' | 'persona';
 
 const UsersTab: React.FC<{ tenantId: string | null; sessionKey: string | null }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
@@ -391,6 +392,7 @@ const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: Rea
     { id: 'system', label: t('system'), icon: <Activity className="w-4 h-4" /> },
     { id: 'providers', label: 'IA Tools', icon: <Cpu className="w-4 h-4" /> },
     { id: 'siren', label: t('voice_audio'), icon: <Mic className="w-4 h-4" /> },
+    { id: 'persona', label: 'Persona', icon: <Bot className="w-4 h-4" /> },
 ];
 
 const AdminDashboard: React.FC = () => {
@@ -432,6 +434,7 @@ const AdminDashboard: React.FC = () => {
                         {adminActiveTab === 'system' && <SystemTab tenantId={tenantId} sessionKey={sessionKey} />}
                         {adminActiveTab === 'providers' && <ProvidersTab tenantId={tenantId} sessionKey={sessionKey} />}
                         {adminActiveTab === 'siren' && <SirenConfigTab />}
+                        {adminActiveTab === 'persona' && <PersonaTab tenantId={tenantId} sessionKey={sessionKey} />}
                     </motion.div>
                 </AnimatePresence>
             </div>
