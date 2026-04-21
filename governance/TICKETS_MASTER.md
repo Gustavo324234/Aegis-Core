@@ -51,7 +51,7 @@
 > La Shell web muestra el estado de las conexiones y permite desconectar.
 
 ### Kernel
-*   **[CORE-142]** Feature: SystemConfig en MasterEnclave + TLS automático `[TODO — Kernel Engineer + Shell Engineer 🔴 FUNDACIÓN]`
+*   **[CORE-142]** Feature: SystemConfig en MasterEnclave + TLS automático `[DONE — Kernel Engineer]`
 *   **[CORE-138]** Feature: OAuth token receiver — `POST /api/oauth/tokens` + `GET /api/oauth/status` + `DELETE /api/oauth/{provider}` `[TODO — Kernel Engineer]`
 *   **[CORE-140]** Feature: Spotify music + Google OAuth para YouTube sin key manual `[TODO — Kernel + Shell Engineer]`
 *   **[CORE-141]** Feature: Google Calendar, Drive, Gmail via syscalls `[TODO — Kernel Engineer]`

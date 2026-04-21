@@ -122,14 +122,21 @@ pub async fn generate_tls(
 
     let status = std::process::Command::new("openssl")
         .args([
-            "req", "-x509", "-newkey", "rsa:4096",
-            "-keyout", key_path,
-            "-out", cert_path,
-            "-days", "365", "-nodes",
-            "-subj", "/CN=aegis-local",
-            "-addext", &format!(
-                "subjectAltName=IP:{},IP:127.0.0.1,DNS:localhost", ip
-            ),
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:4096",
+            "-keyout",
+            key_path,
+            "-out",
+            cert_path,
+            "-days",
+            "365",
+            "-nodes",
+            "-subj",
+            "/CN=aegis-local",
+            "-addext",
+            &format!("subjectAltName=IP:{},IP:127.0.0.1,DNS:localhost", ip),
         ])
         .status()
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
@@ -143,15 +150,21 @@ pub async fn generate_tls(
         .status();
 
     let citadel = state.citadel.lock().await;
-    c.enclave.set_config("tls_enabled", "true")
+    citadel
+        .enclave
+        .set_config("tls_enabled", "true")
         .await
-        .map_err(|e| AegisHttpError::Internal(e))?;
-    c.enclave.set_config("tls_cert_path", cert_path)
+        .map_err(AegisHttpError::Internal)?;
+    citadel
+        .enclave
+        .set_config("tls_cert_path", cert_path)
         .await
-        .map_err(|e| AegisHttpError::Internal(e))?;
-    c.enclave.set_config("tls_key_path", key_path)
+        .map_err(AegisHttpError::Internal)?;
+    citadel
+        .enclave
+        .set_config("tls_key_path", key_path)
         .await
-        .map_err(|e| AegisHttpError::Internal(e))?;
+        .map_err(AegisHttpError::Internal)?;
 
     Ok(Json(GenerateTlsResponse {
         success: true,
@@ -174,7 +187,13 @@ pub async fn restart_service(
 
     let result = if mode.trim() == "docker" {
         std::process::Command::new("docker")
-            .args(["compose", "-f", "/opt/aegis/docker-compose.yml", "restart", "ank-server"])
+            .args([
+                "compose",
+                "-f",
+                "/opt/aegis/docker-compose.yml",
+                "restart",
+                "ank-server",
+            ])
             .output()
     } else {
         std::process::Command::new("systemctl")

@@ -6,6 +6,7 @@ pub mod providers;
 pub mod router_api;
 pub mod siren_api;
 pub mod status;
+pub mod system_config_api;
 pub mod workspace;
 
 use crate::static_files;
@@ -25,6 +26,7 @@ pub fn build_router(state: AppState) -> Router {
         // API Routes
         .nest("/api/auth", auth::router())
         .nest("/api/admin", admin::router())
+        .nest("/api/admin/system-config", system_config_api::router())
         .nest("/api/engine", engine::router())
         .nest("/api/router", router_api::router())
         .nest("/api/workspace", workspace::router())
