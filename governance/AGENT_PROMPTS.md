@@ -36,14 +36,30 @@ GATE (antes de marcar DONE — en este orden):
   cargo clippy -p <crate> -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 
 NO HACER:
-- No push a git
+- No push directo a main — NUNCA
 - No cargo test local (CI lo corre)
 - No modificar repos legacy
+
+FLUJO GIT OBLIGATORIO:
+1. Crear rama: git checkout -b fix/core-XXX-descripcion
+   (usar fix/ para bugs, feat/ para features, chore/ para mantenimiento)
+2. Implementar cambios
+3. Commit con Conventional Commits:
+   fix(área): CORE-XXX descripción corta
+   feat(área): CORE-XXX descripción corta
+   chore(área): CORE-XXX descripción corta
+   Ejemplos de área: ank-core, ank-http, ank-server, installer, shell
+4. Push de la rama: git push origin fix/core-XXX-descripcion
+5. Reportar el comando exacto para que Tavo cree el PR
 
 AL TERMINAR EL TICKET:
 1. Verificar que el gate pasa completo (fmt + build + clippy)
 2. Actualizar el estado en Aegis-Core/governance/TICKETS_MASTER.md → [DONE]
-3. Reportar: archivos modificados + mensaje de commit sugerido
+3. Reportar:
+   - Archivos modificados
+   - Mensaje de commit usado
+   - Nombre de la rama creada
+   - Comando sugerido de PR (ej: gh pr create --title "fix(ank-core): CORE-XXX ..." --base main)
 
 TAREA: [describir el ticket aquí]
 ```
@@ -80,14 +96,30 @@ GATE (antes de marcar DONE — en este orden):
   cd shell/ui && npm run lint
 
 NO HACER:
-- No push a git
+- No push directo a main — NUNCA
 - No modificar repos legacy
 - No agregar lógica de negocio fuera de los stores
+
+FLUJO GIT OBLIGATORIO:
+1. Crear rama: git checkout -b fix/core-XXX-descripcion
+   (usar fix/ para bugs, feat/ para features, chore/ para mantenimiento)
+2. Implementar cambios
+3. Commit con Conventional Commits:
+   fix(área): CORE-XXX descripción corta
+   feat(área): CORE-XXX descripción corta
+   chore(área): CORE-XXX descripción corta
+   Ejemplos de área: shell, shell-ui, shell-store, shell-components
+4. Push de la rama: git push origin fix/core-XXX-descripcion
+5. Reportar el comando exacto para que Tavo cree el PR
 
 AL TERMINAR EL TICKET:
 1. Verificar que el gate pasa sin errores TypeScript ni lint
 2. Actualizar el estado en Aegis-Core/governance/TICKETS_MASTER.md → [DONE]
-3. Reportar: archivos modificados + mensaje de commit sugerido
+3. Reportar:
+   - Archivos modificados
+   - Mensaje de commit usado
+   - Nombre de la rama creada
+   - Comando sugerido de PR (ej: gh pr create --title "fix(shell): CORE-XXX ..." --base main)
 
 TAREA: [describir el ticket aquí]
 ```
@@ -121,13 +153,29 @@ GATE (antes de marcar DONE):
   shellcheck installer/*.sh installer/aegis
 
 NO HACER:
-- No push a git
+- No push directo a main — NUNCA
 - No modificar repos legacy
+
+FLUJO GIT OBLIGATORIO:
+1. Crear rama: git checkout -b fix/core-XXX-descripcion
+   (usar fix/ para bugs, feat/ para features, chore/ para mantenimiento)
+2. Implementar cambios
+3. Commit con Conventional Commits:
+   fix(área): CORE-XXX descripción corta
+   feat(área): CORE-XXX descripción corta
+   chore(área): CORE-XXX descripción corta
+   Ejemplos de área: installer, ci, docker
+4. Push de la rama: git push origin fix/core-XXX-descripcion
+5. Reportar el comando exacto para que Tavo cree el PR
 
 AL TERMINAR EL TICKET:
 1. Verificar que shellcheck pasa sin warnings
 2. Actualizar el estado en Aegis-Core/governance/TICKETS_MASTER.md → [DONE]
-3. Reportar: archivos modificados + mensaje de commit sugerido
+3. Reportar:
+   - Archivos modificados
+   - Mensaje de commit usado
+   - Nombre de la rama creada
+   - Comando sugerido de PR (ej: gh pr create --title "fix(installer): CORE-XXX ..." --base main)
 
 TAREA: [describir el ticket aquí]
 ```
@@ -162,13 +210,29 @@ GATE (antes de marcar DONE):
   npx expo export
 
 NO HACER:
-- No push a git
+- No push directo a main — NUNCA
 - No modificar repos legacy
+
+FLUJO GIT OBLIGATORIO:
+1. Crear rama: git checkout -b fix/core-XXX-descripcion
+   (usar fix/ para bugs, feat/ para features, chore/ para mantenimiento)
+2. Implementar cambios
+3. Commit con Conventional Commits:
+   fix(área): CORE-XXX descripción corta
+   feat(área): CORE-XXX descripción corta
+   chore(área): CORE-XXX descripción corta
+   Ejemplos de área: app, app-store, app-screens
+4. Push de la rama: git push origin fix/core-XXX-descripcion
+5. Reportar el comando exacto para que Tavo cree el PR
 
 AL TERMINAR EL TICKET:
 1. Verificar que el gate pasa sin errores TypeScript
 2. Actualizar el estado en Aegis-Core/governance/TICKETS_MASTER.md → [DONE]
-3. Reportar: archivos modificados + mensaje de commit sugerido
+3. Reportar:
+   - Archivos modificados
+   - Mensaje de commit usado
+   - Nombre de la rama creada
+   - Comando sugerido de PR (ej: gh pr create --title "fix(app): CORE-XXX ..." --base main)
 
 TAREA: [describir el ticket aquí]
 ```
@@ -189,7 +253,7 @@ Responsabilidades:
 - Diseñar arquitectura
 - Crear y mantener governance/
 - Despachar prompts a los especialistas
-- No implementa código
+- No implementa código directamente — escribe archivos vía aegis-nexus MCP
 
 ---
 
@@ -199,11 +263,25 @@ Responsabilidades:
 1. Copiar el prompt del agente correspondiente
 2. Reemplazar `TAREA: [describir el ticket aquí]` con:
    `TAREA: Implementar el ticket CORE-XXX. Lee el ticket completo antes de empezar.`
-3. El agente lee el ticket, lee el legacy de referencia, implementa, verifica el gate y cierra.
+3. El agente lee el ticket, lee el legacy de referencia, implementa, verifica el gate, crea la rama, hace el commit y el push, y reporta el PR sugerido.
+4. Tavo revisa y mergea el PR manualmente.
 
-**Convención de commits:**
+**Convención de ramas:**
 ```
-feat(ank-http): CORE-012 implement REST auth endpoints
-fix(installer): CORE-040 correct health check grep pattern
-chore(governance): CORE-063 add AEGIS_CONTEXT and CODEX
+fix/core-123-remove-syscall-prompt
+feat/core-122-model-profile
+chore/core-063-update-aegis-context
 ```
+
+**Convención de commits (Conventional Commits — dispara release-please):**
+```
+fix(ank-core): CORE-123 remove USER_PROCESS_INSTRUCTION tag from prompt
+feat(installer): CORE-122 add inference profile menu Cloud/Local/Hybrid
+chore(governance): CORE-063 update AEGIS_CONTEXT and TICKETS_MASTER
+```
+
+**Prefijos y su efecto en versión semántica:**
+- `fix:` → patch bump (0.1.12 → 0.1.13)
+- `feat:` → minor bump (0.1.12 → 0.2.0)
+- `chore:` → sin bump (solo CHANGELOG)
+- Nombres sin prefijo (ej: "Smoketest4") → release-please los ignora, sin bump
