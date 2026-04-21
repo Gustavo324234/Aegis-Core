@@ -231,7 +231,7 @@ impl SyscallExecutor {
                     }
                 };
 
-                if !db.is_oauth_connected(PROVIDER_GOOGLE).unwrap_or(false) {
+                if !db.is_oauth_connected("google").unwrap_or(false) {
                     return Ok("[SYSTEM_RESULT: Google Calendar not connected. \
                         Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
                         .to_string());
