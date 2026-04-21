@@ -9,8 +9,7 @@ import { AegisLogo } from './AegisLogo';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import TelemetryDashboard from './TelemetryDashboard';
-import TenantKeyManager from './RouterConfig/TenantKeyManager';
-import UserPasswordChange from './UserPasswordChange';
+import SettingsPanel from './SettingsPanel';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -257,31 +256,14 @@ const ChatTerminal: React.FC = () => {
                 </div>
             </div>
 
-            {/* Settings Modal */}
+            {/* Settings Panel */}
             <AnimatePresence>
                 {showSettings && (
-                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-                        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="w-full max-w-xl">
-                            <div className="bg-aegis-steel border border-white/10 rounded-2xl overflow-hidden shadow-2xl relative max-h-[90vh] overflow-y-auto">
-                                <div className="p-6 border-b border-white/5 flex justify-between items-center bg-black/40 sticky top-0 z-10">
-                                    <h3 className="text-sm font-mono font-bold tracking-widest text-aegis-cyan uppercase">{t('tenant_security')}</h3>
-                                    <div className="flex items-center gap-4">
-                                        <button onClick={() => { const newLang = localStorage.getItem('aegis_language') === 'en' ? 'es' : 'en'; localStorage.setItem('aegis_language', newLang); window.dispatchEvent(new Event('storage')); window.location.reload(); }} className="text-[10px] font-mono text-white/40 hover:text-white uppercase px-2 py-1 border border-white/10 rounded">
-                                            Lang: {localStorage.getItem('aegis_language') === 'en' ? 'EN' : 'ES'}
-                                        </button>
-                                        <button onClick={() => setShowSettings(false)} className="text-white/20 hover:text-white">&times;</button>
-                                    </div>
-                                </div>
-                                <div className="p-8 space-y-6">
-                                    <div>
-                                        <p className="text-[10px] font-mono text-white/40 uppercase mb-4 tracking-widest">{t('personal_keys_notice')}</p>
-                                        <TenantKeyManager tenantId={tenantId!} sessionKey={sessionKey!} />
-                                    </div>
-                                    <UserPasswordChange />
-                                </div>
-                            </div>
-                        </motion.div>
-                    </div>
+                    <SettingsPanel
+                        tenantId={tenantId!}
+                        sessionKey={sessionKey!}
+                        onClose={() => setShowSettings(false)}
+                    />
                 )}
             </AnimatePresence>
         </div>
