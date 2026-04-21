@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { ttsPlayer } from '../audio/TTSPlayer';
+import { useMusicStore } from './musicStore';
 
 export type MessageType = 'text' | 'thought' | 'system' | 'error';
 export type SystemStatus = 'disconnected' | 'connecting' | 'idle' | 'thinking' | 'executing_syscall' | 'error' | 'listening' | 'transcribing';
@@ -361,6 +362,19 @@ export const useAegisStore = create<AegisState>()(
                                 const sock = get().socket;
                                 if (sock) sock.close();
                                 set({ socket: null, status: 'error' });
+                            }
+                            break;
+                        }
+                        case 'music_play': {
+                            if (typeof data === 'object' && data !== null && 'video_id' in data) {
+                                const musicData = data as { video_id: string; title?: string; channel?: string; thumbnail?: string };
+                                useMusicStore.getState().playTrack({
+                                    videoId: musicData.video_id,
+                                    title: musicData.title || '',
+                                    channel: musicData.channel || '',
+                                    thumbnail: musicData.thumbnail || '',
+                                });
+                                return;
                             }
                             break;
                         }
