@@ -3,18 +3,33 @@
 **Epic:** 40 — Connected Accounts (OAuth)
 **Repo:** Aegis-Core — `app/`
 **Tipo:** feat
-**Prioridad:** Alta — prerrequisito de CORE-138
+**Prioridad:** Alta
 **Asignado a:** Shell Engineer (Antigravity)
 **Depende de:** CORE-138 (endpoint receptor de tokens en el servidor)
 
 ---
 
-## Arquitectura — App como único OAuth client
+## Estado de Client IDs ✅
+
+Los Client IDs ya están configurados en `app/src/constants/oauth.ts`:
+
+| Provider | Tipo | Client ID | Estado |
+|---|---|---|---|
+| Google | Web (Expo Go) | `201101395662-v13ic0mv07drv8dvrucaos6kkqaaps0i.apps.googleusercontent.com` | ✅ |
+| Google | iOS nativo | `201101395662-an905drm5aqqog3sae5qp6ghq97o8vpi.apps.googleusercontent.com` | ✅ |
+| Google | Android | Pendiente SHA-1 del keystore EAS | ⏳ |
+| Spotify | — | `3b1ff5d1f6d04fb3af5bdb1489062644` | ✅ |
+
+**No hay placeholders que reemplazar — el archivo ya existe con los valores reales.**
+
+---
+
+## Arquitectura
 
 ```
 App mobile
-    │  Client IDs compilados en el binario (app.json / constantes)
-    │  expo-auth-session maneja el flujo OAuth completo
+    │  Client IDs en app/src/constants/oauth.ts
+    │  expo-auth-session maneja el flujo OAuth + PKCE
     ▼
 Google / Spotify  →  access_token + refresh_token  →  App
     │
@@ -23,84 +38,33 @@ App → POST /api/oauth/tokens → Servidor Aegis
     │  { provider, access_token, refresh_token, expires_in, scope }
     │  headers: x-citadel-tenant + x-citadel-key
     ▼
-Servidor guarda tokens en TenantDB (SQLCipher)
+Servidor guarda tokens en TenantDB (SQLCipher del tenant)
 ```
 
 **El servidor nunca habla con Google/Spotify para OAuth.**
-**Solo recibe y almacena tokens. Sin Device Flow. Sin redirect URI en el servidor.**
-
----
-
-## Ventajas de este modelo
-
-- El usuario hace "Conectar con Google" → el browser nativo de su teléfono abre Google → acepta → vuelve a la app. Flujo de 3 segundos.
-- `expo-auth-session` maneja los deep links automáticamente con Expo Go y builds nativas.
-- Los Client IDs están en `app.json` / constantes TypeScript — visibles en el repo open source, lo cual es correcto y esperado para apps que usan OAuth.
-- El servidor no necesita registrar ninguna app en Google ni Spotify. Sin Client IDs en el servidor.
+**Sin Device Flow. Sin redirect URI en el servidor.**
 
 ---
 
 ## Cambios requeridos
 
-### 1. Dependencias en `app/package.json`
+### 1. Verificar dependencias en `app/package.json`
 
-`expo-auth-session` ya es parte de Expo SDK 52 — verificar que está instalado.
-Si no:
+`expo-auth-session` y `expo-web-browser` deben estar instalados:
 ```bash
-npx expo install expo-auth-session expo-web-browser
+cd app && npx expo install expo-auth-session expo-web-browser
 ```
 
-### 2. Constantes OAuth en `app/src/constants/oauth.ts`
-
-```typescript
-// Registro de apps:
-// Google: console.cloud.google.com → Credenciales → OAuth 2.0 Client ID
-//         Tipo: "Aplicación Android" + "Aplicación iOS" (una por plataforma)
-//         o "Aplicación web" con redirect URI de Expo
-// Spotify: developer.spotify.com → Create App
-//          Redirect URI: exp://localhost:8081/--/oauth/spotify (Expo Go)
-//                        aegis://oauth/spotify (build nativa)
-
-export const OAUTH_CONFIG = {
-  google: {
-    clientId: 'PLACEHOLDER_GOOGLE_CLIENT_ID',  // Tavo reemplaza esto
-    // Para Expo Go usar el clientId de "Web application"
-    // Para builds nativas usar el clientId de Android/iOS
-    scopes: [
-      'https://www.googleapis.com/auth/youtube.readonly',
-      'https://www.googleapis.com/auth/calendar.readonly',
-      'https://www.googleapis.com/auth/drive.readonly',
-      'https://www.googleapis.com/auth/gmail.readonly',
-      'email',
-      'profile',
-    ],
-    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenEndpoint: 'https://oauth2.googleapis.com/token',
-  },
-  spotify: {
-    clientId: 'PLACEHOLDER_SPOTIFY_CLIENT_ID',  // Tavo reemplaza esto
-    scopes: [
-      'user-read-playback-state',
-      'user-modify-playback-state',
-      'user-read-currently-playing',
-      'streaming',
-      'playlist-read-private',
-    ],
-    authorizationEndpoint: 'https://accounts.spotify.com/authorize',
-    tokenEndpoint: 'https://accounts.spotify.com/api/token',
-  },
-} as const;
-```
-
-### 3. Servicio `app/src/services/oauthService.ts`
+### 2. Crear servicio `app/src/services/oauthService.ts`
 
 ```typescript
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
+import { Platform } from 'react-native';
 import { OAUTH_CONFIG } from '@/constants/oauth';
 import { buildUrl } from './bffClient';
 
-// Requerido para que el browser se cierre automáticamente en iOS
+// Requerido para iOS — cierra el browser automáticamente al volver
 WebBrowser.maybeCompleteAuthSession();
 
 export interface OAuthTokens {
@@ -109,6 +73,7 @@ export interface OAuthTokens {
   refreshToken: string | null;
   expiresIn: number;
   scope: string;
+  email?: string;
 }
 
 export interface ConnectedAccountStatus {
@@ -118,15 +83,27 @@ export interface ConnectedAccountStatus {
 }
 
 /**
- * Inicia el flujo OAuth para un provider.
+ * Inicia el flujo OAuth para un provider via PKCE.
  * Abre el browser del sistema, el usuario autoriza, y retorna los tokens.
  */
 export async function connectProvider(
   provider: 'google' | 'spotify'
 ): Promise<OAuthTokens> {
   const config = OAUTH_CONFIG[provider];
+
+  // Seleccionar el Client ID correcto según plataforma
+  let clientId = config.clientId;
+  if (provider === 'google') {
+    if (Platform.OS === 'ios' && config.iosClientId) {
+      clientId = config.iosClientId;
+    } else if (Platform.OS === 'android' && config.androidClientId) {
+      clientId = config.androidClientId;
+    }
+    // En web/Expo Go: usa el Web Client ID (default)
+  }
+
   const redirectUri = AuthSession.makeRedirectUri({
-    scheme: 'aegis',        // deep link nativo
+    scheme: 'aegis',
     path: `oauth/${provider}`,
   });
 
@@ -136,10 +113,10 @@ export async function connectProvider(
   };
 
   const request = new AuthSession.AuthRequest({
-    clientId: config.clientId,
+    clientId,
     scopes: [...config.scopes],
     redirectUri,
-    usePKCE: true,  // PKCE — sin necesidad de Client Secret
+    usePKCE: true,
     responseType: AuthSession.ResponseType.Code,
   });
 
@@ -153,10 +130,9 @@ export async function connectProvider(
     );
   }
 
-  // Intercambiar code por tokens
   const tokenResult = await AuthSession.exchangeCodeAsync(
     {
-      clientId: config.clientId,
+      clientId,
       code: result.params.code,
       redirectUri,
       extraParams: { code_verifier: request.codeVerifier ?? '' },
@@ -168,18 +144,30 @@ export async function connectProvider(
     throw new Error('No se recibió access token');
   }
 
+  // Para Google: obtener email del usuario
+  let email: string | undefined;
+  if (provider === 'google') {
+    try {
+      const userInfo = await fetch(
+        'https://www.googleapis.com/oauth2/v3/userinfo',
+        { headers: { Authorization: `Bearer ${tokenResult.accessToken}` } }
+      ).then(r => r.json());
+      email = userInfo.email;
+    } catch { /* best-effort */ }
+  }
+
   return {
     provider,
     accessToken: tokenResult.accessToken,
     refreshToken: tokenResult.refreshToken ?? null,
     expiresIn: tokenResult.expiresIn ?? 3600,
     scope: tokenResult.scope ?? config.scopes.join(' '),
+    email,
   };
 }
 
 /**
- * Envía los tokens al servidor Aegis para que los guarde
- * en el enclave SQLCipher del tenant.
+ * Envía los tokens al servidor Aegis para guardarlos en SQLCipher.
  */
 export async function saveTokensToServer(
   serverUrl: string,
@@ -200,6 +188,7 @@ export async function saveTokensToServer(
       refresh_token: tokens.refreshToken,
       expires_in: tokens.expiresIn,
       scope: tokens.scope,
+      email: tokens.email,
     }),
   });
 
@@ -208,27 +197,23 @@ export async function saveTokensToServer(
   }
 }
 
-/**
- * Consulta al servidor el estado de las conexiones OAuth del tenant.
- */
 export async function getOAuthStatus(
   serverUrl: string,
   tenantId: string,
   sessionKey: string
 ): Promise<Record<string, ConnectedAccountStatus>> {
-  const res = await fetch(buildUrl(serverUrl, '/api/oauth/status'), {
-    headers: {
-      'x-citadel-tenant': tenantId,
-      'x-citadel-key': sessionKey,
-    },
-  });
-  if (!res.ok) return {};
-  return res.json();
+  try {
+    const res = await fetch(buildUrl(serverUrl, '/api/oauth/status'), {
+      headers: {
+        'x-citadel-tenant': tenantId,
+        'x-citadel-key': sessionKey,
+      },
+    });
+    if (!res.ok) return {};
+    return res.json();
+  } catch { return {}; }
 }
 
-/**
- * Desconecta un provider — elimina tokens del servidor.
- */
 export async function disconnectProvider(
   serverUrl: string,
   tenantId: string,
@@ -245,19 +230,19 @@ export async function disconnectProvider(
 }
 ```
 
-### 4. Pantalla `app/app/(main)/connected-accounts.tsx`
+### 3. Crear pantalla `app/app/(main)/connected-accounts.tsx`
 
 ```tsx
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, ScrollView, Linking
+  ActivityIndicator, Alert, ScrollView,
 } from 'react-native';
 import { useAuthStore } from '@/stores/authStore';
 import {
   connectProvider, saveTokensToServer,
   getOAuthStatus, disconnectProvider,
-  ConnectedAccountStatus
+  ConnectedAccountStatus,
 } from '@/services/oauthService';
 
 const PROVIDERS = [
@@ -283,8 +268,7 @@ export default function ConnectedAccountsScreen() {
 
   const fetchStatus = async () => {
     if (!serverUrl || !tenantId || !sessionKey) return;
-    const s = await getOAuthStatus(serverUrl, tenantId, sessionKey);
-    setStatus(s);
+    setStatus(await getOAuthStatus(serverUrl, tenantId, sessionKey));
     setLoading(false);
   };
 
@@ -297,88 +281,67 @@ export default function ConnectedAccountsScreen() {
       const tokens = await connectProvider(provider);
       await saveTokensToServer(serverUrl, tenantId, sessionKey, tokens);
       await fetchStatus();
-      Alert.alert('✓ Conectado', `Tu cuenta de ${provider === 'google' ? 'Google' : 'Spotify'} fue vinculada exitosamente.`);
+      Alert.alert('✓ Conectado',
+        `Tu cuenta de ${provider === 'google' ? 'Google' : 'Spotify'} fue vinculada.`);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Error desconocido';
-      if (!msg.includes('Cancelado')) {
-        Alert.alert('Error', msg);
-      }
+      if (!msg.includes('Cancelado')) Alert.alert('Error', msg);
     } finally {
       setConnecting(null);
     }
   };
 
   const handleDisconnect = (provider: string) => {
-    Alert.alert(
-      'Desconectar',
-      `¿Querés desconectar tu cuenta de ${provider}?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Desconectar',
-          style: 'destructive',
-          onPress: async () => {
-            if (!serverUrl || !tenantId || !sessionKey) return;
-            await disconnectProvider(serverUrl, tenantId, sessionKey, provider);
-            await fetchStatus();
-          },
+    Alert.alert('Desconectar', `¿Desconectar ${provider}?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Desconectar', style: 'destructive',
+        onPress: async () => {
+          if (!serverUrl || !tenantId || !sessionKey) return;
+          await disconnectProvider(serverUrl, tenantId, sessionKey, provider);
+          await fetchStatus();
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator color="#00F2FE" />
-      </View>
-    );
-  }
+  if (loading) return (
+    <View style={s.center}><ActivityIndicator color="#00F2FE" /></View>
+  );
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Cuentas Conectadas</Text>
-      <Text style={styles.subtitle}>
+    <ScrollView style={s.container}>
+      <Text style={s.title}>Cuentas Conectadas</Text>
+      <Text style={s.subtitle}>
         Conectá tus cuentas para que Aegis pueda reproducir música,
-        consultar tu calendario, archivos y más.
+        ver tu calendario, archivos y más.
       </Text>
-
-      {PROVIDERS.map((provider) => {
-        const s = status[provider.id];
-        const isConnected = s?.connected ?? false;
-        const isBusy = connecting === provider.id;
-
+      {PROVIDERS.map((p) => {
+        const st = status[p.id];
+        const connected = st?.connected ?? false;
+        const busy = connecting === p.id;
         return (
-          <View key={provider.id} style={[
-            styles.card,
-            isConnected && { borderColor: provider.color + '50' }
-          ]}>
-            <View style={styles.cardInfo}>
-              <Text style={styles.providerName}>{provider.name}</Text>
-              <Text style={styles.providerDesc}>{provider.description}</Text>
-              {isConnected && s?.email && (
-                <Text style={[styles.email, { color: provider.color }]}>
-                  {s.email}
-                </Text>
+          <View key={p.id} style={[s.card, connected && { borderColor: p.color + '50' }]}>
+            <View style={s.info}>
+              <Text style={s.name}>{p.name}</Text>
+              <Text style={s.desc}>{p.description}</Text>
+              {connected && st?.email && (
+                <Text style={[s.email, { color: p.color }]}>{st.email}</Text>
               )}
             </View>
-
-            {isConnected ? (
-              <TouchableOpacity
-                onPress={() => handleDisconnect(provider.id)}
-                style={styles.disconnectBtn}
-              >
-                <Text style={styles.disconnectText}>Desconectar</Text>
+            {connected ? (
+              <TouchableOpacity onPress={() => handleDisconnect(p.id)} style={s.discBtn}>
+                <Text style={s.discTxt}>Desconectar</Text>
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
-                onPress={() => handleConnect(provider.id)}
+                onPress={() => handleConnect(p.id)}
                 disabled={!!connecting}
-                style={[styles.connectBtn, { backgroundColor: provider.color }]}
+                style={[s.connBtn, { backgroundColor: p.color }]}
               >
-                {isBusy
+                {busy
                   ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={styles.connectText}>Conectar</Text>
+                  : <Text style={s.connTxt}>Conectar</Text>
                 }
               </TouchableOpacity>
             )}
@@ -389,81 +352,53 @@ export default function ConnectedAccountsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000', padding: 20 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   title: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 8 },
   subtitle: { fontSize: 13, color: 'rgba(255,255,255,0.4)', marginBottom: 24, lineHeight: 18 },
   card: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
-    padding: 16, marginBottom: 12,
+    backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 16,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', padding: 16, marginBottom: 12,
   },
-  cardInfo: { flex: 1, marginRight: 12 },
-  providerName: { fontSize: 15, fontWeight: 'bold', color: '#fff' },
-  providerDesc: { fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 2 },
+  info: { flex: 1, marginRight: 12 },
+  name: { fontSize: 15, fontWeight: 'bold', color: '#fff' },
+  desc: { fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 2 },
   email: { fontSize: 11, marginTop: 4, fontWeight: '600' },
-  connectBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, minWidth: 90, alignItems: 'center' },
-  connectText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
-  disconnectBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
-  disconnectText: { color: 'rgba(255,255,255,0.5)', fontSize: 12 },
+  connBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, minWidth: 90, alignItems: 'center' },
+  connTxt: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
+  discBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  discTxt: { color: 'rgba(255,255,255,0.5)', fontSize: 12 },
 });
 ```
 
-### 5. Registrar pantalla en la navegación
+### 4. Agregar ruta en `app/app/(main)/_layout.tsx`
 
-En `app/app/(main)/_layout.tsx`, agregar la ruta `connected-accounts`.
-En `app/app/(main)/settings.tsx`, agregar un item de navegación "Cuentas Conectadas"
-que lleve a `/(main)/connected-accounts`.
+Agregar `connected-accounts` como ruta dentro del layout principal.
 
-### 6. Deep link en `app.json`
+### 5. Agregar acceso desde Settings
 
-```json
-{
-  "expo": {
-    "scheme": "aegis",
-    "...": "..."
-  }
-}
-```
-
----
-
-## Acción requerida por Tavo (fuera del código)
-
-**Google Cloud Console:**
-1. Crear proyecto "Aegis OS"
-2. Habilitar: YouTube Data API v3, Calendar API, Drive API, Gmail API
-3. Pantalla de consentimiento OAuth → "Externo" → nombre "Aegis OS"
-4. Credenciales → OAuth 2.0 Client ID:
-   - Tipo "Android" → package name del app Expo → SHA-1 del keystore
-   - Tipo "iOS" → bundle ID del app Expo
-   - Tipo "Web application" → redirect URI: `https://auth.expo.io/@<username>/aegis` (para Expo Go)
-5. Reemplazar `PLACEHOLDER_GOOGLE_CLIENT_ID` en `oauth.ts`
-
-**Spotify Developer Dashboard:**
-1. Crear app "Aegis OS"
-2. Redirect URIs: `aegis://oauth/spotify` + `exp://localhost:8081/--/oauth/spotify`
-3. Reemplazar `PLACEHOLDER_SPOTIFY_CLIENT_ID` en `oauth.ts`
+En `app/app/(main)/settings.tsx`, agregar un item que navegue a `/(main)/connected-accounts`.
 
 ---
 
 ## Criterios de aceptación
 
-- [ ] `expo start` sin errores TypeScript
+- [ ] `npx expo export` sin errores TypeScript
 - [ ] Pantalla "Cuentas Conectadas" accesible desde Settings
-- [ ] Con Client IDs reales: "Conectar Google" abre Google en el browser y retorna a la app
+- [ ] "Conectar Google" abre Google OAuth y retorna a la app
+- [ ] "Conectar Spotify" abre Spotify OAuth y retorna a la app
 - [ ] Tokens se guardan en el servidor — `GET /api/oauth/status` refleja el estado
-- [ ] Email de la cuenta conectada visible en la pantalla
+- [ ] Email de la cuenta Google visible en la pantalla
 - [ ] Desconectar elimina los tokens del servidor
-- [ ] Con placeholders: botón muestra error amigable (no crash)
 
 ---
 
 ## Dependencias
 
-- CORE-138 (endpoint `POST /api/oauth/tokens` en el servidor)
+- CORE-138 (endpoint `POST /api/oauth/tokens` operativo en el servidor)
+- `app/src/constants/oauth.ts` ya existe con los Client IDs reales ✅
 
 ---
 
