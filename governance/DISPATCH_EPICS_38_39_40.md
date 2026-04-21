@@ -7,29 +7,21 @@
 
 ---
 
-## ⚠️ ACCIÓN DE TAVO ANTES DE EMPEZAR
+## ✅ OAUTH CLIENT IDs — YA CONFIGURADOS
 
-### Antes de CORE-143 (no bloquea las otras rondas):
-Registrar apps OAuth:
+Los Client IDs están en `app/src/constants/oauth.ts`. No hay nada que reemplazar.
 
-**Google Cloud Console** (console.cloud.google.com):
-1. Nuevo proyecto → nombre "Aegis OS"
-2. Habilitar APIs: YouTube Data API v3, Calendar API, Drive API, Gmail API
-3. Pantalla de consentimiento → "Externo" → nombre "Aegis OS"
-4. Credenciales → OAuth 2.0 Client ID:
-   - Tipo "Android" → package name de la app Expo
-   - Tipo "iOS" → bundle ID de la app Expo
-   - Tipo "Web" → redirect URI: `https://auth.expo.io/@<tu-usuario>/aegis`
-5. Copiar Client ID
+| Provider | Tipo | Dónde encontrarlo |
+|---|---|---|
+| Google Web | Para Expo Go / desarrollo | console.cloud.google.com → Aegis OS → Credenciales → "Aegis OS - Web" |
+| Google iOS | Para build nativa iOS | console.cloud.google.com → Aegis OS → Credenciales → "Aegis OS - iOS" |
+| Google Android | ⏳ Pendiente SHA-1 | Crear cuando se haga el primer `eas build --platform android` |
+| Spotify | Desarrollo y producción | developer.spotify.com → Aegis OS → Basic Information |
 
-**Spotify Developer Dashboard** (developer.spotify.com):
-1. Create App → nombre "Aegis OS"
-2. Redirect URIs: `aegis://oauth/spotify` + `exp://localhost:8081/--/oauth/spotify`
-3. Copiar Client ID
-
-Una vez obtenidos, reemplazar en `app/src/constants/oauth.ts`:
-- `PLACEHOLDER_GOOGLE_CLIENT_ID` → el Client ID de Google
-- `PLACEHOLDER_SPOTIFY_CLIENT_ID` → el Client ID de Spotify
+**Para agregar el Client ID de Android en el futuro:**
+1. Ejecutar `eas credentials -p android` para obtener el SHA-1
+2. Ir a console.cloud.google.com → Aegis OS → Credenciales → Crear Client ID → Android
+3. Agregar el valor resultante en `app/src/constants/oauth.ts` → `androidClientId`
 
 ---
 
@@ -43,10 +35,10 @@ RONDA 1 (paralelo — autónomos)
 RONDA 2 (requiere CORE-142)
   [Kernel]  CORE-134  TLS en Axum puerto 8000
 
-RONDA 3 (requiere CORE-128)
-  [Kernel]  CORE-129  Persona en SQLCipher + endpoints /api/persona
-  [Kernel]  CORE-135  Plugin music_search + interceptor [MUSIC_PLAY]
-  [Kernel]  CORE-138  OAuth token receiver (POST/GET/DELETE /api/oauth/*)
+RONDA 3 (requiere CORE-128 o CORE-142 según el ticket)
+  [Kernel]  CORE-129  Persona en SQLCipher + endpoints /api/persona  (requiere 128)
+  [Kernel]  CORE-135  Plugin music_search + interceptor [MUSIC_PLAY] (requiere 128)
+  [Kernel]  CORE-138  OAuth token receiver (POST/GET/DELETE /api/oauth/*) (requiere 142)
 
 RONDA 4 (requiere CORE-129)
   [Kernel]  CORE-132  Onboarding conversacional de Persona
@@ -73,7 +65,7 @@ RONDA S3 (requiere CORE-135 mergeado)
 RONDA S4 (requiere CORE-136)
   [Shell]  CORE-137  Comandos de control de música por chat y voz
 
-RONDA S5 (requiere CORE-138 mergeado + Tavo registró apps OAuth)
+RONDA S5 (requiere CORE-138 mergeado)
   [Shell]  CORE-143  OAuth via expo-auth-session en app mobile
 
 RONDA S6 (requiere CORE-129)
@@ -432,7 +424,7 @@ GATE:
 
 FLUJO GIT:
 1. git checkout -b feat/core-140-spotify-music
-2. Implementar parte kernel
+2. Implementar
 3. git commit -m "feat(ank-core,shell): CORE-140 Spotify music — OAuth-based search and playback"
 4. git push origin feat/core-140-spotify-music
 5. Reportar PR sugerido
@@ -607,7 +599,7 @@ TAREA: Implementar el ticket CORE-137. Lee el ticket completo antes de empezar.
 
 ---
 
-## SHELL — RONDA S5 (después de CORE-138 mergeado + Tavo registró apps)
+## SHELL — RONDA S5 (después de CORE-138 mergeado)
 
 ### 🎨 SHELL ENGINEER — CORE-143
 
@@ -618,17 +610,23 @@ REPO DE TRABAJO: Aegis-Core (único repo activo)
 
 PROTOCOLO DE INICIO:
 1. read_file("Aegis-Core", "governance/Tickets/CORE-143.md")
-2. read_file("Aegis-Core", "app/src/services/bffClient.ts")
-3. read_file("Aegis-Core", "app/src/stores/authStore.ts")
-4. read_file("Aegis-Core", "app/app/(main)/_layout.tsx")
-5. read_file("Aegis-Core", "app/app.json")
+2. read_file("Aegis-Core", "app/src/constants/oauth.ts")
+3. read_file("Aegis-Core", "app/src/services/bffClient.ts")
+4. read_file("Aegis-Core", "app/src/stores/authStore.ts")
+5. read_file("Aegis-Core", "app/app/(main)/_layout.tsx")
+6. read_file("Aegis-Core", "app/app.json")
+
+NOTA IMPORTANTE: Los Client IDs de Google y Spotify ya están configurados en
+app/src/constants/oauth.ts — NO hay placeholders que reemplazar.
+  - Google Web (Expo Go): 201101395662-v13ic0mv07drv8dvrucaos6kkqaaps0i.apps.googleusercontent.com
+  - Google iOS (build nativa): 201101395662-an905drm5aqqog3sae5qp6ghq97o8vpi.apps.googleusercontent.com
+  - Spotify: 3b1ff5d1f6d04fb3af5bdb1489062644
+  - Android: vacío — agregar cuando se tenga el SHA-1 del keystore EAS
 
 STACK: React Native, Expo SDK 52, TypeScript, expo-auth-session, expo-web-browser
 DIRECTORIO DE TRABAJO: Aegis-Core/app/
 
-DEPENDENCIAS:
-- CORE-138 mergeado en main (endpoint /api/oauth/tokens operativo)
-- Tavo reemplazó los PLACEHOLDER en app/src/constants/oauth.ts con Client IDs reales
+DEPENDENCIA: CORE-138 mergeado en main (endpoint /api/oauth/tokens operativo).
 
 GATE:
   npx expo export
@@ -681,13 +679,10 @@ TAREA: Implementar el ticket CORE-131. Lee el ticket completo antes de empezar.
 ## RESUMEN VISUAL
 
 ```
-TAVO (antes de CORE-143):
-  → Registrar apps Google + Spotify → reemplazar PLACEHOLDERs en oauth.ts
-
 KERNEL ENGINEER:
   Ronda 1 (paralelo):  CORE-142  CORE-128
   Ronda 2:             CORE-134  (requiere 142)
-  Ronda 3 (paralelo):  CORE-129  CORE-135  CORE-138  (requieren 128 o 142)
+  Ronda 3 (paralelo):  CORE-129  CORE-135  CORE-138
   Ronda 4:             CORE-132  (requiere 129)
   Ronda 5:             CORE-141  (requiere 138)
   Ronda 6:             CORE-140  (requiere 135+138)
@@ -697,11 +692,12 @@ SHELL ENGINEER:
   Ronda S2:  CORE-130  CORE-139  (requieren 133)
   Ronda S3:  CORE-136  (requiere 135)
   Ronda S4:  CORE-137  (requiere 136)
-  Ronda S5:  CORE-143  (requiere 138 + placeholders reemplazados)
+  Ronda S5:  CORE-143  (requiere 138)
   Ronda S6:  CORE-131  (requiere 129)
 ```
 
 ---
 
 *Generado por Arquitecto IA — 2026-04-21*
-*Para agregar tickets futuros: seguir el mismo formato de prompt.*
+*OAuth Client IDs configurados — ver app/src/constants/oauth.ts*
+*Android Client ID pendiente: agregar tras primer eas build --platform android*

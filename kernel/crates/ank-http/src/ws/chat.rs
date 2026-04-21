@@ -288,22 +288,24 @@ async fn stream_with_receiver(
                     let provider = caps[1].to_string();
                     let track_id = caps[2].to_string();
 
-                    let (track_uri, title) = if provider == "spotify" {
-                        (track_id.clone(), String::new())
+                    let data = if provider == "spotify" {
+                        json!({
+                            "provider": provider,
+                            "track_uri": track_id,
+                            "track_id": track_id
+                        })
                     } else {
-                        (String::new(), String::new())
+                        json!({
+                            "provider": provider,
+                            "video_id": track_id
+                        })
                     };
 
                     let _ = socket
                         .send(Message::Text(
                             json!({
                                 "event": "music_play",
-                                "data": {
-                                    "provider": provider,
-                                    "track_id": track_id,
-                                    "track_uri": track_uri,
-                                    "title": title
-                                }
+                                "data": data
                             })
                             .to_string(),
                         ))
@@ -315,15 +317,12 @@ async fn stream_with_receiver(
                     let (action, value) = if tag.starts_with("MUSIC_VOLUME:") {
                         ("volume", caps.get(2).map(|m| m.as_str()).unwrap_or("70"))
                     } else {
-                        (
-                            match tag {
-                                "MUSIC_PAUSE" => "pause",
-                                "MUSIC_RESUME" => "resume",
-                                "MUSIC_STOP" => "stop",
-                                _ => "unknown",
-                            },
-                            "",
-                        )
+                        (match tag {
+                            "MUSIC_PAUSE" => "pause",
+                            "MUSIC_RESUME" => "resume",
+                            "MUSIC_STOP" => "stop",
+                            _ => "unknown",
+                        }, "")
                     };
                     let _ = socket
                         .send(Message::Text(

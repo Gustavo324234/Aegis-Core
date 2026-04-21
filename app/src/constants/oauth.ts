@@ -1,6 +1,21 @@
+// OAuth Configuration — Aegis OS
+// Client IDs registrados por el autor del proyecto.
+// Estos IDs son públicos por diseño — el flujo PKCE no requiere Client Secret.
+//
+// Google: console.cloud.google.com — proyecto "Aegis OS"
+//   Web Client ID:  para Expo Go durante desarrollo
+//   iOS Client ID:  para builds nativas iOS
+//
+// Spotify: developer.spotify.com — app "Aegis OS"
+
 export const OAUTH_CONFIG = {
   google: {
-    clientId: 'PLACEHOLDER_GOOGLE_CLIENT_ID',
+    // Para Expo Go y web: usar el Web Client ID
+    clientId: '201101395662-v13ic0mv07drv8dvrucaos6kkqaaps0i.apps.googleusercontent.com',
+    // Para builds nativas iOS
+    iosClientId: '201101395662-an905drm5aqqog3sae5qp6ghq97o8vpi.apps.googleusercontent.com',
+    // Para builds nativas Android (agregar cuando se tenga el SHA-1)
+    androidClientId: '',
     scopes: [
       'https://www.googleapis.com/auth/youtube.readonly',
       'https://www.googleapis.com/auth/calendar.readonly',
@@ -13,7 +28,7 @@ export const OAUTH_CONFIG = {
     tokenEndpoint: 'https://oauth2.googleapis.com/token',
   },
   spotify: {
-    clientId: 'PLACEHOLDER_SPOTIFY_CLIENT_ID',
+    clientId: '3b1ff5d1f6d04fb3af5bdb1489062644',
     scopes: [
       'user-read-playback-state',
       'user-modify-playback-state',
