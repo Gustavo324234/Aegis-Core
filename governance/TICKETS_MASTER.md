@@ -13,7 +13,7 @@
 ### ADR-039: Persona en `kv_store` SQLCipher del tenant. Máx 4000 chars.
 
 *   **[CORE-128]** Fix: `SYSTEM_PROMPT_MASTER` honesto + `build_prompt(persona)` `[DONE]`
-*   **[CORE-129]** Feature: Persona en SQLCipher + endpoints `/api/persona` `[TODO — Kernel Engineer]`
+*   **[CORE-129]** Feature: Persona en SQLCipher + endpoints `/api/persona` `[DONE]`
 *   **[CORE-132]** Feature: Onboarding conversacional — primer mensaje sin Persona `[TODO — Kernel Engineer]`
 *   **[CORE-134]** Fix: TLS en Axum puerto 8000 — depende de CORE-142 `[DONE]`
 *   **[CORE-130]** Feature: Tab "Persona" en Admin Dashboard `[TODO — Shell Engineer]`
@@ -85,7 +85,7 @@
 | Componente | Estado |
 |---|---|
 | Epic 32–37 | ✅ DONE |
-| Epic 38: Agent Persona System | 🔄 IN PROGRESS — 0/7 |
+| Epic 38: Agent Persona System | 🔄 IN PROGRESS — 1/7 |
 | Epic 39: Aegis Music | 📋 PLANNED — 0/3 |
 | Epic 40: Connected Accounts | 📋 PLANNED — 0/6 |
 | Chat end-to-end | ✅ OPERATIVO |
