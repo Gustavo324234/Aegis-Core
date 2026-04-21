@@ -3,7 +3,7 @@ use ank_core::plugins::PluginManager;
 use ank_core::router::catalog::ModelProfile;
 use ank_core::telemetry::{CompletedInference, TelemetryState};
 use ank_core::{
-    citadel::identity::Citadel, enclave::master::MasterEnclave, enclave::TenantDB,
+    citadel::identity::Citadel, enclave::master::MasterEnclave,
     router::CognitiveRouter, router::SirenRouter, CognitiveHAL, CognitiveScheduler,
     SQLCipherPersistor, SchedulerEvent, StatePersistor, PCB,
 };
