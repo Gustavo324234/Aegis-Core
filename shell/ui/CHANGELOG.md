@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.1.0...shell-ui-v1.1.1) (2026-04-21)
+
+
+### Bug Fixes
+
+* **shell:** music_play and music_control events read data directly, not data.payload ([#79](https://github.com/Gustavo324234/Aegis-Core/issues/79)) ([cc9706e](https://github.com/Gustavo324234/Aegis-Core/commit/cc9706e59573493fbddb488067248c4ee949145c))
+
 ## [1.1.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.8...shell-ui-v1.1.0) (2026-04-21)
 
 
