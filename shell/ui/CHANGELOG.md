@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.8](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.7...shell-ui-v1.0.8) (2026-04-21)
+
+
+### Bug Fixes
+
+* **shell,ank-core:** CORE-126 CORE-128 layout fix and system prompt rewrite ([#66](https://github.com/Gustavo324234/Aegis-Core/issues/66)) ([313400a](https://github.com/Gustavo324234/Aegis-Core/commit/313400aa583034b7f2d7e48d9547171a20c6e2a1))
+
 ## [1.0.7](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.0.6...shell-ui-v1.0.7) (2026-04-21)
 
 
