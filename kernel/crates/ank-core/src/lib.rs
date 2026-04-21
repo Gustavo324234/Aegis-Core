@@ -3,6 +3,7 @@ pub mod chronos;
 pub mod citadel;
 pub mod dag;
 pub mod enclave;
+pub mod oauth;
 pub mod pcb;
 pub mod plugins;
 pub mod router;

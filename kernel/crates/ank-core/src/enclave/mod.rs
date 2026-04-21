@@ -1,6 +1,7 @@
 use anyhow::Result;
 use rusqlite::Connection;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 
 pub mod master;
@@ -87,6 +88,145 @@ impl TenantDB {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn set_oauth_token(
+        &self,
+        provider: &str,
+        access_token: &str,
+        refresh_token: Option<&str>,
+        expires_in_secs: u64,
+        scope: &str,
+    ) -> Result<()> {
+        let expiry = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs()
+            .saturating_add(expires_in_secs);
+
+        self.set_kv(&format!("oauth_{}_access_token", provider), access_token)?;
+        self.set_kv(&format!("oauth_{}_expiry", provider), &expiry.to_string())?;
+        self.set_kv(&format!("oauth_{}_scope", provider), scope)?;
+        if let Some(rt) = refresh_token {
+            self.set_kv(&format!("oauth_{}_refresh_token", provider), rt)?;
+        }
+        Ok(())
+    }
+
+    pub fn get_valid_access_token(&self, provider: &str) -> Result<Option<String>> {
+        let token = self.get_kv(&format!("oauth_{}_access_token", provider))?;
+        let expiry = self.get_kv(&format!("oauth_{}_expiry", provider))?;
+        match (token, expiry) {
+            (Some(t), Some(exp)) => {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+                let exp_secs: u64 = exp.parse().unwrap_or(0);
+                if now + 60 < exp_secs {
+                    Ok(Some(t))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub fn get_refresh_token(&self, provider: &str) -> Result<Option<String>> {
+        self.get_kv(&format!("oauth_{}_refresh_token", provider))
+    }
+
+    pub fn get_oauth_scope(&self, provider: &str) -> Result<Option<String>> {
+        self.get_kv(&format!("oauth_{}_scope", provider))
+    }
+
+    pub fn is_oauth_connected(&self, provider: &str) -> Result<bool> {
+        Ok(self.get_refresh_token(provider)?.is_some())
+    }
+
+    pub fn revoke_oauth(&self, provider: &str) -> Result<()> {
+        for suffix in &["access_token", "refresh_token", "expiry", "scope", "email"] {
+            let _ = self.connection.execute(
+                "DELETE FROM kv_store WHERE key = ?1",
+                [&format!("oauth_{}_{}", provider, suffix)],
+            );
+        }
+        Ok(())
+    }
+}
+
+const PERSONA_KEY: &str = "agent_persona";
+const PERSONA_MAX_LEN: usize = 4000;
+
+impl TenantDB {
+    pub fn set_persona(&self, persona: &str) -> Result<()> {
+        anyhow::ensure!(
+            persona.len() <= PERSONA_MAX_LEN,
+            "Persona exceeds maximum length of {} characters",
+            PERSONA_MAX_LEN
+        );
+        self.set_kv(PERSONA_KEY, persona)
+    }
+
+    pub fn get_persona(&self) -> Result<Option<String>> {
+        self.get_kv(PERSONA_KEY)
+    }
+
+    pub fn delete_persona(&self) -> Result<()> {
+        use anyhow::Context;
+        self.connection
+            .execute("DELETE FROM kv_store WHERE key = ?1", [PERSONA_KEY])
+            .context("Failed to delete agent persona")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_persona_set_get_delete() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let base_path = dir.path();
+        let tenant_id = "test_persona_user";
+        let correct_key = "test_key_123";
+
+        std::env::set_current_dir(base_path)?;
+
+        let db_path = format!("./users/{}/memory.db", tenant_id);
+        {
+            let db = TenantDB::open(tenant_id, correct_key)?;
+            db.set_persona("Eres Eve, asistente de ACME Corp.")?;
+            let loaded = db.get_persona()?;
+            assert!(loaded.is_some(), "Persona should be stored");
+            assert_eq!(loaded.unwrap(), "Eres Eve, asistente de ACME Corp.");
+        }
+
+        {
+            let db = TenantDB::open(tenant_id, correct_key)?;
+            let loaded = db.get_persona()?;
+            assert!(loaded.is_some());
+            db.delete_persona()?;
+            let after_delete = db.get_persona()?;
+            assert!(after_delete.is_none(), "Persona should be deleted");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_persona_max_length() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let base_path = dir.path();
+        std::env::set_current_dir(base_path)?;
+
+        let tenant_id = "test_maxlen_user";
+        let correct_key = "test_key_456";
+
+        let too_long = "x".repeat(4001);
+        let db = TenantDB::open(tenant_id, correct_key)?;
+        let result = db.set_persona(&too_long);
+        assert!(result.is_err(), "Persona of 4001 chars should fail");
+
+        let valid = "x".repeat(4000);
+        db.set_persona(&valid)?;
+        let loaded = db.get_persona()?;
+        assert_eq!(loaded.unwrap().len(), 4000);
+
+        Ok(())
     }
 }
 
