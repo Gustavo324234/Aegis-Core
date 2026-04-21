@@ -104,7 +104,7 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 
 ### P1 — Seguridad y Estabilidad
 *   **[CORE-091]** Rate Limiting en `/api/auth/login` `[DONE]`
-*   **[CORE-092]** Watchdog HAL Runner `[DONE]` — 2026-04-16 (Arquitecto IA)
+*   **[CORE-092]** Watchdog HAL Runner `[DONE]`
 *   **[CORE-093]** Reuse de `CloudProxyDriver` via `Arc<reqwest::Client>` `[DONE]`
 *   **[CORE-094]** `tokio::sync::Mutex` en `CognitiveHAL` `[DONE]`
 *   **[CORE-095]** Retry con Exponential Backoff en `CloudProxyDriver` `[DONE]`
@@ -113,7 +113,7 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 ### P2 — Deuda técnica
 *   **[CORE-097]** Preemption real via `CancellationToken` `[DONE]`
 *   **[CORE-098]** Investigación LanceDB / VCM L3 `[DONE]` — ADR-038: fast-hnsw/usearch
-*   **[CORE-099]** CI: stubs gRPC Python `[N/A]` — no hay `*_pb2.py` en el repo
+*   **[CORE-099]** CI: stubs gRPC Python `[N/A]`
 *   **[CORE-105]** Telemetría tokens/s y costo estimado `[DONE]`
 *   **[CORE-106]** Latencia real en `CognitiveRouter` `[DONE]`
 *   **[CORE-107]** Documentación OpenAPI/Swagger `[DONE]`
@@ -121,18 +121,8 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 ### P3 — Experiencia y mantenibilidad
 *   **[CORE-108]** Indicador UI cuando STT no está disponible `[DONE]`
 
-### Duplicados creados por error — CLOSED
-*   **[CORE-110]** = CORE-091 (rate limiting) `[CLOSED/DUPLICATE]`
-*   **[CORE-111]** = CORE-092 (watchdog HAL Runner) `[CLOSED/DUPLICATE]`
-*   **[CORE-112]** = CORE-093 (reuse CloudProxyDriver) `[CLOSED/DUPLICATE]`
-*   **[CORE-113]** = CORE-094 (tokio::sync::Mutex) `[CLOSED/DUPLICATE]`
-*   **[CORE-114]** = CORE-095 (retry backoff) `[CLOSED/DUPLICATE]`
-*   **[CORE-115]** = CORE-097 (preemption CancellationToken) `[CLOSED/DUPLICATE]`
-*   **[CORE-116]** = CORE-096 (SHA-256+Argon2id) `[CLOSED/DUPLICATE]`
-*   **[CORE-117]** = CORE-099 (stubs CI) `[CLOSED/DUPLICATE]`
-*   **[CORE-118]** = CORE-105 (telemetría TPS+costo) `[CLOSED/DUPLICATE]`
-*   **[CORE-119]** = CORE-106 (speed_inv → avg_latency_ms) `[CLOSED/DUPLICATE]`
-*   **[CORE-120]** = CORE-108 (indicador UI STT) `[CLOSED/DUPLICATE]`
+### Duplicados — CLOSED
+*   **[CORE-110 a CORE-120]** Duplicados cerrados — ver histórico
 
 ---
 
@@ -143,34 +133,38 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 
 ---
 
-## 🚀 SISTEMA STATUS — 2026-04-16
+## 🐛 SMOKE TEST BUGS — 2026-04-20
+**Smoke test:** PASS ✅ — chat end-to-end operativo con OpenRouter
+
+*   **[CORE-121]** Fix: `openrouter/free` ausente en `models.yaml` `[DONE]`
+*   **[CORE-122]** Installer: perfil de inferencia Cloud/Local/Hybrid + `ModelProfile` en Kernel `[DONE]`
+*   **[CORE-123]** Fix: LLM generaba syscalls — `[USER_PROCESS_INSTRUCTION]` confundía al modelo `[DONE]`
+
+---
+
+## 🎨 EPIC 37: UX Polish — Post Smoke Test
+**Status:** ✅ DONE — 2026-04-20
+
+*   **[CORE-124]** Fix: Historial del chat se borra al recargar `[DONE]`
+*   **[CORE-125]** Fix: Micrófono bloqueado en HTTP — HTTPS via Caddy `[DONE]`
+*   **[CORE-126]** Fix: Panel de telemetría ilegible — tamaños aumentados `[DONE]`
+*   **[CORE-127]** Fix: Catálogo Gemini desactualizado — agregado 2.5 Pro y Flash `[DONE]`
+
+---
+
+## 🚀 SISTEMA STATUS — 2026-04-20
 
 | Componente | Estado |
 |---|---|
 | Epic 32: Monorepo Unificado | ✅ DONE |
 | Epic 34: Audit Fixes | ✅ DONE |
-| Chat end-to-end (Scheduler → HAL → WS) | ✅ OPERATIVO |
-| Protocolo Citadel | ✅ COMPLETO |
-| Epic 35: Hardening Post-Launch | ✅ DONE — 13/13 |
-| Epic 36: VCM L3 (usearch) | ✅ DONE — 1/1 |
+| Epic 35: Hardening Post-Launch | ✅ DONE |
+| Epic 36: VCM L3 (usearch) | ✅ DONE |
+| Epic 37: UX Polish | ✅ DONE |
+| Chat end-to-end | ✅ OPERATIVO |
+| Smoke test producción | ✅ PASS |
 | Epic 33: Linux Distribution | 🔮 PLANNED |
 
 ---
 
-## 🐛 SMOKE TEST BUGS — 2026-04-20
-**Smoke test:** PASS ✅ — chat end-to-end operativo con OpenRouter
-
-*   **[CORE-121]** Fix: `openrouter/free` ausente en `models.yaml` `[DONE — Arquitecto IA]`
-*   **[CORE-122]** Installer: perfil de inferencia Cloud/Local/Hybrid + `ModelProfile` en Kernel `[DONE — Arquitecto IA]`
-*   **[CORE-123]** Fix: LLM generaba syscalls — `[USER_PROCESS_INSTRUCTION]` confundía al modelo `[DONE — Arquitecto IA]`
-
----
-
-## 🎨 EPIC 37: UX Polish — Post Smoke Test
-**Status:** TODO — 2026-04-20
-**Motivación:** Bugs y mejoras de UX identificados durante el smoke test en producción.
-
-*   **[CORE-124]** Fix: Historial del chat se borra al recargar la página `[TODO — Shell Engineer]`
-*   **[CORE-125]** Fix: Micrófono bloqueado en HTTP — Siren requiere HTTPS o localhost `[DONE — DevOps Engineer]`
-*   **[CORE-126]** Fix: Panel de telemetría superior demasiado pequeño — ilegible `[TODO — Shell Engineer]`
-*   **[CORE-127]** Fix: Catálogo de modelos Gemini desactualizado — falta Gemini 2.5 Pro/Flash `[TODO — Arquitecto IA]`
+*Última actualización: 2026-04-20 — Smoke test PASS. Epic 37 completo.*
