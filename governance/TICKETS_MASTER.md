@@ -122,9 +122,6 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 *   **[CORE-108]** Indicador UI cuando STT no está disponible `[DONE]`
 
 ### Duplicados creados por error — CLOSED
-> Estos tickets fueron creados por el Kernel Engineer durante CORE-098 sin saber
-> que Epic 35 ya los había resuelto. Se registran como cerrados para trazabilidad.
-
 *   **[CORE-110]** = CORE-091 (rate limiting) `[CLOSED/DUPLICATE]`
 *   **[CORE-111]** = CORE-092 (watchdog HAL Runner) `[CLOSED/DUPLICATE]`
 *   **[CORE-112]** = CORE-093 (reuse CloudProxyDriver) `[CLOSED/DUPLICATE]`
@@ -140,10 +137,9 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 ---
 
 ## 🔮 EPIC 36: Post-Launch Improvements — VCM L3
-**Status:** IN PROGRESS — 2026-04-16
-**Origen:** ADR-038 (CORE-098) — decisión de implementar usearch como motor de vector search
+**Status:** ✅ DONE — 2026-04-20
 
-*   **[CORE-109]** Implementar `usearch` en `LanceSwapManager` (VCM L3) `[TODO]` — Kernel Engineer
+*   **[CORE-109]** Implementar `usearch` en `LanceSwapManager` (VCM L3) `[DONE]` — Kernel Engineer
 
 ---
 
@@ -156,18 +152,25 @@ Sin BFF Python. Sin dependencias de runtime externas. 33/33 tickets completados.
 | Chat end-to-end (Scheduler → HAL → WS) | ✅ OPERATIVO |
 | Protocolo Citadel | ✅ COMPLETO |
 | Epic 35: Hardening Post-Launch | ✅ DONE — 13/13 |
-| Epic 36: VCM L3 (usearch) | 🔧 IN PROGRESS — 1 ticket TODO |
+| Epic 36: VCM L3 (usearch) | ✅ DONE — 1/1 |
 | Epic 33: Linux Distribution | 🔮 PLANNED |
 
 ---
 
-*Última actualización: 2026-04-16 — Arquitecto IA (clasificación de CORE-109 a CORE-120)*
+## 🐛 SMOKE TEST BUGS — 2026-04-20
+**Smoke test:** PASS ✅ — chat end-to-end operativo con OpenRouter
+
+*   **[CORE-121]** Fix: `openrouter/free` ausente en `models.yaml` `[DONE — Arquitecto IA]`
+*   **[CORE-122]** Installer: perfil de inferencia Cloud/Local/Hybrid + `ModelProfile` en Kernel `[DONE — Arquitecto IA]`
+*   **[CORE-123]** Fix: LLM generaba syscalls — `[USER_PROCESS_INSTRUCTION]` confundía al modelo `[DONE — Arquitecto IA]`
 
 ---
 
-## 🐛 SMOKE TEST BUGS — 2026-04-20
+## 🎨 EPIC 37: UX Polish — Post Smoke Test
+**Status:** TODO — 2026-04-20
+**Motivación:** Bugs y mejoras de UX identificados durante el smoke test en producción.
 
-*   **[CORE-121]** Fix: `openrouter/free` ausente en `models.yaml` — CognitiveRouter no podía matchear la key del KeyPool, caía a Ollama y fallaba en servidores cloud-only `[DONE — Arquitecto IA]`
-*   **[CORE-122]** Installer: pregunta de perfil de inferencia (Cloud / Local / Hybrid) — inyecta `AEGIS_MODEL_PROFILE` en `.env` y el Kernel filtra el catálogo al arrancar `[TODO — DevOps Engineer + Kernel Engineer]`
-*   **[CORE-122]** Installer: perfil de inferencia (Cloud/Local/Hybrid) + `ModelProfile` en Kernel — `AEGIS_MODEL_PROFILE` en `.env`, catálogo filtrado al arrancar `[DONE — Arquitecto IA — 2026-04-20]`
-*   **[CORE-123]** Fix: LLM generaba syscalls en lugar de responder — `[USER_PROCESS_INSTRUCTION]` en prompt confundía al modelo. `build_prompt()` ahora limpio sin tools `[DONE — Arquitecto IA — 2026-04-20]`
+*   **[CORE-124]** Fix: Historial del chat se borra al recargar la página `[TODO — Shell Engineer]`
+*   **[CORE-125]** Fix: Micrófono bloqueado en HTTP — Siren requiere HTTPS o localhost `[DONE — DevOps Engineer]`
+*   **[CORE-126]** Fix: Panel de telemetría superior demasiado pequeño — ilegible `[TODO — Shell Engineer]`
+*   **[CORE-127]** Fix: Catálogo de modelos Gemini desactualizado — falta Gemini 2.5 Pro/Flash `[TODO — Arquitecto IA]`

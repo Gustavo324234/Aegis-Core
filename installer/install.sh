@@ -30,6 +30,7 @@ NC='\033[0m'
 INSTALL_MODE="1"
 ARCH="x86_64"
 INFERENCE_PROFILE="cloud"
+ENABLE_TLS="false"
 
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
@@ -182,6 +183,39 @@ show_inference_profile_menu() {
     log "Inference profile: ${INFERENCE_PROFILE}"
 }
 
+show_tls_menu() {
+    if [ ! -t 0 ]; then
+        log "Non-interactive shell. Defaulting to no TLS."
+        return
+    fi
+    echo ""
+    echo -e "${YELLOW}--- SEGURIDAD (TLS / HTTPS) ---${NC}"
+    echo "¿Desea generar un certificado TLS self-signed para usar HTTPS?"
+    echo "¡REQUERIDO para que el browser permita usar el micrófono (Siren) fuera de localhost!"
+    echo "  [1] Sí - Generar HTTPS self-signed (Recomendado) [DEFAULT]"
+    echo "  [2] No - Servir solo HTTP"
+    read -rp "Selección [1-2]: " tls_choice
+    case "${tls_choice:-1}" in
+        2) ENABLE_TLS="false" ;;
+        *) ENABLE_TLS="true" ;;
+    esac
+}
+
+setup_tls() {
+    if [[ "$ENABLE_TLS" == "true" ]]; then
+        log "Generando certificado TLS self-signed..."
+        mkdir -p "$CONFIG_DIR"
+        openssl req -x509 -newkey rsa:4096 -keyout "$CONFIG_DIR/key.pem" \
+          -out "$CONFIG_DIR/cert.pem" -days 365 -nodes \
+          -subj "/CN=aegis-local" >> "$LOG_FILE" 2>&1
+        if id -u aegis >/dev/null 2>&1; then
+            chown aegis:aegis "$CONFIG_DIR"/*.pem
+        fi
+        chmod 640 "$CONFIG_DIR"/*.pem
+        success "Certificado TLS creado en $CONFIG_DIR"
+    fi
+}
+
 install_dependencies() {
     log "Updating package lists..."
     apt-get update -qq >> "$LOG_FILE" 2>&1
@@ -264,6 +298,10 @@ UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
 EOF
+        if [[ "$ENABLE_TLS" == "true" ]]; then
+            echo "AEGIS_TLS_CERT=${CONFIG_DIR}/cert.pem" >> "$ENV_FILE"
+            echo "AEGIS_TLS_KEY=${CONFIG_DIR}/key.pem" >> "$ENV_FILE"
+        fi
         chmod 640 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
         success "Environment file → ${ENV_FILE}"
@@ -344,6 +382,11 @@ EOF
             || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}" >> "${INSTALL_ROOT}/.env"
     fi
 
+    if [[ "$ENABLE_TLS" == "true" ]]; then
+        grep -q "AEGIS_TLS_CERT" "${INSTALL_ROOT}/.env" || echo "AEGIS_TLS_CERT=/etc/aegis/cert.pem" >> "${INSTALL_ROOT}/.env"
+        grep -q "AEGIS_TLS_KEY" "${INSTALL_ROOT}/.env" || echo "AEGIS_TLS_KEY=/etc/aegis/key.pem" >> "${INSTALL_ROOT}/.env"
+    fi
+
     mkdir -p "$CONFIG_DIR"
     echo "docker" > "$CONFIG_DIR/mode"
 
@@ -362,18 +405,25 @@ EOF
 }
 
 wait_and_show() {
+    local PROTOCOL="http"
+    local CURL_FLAGS=("-s")
+    if [[ "$ENABLE_TLS" == "true" ]]; then
+        PROTOCOL="https"
+        CURL_FLAGS+=("-k")
+    fi
+
     log "Waiting for Aegis to initialize (max 60s)..."
     local attempts=0
     while [[ $attempts -lt 30 ]]; do
-        if curl -s "http://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
+        if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
             break
         fi
         sleep 2
         attempts=$((attempts + 1))
     done
 
-    if curl -s "http://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
-        success "Aegis is UP at http://localhost:8000"
+    if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
+        success "Aegis is UP at ${PROTOCOL}://localhost:8000"
 
         local token=""
         if [[ "${INSTALL_MODE}" == "1" ]]; then
@@ -397,12 +447,18 @@ wait_and_show() {
 
         if [[ -n "$token" ]]; then
             echo -e "${CYAN}  First-time setup URL:${NC}"
-            echo -e "  ${GREEN}http://${ip}:8000?setup_token=${token}${NC}"
+            echo -e "  ${GREEN}${PROTOCOL}://${ip}:8000?setup_token=${token}${NC}"
+            if [[ "$ENABLE_TLS" == "true" ]]; then
+                echo -e "  ${YELLOW}(Note: Your browser will warn about the self-signed certificate. Accept it to continue.)${NC}"
+            fi
             echo ""
             echo -e "  Token expires in 30 minutes."
             echo -e "  To regenerate: ${CYAN}sudo aegis token${NC}"
         else
-            echo -e "  Access URL: ${CYAN}http://${ip}:8000${NC}"
+            echo -e "  Access URL: ${CYAN}${PROTOCOL}://${ip}:8000${NC}"
+            if [[ "$ENABLE_TLS" == "true" ]]; then
+                echo -e "  ${YELLOW}(Note: Self-signed certificate is in use.)${NC}"
+            fi
             echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
         fi
         echo -e "${GREEN}################################################################${NC}"
@@ -418,6 +474,8 @@ check_root
 detect_arch
 show_main_menu
 show_inference_profile_menu
+show_tls_menu
+setup_tls
 install_dependencies
 
 if [[ "$INSTALL_MODE" == "1" ]]; then
