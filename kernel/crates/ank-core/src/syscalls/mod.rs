@@ -1,6 +1,4 @@
 use crate::enclave::TenantDB;
-use crate::enclave::TenantDB;
-use crate::oauth::{get_google_token, PROVIDER_GOOGLE};
 use crate::plugins::PluginManager;
 use crate::scribe::CommitMetadata;
 use regex::Regex;
@@ -254,7 +252,7 @@ impl SyscallExecutor {
                     }
                 };
 
-                if !db.is_oauth_connected(PROVIDER_GOOGLE).unwrap_or(false) {
+                if !db.is_oauth_connected("google").unwrap_or(false) {
                     return Ok("[SYSTEM_RESULT: Google Drive not connected. \
                         Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
                         .to_string());
@@ -275,7 +273,7 @@ impl SyscallExecutor {
                     }
                 };
 
-                if !db.is_oauth_connected(PROVIDER_GOOGLE).unwrap_or(false) {
+                if !db.is_oauth_connected("google").unwrap_or(false) {
                     return Ok("[SYSTEM_RESULT: Gmail not connected. \
                         Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
                         .to_string());
@@ -305,7 +303,7 @@ impl SyscallExecutor {
         db: &TenantDB,
         query: &str,
         max_results: u8,
-        tenant_id: &str,
+        _tenant_id: &str,
     ) -> Result<String, SyscallError> {
         let token = db
             .get_valid_access_token("spotify")
@@ -463,7 +461,7 @@ impl SyscallExecutor {
         max_results: u8,
     ) -> Result<String, SyscallError> {
         let token = db
-            .get_valid_access_token(PROVIDER_GOOGLE)
+            .get_valid_access_token("google")
             .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?;
 
         let token = match token {
@@ -517,8 +515,8 @@ impl SyscallExecutor {
             .as_array()
             .map(|items| {
                 items.iter().map(|evt| {
-                    let start = evt["start"].as_ref();
-                    let end = evt["end"].as_ref();
+                    let start = evt.get("start");
+                    let end = evt.get("end");
                     let attendees = evt["attendees"]
                         .as_array()
                         .map(|arr| {
@@ -530,8 +528,8 @@ impl SyscallExecutor {
 
                     serde_json::json!({
                         "title": evt["summary"].as_str().unwrap_or("Sin título"),
-                        "start": start.and_then(|s| s["dateTime"].as_str()).or_else(|| s["date"].as_str()),
-                        "end": end.and_then(|e| e["dateTime"].as_str()).or_else(|| e["date"].as_str()),
+                        "start": start.and_then(|s| s["dateTime"].as_str().or_else(|| s["date"].as_str())),
+                        "end": end.and_then(|e| e["dateTime"].as_str().or_else(|| e["date"].as_str())),
                         "location": evt["location"].as_str().unwrap_or(""),
                         "description": evt["description"].as_str().unwrap_or(""),
                         "attendees": attendees
@@ -553,7 +551,7 @@ impl SyscallExecutor {
         max_results: u8,
     ) -> Result<String, SyscallError> {
         let token = db
-            .get_valid_access_token(PROVIDER_GOOGLE)
+            .get_valid_access_token("google")
             .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?;
 
         let token = match token {
@@ -649,7 +647,7 @@ impl SyscallExecutor {
         max_results: u8,
     ) -> Result<String, SyscallError> {
         let token = db
-            .get_valid_access_token(PROVIDER_GOOGLE)
+            .get_valid_access_token("google")
             .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?;
 
         let token = match token {
