@@ -26,7 +26,7 @@
 
 ## 🎵 EPIC 39: Aegis Music — PLANNED
 
-*   **[CORE-135]** Feature: Plugin `music_search` + syscall + interceptor `[MUSIC_PLAY]` `[TODO — Kernel Engineer]`
+*   **[CORE-135]** Feature: Plugin `music_search` + syscall + interceptor `[MUSIC_PLAY]` `[DONE — Kernel Engineer]`
 *   **[CORE-136]** Feature: MusicPlayer flotante YouTube IFrame `[TODO — Shell Engineer]`
 *   **[CORE-137]** Feature: Comandos de control por chat y voz `[TODO — Kernel + Shell Engineer]`
 
@@ -86,13 +86,13 @@
 |---|---|
 | Epic 32–37 | ✅ DONE |
 | Epic 38: Agent Persona System | 🔄 IN PROGRESS — 0/7 |
-| Epic 39: Aegis Music | 📋 PLANNED — 0/3 |
+| Epic 39: Aegis Music | 🔄 IN PROGRESS — 1/3 |
 | Epic 40: Connected Accounts | 📋 PLANNED — 0/6 |
 | Chat end-to-end | ✅ OPERATIVO |
 | Siren desde LAN | ✅ TLS CONFIGURADO — awaiting merge |
 | OAuth / Música integrada | ❌ BLOQUEADO — CORE-142 + CORE-138 + CORE-143 |
 
-**Total tickets pendientes: 16**
+**Total tickets pendientes: 15**
 **Ticket fundación: CORE-142**
 **Acción de Tavo antes de CORE-143: registrar apps Google + Spotify**
 
