@@ -346,8 +346,18 @@ mod tests {
     async fn test_hybrid_smart_routing_high_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let mut hal = CognitiveHAL::new(pm)?;
-        hal.register_driver("local-driver", Box::new(DummyDriver { name: "local".to_string() }));
-        hal.register_driver("cloud-driver", Box::new(DummyDriver { name: "cloud".to_string() }));
+        hal.register_driver(
+            "local-driver",
+            Box::new(DummyDriver {
+                name: "local".to_string(),
+            }),
+        );
+        hal.register_driver(
+            "cloud-driver",
+            Box::new(DummyDriver {
+                name: "cloud".to_string(),
+            }),
+        );
         let mut pcb = PCB::mock("Complex Mission", 10);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
@@ -355,7 +365,10 @@ mod tests {
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
         assert_eq!(tokens.len(), 1);
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
-        assert!(response.contains("[cloud]"), "Debe haber seleccionado el driver cloud por alta prioridad");
+        assert!(
+            response.contains("[cloud]"),
+            "Debe haber seleccionado el driver cloud por alta prioridad"
+        );
         Ok(())
     }
 
@@ -363,15 +376,28 @@ mod tests {
     async fn test_hybrid_smart_routing_low_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let mut hal = CognitiveHAL::new(pm)?;
-        hal.register_driver("local-driver", Box::new(DummyDriver { name: "local".to_string() }));
-        hal.register_driver("cloud-driver", Box::new(DummyDriver { name: "cloud".to_string() }));
+        hal.register_driver(
+            "local-driver",
+            Box::new(DummyDriver {
+                name: "local".to_string(),
+            }),
+        );
+        hal.register_driver(
+            "cloud-driver",
+            Box::new(DummyDriver {
+                name: "cloud".to_string(),
+            }),
+        );
         let mut pcb = PCB::mock("Simple task", 5);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
         let stream_res = hal.route_and_execute(shared_pcb).await?;
         let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
         let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
-        assert!(response.contains("[local]"), "Debe haber seleccionado el driver local por baja prioridad");
+        assert!(
+            response.contains("[local]"),
+            "Debe haber seleccionado el driver local por baja prioridad"
+        );
         Ok(())
     }
 
@@ -380,9 +406,18 @@ mod tests {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let hal = CognitiveHAL::new(pm)?;
         let prompt = hal.build_prompt("hola").await;
-        assert!(!prompt.contains("[USER_PROCESS_INSTRUCTION]"), "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION");
-        assert!(!prompt.contains("HERRAMIENTAS DISPONIBLES"), "Sin tools, no debe haber sección de herramientas");
-        assert!(prompt.contains("hola"), "El prompt debe contener la instrucción");
+        assert!(
+            !prompt.contains("[USER_PROCESS_INSTRUCTION]"),
+            "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
+        );
+        assert!(
+            !prompt.contains("HERRAMIENTAS DISPONIBLES"),
+            "Sin tools, no debe haber sección de herramientas"
+        );
+        assert!(
+            prompt.contains("hola"),
+            "El prompt debe contener la instrucción"
+        );
         Ok(())
     }
 }
