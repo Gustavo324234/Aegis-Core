@@ -65,8 +65,16 @@ cmd_status() {
         sudo systemctl status "$SERVICE_NAME" --no-pager || true
     fi
     printf '\n%s--- API Health Check ---%s\n' "$CYAN" "$NC"
-    if curl -s -f --connect-timeout 2 http://localhost:8000/health > /dev/null; then
-        printf '%sAPI is UP (http://localhost:8000)%s\n' "$GREEN" "$NC"
+
+    local PROTOCOL="http"
+    local CURL_FLAGS=("-s" "-f" "--connect-timeout" "2")
+    if grep -q "AEGIS_TLS_CERT=" /etc/aegis/aegis.env 2>/dev/null || grep -q "AEGIS_TLS_CERT=" "$INSTALL_DIR/.env" 2>/dev/null; then
+        PROTOCOL="https"
+        CURL_FLAGS+=("-k")
+    fi
+
+    if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:8000/health" > /dev/null 2>&1; then
+        printf '%sAPI is UP (%s://localhost:8000)%s\n' "$GREEN" "$PROTOCOL" "$NC"
     else
         printf '%sAPI is DOWN or unreachable%s\n' "$RED" "$NC"
     fi
@@ -189,8 +197,12 @@ cmd_token() {
         printf '%sNo setup token found. System may already be initialized.%s\n' "$YELLOW" "$NC"
     else
         local ip
-        ip=$(hostname -I | awk '{print $1}')
-        printf "\n${GREEN}Setup URL: http://%s:8000?setup_token=%s${NC}\n" "$ip" "$token"
+        ip=$(hostname -I | awk '{print $1}' || echo "localhost")
+        local PROTOCOL="http"
+        if grep -q "AEGIS_TLS_CERT=" /etc/aegis/aegis.env 2>/dev/null || grep -q "AEGIS_TLS_CERT=" "$INSTALL_DIR/.env" 2>/dev/null; then
+            PROTOCOL="https"
+        fi
+        printf "\n${GREEN}Setup URL: %s://%s:8000?setup_token=%s${NC}\n" "$PROTOCOL" "$ip" "$token"
     fi
 }
 
