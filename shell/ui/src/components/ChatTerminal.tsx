@@ -248,15 +248,19 @@ const ChatTerminal: React.FC = () => {
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => e.preventDefault();
 
     return (
+        // CORE-126 fix: contenedor raíz usa h-dvh con overflow-hidden para que
+        // TelemetryDashboard + chat quepan exactamente en la pantalla sin desbordarse
         <div
-            className="flex flex-col h-screen bg-black text-white overflow-hidden font-sans"
+            className="flex flex-col h-dvh bg-black text-white overflow-hidden font-sans"
             onDrop={handleDrop}
             onDragOver={handleDragOver}
         >
+            {/* TelemetryDashboard es shrink-0 — toma su espacio y el resto va al chat */}
             <TelemetryDashboard />
 
-            <div className="flex-1 flex flex-col min-w-0 h-full">
-                <header className="h-16 shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/40 backdrop-blur-3xl z-50">
+            {/* Chat ocupa el espacio restante con min-h-0 para que flex funcione correctamente */}
+            <div className="flex-1 flex flex-col min-h-0 min-w-0">
+                <header className="h-14 shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/40 backdrop-blur-3xl z-50">
                     <div className="flex items-center gap-4">
                         <AegisLogo variant="icon" className="w-5 h-5 text-aegis-cyan drop-shadow-[0_0_8px_rgba(0,242,254,0.4)]" />
                         <div className="flex flex-col">
@@ -268,7 +272,7 @@ const ChatTerminal: React.FC = () => {
                         <div className="h-4 w-px bg-white/10" />
                         <div className="flex items-center gap-2">
                             <span className="text-[8px] font-mono text-white/40 uppercase tracking-widest">{tenantId} // Active Domain</span>
-                            <button 
+                            <button
                                 onClick={logout}
                                 className="p-1.5 rounded-md hover:bg-white/5 text-white/20 hover:text-red-400 transition-colors"
                                 title="Disconnect"
@@ -279,14 +283,14 @@ const ChatTerminal: React.FC = () => {
                     </div>
                 </header>
 
-                <main 
+                <main
                     ref={scrollRef}
                     onScroll={handleScroll}
-                    className="flex-1 overflow-y-auto px-6 py-8 space-y-8 scrollbar-hide relative"
+                    className="flex-1 overflow-y-auto px-6 py-8 space-y-8 scrollbar-hide relative min-h-0"
                 >
                     <AnimatePresence initial={false}>
                         {messages.length === 0 ? (
-                            <motion.div 
+                            <motion.div
                                 initial={{ opacity: 0 }}
                                 animate={{ opacity: 1 }}
                                 className="h-full flex flex-col items-center justify-center gap-6"
@@ -361,7 +365,7 @@ const ChatTerminal: React.FC = () => {
                                 className={cn(
                                     "p-2 rounded-lg transition-all",
                                     !sttAvailable && "opacity-30 cursor-not-allowed",
-                                    status === 'listening' 
+                                    status === 'listening'
                                         ? "bg-green-500 text-white shadow-[0_0_15px_rgba(34,197,94,0.5)] animate-pulse"
                                         : status === 'transcribing'
                                             ? "bg-yellow-500 text-black shadow-[0_0_15px_rgba(234,179,8,0.5)]"
@@ -404,7 +408,7 @@ const ChatTerminal: React.FC = () => {
                 <AnimatePresence>
                     {showSettings && (
                         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-                            <motion.div 
+                            <motion.div
                                 initial={{ opacity: 0, scale: 0.9 }}
                                 animate={{ opacity: 1, scale: 1 }}
                                 exit={{ opacity: 0, scale: 0.9 }}
@@ -414,12 +418,12 @@ const ChatTerminal: React.FC = () => {
                                     <div className="p-6 border-b border-white/5 flex justify-between items-center bg-black/40 sticky top-0 z-10">
                                         <h3 className="text-sm font-mono font-bold tracking-widest text-aegis-cyan uppercase">{t('tenant_security')}</h3>
                                         <div className="flex items-center gap-4">
-                                            <button 
+                                            <button
                                                 onClick={() => {
                                                     const newLang = localStorage.getItem('aegis_language') === 'en' ? 'es' : 'en';
                                                     localStorage.setItem('aegis_language', newLang);
                                                     window.dispatchEvent(new Event('storage'));
-                                                    window.location.reload(); 
+                                                    window.location.reload();
                                                 }}
                                                 className="text-[10px] font-mono text-white/40 hover:text-white uppercase px-2 py-1 border border-white/10 rounded"
                                             >
