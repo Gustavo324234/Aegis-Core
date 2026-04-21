@@ -26,15 +26,15 @@
 
 ## 🎵 EPIC 39: Aegis Music — PLANNED
 
-*   **[CORE-135]** Feature: Plugin `music_search` + syscall + interceptor `[MUSIC_PLAY]` `[TODO — Kernel Engineer]`
+*   **[CORE-135]** Feature: Plugin `music_search` + syscall + interceptor `[MUSIC_PLAY]` `[DONE — Kernel Engineer]`
 *   **[CORE-136]** Feature: MusicPlayer flotante YouTube IFrame `[TODO — Shell Engineer]`
-*   **[CORE-137]** Feature: Comandos de control por chat y voz `[TODO — Kernel + Shell Engineer]`
+*   **[CORE-137]** Feature: Comandos de control por chat y voz `[DONE — Kernel Engineer]`
 
-**Orden:** CORE-135 → CORE-136 → CORE-137
+**Orden:** CORE-135 → CORE-136 → CORE-137 (paralelo Shell)
 
 ---
 
-## 🔗 EPIC 40: Connected Accounts (OAuth) — PLANNED
+## 🔗 EPIC 40: Connected Accounts (OAuth) — IN PROGRESS
 
 ### ADR-041
 > OAuth tokens en `kv_store` del enclave SQLCipher del tenant.
@@ -53,8 +53,8 @@
 ### Kernel
 *   **[CORE-142]** Feature: SystemConfig en MasterEnclave + TLS automático `[DONE — Kernel Engineer]`
 *   **[CORE-138]** Feature: OAuth token receiver — `POST /api/oauth/tokens` + `GET /api/oauth/status` + `DELETE /api/oauth/{provider}` `[TODO — Kernel Engineer]`
-*   **[CORE-140]** Feature: Spotify music + Google OAuth para YouTube sin key manual `[TODO — Kernel + Shell Engineer]`
-*   **[CORE-141]** Feature: Google Calendar, Drive, Gmail via syscalls `[TODO — Kernel Engineer]`
+*   **[CORE-140]** Feature: Spotify music + Google OAuth para YouTube sin key manual `[DONE — Kernel Engineer]`
+*   **[CORE-141]** Feature: Google Calendar, Drive, Gmail via syscalls `[DONE — Kernel Engineer]`
 
 ### Shell
 *   **[CORE-139]** Feature: Connected Accounts — estado en SettingsPanel, desconectar desde web `[TODO — Shell Engineer]`
@@ -86,13 +86,13 @@
 |---|---|
 | Epic 32–37 | ✅ DONE |
 | Epic 38: Agent Persona System | 🔄 IN PROGRESS — 3/7 |
-| Epic 39: Aegis Music | 📋 PLANNED — 0/3 |
-| Epic 40: Connected Accounts | 📋 PLANNED — 0/6 |
+| Epic 39: Aegis Music | 🔄 IN PROGRESS — 1/3 |
+| Epic 40: Connected Accounts | 🔄 IN PROGRESS — 1/6 |
 | Chat end-to-end | ✅ OPERATIVO |
 | Siren desde LAN | ✅ TLS CONFIGURADO — awaiting merge |
-| OAuth / Música integrada | ❌ BLOQUEADO — CORE-142 + CORE-138 + CORE-143 |
+| OAuth / Música integrada | 🔄 EN PROGRESO — Spotify (CORE-140) + Google (CORE-141) |
 
-**Total tickets pendientes: 15**
+**Total tickets pendientes: 14**
 **Ticket fundación: CORE-142**
 **Acción de Tavo antes de CORE-143: registrar apps Google + Spotify**
 
