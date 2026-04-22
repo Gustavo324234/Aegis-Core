@@ -15,4 +15,3 @@ async fn get_music_config() -> axum::Json<serde_json::Value> {
         "provider": "auto"
     }))
 }
-
