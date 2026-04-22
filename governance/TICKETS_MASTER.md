@@ -19,7 +19,7 @@
 
 *   **[CORE-145]** Feature: Onboarding conversacional en chat `[DONE ✅]`
 *   **[CORE-146]** Feature: QR + Cloudflare Tunnel automático + scanner en app `[DONE ✅]`
-*   **[CORE-147]** Fix: Eliminar TLS self-signed del installer — Cloudflare Tunnel como HTTPS `[TODO — Kernel Engineer 🔴]`
+*   **[CORE-147]** Fix: Eliminar TLS self-signed del installer — Cloudflare Tunnel como HTTPS `[DONE ✅]`
 *   **[CORE-148]** Fix: System prompt — tono natural, sin respuestas robóticas `[TODO — Kernel Engineer]`
 
 ---
@@ -35,7 +35,7 @@
 | Epic 32–40 | ✅ DONE |
 | Onboarding identidad en chat | ✅ CORE-145 DONE |
 | QR + Cloudflare Tunnel | ✅ CORE-146 DONE |
-| Installer TLS → Cloudflare | ❌ CORE-147 pendiente |
+| Installer TLS → Cloudflare | ✅ CORE-147 DONE |
 | Chat — respuestas robóticas | ❌ CORE-148 pendiente |
 
 **Tickets pendientes: 2**
