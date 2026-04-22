@@ -2,6 +2,13 @@
 
 
 
+## [0.1.15](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.14...ank-http-v0.1.15) (2026-04-22)
+
+
+### Bug Fixes
+
+* **core,http,installer:** music prompt always injected + TLS vars on … ([#81](https://github.com/Gustavo324234/Aegis-Core/issues/81)) ([141bc16](https://github.com/Gustavo324234/Aegis-Core/commit/141bc16c1303655eeb999a62305c0ffc82026ee2))
+
 ## [0.1.14](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.13...ank-http-v0.1.14) (2026-04-21)
 
 

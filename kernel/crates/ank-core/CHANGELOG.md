@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.10...ank-core-v0.1.11) (2026-04-22)
+
+
+### Bug Fixes
+
+* **core,http,installer:** music prompt always injected + TLS vars on … ([#81](https://github.com/Gustavo324234/Aegis-Core/issues/81)) ([141bc16](https://github.com/Gustavo324234/Aegis-Core/commit/141bc16c1303655eeb999a62305c0ffc82026ee2))
+
 ## [0.1.10](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.9...ank-core-v0.1.10) (2026-04-21)
 
 

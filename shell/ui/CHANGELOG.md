@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.1.1...shell-ui-v1.1.2) (2026-04-22)
+
+
+### Bug Fixes
+
+* **core,http,installer:** music prompt always injected + TLS vars on … ([#81](https://github.com/Gustavo324234/Aegis-Core/issues/81)) ([141bc16](https://github.com/Gustavo324234/Aegis-Core/commit/141bc16c1303655eeb999a62305c0ffc82026ee2))
+
 ## [1.1.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.1.0...shell-ui-v1.1.1) (2026-04-21)
 
 
