@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.18](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.17...ank-server-v0.1.18) (2026-04-22)
+
+
+### Bug Fixes
+
+* **ank-server:** CORE-147 enforce internal HTTP and fix cloudflared path ([#95](https://github.com/Gustavo324234/Aegis-Core/issues/95)) ([08dd48e](https://github.com/Gustavo324234/Aegis-Core/commit/08dd48e29a3d7a2e3d7b3c0f638cf95eeea45f44))
+
 ## [0.1.17](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.16...ank-server-v0.1.17) (2026-04-22)
 
 
