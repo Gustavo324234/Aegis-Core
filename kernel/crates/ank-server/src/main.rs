@@ -45,6 +45,11 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // CORE-147: Enforce internal HTTP by unsetting TLS environment variables.
+    // Cloudflare Tunnel handles HTTPS externally.
+    std::env::remove_var("AEGIS_TLS_CERT");
+    std::env::remove_var("AEGIS_TLS_KEY");
+
     // 1. Inicializar tracing
     let data_dir = resolve_data_dir();
     let logs_dir = data_dir.join("logs");
@@ -487,12 +492,19 @@ async fn start_cloudflare_tunnel(port: u16) -> Result<String> {
 
     info!("Starting cloudflared tunnel on port {}...", port);
 
-    let mut child = Command::new("cloudflared")
+    // CORE-147: Use absolute path if available to ensure service can find it
+    let bin = if std::path::Path::new("/usr/local/bin/cloudflared").exists() {
+        "/usr/local/bin/cloudflared"
+    } else {
+        "cloudflared"
+    };
+
+    let mut child = Command::new(bin)
         .args(["tunnel", "--url", &format!("http://localhost:{}", port)])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("Failed to spawn cloudflared. Is it installed?")?;
+        .context(format!("Failed to spawn {}. Is it installed?", bin))?;
 
     let stderr = child
         .stderr
