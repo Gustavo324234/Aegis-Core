@@ -20,4 +20,5 @@ pub struct AppState {
     pub config: crate::config::HttpConfig,
     pub auth_rate_limiter: AuthRateLimiter,
     pub telemetry: TelemetryState,
+    pub tunnel_url: Arc<RwLock<Option<String>>>,
 }

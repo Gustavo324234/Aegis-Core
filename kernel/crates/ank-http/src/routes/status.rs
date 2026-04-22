@@ -23,6 +23,14 @@ pub struct SystemStatusResponse {
 }
 
 #[derive(serde::Serialize, ToSchema)]
+pub struct ConnectionInfoResponse {
+    pub local_url: String,
+    pub tunnel_url: Option<String>,
+    pub tunnel_status: String,
+    pub qr_url: String,
+}
+
+#[derive(serde::Serialize, ToSchema)]
 pub struct PublicSystemStateResponse {
     pub state: String,
 }
@@ -42,6 +50,7 @@ pub fn system_router() -> Router<AppState> {
     Router::new()
         .route("/state", get(get_public_system_state))
         .route("/sync_version", get(get_sync_version))
+        .route("/connection-info", get(get_connection_info))
         .route("/hw_profile", post(crate::routes::engine::set_hw_profile))
 }
 
@@ -181,4 +190,58 @@ pub async fn health_check() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "Online".to_string(),
     })
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/system/connection-info",
+    tag = "status",
+    responses(
+        (status = 200, description = "Connection information", body = ConnectionInfoResponse)
+    )
+)]
+pub async fn get_connection_info(State(state): State<AppState>) -> Json<ConnectionInfoResponse> {
+    let tunnel_url = state.tunnel_url.read().await.clone();
+
+    // Determine tunnel status
+    let tunnel_status = if tunnel_url.is_some() {
+        "active".to_string()
+    } else {
+        // Best effort check if cloudflared is available
+        let exists = std::process::Command::new("cloudflared")
+            .arg("--version")
+            .output()
+            .is_ok();
+
+        if exists {
+            "connecting".to_string()
+        } else {
+            "disabled".to_string()
+        }
+    };
+
+    // Get local IP
+    let local_ip = get_local_ip().unwrap_or_else(|| "localhost".to_string());
+    let protocol = if std::env::var("AEGIS_TLS_CERT").is_ok() {
+        "https"
+    } else {
+        "http"
+    };
+    let local_url = format!("{}://{}:8000", protocol, local_ip);
+
+    let qr_url = tunnel_url.clone().unwrap_or_else(|| local_url.clone());
+
+    Json(ConnectionInfoResponse {
+        local_url,
+        tunnel_url,
+        tunnel_status,
+        qr_url,
+    })
+}
+
+fn get_local_ip() -> Option<String> {
+    use std::net::UdpSocket;
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    socket.local_addr().ok().map(|addr| addr.ip().to_string())
 }

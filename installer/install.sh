@@ -227,9 +227,26 @@ install_dependencies() {
     done
 }
 
+install_cloudflared() {
+    if command -v cloudflared &>/dev/null; then
+        log "cloudflared ya instalado — omitiendo"
+        return
+    fi
+    log "Instalando cloudflared (tunnel remoto)..."
+    local arch_str="amd64"
+    [[ "$(uname -m)" == "aarch64" ]] && arch_str="arm64"
+    local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch_str}"
+    if curl -L --fail --silent "$url" -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared; then
+        success "cloudflared instalado"
+    else
+        warn "No se pudo instalar cloudflared — acceso remoto deshabilitado"
+    fi
+}
+
 install_native() {
     log "Starting native installation..."
 
+    install_cloudflared
     setup_tls_automatic
 
     # CORE-147: Enforce cert ownership/permissions after (re)generation

@@ -11,6 +11,8 @@ import { twMerge } from 'tailwind-merge';
 import TelemetryDashboard from './TelemetryDashboard';
 import SettingsPanel from './SettingsPanel';
 import MusicPlayer from './MusicPlayer';
+import { QrCode } from 'lucide-react';
+import { ConnectionQR } from './ConnectionQR';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -92,6 +94,7 @@ const ChatTerminal: React.FC = () => {
     const [voiceError, setVoiceError] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    const [showQR, setShowQR] = useState(false);
 
     const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
         if (scrollRef.current) {
@@ -188,6 +191,9 @@ const ChatTerminal: React.FC = () => {
                         <div className="h-4 w-px bg-white/10" />
                         <div className="flex items-center gap-2">
                             <span className="text-[8px] font-mono text-white/40 uppercase tracking-widest">{tenantId} // Active Domain</span>
+                            <button onClick={() => setShowQR(true)} className="p-1.5 rounded-md hover:bg-white/5 text-white/20 hover:text-aegis-cyan transition-colors" title="Mobile Connection">
+                                <QrCode className="w-3.5 h-3.5" />
+                            </button>
                             <button onClick={logout} className="p-1.5 rounded-md hover:bg-white/5 text-white/20 hover:text-red-400 transition-colors" title="Disconnect">
                                 <LogOut className="w-3 h-3" />
                             </button>
@@ -269,6 +275,9 @@ const ChatTerminal: React.FC = () => {
             </AnimatePresence>
 
             <MusicPlayer />
+            <AnimatePresence>
+                {showQR && <ConnectionQR onClose={() => setShowQR(false)} />}
+            </AnimatePresence>
         </div>
     );
 };
