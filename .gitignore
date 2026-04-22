@@ -1,5 +1,6 @@
 # Rust build artifacts
 target/
+target_verify_fix/
 *.rs.bk
 
 # Node / UI
@@ -8,8 +9,8 @@ shell/ui/dist/
 app/node_modules/
 app/.expo/
 app/dist/
-app/android/.gradle/
-app/android/app/build/
+app/android/
+app/.idea/
 
 # Python (legacy BFF)
 shell/bff/__pycache__/
@@ -42,8 +43,10 @@ dev.sh
 kernel/crates/ank-server/build_error.log
 kernel/crates/ank-server/test_output.txt
 kernel/clippy_output.txt
-target_verify_fix/
 pr_body.txt
+
+# Scratch / temp
+scratch/
 
 # Compiled WASM plugins (build artifacts)
 kernel/plugins_src/target/
