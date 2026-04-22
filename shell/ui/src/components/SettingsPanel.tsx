@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Save, User, Cpu, Volume2, Shield, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Link2 } from 'lucide-react';
+import { Settings, X, Save, Cpu, Volume2, Shield, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Link2, Sparkles } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -17,7 +17,7 @@ interface SettingsPanelProps {
 type TabId = 'persona' | 'motor' | 'voz' | 'seguridad' | 'accounts';
 
 const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: React.ReactNode }[] => [
-    { id: 'persona', label: t('tab_persona'), icon: <User className="w-4 h-4" /> },
+    { id: 'persona', label: t('tab_persona'), icon: <Sparkles className="w-4 h-4" /> },
     { id: 'motor', label: t('tab_motor'), icon: <Cpu className="w-4 h-4" /> },
     { id: 'voz', label: t('tab_voz'), icon: <Volume2 className="w-4 h-4" /> },
     { id: 'seguridad', label: t('tab_seguridad'), icon: <Shield className="w-4 h-4" /> },
@@ -131,6 +131,15 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
 
     return (
         <div className="space-y-6">
+            <div className="p-4 bg-aegis-cyan/5 border border-aegis-cyan/20 rounded-xl">
+                <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest mb-1">
+                    {t('tab_persona')}
+                </p>
+                <p className="text-sm font-mono text-aegis-cyan">
+                    {t('persona_desc')}
+                </p>
+            </div>
+
             <div>
                 <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-2">
                     {t('persona_name')}
@@ -183,7 +192,10 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
                     disabled={isSaving || !persona.prompt}
                     className="flex-1 px-4 py-2.5 border border-white/10 rounded-lg text-[10px] font-mono text-white/40 hover:text-white hover:bg-white/5 transition-colors uppercase tracking-widest disabled:opacity-30"
                 >
-                    {t('reset_persona')}
+                    <div className="text-left">
+                        <span className="block">{t('persona_reset')}</span>
+                        <span className="text-[8px] opacity-60 normal-case tracking-normal">{t('persona_reset_hint')}</span>
+                    </div>
                 </button>
                 <button
                     onClick={handleSave}
