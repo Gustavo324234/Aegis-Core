@@ -168,7 +168,9 @@ jobs:
           vcpkg install openssl:x64-windows-static
           vcpkg integrate install
       - name: Install protoc
-        run: choco install protoc -y
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
