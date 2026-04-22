@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.17](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.16...ank-server-v0.1.17) (2026-04-22)
+
+
+### Features
+
+* **ank-server,installer:** CORE-146 Cloudflare tunnel + connection-i… ([#90](https://github.com/Gustavo324234/Aegis-Core/issues/90)) ([e8be602](https://github.com/Gustavo324234/Aegis-Core/commit/e8be60263bc0d4d8a4ab3fc9175badfb0982887c))
+
 ## [0.1.16](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.15...ank-server-v0.1.16) (2026-04-22)
 
 

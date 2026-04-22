@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.1.2...shell-ui-v1.2.0) (2026-04-22)
+
+
+### Features
+
+* **ank-server,installer:** CORE-146 Cloudflare tunnel + connection-i… ([#90](https://github.com/Gustavo324234/Aegis-Core/issues/90)) ([e8be602](https://github.com/Gustavo324234/Aegis-Core/commit/e8be60263bc0d4d8a4ab3fc9175badfb0982887c))
+* **shell:** CORE-145 rename Persona tab to Identidad + reset hint ([#88](https://github.com/Gustavo324234/Aegis-Core/issues/88)) ([52ac202](https://github.com/Gustavo324234/Aegis-Core/commit/52ac202d0a0f9d62e73146fa0d613e872a4ed4db))
+
 ## [1.1.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.1.1...shell-ui-v1.1.2) (2026-04-22)
 
 
