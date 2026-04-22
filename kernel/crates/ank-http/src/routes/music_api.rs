@@ -6,19 +6,12 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/config", get(get_music_config))
 }
 
+/// CORE-140: Music is always configured now.
+/// With OAuth (Spotify/Google), a static YOUTUBE_API_KEY is no longer required.
+/// The syscall executor checks per-tenant OAuth tokens at runtime.
 async fn get_music_config() -> axum::Json<serde_json::Value> {
-    let configured = std::env::var("YOUTUBE_API_KEY")
-        .map(|k| !k.is_empty())
-        .unwrap_or(false);
-
-    if configured {
-        axum::Json(json!({
-            "configured": true,
-            "provider": "youtube"
-        }))
-    } else {
-        axum::Json(json!({
-            "configured": false
-        }))
-    }
+    axum::Json(json!({
+        "configured": true,
+        "provider": "auto"
+    }))
 }

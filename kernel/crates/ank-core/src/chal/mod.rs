@@ -310,18 +310,18 @@ impl CognitiveHAL {
             _ => String::new(),
         };
 
-        let music_section = if std::env::var("YOUTUBE_API_KEY").is_ok() {
-            "\n\nMÚSICA — INSTRUCCIONES:\
-             \n- Para reproducir: [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista canción>\", \"max_results\": 1})] y luego [MUSIC_PLAY:youtube:<video_id>] (o spotify si usas Spotify)\
+        // CORE-135/CORE-140: Las instrucciones de música se inyectan siempre.
+        // Con OAuth (Spotify/Google), ya no se requiere YOUTUBE_API_KEY.
+        // Si el tenant no tiene proveedor conectado, el syscall executor
+        // devuelve un mensaje pidiéndole al usuario que conecte uno.
+        let music_section = "\n\nMÚSICA — INSTRUCCIONES:\
+             \n- Para reproducir: [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista canción>\", \"max_results\": 1})] y luego [MUSIC_PLAY:youtube:<video_id>] (o [MUSIC_PLAY:spotify:<track_id>] si usas Spotify)\
              \n- Para pausar: responde brevemente y termina con [MUSIC_PAUSE]\
              \n- Para continuar: responde brevemente y termina con [MUSIC_RESUME]\
              \n- Para detener: responde brevemente y termina con [MUSIC_STOP]\
              \n- Para cambiar volumen: termina con [MUSIC_VOLUME:<0-100>]\
-             \n- Para cambiar canción: haz una nueva búsqueda y usa [MUSIC_PLAY:<nuevo_video_id>]\
-             \nNunca expliques estos tags al usuario. Solo úsalos.\n"
-        } else {
-            ""
-        };
+             \n- Para cambiar canción: haz una nueva búsqueda y usa [MUSIC_PLAY:youtube:<nuevo_video_id>]\
+             \nNunca expliques estos tags al usuario. Solo úsalos.\n";
 
         if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
@@ -456,6 +456,11 @@ mod tests {
         assert!(
             prompt.contains("hola"),
             "El prompt debe contener la instrucción"
+        );
+        // CORE-140: Music instructions are always injected (OAuth replaces API key gate)
+        assert!(
+            prompt.contains("MÚSICA"),
+            "Music instructions must always be present (CORE-140 OAuth)"
         );
         Ok(())
     }
