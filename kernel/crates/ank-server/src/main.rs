@@ -99,16 +99,6 @@ async fn main() -> Result<()> {
     // 6. Setup Token
     {
         let c = citadel.lock().await;
-        if let Ok(Some(enabled)) = c.enclave.get_config("tls_enabled").await {
-            if enabled == "true" {
-                if let Ok(Some(cert)) = c.enclave.get_config("tls_cert_path").await {
-                    std::env::set_var("AEGIS_TLS_CERT", cert);
-                }
-                if let Ok(Some(key_path)) = c.enclave.get_config("tls_key_path").await {
-                    std::env::set_var("AEGIS_TLS_KEY", key_path);
-                }
-            }
-        }
 
         if !c.enclave.admin_exists().await? {
             let token = uuid::Uuid::new_v4().to_string().replace("-", "");
@@ -437,27 +427,10 @@ async fn main() -> Result<()> {
         }
     });
 
-    // CORE-147: Log TLS status explicitly so journalctl shows whether HTTPS or HTTP is active.
-    match (
-        std::env::var("AEGIS_TLS_CERT"),
-        std::env::var("AEGIS_TLS_KEY"),
-    ) {
-        (Ok(cert), Ok(key)) => {
-            if std::path::Path::new(&cert).exists() && std::path::Path::new(&key).exists() {
-                info!("🔒 TLS enabled — serving HTTPS on port 8000");
-                info!("   cert: {}", cert);
-            } else {
-                warn!("⚠️  TLS vars set but cert/key files NOT FOUND — falling back to HTTP");
-                warn!("   Expected cert: {}", cert);
-                warn!("   Expected key: {}", key);
-                warn!("   Run: sudo aegis update  (will regenerate TLS)");
-            }
-        }
-        _ => {
-            warn!("🔓 TLS not configured — serving HTTP on port 8000");
-            warn!("   To enable HTTPS: sudo aegis update");
-        }
-    }
+    // CORE-147: Log informative message for HTTP + Tunnel
+    info!("🌐 Aegis serving HTTP on port 8000");
+    info!("   For HTTPS access: cloudflared tunnel --url http://localhost:8000");
+    info!("   Or run: sudo aegis tunnel");
 
     // 13. Axum Server
     info!("Starting Axum on port 8000");

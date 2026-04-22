@@ -108,14 +108,22 @@ export default function LoginScreen() {
         </View>
 
         <View style={styles.form}>
+          <TouchableOpacity 
+            style={styles.qrBannerButton}
+            onPress={handleScanPress}
+          >
+            <Ionicons name="qr-code" size={24} color="#000" />
+            <Text style={styles.qrBannerButtonText}>PAIR WITH SERVER QR</Text>
+          </TouchableOpacity>
+
           <Text style={styles.label}>Server URL</Text>
           <View style={styles.inputWithAction}>
             <TextInput
-              style={[styles.input, { flex: 1, marginBottom: 0 }]}
+              style={styles.inputInner}
               value={serverUrl}
               onChangeText={setServerUrl}
               placeholder="http://192.168.1.x:8000"
-              placeholderTextColor="#666"
+              placeholderTextColor="#444"
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
@@ -125,7 +133,8 @@ export default function LoginScreen() {
               style={styles.qrButton}
               activeOpacity={0.7}
             >
-              <Ionicons name="qr-code-outline" size={22} color="#00E5CC" />
+              <Ionicons name="qr-code-outline" size={20} color="#00E5CC" />
+              <Text style={styles.qrButtonText}>SCAN</Text>
             </TouchableOpacity>
           </View>
 
@@ -229,8 +238,12 @@ const styles = StyleSheet.create({
   secondaryButton: { marginTop: 20, padding: 12, alignItems: 'center' },
   secondaryButtonText: { color: '#7C6FE0', fontSize: 13, fontWeight: '600' },
   footer: { color: '#333', fontSize: 10, textAlign: 'center', marginTop: 48, letterSpacing: 1 },
-  inputWithAction: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderWidth: 1, borderColor: '#333', borderRadius: 8, marginBottom: 20 },
-  qrButton: { padding: 12, borderLeftWidth: 1, borderLeftColor: '#222' },
+  qrBannerButton: { flexDirection: 'row', backgroundColor: '#00E5CC', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 32, shadowColor: '#00E5CC', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 5 },
+  qrBannerButtonText: { color: '#000', fontWeight: '900', fontSize: 14, letterSpacing: 1 },
+  inputWithAction: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderWidth: 1, borderColor: '#333', borderRadius: 8, marginBottom: 20, overflow: 'hidden' },
+  inputInner: { flex: 1, color: '#FFF', padding: 16, fontSize: 16 },
+  qrButton: { flexDirection: 'row', paddingHorizontal: 16, backgroundColor: '#1A1A1A', borderLeftWidth: 1, borderLeftColor: '#333', justifyContent: 'center', alignItems: 'center', gap: 8 },
+  qrButtonText: { color: '#00E5CC', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   scannerOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: '#000', zIndex: 1000 },
   scannerHeader: { position: 'absolute', top: 60, left: 0, right: 0, alignItems: 'center', zIndex: 1001 },
   scannerTitle: { color: '#00E5CC', fontSize: 14, fontWeight: '900', letterSpacing: 2, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4 },

@@ -68,10 +68,6 @@ cmd_status() {
 
     local PROTOCOL="http"
     local CURL_FLAGS=("-s" "-f" "--connect-timeout" "2")
-    if grep -q "AEGIS_TLS_CERT=" /etc/aegis/aegis.env 2>/dev/null || grep -q "AEGIS_TLS_CERT=" "$INSTALL_DIR/.env" 2>/dev/null; then
-        PROTOCOL="https"
-        CURL_FLAGS+=("-k")
-    fi
 
     if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:8000/health" > /dev/null 2>&1; then
         printf '%sAPI is UP (%s://localhost:8000)%s\n' "$GREEN" "$PROTOCOL" "$NC"
@@ -177,41 +173,17 @@ cmd_update() {
         printf '%b%s%b\n' "$YELLOW" "  Aviso: UI no disponible en este release, manteniendo actual." "$NC"
     fi
 
-    # SRE: Auto-enable TLS on upgrade — regenerate if missing or expiring soon
-    printf "  \u2192 Verificando TLS...\n"
-    local ENV_FILE="/etc/aegis/aegis.env"
-    local CONFIG_DIR="/etc/aegis"
-    if grep -q "AEGIS_TLS_CERT" "$ENV_FILE" 2>/dev/null; then
-        local cert_path
-        cert_path=$(grep "AEGIS_TLS_CERT" "$ENV_FILE" | cut -d= -f2)
-        if [[ ! -f "$cert_path" ]]; then
-            printf '%b  \u2192 Certificado TLS no encontrado \u2014 regenerando...%b\n' "$YELLOW" "$NC"
-            regenerate_tls_cert
-        else
-            local expiry_date expiry_epoch now_epoch days_left
-            expiry_date=$(openssl x509 -enddate -noout -in "$cert_path" 2>/dev/null \
-                | cut -d= -f2 || echo "")
-            if [[ -n "$expiry_date" ]]; then
-                expiry_epoch=$(date -d "$expiry_date" +%s 2>/dev/null || echo 0)
-                now_epoch=$(date +%s)
-                days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
-                if [[ $days_left -lt 30 ]]; then
-                    printf '%b  \u2192 Certificado TLS vence en %d d\u00edas \u2014 regenerando...%b\n' "$YELLOW" "$days_left" "$NC"
-                    regenerate_tls_cert
-                else
-                    printf '  \u2192 Certificado TLS v\u00e1lido (%d d\u00edas restantes)\n' "$days_left"
-                fi
-            fi
-        fi
-    elif [[ ! -f "${CONFIG_DIR}/cert.pem" ]]; then
-        printf '%b  \u2192 TLS no configurado \u2014 generando certificado inicial...%b\n' "$YELLOW" "$NC"
-        regenerate_tls_cert
-        if [[ -f "$ENV_FILE" ]] && [[ -f "${CONFIG_DIR}/cert.pem" ]]; then
-            grep -q "AEGIS_TLS_CERT" "$ENV_FILE" \
-                || echo "AEGIS_TLS_CERT=${CONFIG_DIR}/cert.pem" | sudo tee -a "$ENV_FILE" > /dev/null
-            grep -q "AEGIS_TLS_KEY" "$ENV_FILE" \
-                || echo "AEGIS_TLS_KEY=${CONFIG_DIR}/key.pem" | sudo tee -a "$ENV_FILE" > /dev/null
-        fi
+    # CORE-147: Ensure cloudflared is installed
+    if ! command -v cloudflared &>/dev/null; then
+        printf "  → Instalando cloudflared...\n"
+        local arch_str="amd64"
+        [[ "$(uname -m)" == "aarch64" ]] && arch_str="arm64"
+        curl -L --fail --silent \
+            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch_str}" \
+            -o /usr/local/bin/cloudflared \
+            && chmod +x /usr/local/bin/cloudflared \
+            && printf '%b  → cloudflared instalado%b\n' "$GREEN" "$NC" \
+            || printf '%b  → cloudflared no disponible — acceso solo LAN%b\n' "$YELLOW" "$NC"
     fi
 
     printf "  \u2192 Iniciando servicio...\n"
@@ -222,53 +194,7 @@ cmd_update() {
     cmd_version
 }
 
-# CORE-147: regenerate_tls_cert — genera/renueva el certificado self-signed
-# Actualiza ownership, permisos y aegis.env.
-regenerate_tls_cert() {
-    local local_ip cert_dir
-    local_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || local_ip="127.0.0.1"
-    cert_dir="/etc/aegis"
 
-    printf '  \u2192 Generando certificado TLS para IP %s...\n' "$local_ip"
-    openssl req -x509 -newkey rsa:4096 \
-        -keyout "${cert_dir}/key.pem" \
-        -out "${cert_dir}/cert.pem" \
-        -days 365 -nodes \
-        -subj "/CN=aegis-local" \
-        -addext "subjectAltName=IP:${local_ip},IP:127.0.0.1,DNS:localhost" \
-        2>/dev/null
-
-    if id -u aegis > /dev/null 2>&1; then
-        chown aegis:aegis "${cert_dir}"/*.pem 2>/dev/null || true
-    fi
-    chmod 640 "${cert_dir}"/*.pem
-
-    local env_file="/etc/aegis/aegis.env"
-    if [[ -f "$env_file" ]]; then
-        grep -q "AEGIS_TLS_CERT" "$env_file" \
-            || echo "AEGIS_TLS_CERT=${cert_dir}/cert.pem" >> "$env_file"
-        grep -q "AEGIS_TLS_KEY" "$env_file" \
-            || echo "AEGIS_TLS_KEY=${cert_dir}/key.pem" >> "$env_file"
-    fi
-
-    printf '%b  \u2192 Certificado TLS regenerado para IP %s%b\n' "$GREEN" "$local_ip" "$NC"
-    printf '%b  \u2192 Abr\u00ed el browser en https://%s:8000 y acept\u00e1 el certificado self-signed%b\n' \
-        "$YELLOW" "$local_ip" "$NC"
-}
-
-cmd_tls_regen() {
-    printf '%b%s%b\n' "$CYAN" "--- Aegis TLS Certificate Regeneration ---" "$NC"
-    if [[ "$EUID" -ne 0 ]]; then
-        printf '%bError: requiere sudo%b\n' "$RED" "$NC"
-        exit 1
-    fi
-    regenerate_tls_cert
-    printf '  \u2192 Reiniciando servicio para aplicar nuevo certificado...\n'
-    systemctl restart aegis
-    local local_ip
-    local_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || local_ip="localhost"
-    printf '%bListo. Abr\u00ed: https://%s:8000%b\n' "$GREEN" "$local_ip" "$NC"
-}
 
 cmd_token() {
     printf '%sRetrieving Setup Token...%s\n' "$CYAN" "$NC"
@@ -285,9 +211,6 @@ cmd_token() {
         local ip
         ip=$(hostname -I | awk '{print $1}' || echo "localhost")
         local PROTOCOL="http"
-        if grep -q "AEGIS_TLS_CERT=" /etc/aegis/aegis.env 2>/dev/null || grep -q "AEGIS_TLS_CERT=" "$INSTALL_DIR/.env" 2>/dev/null; then
-            PROTOCOL="https"
-        fi
         printf '\n%bSetup URL: %s://%s:8000?setup_token=%s%b\n' "$GREEN" "$PROTOCOL" "$ip" "$token" "$NC"
     fi
 }
@@ -304,7 +227,7 @@ case "${1:-help}" in
     diag)      shift; cmd_diag "$@" ;;
     logs)      shift; cmd_logs "$@" ;;
     update)    shift; cmd_update "$@" ;;
-    tls-regen) shift; cmd_tls_regen "$@" ;;
+
     version)   shift; cmd_version "$@" ;;
     token)     shift; cmd_token "$@" ;;
     uninstall) shift; cmd_uninstall "$@" ;;
@@ -321,9 +244,8 @@ case "${1:-help}" in
         echo "  diag          Run deep diagnostic report"
         echo "  version       Show installed core version"
         echo "  logs [N]      Follow logs (default 100)"
-        echo "  update           Update to latest nightly build"
-        echo "  update --stable  Update to latest stable release"
-        echo "  tls-regen        Regenerate TLS certificate (run after IP change or expiry)"
+        echo "  update           Update to latest nightly build (installs cloudflared if missing)"
+        echo "  update --stable  Update to latest stable release (installs cloudflared if missing)"
         echo "  token            Get setup URL"
         echo "  uninstall        Remove Aegis from system"
         ;;
