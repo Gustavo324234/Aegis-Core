@@ -40,7 +40,7 @@ detect_arch() {
 AEGIS_MODE=$(detect_mode)
 
 cmd_start() {
-    printf "${CYAN}Starting Aegis OS (%s)...${NC}\n" "$AEGIS_MODE"
+    printf '%bStarting Aegis OS (%s)...%b\n' "$CYAN" "$AEGIS_MODE" "$NC"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" || exit; docker compose up -d)
     else
@@ -49,7 +49,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-    printf "${CYAN}Stopping Aegis OS (%s)...${NC}\n" "$AEGIS_MODE"
+    printf '%bStopping Aegis OS (%s)...%b\n' "$CYAN" "$AEGIS_MODE" "$NC"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" || exit; docker compose down)
     else
@@ -58,7 +58,7 @@ cmd_stop() {
 }
 
 cmd_status() {
-    printf "${CYAN}--- Aegis OS Status (%s) ---${NC}\n" "$AEGIS_MODE"
+    printf '%b--- Aegis OS Status (%s) ---%b\n' "$CYAN" "$AEGIS_MODE" "$NC"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" || exit; docker compose ps) || echo "Docker not running."
     else
@@ -113,7 +113,7 @@ cmd_version() {
     if [[ -f "$BIN_PATH" ]]; then
         "$BIN_PATH" --version
     else
-        printf "${RED}%s${NC}\n" "Aegis binario no encontrado en $BIN_PATH"
+        printf '%b%s%b\n' "$RED" "Aegis binario no encontrado en $BIN_PATH" "$NC"
     fi
 }
 
@@ -134,8 +134,8 @@ cmd_update() {
     ARCH=$(detect_arch)
     local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${TAG}"
 
-    printf "${CYAN}%s${NC}\n" "--- Aegis OS Upgrade Tool ---"
-    printf "Canal: ${YELLOW}%s${NC} (Tag: %s)\n" "$CHANNEL" "$TAG"
+    printf '%b%s%b\n' "$CYAN" "--- Aegis OS Upgrade Tool ---" "$NC"
+    printf 'Canal: %b%s%b (Tag: %s)\n' "$YELLOW" "$CHANNEL" "$NC" "$TAG"
 
     printf "Versión actual: "
     cmd_version || true
@@ -145,7 +145,7 @@ cmd_update() {
     local remote_date
     remote_date=$(echo "$remote_info" | grep '"published_at"' | head -1 | grep -oP '"\K[^"]+(?=")' || echo "unknown")
 
-    printf "Última disponible: ${GREEN}%s${NC}\n\n" "$remote_date"
+    printf 'Última disponible: %b%s%b\n\n' "$GREEN" "$remote_date" "$NC"
 
     printf "  → Deteniendo servicio...\n"
     sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
@@ -154,8 +154,8 @@ cmd_update() {
     if ! curl -L --fail --progress-bar \
         "${RELEASE_URL}/ank-server-linux-${ARCH}.tar.gz" \
         -o /tmp/ank-update.tar.gz; then
-        printf "${RED}Error: No se pudo descargar el binario (canal: %s, tag: %s).${NC}\n" "$CHANNEL" "$TAG"
-        printf "${YELLOW}Sugerencia: intentá con 'sudo aegis update' (usa nightly por defecto).${NC}\n"
+        printf '%bError: No se pudo descargar el binario (canal: %s, tag: %s).%b\n' "$RED" "$CHANNEL" "$TAG" "$NC"
+        printf '%bSugerencia: intentá con '"'"'sudo aegis update'"'"' (usa nightly por defecto).%b\n' "$YELLOW" "$NC"
         sudo systemctl start "$SERVICE_NAME"
         exit 1
     fi
@@ -174,13 +174,13 @@ cmd_update() {
         sudo chown -R aegis:aegis "$UI_PATH" 2>/dev/null || true
         rm -f /tmp/ui-update.tar.gz
     else
-        printf "${YELLOW}%s${NC}\n" "  Aviso: UI no disponible en este release, manteniendo actual."
+        printf '%b%s%b\n' "$YELLOW" "  Aviso: UI no disponible en este release, manteniendo actual." "$NC"
     fi
 
     printf "  → Iniciando servicio...\n"
     sudo systemctl start "$SERVICE_NAME"
 
-    printf "\n${GREEN}%s${NC}\n" "Actualización completada."
+    printf '\n%b%s%b\n' "$GREEN" "Actualización completada." "$NC"
     printf "Nueva versión: "
     cmd_version
 }
@@ -203,7 +203,7 @@ cmd_token() {
         if grep -q "AEGIS_TLS_CERT=" /etc/aegis/aegis.env 2>/dev/null || grep -q "AEGIS_TLS_CERT=" "$INSTALL_DIR/.env" 2>/dev/null; then
             PROTOCOL="https"
         fi
-        printf "\n${GREEN}Setup URL: %s://%s:8000?setup_token=%s${NC}\n" "$PROTOCOL" "$ip" "$token"
+        printf '\n%bSetup URL: %s://%s:8000?setup_token=%s%b\n' "$GREEN" "$PROTOCOL" "$ip" "$token" "$NC"
     fi
 }
 
