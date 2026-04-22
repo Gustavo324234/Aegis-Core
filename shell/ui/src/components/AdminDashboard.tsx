@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, Plus, Key, Terminal, LogOut, Check, Users, Activity, Trash2, RefreshCw, Cpu, HardDrive, Clock, Server, Mic, Bot } from 'lucide-react';
+import { Shield, Plus, Key, Terminal, LogOut, Check, Users, Activity, Trash2, RefreshCw, Cpu, HardDrive, Clock, Server, Mic, Sparkles } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 
@@ -392,7 +392,7 @@ const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: Rea
     { id: 'system', label: t('system'), icon: <Activity className="w-4 h-4" /> },
     { id: 'providers', label: 'IA Tools', icon: <Cpu className="w-4 h-4" /> },
     { id: 'siren', label: t('voice_audio'), icon: <Mic className="w-4 h-4" /> },
-    { id: 'persona', label: 'Persona', icon: <Bot className="w-4 h-4" /> },
+    { id: 'persona', label: t('tab_persona'), icon: <Sparkles className="w-4 h-4" /> },
 ];
 
 const AdminDashboard: React.FC = () => {
