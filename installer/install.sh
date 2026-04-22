@@ -368,7 +368,7 @@ EOF
             || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}" >> "${INSTALL_ROOT}/.env"
     fi
 
-    fi
+
 
     mkdir -p "$CONFIG_DIR"
     echo "docker" > "$CONFIG_DIR/mode"
