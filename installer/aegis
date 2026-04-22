@@ -177,6 +177,32 @@ cmd_update() {
         printf '%b%s%b\n' "$YELLOW" "  Aviso: UI no disponible en este release, manteniendo actual." "$NC"
     fi
 
+    # SRE: Auto-enable TLS on upgrade if not already configured
+    printf "  → Verificando TLS...\n"
+    local ENV_FILE="/etc/aegis/aegis.env"
+    local CONFIG_DIR="/etc/aegis"
+    if [[ ! -f "${CONFIG_DIR}/cert.pem" ]]; then
+        printf "  → Generando certificado TLS self-signed...\n"
+        local local_ip
+        local_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || local_ip="127.0.0.1"
+        sudo openssl req -x509 -newkey rsa:4096 \
+            -keyout "${CONFIG_DIR}/key.pem" \
+            -out "${CONFIG_DIR}/cert.pem" \
+            -days 365 -nodes \
+            -subj "/CN=aegis-local" \
+            -addext "subjectAltName=IP:${local_ip},IP:127.0.0.1,DNS:localhost" \
+            2>/dev/null || printf '%b%s%b\n' "$YELLOW" "  TLS generation failed — continuing with HTTP" "$NC"
+        if [[ -f "${CONFIG_DIR}/cert.pem" ]]; then
+            sudo chown aegis:aegis "${CONFIG_DIR}"/*.pem 2>/dev/null || true
+            sudo chmod 640 "${CONFIG_DIR}"/*.pem
+            printf '%b%s%b\n' "$GREEN" "  Certificado TLS generado para IP ${local_ip}" "$NC"
+        fi
+    fi
+    if [[ -f "$ENV_FILE" ]] && [[ -f "${CONFIG_DIR}/cert.pem" ]]; then
+        grep -q "AEGIS_TLS_CERT" "$ENV_FILE" || echo "AEGIS_TLS_CERT=${CONFIG_DIR}/cert.pem" | sudo tee -a "$ENV_FILE" > /dev/null
+        grep -q "AEGIS_TLS_KEY"  "$ENV_FILE" || echo "AEGIS_TLS_KEY=${CONFIG_DIR}/key.pem"   | sudo tee -a "$ENV_FILE" > /dev/null
+    fi
+
     printf "  → Iniciando servicio...\n"
     sudo systemctl start "$SERVICE_NAME"
 
