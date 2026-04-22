@@ -1,89 +1,75 @@
-# CORE-145 — Feature: Onboarding conversacional de Persona — rediseño
+# CORE-145 — Feature: Onboarding conversacional de identidad — la IA pregunta en el chat
 
 **Epic:** 41 — UX & Onboarding
-**Repo:** Aegis-Core — `kernel/` + `shell/`
+**Repo:** Aegis-Core — `kernel/`
 **Crates:** `ank-http`, `ank-core`
 **Tipo:** feat
 **Prioridad:** Alta
-**Asignado a:** Kernel Engineer + Shell Engineer
+**Asignado a:** Kernel Engineer
 
 ---
 
-## Problema con CORE-132 (implementación anterior)
+## Qué se quiere lograr
 
-CORE-132 implementó un onboarding de Persona pero en la pantalla de Settings,
-como un formulario frío. El usuario quiere que el agente **le pregunte directamente
-en el chat** al primer uso — como una conversación real, no un formulario.
-
----
-
-## Comportamiento deseado
-
-### Primera vez que el usuario abre el chat (sin Persona configurada):
-
-```
-Aegis:  ¡Hola! Soy tu asistente personal. Antes de empezar, me gustaría
-        conocerte mejor.
-
-        ¿Cómo te gustaría que me llame? (podés darme cualquier nombre)
-```
-
-El usuario responde con un nombre, por ejemplo "Nova".
-
-```
-Aegis:  Perfecto, seré Nova para vos 😊
-
-        ¿Cómo preferís que me comunique contigo?
-        · Formal y profesional
-        · Casual y cercano
-        · Directo y conciso
-        · Creativo y expresivo
-```
-
-El usuario elige o describe libremente.
-
-```
-Aegis:  Entendido. Ya soy Nova, y voy a comunicarme de forma casual y cercana.
-        ¿En qué te puedo ayudar hoy?
-```
-
-A partir de ese momento, **el agente usa esa Persona en todas las conversaciones**.
-
-### Flujo técnico
-
-1. Al primer WebSocket `submit`, el kernel detecta que no hay Persona configurada
-2. En lugar de procesar el prompt con el LLM, el kernel inicia el flujo de onboarding
-3. El onboarding es un **state machine de 2 pasos** manejado en el servidor:
-   - Step 1: pedir nombre → guardar en `kv_store` como `onboarding_name`
-   - Step 2: pedir estilo → construir Persona y guardarla con `set_persona()`
-4. Una vez completado, el flag `onboarding_complete` se setea en el enclave
-5. El mensaje original del usuario (que disparó el onboarding) se procesa normalmente
+La primera vez que un usuario abre el chat, **el agente mismo inicia una conversación
+natural** para establecer su identidad. No hay formularios, no hay Settings, no hay
+pantallas de configuración. El propio agente pregunta, escucha, reacciona con
+personalidad, y se transforma.
 
 ---
 
-## Cambios requeridos
+## Conversación de ejemplo (flujo real)
 
-### 1. `ank-core` — Estado de onboarding en `TenantDB`
+```
+[Agente, primer mensaje automático al conectar]:
+Hola! Soy tu nuevo asistente personal 👋
+¿Cómo querés que me llame?
+
+[Usuario]:
+Te voy a llamar Jarvis.
+
+[Agente]:
+¡Jarvis! Me encanta ese nombre 😄
+A partir de ahora me llamaré Jarvis.
+
+Ahora dime, ¿qué tipo de personalidad preferís que adopte?
+
+· Profesional y preciso
+· Casual y amigable
+· Directo y sin rodeos
+· Curioso y creativo
+
+(o describímela con tus palabras)
+
+[Usuario]:
+Casual y amigable
+
+[Agente]:
+Perfecto! Ya soy Jarvis, tu asistente casual y amigable 🚀
+¿En qué te puedo ayudar hoy?
+```
+
+A partir de ese momento el agente usa esa identidad en **todas las conversaciones**.
+Si el usuario quiere cambiarla, puede hacerlo desde Settings → tab que sea
+(el nombre no importa — el flujo de chat siempre tiene prioridad).
+
+---
+
+## Implementación
+
+### 1. `ank-core/src/enclave/mod.rs` — Estado de onboarding en TenantDB
 
 ```rust
 const ONBOARDING_STEP_KEY: &str = "onboarding_step";
 const ONBOARDING_NAME_KEY: &str = "onboarding_pending_name";
 
 impl TenantDB {
-    /// Retorna el step actual del onboarding:
-    /// None = no iniciado, Some("name") = esperando nombre, Some("style") = esperando estilo
     pub fn get_onboarding_step(&self) -> Result<Option<String>> {
         self.get_kv(ONBOARDING_STEP_KEY)
     }
 
     pub fn set_onboarding_step(&self, step: &str) -> Result<()> {
         self.set_kv(ONBOARDING_STEP_KEY, step)
-    }
-
-    pub fn clear_onboarding(&self) -> Result<()> {
-        self.connection.execute("DELETE FROM kv_store WHERE key IN (?1, ?2)",
-            [ONBOARDING_STEP_KEY, ONBOARDING_NAME_KEY])?;
-        Ok(())
     }
 
     pub fn set_onboarding_name(&self, name: &str) -> Result<()> {
@@ -93,34 +79,164 @@ impl TenantDB {
     pub fn get_onboarding_name(&self) -> Result<Option<String>> {
         self.get_kv(ONBOARDING_NAME_KEY)
     }
+
+    pub fn clear_onboarding(&self) -> Result<()> {
+        let _ = self.connection.execute(
+            "DELETE FROM kv_store WHERE key IN (?1, ?2)",
+            [ONBOARDING_STEP_KEY, ONBOARDING_NAME_KEY],
+        );
+        Ok(())
+    }
 }
 ```
 
 ### 2. `ank-http/src/ws/chat.rs` — Interceptor de onboarding
 
-Antes de despachar el prompt al scheduler, verificar si el tenant necesita onboarding:
+El flujo tiene tres estados. Se intercepta **antes** de crear el PCB.
+
+**Al conectar** (en `handle_chat()`, después de autenticar, antes del loop):
 
 ```rust
-// En handle_chat(), después de autenticar y antes del loop principal:
-
-// Verificar si hay onboarding pendiente
-let needs_onboarding = {
-    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-        db.get_persona().ok().flatten().is_none()
-            && db.get_onboarding_step().ok().flatten().is_none()
-    } else { false }
+// Verificar si necesita onboarding
+let should_onboard = {
+    match ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
+        Ok(db) => {
+            let has_persona = db.get_persona().ok().flatten().is_some();
+            let has_step   = db.get_onboarding_step().ok().flatten().is_some();
+            !has_persona && !has_step
+        }
+        Err(_) => false,
+    }
 };
 
-if needs_onboarding {
-    // Iniciar onboarding — step 1: pedir nombre
+if should_onboard {
+    // Iniciar onboarding — guardar step e inmediatamente saludar
     if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
         let _ = db.set_onboarding_step("awaiting_name");
     }
-    let greeting = "¡Hola! Soy tu asistente personal. Antes de empezar, \
-                    me gustaría conocerte mejor.\n\n\
-                    ¿Cómo te gustaría que me llame?";
+    send_onboarding_message(
+        &mut socket,
+        "Hola! Soy tu nuevo asistente personal 👋\n¿Cómo querés que me llame?"
+    ).await;
+}
+```
+
+**En el loop de mensajes**, antes de crear el PCB, interceptar el step:
+
+```rust
+// Leer el step actual del enclave
+let onboarding_step: Option<String> = {
+    ank_core::enclave::TenantDB::open(&tenant_id, &hash)
+        .ok()
+        .and_then(|db| db.get_onboarding_step().ok().flatten())
+};
+
+match onboarding_step.as_deref() {
+
+    // ── STEP 1: El usuario está respondiendo con el nombre ──
+    Some("awaiting_name") => {
+        let name = prompt.trim().to_string();
+        if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
+            let _ = db.set_onboarding_name(&name);
+            let _ = db.set_onboarding_step("awaiting_style");
+        }
+
+        let msg = format!(
+            "¡{}! Me encanta ese nombre 😄\n\
+             A partir de ahora me llamaré {}.\n\n\
+             Ahora dime, ¿qué tipo de personalidad preferís que adopte?\n\n\
+             · Profesional y preciso\n\
+             · Casual y amigable\n\
+             · Directo y sin rodeos\n\
+             · Curioso y creativo\n\n\
+             (o describímela con tus palabras)",
+            name, name
+        );
+        send_onboarding_message(&mut socket, &msg).await;
+        continue;
+    }
+
+    // ── STEP 2: El usuario está eligiendo la personalidad ──
+    Some("awaiting_style") => {
+        let style_input = prompt.trim().to_string();
+
+        if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
+            let name = db.get_onboarding_name()
+                .ok().flatten()
+                .unwrap_or_else(|| "Aegis".to_string());
+
+            let style_desc = map_style_to_description(&style_input);
+
+            let persona = format!(
+                "Tu nombre es {}. {}\n\
+                 Eres el asistente personal del usuario. Cuando sea apropiado \
+                 te referís a vos mismo como {}. Mantenés este estilo en \
+                 todas tus respuestas sin excepción.",
+                name, style_desc, name
+            );
+
+            let _ = db.set_persona(&persona);
+            let _ = db.clear_onboarding();
+
+            let msg = format!(
+                "Perfecto! Ya soy **{}**, tu asistente {} 🚀\n\n\
+                 Podés cambiar mi personalidad cuando quieras desde \
+                 Configuración.\n\n\
+                 ¿En qué te puedo ayudar hoy?",
+                name,
+                friendly_style_label(&style_input)
+            );
+            send_onboarding_message(&mut socket, &msg).await;
+        }
+        continue;
+    }
+
+    // ── Sin onboarding: flujo normal ──
+    _ => {
+        // Continuar con el PCB normalmente
+    }
+}
+```
+
+**Funciones auxiliares:**
+
+```rust
+/// Convierte la elección del usuario en una instrucción de Persona.
+/// Si no coincide con ninguna opción, usa el texto libre directamente.
+fn map_style_to_description(input: &str) -> String {
+    let s = input.to_lowercase();
+    if s.contains("profesional") || s.contains("preciso") || s.contains("formal") {
+        "Sos profesional y preciso. Comunicás con claridad y rigor, \
+         sin lenguaje informal.".to_string()
+    } else if s.contains("casual") || s.contains("amigable") || s.contains("cercano") {
+        "Sos casual y amigable, como un amigo de confianza. \
+         Usás un tono cálido, natural y relajado.".to_string()
+    } else if s.contains("directo") || s.contains("sin rodeos") || s.contains("conciso") {
+        "Sos directo y sin rodeos. Respondés de forma breve y clara, \
+         sin relleno innecesario.".to_string()
+    } else if s.contains("curioso") || s.contains("creativo") || s.contains("expresivo") {
+        "Sos curioso y creativo. Aportás perspectivas originales \
+         y no tenés miedo de ser expresivo.".to_string()
+    } else {
+        // Usar el texto libre del usuario como instrucción directa
+        format!("Tu estilo de comunicación: {}.", input)
+    }
+}
+
+/// Label amigable para el mensaje de confirmación.
+fn friendly_style_label(input: &str) -> &str {
+    let s = input.to_lowercase();
+    if s.contains("profesional") || s.contains("preciso") { "profesional y preciso" }
+    else if s.contains("casual") || s.contains("amigable") { "casual y amigable" }
+    else if s.contains("directo") || s.contains("sin rodeos") { "directo y sin rodeos" }
+    else if s.contains("curioso") || s.contains("creativo") { "curioso y creativo" }
+    else { "personalizado" }
+}
+
+/// Envía un mensaje de onboarding al WebSocket como si fuera el agente.
+async fn send_onboarding_message(socket: &mut WebSocket, text: &str) {
     let _ = socket.send(Message::Text(
-        json!({ "event": "kernel_event", "data": { "output": greeting } }).to_string()
+        json!({ "event": "kernel_event", "data": { "output": text } }).to_string()
     )).await;
     let _ = socket.send(Message::Text(
         json!({ "event": "kernel_event", "data": {
@@ -130,142 +246,49 @@ if needs_onboarding {
 }
 ```
 
-En el loop de mensajes, antes de crear el PCB, interceptar el onboarding:
+### 3. Comportamiento al resetear la Persona desde Settings
 
-```rust
-// Al recibir un submit, verificar si hay onboarding en curso
-let onboarding_step = {
-    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-        db.get_onboarding_step().ok().flatten()
-    } else { None }
-};
+Cuando el usuario hace `DELETE /api/persona`, el onboarding se reactiva
+automáticamente en el próximo mensaje. Esto ya funciona porque:
+- `get_onboarding_step()` retorna `None` (no hay step)
+- `get_persona()` retorna `None` (la borraron)
+- El `should_onboard` flag en el `handle_chat()` se activa
 
-match onboarding_step.as_deref() {
-    Some("awaiting_name") => {
-        // El prompt ES el nombre
-        let name = prompt.trim().to_string();
-        if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-            let _ = db.set_onboarding_name(&name);
-            let _ = db.set_onboarding_step("awaiting_style");
-        }
-        let response = format!(
-            "Perfecto, seré **{}** para vos 😊\n\n\
-            ¿Cómo preferís que me comunique contigo?\n\
-            · Formal y profesional\n\
-            · Casual y cercano\n\
-            · Directo y conciso\n\
-            · Creativo y expresivo\n\n\
-            (o describí libremente cómo querés que sea)",
-            name
-        );
-        let _ = socket.send(Message::Text(
-            json!({ "event": "kernel_event", "data": { "output": response } }).to_string()
-        )).await;
-        let _ = socket.send(Message::Text(
-            json!({ "event": "kernel_event", "data": {
-                "status_update": { "state": "STATE_COMPLETED" }
-            }}).to_string()
-        )).await;
-        continue; // No procesar como prompt normal
-    }
-    Some("awaiting_style") => {
-        // El prompt ES el estilo elegido
-        let style = prompt.trim().to_string();
-        if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-            let name = db.get_onboarding_name().ok().flatten()
-                .unwrap_or_else(|| "Aegis".to_string());
+No se necesita código adicional para esto.
 
-            // Construir la Persona
-            let persona = format!(
-                "Tu nombre es {}. {}\n\
-                 Eres el asistente personal del usuario. Siempre te presentás \
-                 con tu nombre cuando es apropiado. Mantenés este estilo en \
-                 todas tus respuestas.",
-                name,
-                style_to_persona_instruction(&style)
-            );
-            let _ = db.set_persona(&persona);
-            let _ = db.clear_onboarding();
+---
 
-            let response = format!(
-                "Entendido. Ya soy **{}** 🎉\n\n\
-                 A partir de ahora me voy a comunicar de esta forma. \
-                 Podés cambiar mi personalidad en cualquier momento desde \
-                 Configuración → Identidad.\n\n\
-                 ¿En qué te puedo ayudar hoy?",
-                name
-            );
-            let _ = socket.send(Message::Text(
-                json!({ "event": "kernel_event", "data": { "output": response } }).to_string()
-            )).await;
-            let _ = socket.send(Message::Text(
-                json!({ "event": "kernel_event", "data": {
-                    "status_update": { "state": "STATE_COMPLETED" }
-                }}).to_string()
-            )).await;
-        }
-        continue;
-    }
-    _ => {
-        // Flujo normal — continuar con el PCB
-    }
-}
-```
+## Lo que NO cambia en la Shell
 
-Función auxiliar para convertir la elección de estilo en instrucción de Persona:
-
-```rust
-fn style_to_persona_instruction(style: &str) -> &str {
-    let s = style.to_lowercase();
-    if s.contains("formal") || s.contains("profesional") {
-        "Comunicás de forma formal, precisa y profesional. Usás un tono respetuoso y estructurado."
-    } else if s.contains("casual") || s.contains("cercano") || s.contains("amigable") {
-        "Comunicás de forma casual y cercana, como un amigo de confianza. Usás un tono cálido y natural."
-    } else if s.contains("directo") || s.contains("conciso") || s.contains("breve") {
-        "Sos directo y conciso. Respondés sin rodeos, priorizando la claridad sobre la extensión."
-    } else if s.contains("creativo") || s.contains("expresivo") || s.contains("divertido") {
-        "Sos creativo y expresivo. Añadís personalidad a tus respuestas y no tenés miedo de ser original."
-    } else {
-        // Usar el texto libre del usuario directamente como instrucción
-        // (se inyecta dinámicamente en el llamador, no acá)
-        "Comunicás siguiendo el estilo preferido del usuario."
-    }
-}
-```
-
-**Nota para el Kernel Engineer:** Si el estilo no coincide con ninguna opción, usar el texto libre del usuario como instrucción directa en la Persona. Para eso, `style_to_persona_instruction` debería recibir el style original y devolverlo si no hay match.
-
-### 3. Shell — Renombrar "Persona" → "Identidad" en Settings
-
-En `SettingsPanel.tsx`, cambiar la tab "Persona" a "Identidad":
-- Tab label: `Identidad` (con icono `Sparkles` o `User`)
-- Descripción: "Configurá el nombre y personalidad de tu agente"
-- El botón "Resetear" debería aclarar: "Al resetear, el agente te hará las preguntas de nuevo al próximo mensaje"
-
-En `AdminDashboard.tsx`, el tab "Persona" también se renombra a "Identidad".
+- El tab en Settings puede seguir existiendo para editar la Persona manualmente
+  (usuarios avanzados)
+- No hay que agregar ni quitar pantallas de la Shell para este ticket
+- El onboarding es 100% manejado por el kernel en el WebSocket
 
 ---
 
 ## Criterios de aceptación
 
 - [ ] `cargo build --workspace` sin errores
-- [ ] Primer mensaje al chat (sin Persona): el agente pregunta el nombre
-- [ ] Al responder con un nombre: el agente confirma y pregunta el estilo
-- [ ] Al elegir el estilo: Persona guardada en SQLCipher, onboarding limpiado
-- [ ] Segundo inicio de sesión: sin onboarding — va directo al chat con la Persona activa
-- [ ] Si el usuario resetea la Persona desde Settings: el onboarding vuelve a dispararse
-- [ ] El texto del agente durante el onboarding usa el idioma del sistema (español por defecto)
+- [ ] Al conectar sin Persona: el agente saluda y pregunta el nombre automáticamente
+- [ ] Al responder con un nombre: el agente lo repite con entusiasmo y pregunta la personalidad
+- [ ] Al elegir la personalidad: Persona guardada en SQLCipher, agente confirma con el nombre
+- [ ] Segunda sesión (Persona ya configurada): el agente NO hace onboarding — va directo al chat
+- [ ] Si el usuario responde algo inusual como nombre (ej: "123"): el agente lo acepta igual
+- [ ] Si el usuario describe la personalidad con texto libre: se usa como instrucción directa
+- [ ] Al borrar la Persona desde Settings → próximo mensaje dispara el onboarding nuevamente
 
 ---
 
 ## Dependencias
 
 - CORE-129 (Persona en SQLCipher) — DONE ✅
+- CORE-147 (TLS fix) — despachar primero por estabilidad del servidor
 
 ---
 
 ## Commit message
 
 ```
-feat(ank-http,shell): CORE-145 conversational persona onboarding in chat — name and style setup
+feat(ank-http,ank-core): CORE-145 conversational identity onboarding — agent asks name and style in chat
 ```
