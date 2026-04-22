@@ -134,35 +134,27 @@ async fn handle_chat(
         .await;
 
     // 2.5 Onboarding check
-    let needs_onboarding = {
-        if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-            db.get_persona().ok().flatten().is_none()
-                && db.get_onboarding_step().ok().flatten().is_none()
-        } else {
-            false
+    let should_onboard = {
+        match ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
+            Ok(db) => {
+                let has_persona = db.get_persona().ok().flatten().is_some();
+                let has_step = db.get_onboarding_step().ok().flatten().is_some();
+                !has_persona && !has_step
+            }
+            Err(_) => false,
         }
     };
 
-    if needs_onboarding {
+    if should_onboard {
+        // Iniciar onboarding — guardar step e inmediatamente saludar
         if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
             let _ = db.set_onboarding_step("awaiting_name");
         }
-        let greeting = "¡Hola! Soy tu asistente personal. Antes de empezar, \
-                        me gustaría conocerte mejor.\n\n\
-                        ¿Cómo te gustaría que me llame?";
-        let _ = socket
-            .send(Message::Text(
-                json!({ "event": "kernel_event", "data": { "output": greeting } }).to_string(),
-            ))
-            .await;
-        let _ = socket
-            .send(Message::Text(
-                json!({ "event": "kernel_event", "data": {
-                    "status_update": { "state": "STATE_COMPLETED" }
-                }})
-                .to_string(),
-            ))
-            .await;
+        send_onboarding_message(
+            &mut socket,
+            "Hola! Soy tu nuevo asistente personal 👋\n¿Cómo querés que me llame?",
+        )
+        .await;
     }
 
     // 3. Loop
@@ -222,48 +214,39 @@ async fn handle_chat(
 
             // Intercept onboarding steps
             let onboarding_step = {
-                if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-                    db.get_onboarding_step().ok().flatten()
-                } else {
-                    None
-                }
+                ank_core::enclave::TenantDB::open(&tenant_id, &hash)
+                    .ok()
+                    .and_then(|db| db.get_onboarding_step().ok().flatten())
             };
 
             match onboarding_step.as_deref() {
+                // ── STEP 1: El usuario está respondiendo con el nombre ──
                 Some("awaiting_name") => {
                     let name = prompt.trim().to_string();
                     if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
                         let _ = db.set_onboarding_name(&name);
                         let _ = db.set_onboarding_step("awaiting_style");
                     }
-                    let response = format!(
-                        "Perfecto, seré **{}** para vos 😊\n\n\
-                        ¿Cómo preferís que me comunique contigo?\n\
-                        · Formal y profesional\n\
-                        · Casual y cercano\n\
-                        · Directo y conciso\n\
-                        · Creativo y expresivo\n\n\
-                        (o describí libremente cómo querés que sea)",
-                        name
+
+                    let msg = format!(
+                        "¡{}! Me encanta ese nombre 😄\n\
+                         A partir de ahora me llamaré {}.\n\n\
+                         Ahora dime, ¿qué tipo de personalidad preferís que adopte?\n\n\
+                         · Profesional y preciso\n\
+                         · Casual y amigable\n\
+                         · Directo y sin rodeos\n\
+                         · Curioso y creativo\n\n\
+                         (o describímela con tus palabras)",
+                        name, name
                     );
-                    let _ = socket
-                        .send(Message::Text(
-                            json!({ "event": "kernel_event", "data": { "output": response } })
-                                .to_string(),
-                        ))
-                        .await;
-                    let _ = socket
-                        .send(Message::Text(
-                            json!({ "event": "kernel_event", "data": {
-                                "status_update": { "state": "STATE_COMPLETED" }
-                            }})
-                            .to_string(),
-                        ))
-                        .await;
+                    send_onboarding_message(&mut socket, &msg).await;
                     continue;
                 }
+
+                // ── STEP 2: El usuario está eligiendo la personalidad ──
                 Some("awaiting_style") => {
-                    let style = prompt.trim().to_string();
+                    let style_input = prompt.trim().to_string();
+
                     if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
                         let name = db
                             .get_onboarding_name()
@@ -271,53 +254,28 @@ async fn handle_chat(
                             .flatten()
                             .unwrap_or_else(|| "Aegis".to_string());
 
-                        let style_instruction = style_to_persona_instruction(&style);
-                        let persona = if style_instruction
-                            == "Comunicás siguiendo el estilo preferido del usuario."
-                        {
-                            // Usar el texto libre del usuario
-                            format!(
-                                "Tu nombre es {}. Comunicás de la siguiente forma: {}\n\
-                                 Eres el asistente personal del usuario. Siempre te presentás \
-                                 con tu nombre cuando es apropiado. Mantenés este estilo en \
-                                 todas tus respuestas.",
-                                name, style
-                            )
-                        } else {
-                            format!(
-                                "Tu nombre es {}. {}\n\
-                                 Eres el asistente personal del usuario. Siempre te presentás \
-                                 con tu nombre cuando es apropiado. Mantenés este estilo en \
-                                 todas tus respuestas.",
-                                name, style_instruction
-                            )
-                        };
+                        let style_desc = map_style_to_description(&style_input);
+
+                        let persona = format!(
+                            "Tu nombre es {}. {}\n\
+                             Eres el asistente personal del usuario. Cuando sea apropiado \
+                             te referís a vos mismo como {}. Mantenés este estilo en \
+                             todas tus respuestas sin excepción.",
+                            name, style_desc, name
+                        );
 
                         let _ = db.set_persona(&persona);
                         let _ = db.clear_onboarding();
 
-                        let response = format!(
-                            "Entendido. Ya soy **{}** 🎉\n\n\
-                             A partir de ahora me voy a comunicar de esta forma. \
-                             Podés cambiar mi personalidad en cualquier momento desde \
-                             Configuración → Identidad.\n\n\
+                        let msg = format!(
+                            "Perfecto! Ya soy **{}**, tu asistente {} 🚀\n\n\
+                             Podés cambiar mi personalidad cuando quieras desde \
+                             Configuración.\n\n\
                              ¿En qué te puedo ayudar hoy?",
-                            name
+                            name,
+                            friendly_style_label(&style_input)
                         );
-                        let _ = socket
-                            .send(Message::Text(
-                                json!({ "event": "kernel_event", "data": { "output": response } })
-                                    .to_string(),
-                            ))
-                            .await;
-                        let _ = socket
-                            .send(Message::Text(
-                                json!({ "event": "kernel_event", "data": {
-                                    "status_update": { "state": "STATE_COMPLETED" }
-                                }})
-                                .to_string(),
-                            ))
-                            .await;
+                        send_onboarding_message(&mut socket, &msg).await;
                     }
                     continue;
                 }
@@ -510,20 +468,61 @@ async fn stream_with_receiver(
     }
 }
 
-fn style_to_persona_instruction(style: &str) -> &str {
-    let s = style.to_lowercase();
-    if s.contains("formal") || s.contains("profesional") {
-        "Comunicás de forma formal, precisa y profesional. Usás un tono respetuoso y estructurado."
-    } else if s.contains("casual") || s.contains("cercano") || s.contains("amigable") {
-        "Comunicás de forma casual y cercana, como un amigo de confianza. Usás un tono cálido y natural."
-    } else if s.contains("directo") || s.contains("conciso") || s.contains("breve") {
-        "Sos directo y conciso. Respondés sin rodeos, priorizando la claridad sobre la extensión."
-    } else if s.contains("creativo") || s.contains("expresivo") || s.contains("divertido") {
-        "Sos creativo y expresivo. Añadís personalidad a tus respuestas y no tenés miedo de ser original."
+/// Convierte la elección del usuario en una instrucción de Persona.
+/// Si no coincide con ninguna opción, usa el texto libre directamente.
+fn map_style_to_description(input: &str) -> String {
+    let s = input.to_lowercase();
+    if s.contains("profesional") || s.contains("preciso") || s.contains("formal") {
+        "Sos profesional y preciso. Comunicás con claridad y rigor, \
+         sin lenguaje informal."
+            .to_string()
+    } else if s.contains("casual") || s.contains("amigable") || s.contains("cercano") {
+        "Sos casual y amigable, como un amigo de confianza. \
+         Usás un tono cálido, natural y relajado."
+            .to_string()
+    } else if s.contains("directo") || s.contains("sin rodeos") || s.contains("conciso") {
+        "Sos directo y sin rodeos. Respondés de forma breve y clara, \
+         sin relleno innecesario."
+            .to_string()
+    } else if s.contains("curioso") || s.contains("creativo") || s.contains("expresivo") {
+        "Sos curioso y creativo. Aportás perspectivas originales \
+         y no tenés miedo de ser expresivo."
+            .to_string()
     } else {
-        // El ticket dice: "Si el estilo no coincide con ninguna opción, usar el texto libre del usuario como instrucción directa en la Persona."
-        // Sin embargo, para que sea un &str estático, devolvemos una instrucción genérica y el llamador inyectará el estilo si es necesario.
-        // O mejor, el llamador maneja el fallback.
-        "Comunicás siguiendo el estilo preferido del usuario."
+        // Usar el texto libre del usuario como instrucción directa
+        format!("Tu estilo de comunicación: {}.", input)
     }
+}
+
+/// Label amigable para el mensaje de confirmación.
+fn friendly_style_label(input: &str) -> &str {
+    let s = input.to_lowercase();
+    if s.contains("profesional") || s.contains("preciso") {
+        "profesional y preciso"
+    } else if s.contains("casual") || s.contains("amigable") {
+        "casual y amigable"
+    } else if s.contains("directo") || s.contains("sin rodeos") {
+        "directo y sin rodeos"
+    } else if s.contains("curioso") || s.contains("creativo") {
+        "curioso y creativo"
+    } else {
+        "personalizado"
+    }
+}
+
+/// Envía un mensaje de onboarding al WebSocket como si fuera el agente.
+async fn send_onboarding_message(socket: &mut WebSocket, text: &str) {
+    let _ = socket
+        .send(Message::Text(
+            json!({ "event": "kernel_event", "data": { "output": text } }).to_string(),
+        ))
+        .await;
+    let _ = socket
+        .send(Message::Text(
+            json!({ "event": "kernel_event", "data": {
+                "status_update": { "state": "STATE_COMPLETED" }
+            }})
+            .to_string(),
+        ))
+        .await;
 }
