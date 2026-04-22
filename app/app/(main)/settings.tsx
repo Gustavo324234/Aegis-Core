@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
-  TextInput, StyleSheet, Alert, SafeAreaView
+  TextInput, StyleSheet, Alert, SafeAreaView, Platform
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/authStore';
@@ -12,7 +12,7 @@ import { TRANSLATIONS, Language } from '@/constants/i18n';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { logout, mode } = useAuthStore();
+  const { logout, mode, serverUrl } = useAuthStore();
   const {
     selectedProviderId,
     selectedModel,
@@ -122,6 +122,25 @@ export default function SettingsScreen() {
               </Text>
             </TouchableOpacity>
           ))}
+        </View>
+
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>SATELLITE CONNECTION</Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>CONNECTED TO</Text>
+          <Text style={styles.serverValue}>{serverUrl || 'None'}</Text>
+          <TouchableOpacity 
+            style={styles.relinkBtn}
+            onPress={() => {
+              Alert.alert('Re-link Server', 'This will logout and allow you to scan a new QR code.', [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Continue', onPress: async () => { await logout(); router.replace('/(auth)/login'); } }
+              ]);
+            }}
+          >
+            <Text style={styles.relinkBtnText}>RE-LINK VIA QR SCAN</Text>
+          </TouchableOpacity>
         </View>
 
         {/* SECTION: ACTIVE MODE */}
@@ -296,6 +315,9 @@ const styles = StyleSheet.create({
   modeCard: { backgroundColor: '#0A0A0A', padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#1A1A1A' },
   modeValue: { color: '#00E5CC', fontSize: 16, fontWeight: 'bold', letterSpacing: 1 },
   modeDesc: { color: '#444', fontSize: 11, marginTop: 4 },
+  serverValue: { color: '#AAA', fontSize: 13, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 12 },
+  relinkBtn: { backgroundColor: 'rgba(124, 111, 224, 0.1)', padding: 12, borderRadius: 6, borderWidth: 1, borderColor: '#7C6FE033', alignItems: 'center' },
+  relinkBtnText: { color: '#7C6FE0', fontSize: 10, fontWeight: 'bold', letterSpacing: 1 },
   providerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
   providerCard: { flex: 1, minWidth: '30%', backgroundColor: '#0A0A0A', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#1A1A1A', alignItems: 'center', position: 'relative' },
   providerCardActive: { borderColor: '#7C6FE0', backgroundColor: '#0F0D1A' },

@@ -30,7 +30,6 @@ NC='\033[0m'
 INSTALL_MODE="1"
 ARCH="x86_64"
 INFERENCE_PROFILE="cloud"
-ENABLE_TLS="true"
 
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
@@ -184,31 +183,7 @@ show_inference_profile_menu() {
     log "Inference profile: ${INFERENCE_PROFILE}"
 }
 
-setup_tls_automatic() {
-    log "Generando certificado TLS self-signed (HTTPS activado por defecto)..."
-    mkdir -p "$CONFIG_DIR"
-    local local_ip
-    local_ip=$(hostname -I 2>/dev/null | awk '{print $1}') || local_ip="127.0.0.1"
 
-    openssl req -x509 -newkey rsa:4096 \
-        -keyout "$CONFIG_DIR/key.pem" \
-        -out "$CONFIG_DIR/cert.pem" \
-        -days 365 -nodes \
-        -subj "/CN=aegis-local" \
-        -addext "subjectAltName=IP:${local_ip},IP:127.0.0.1,DNS:localhost" \
-        >> "$LOG_FILE" 2>&1 || warn "TLS generation failed — continuing with HTTP"
-
-    if [[ -f "$CONFIG_DIR/cert.pem" ]]; then
-        if id -u aegis >/dev/null 2>&1; then
-            chown aegis:aegis "$CONFIG_DIR"/*.pem 2>/dev/null || true
-        fi
-        chmod 640 "$CONFIG_DIR"/*.pem
-        ENABLE_TLS="true"
-        success "Certificado TLS generado para IP ${local_ip}"
-    else
-        ENABLE_TLS="false"
-    fi
-}
 
 install_dependencies() {
     log "Updating package lists..."
@@ -247,16 +222,6 @@ install_native() {
     log "Starting native installation..."
 
     install_cloudflared
-    setup_tls_automatic
-
-    # CORE-147: Enforce cert ownership/permissions after (re)generation
-    # The update may run as root; the service runs as aegis — ensure it can read the certs.
-    if [[ -f "$CONFIG_DIR/cert.pem" ]]; then
-        if id -u aegis > /dev/null 2>&1; then
-            chown aegis:aegis "$CONFIG_DIR"/*.pem 2>/dev/null || true
-        fi
-        chmod 640 "$CONFIG_DIR"/*.pem
-    fi
 
     if ! id -u aegis >/dev/null 2>&1; then
         log "Creating 'aegis' system user..."
@@ -320,10 +285,6 @@ UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
 EOF
-        if [[ "$ENABLE_TLS" == "true" ]]; then
-            echo "AEGIS_TLS_CERT=${CONFIG_DIR}/cert.pem" >> "$ENV_FILE"
-            echo "AEGIS_TLS_KEY=${CONFIG_DIR}/key.pem" >> "$ENV_FILE"
-        fi
         chmod 640 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
         success "Environment file → ${ENV_FILE}"
@@ -334,11 +295,6 @@ EOF
         grep -q "UI_DIST_PATH"          "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}"               >> "$ENV_FILE"
         grep -q "AEGIS_DATA_DIR"        "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                 >> "$ENV_FILE"
         grep -q "AEGIS_MODEL_PROFILE"   "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"   >> "$ENV_FILE"
-        # SRE: Inyectar TLS vars en instalaciones existentes (upgrade desde pre-TLS)
-        if [[ "$ENABLE_TLS" == "true" ]]; then
-            grep -q "AEGIS_TLS_CERT" "$ENV_FILE" || echo "AEGIS_TLS_CERT=${CONFIG_DIR}/cert.pem" >> "$ENV_FILE"
-            grep -q "AEGIS_TLS_KEY"  "$ENV_FILE" || echo "AEGIS_TLS_KEY=${CONFIG_DIR}/key.pem"   >> "$ENV_FILE"
-        fi
     fi
 
     # Write mode file
@@ -384,7 +340,6 @@ EOF
 install_docker() {
     log "Starting Docker installation..."
     mkdir -p "$CONFIG_DIR"
-    setup_tls_automatic
     mkdir -p "$INSTALL_ROOT"
 
     local raw_url="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer/docker-compose.yml"
@@ -413,9 +368,6 @@ EOF
             || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}" >> "${INSTALL_ROOT}/.env"
     fi
 
-    if [[ "$ENABLE_TLS" == "true" ]]; then
-        grep -q "AEGIS_TLS_CERT" "${INSTALL_ROOT}/.env" || echo "AEGIS_TLS_CERT=/etc/aegis/cert.pem" >> "${INSTALL_ROOT}/.env"
-        grep -q "AEGIS_TLS_KEY" "${INSTALL_ROOT}/.env" || echo "AEGIS_TLS_KEY=/etc/aegis/key.pem" >> "${INSTALL_ROOT}/.env"
     fi
 
     mkdir -p "$CONFIG_DIR"
@@ -438,10 +390,6 @@ EOF
 wait_and_show() {
     local PROTOCOL="http"
     local CURL_FLAGS=("-s")
-    if [[ "$ENABLE_TLS" == "true" ]]; then
-        PROTOCOL="https"
-        CURL_FLAGS+=("-k")
-    fi
 
     log "Waiting for Aegis to initialize (max 60s)..."
     local attempts=0
@@ -479,17 +427,11 @@ wait_and_show() {
         if [[ -n "$token" ]]; then
             echo -e "${CYAN}  First-time setup URL:${NC}"
             echo -e "  ${GREEN}${PROTOCOL}://${ip}:8000?setup_token=${token}${NC}"
-            if [[ "$ENABLE_TLS" == "true" ]]; then
-                echo -e "  ${YELLOW}(Note: Your browser will warn about the self-signed certificate. Accept it to continue.)${NC}"
-            fi
             echo ""
             echo -e "  Token expires in 30 minutes."
             echo -e "  To regenerate: ${CYAN}sudo aegis token${NC}"
         else
             echo -e "  Access URL: ${CYAN}${PROTOCOL}://${ip}:8000${NC}"
-            if [[ "$ENABLE_TLS" == "true" ]]; then
-                echo -e "  ${YELLOW}(Note: Self-signed certificate is in use.)${NC}"
-            fi
             echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
         fi
         echo -e "${GREEN}################################################################${NC}"

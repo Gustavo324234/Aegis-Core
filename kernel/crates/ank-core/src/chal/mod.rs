@@ -19,16 +19,24 @@ pub mod hardware;
 /// - No inventa acciones que no ejecutó.
 /// - Sin listas innecesarias en respuestas conversacionales.
 /// - Identidad: "Aegis" por defecto; la Persona del tenant la sobreescribe (CORE-129).
-pub const SYSTEM_PROMPT_MASTER: &str = "Eres Aegis, un asistente de IA.\n\
-Responde en el idioma del usuario. Sé directo y conciso.\n\
-REGLAS CRÍTICAS:\n\
-- Solo afirma que hiciste algo si una herramienta te devolvió un resultado concreto. \
-Nunca digas \"he registrado\", \"he guardado\" o \"queda anotado\" si no ejecutaste \
-una herramienta que lo confirme.\n\
-- Describe únicamente las capacidades que tus herramientas activas te permiten ejecutar. \
-Si no hay herramientas de finanzas, no afirmes que podés llevar un registro de gastos.\n\
-- Usa prosa directa. Evita listas numeradas o con viñetas salvo que el usuario \
-las pida explícitamente o el contenido sea inherentemente una lista.\n";
+pub const SYSTEM_PROMPT_MASTER: &str = "\
+Sos un asistente personal inteligente y cercano. Respondés en el idioma del usuario.\n\
+\n\
+TONO Y ESTILO:\n\
+- Conversá de forma natural y cálida, como un asistente de confianza.\n\
+- Respondés con la extensión adecuada al contexto: corto para saludos, \
+  más elaborado cuando la pregunta lo requiere.\n\
+- Cuando no sabés algo o no podés hacer algo, lo decís de forma amigable \
+  y ofrecés alternativas si las hay. Nunca respondés solo \"No sé.\" \
+  — siempre agregás contexto útil.\n\
+- No anunciés tus capacidades espontáneamente. Si el usuario pregunta \
+  qué podés hacer, entonces sí explicás.\n\
+\n\
+PRECISIÓN:\n\
+- Solo afirmás que hiciste algo si una herramienta te devolvió un resultado concreto.\n\
+- No inventés datos, cifras ni hechos que no tenés.\n\
+- Si ejecutaste una herramienta y no devolvió resultados útiles, lo decís claramente.\n\
+";
 
 /// Template para inyectar la Persona del tenant cuando está configurada (CORE-129).
 /// `{persona}` se reemplaza con el texto libre del operador.
@@ -310,18 +318,25 @@ impl CognitiveHAL {
             _ => String::new(),
         };
 
-        // CORE-135/CORE-140: Las instrucciones de música se inyectan siempre.
-        // Con OAuth (Spotify/Google), ya no se requiere YOUTUBE_API_KEY.
-        // Si el tenant no tiene proveedor conectado, el syscall executor
-        // devuelve un mensaje pidiéndole al usuario que conecte uno.
-        let music_section = "\n\nMÚSICA — INSTRUCCIONES:\
+        // CORE-148: Music instructions are only injected if the music_search plugin is active.
+        let has_music_plugin = self
+            .plugin_manager
+            .read()
+            .await
+            .is_plugin_active("music_search");
+
+        let music_section = if has_music_plugin {
+            "\n\nMÚSICA — INSTRUCCIONES:\
              \n- Para reproducir: [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista canción>\", \"max_results\": 1})] y luego [MUSIC_PLAY:youtube:<video_id>] (o [MUSIC_PLAY:spotify:<track_id>] si usas Spotify)\
              \n- Para pausar: responde brevemente y termina con [MUSIC_PAUSE]\
              \n- Para continuar: responde brevemente y termina con [MUSIC_RESUME]\
              \n- Para detener: responde brevemente y termina con [MUSIC_STOP]\
              \n- Para cambiar volumen: termina con [MUSIC_VOLUME:<0-100>]\
              \n- Para cambiar canción: haz una nueva búsqueda y usa [MUSIC_PLAY:youtube:<nuevo_video_id>]\
-             \nNunca expliques estos tags al usuario. Solo úsalos.\n";
+             \nNunca expliques estos tags al usuario. Solo úsalos.\n"
+        } else {
+            ""
+        };
 
         if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
@@ -457,10 +472,10 @@ mod tests {
             prompt.contains("hola"),
             "El prompt debe contener la instrucción"
         );
-        // CORE-140: Music instructions are always injected (OAuth replaces API key gate)
+        // CORE-148: Music instructions are only injected if plugin is active.
         assert!(
-            prompt.contains("MÚSICA"),
-            "Music instructions must always be present (CORE-140 OAuth)"
+            !prompt.contains("MÚSICA"),
+            "Music instructions must NOT be present if plugin is not active (CORE-148)"
         );
         Ok(())
     }

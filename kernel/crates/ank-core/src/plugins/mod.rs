@@ -525,6 +525,11 @@ impl PluginManager {
         }
         prompt
     }
+
+    /// Verifica si un plugin está cargado y activo.
+    pub fn is_plugin_active(&self, name: &str) -> bool {
+        self.plugins.contains_key(name)
+    }
 }
 
 #[cfg(test)]
