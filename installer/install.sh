@@ -232,6 +232,15 @@ install_native() {
 
     setup_tls_automatic
 
+    # CORE-147: Enforce cert ownership/permissions after (re)generation
+    # The update may run as root; the service runs as aegis — ensure it can read the certs.
+    if [[ -f "$CONFIG_DIR/cert.pem" ]]; then
+        if id -u aegis > /dev/null 2>&1; then
+            chown aegis:aegis "$CONFIG_DIR"/*.pem 2>/dev/null || true
+        fi
+        chmod 640 "$CONFIG_DIR"/*.pem
+    fi
+
     if ! id -u aegis >/dev/null 2>&1; then
         log "Creating 'aegis' system user..."
         useradd --system --no-create-home --shell /sbin/nologin aegis >> "$LOG_FILE" 2>&1

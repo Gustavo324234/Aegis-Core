@@ -432,6 +432,28 @@ async fn main() -> Result<()> {
         }
     });
 
+    // CORE-147: Log TLS status explicitly so journalctl shows whether HTTPS or HTTP is active.
+    match (
+        std::env::var("AEGIS_TLS_CERT"),
+        std::env::var("AEGIS_TLS_KEY"),
+    ) {
+        (Ok(cert), Ok(key)) => {
+            if std::path::Path::new(&cert).exists() && std::path::Path::new(&key).exists() {
+                info!("🔒 TLS enabled — serving HTTPS on port 8000");
+                info!("   cert: {}", cert);
+            } else {
+                warn!("⚠️  TLS vars set but cert/key files NOT FOUND — falling back to HTTP");
+                warn!("   Expected cert: {}", cert);
+                warn!("   Expected key: {}", key);
+                warn!("   Run: sudo aegis update  (will regenerate TLS)");
+            }
+        }
+        _ => {
+            warn!("🔓 TLS not configured — serving HTTP on port 8000");
+            warn!("   To enable HTTPS: sudo aegis update");
+        }
+    }
+
     // 13. Axum Server
     info!("Starting Axum on port 8000");
     let http_server = AegisHttpServer::new(state);
