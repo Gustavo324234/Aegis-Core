@@ -37,8 +37,8 @@ Ver historial de tickets CORE-001 a CORE-143.
 
 ### Tickets
 
-*   **[CORE-145]** Feature: Onboarding conversacional de Persona en el chat — nombre y estilo `[DONE — Kernel Engineer]`
-*   **[CORE-146]** Feature: Conexión app por QR + acceso remoto via Cloudflare tunnel `[TODO — Kernel Engineer + Shell Engineer]`
+*   **[CORE-145]** Feature: Onboarding conversacional de Persona en el chat — nombre y estilo `[DONE — Shell Engineer + Kernel Engineer]`
+*   **[CORE-146]** Feature: Conexión app por QR + acceso remoto via Cloudflare tunnel `[DONE — Kernel Engineer + Shell Engineer]`
 *   **[CORE-147]** Fix: TLS no levanta tras `aegis update` — regeneración automática `[DONE — Kernel Engineer]`
 
 ### Orden de implementación

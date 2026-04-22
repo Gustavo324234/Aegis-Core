@@ -14,7 +14,8 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_CONTACTS",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.CAMERA"
       ]
     },
     "ios": {
@@ -41,6 +42,12 @@
         {
           "icon": "./Logo/logo_icon.png",
           "color": "#7C6FE0"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Aegis necesita la cámara para escanear el QR de conexión."
         }
       ]
     ],
