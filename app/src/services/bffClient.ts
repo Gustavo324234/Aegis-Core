@@ -1,4 +1,3 @@
-import * as Crypto from 'expo-crypto';
 import { ENDPOINTS } from '@/constants/endpoints';
 import type { LoginResponse } from '@/types/auth';
 
@@ -17,24 +16,19 @@ function buildWsUrl(serverUrl: string, path: string): string {
   return `ws://${base}${path}`;
 }
 
-export async function hashPassword(password: string): Promise<string> {
-  return Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    password,
-    { encoding: Crypto.CryptoEncoding.HEX }
-  );
-}
+// NOTE: No pre-hashing here. The ank-server (auth.rs) hashes the session_key
+// server-side via hash_passphrase(). The web UI also sends the raw passphrase.
+// Pre-hashing would cause double-hashing and authentication failure.
 
 export async function login(
   serverUrl: string,
   email: string,
   password: string
 ): Promise<LoginResponse> {
-  const passwordHash = await hashPassword(password);
   const response = await fetch(buildUrl(serverUrl, ENDPOINTS.LOGIN), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tenant_id: email, session_key: passwordHash }),
+    body: JSON.stringify({ tenant_id: email, session_key: password }),
   });
   
   if (!response.ok) {
@@ -43,20 +37,25 @@ export async function login(
   }
   
   // The kernel returns {"message": "...", "status": "authenticated"}
-  // We normalize it to what the AuthStore expects
+  // We normalize it to what the AuthStore expects.
+  // session_key = raw passphrase (consistent with web UI / useAegisStore)
   return {
-    session_key: passwordHash,
+    session_key: password,
     tenant_id: email,
   };
 }
 
 export async function getStatus(
   serverUrl: string,
+  tenantId: string,
   sessionKey: string
 ): Promise<boolean> {
   try {
     const response = await fetch(buildUrl(serverUrl, ENDPOINTS.STATUS), {
-      headers: { 'x-citadel-key': sessionKey },
+      headers: {
+        'x-citadel-tenant': tenantId,
+        'x-citadel-key': sessionKey,
+      },
     });
     return response.ok;
   } catch {
