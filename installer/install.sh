@@ -308,6 +308,11 @@ EOF
         grep -q "UI_DIST_PATH"          "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}"               >> "$ENV_FILE"
         grep -q "AEGIS_DATA_DIR"        "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                 >> "$ENV_FILE"
         grep -q "AEGIS_MODEL_PROFILE"   "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"   >> "$ENV_FILE"
+        # SRE: Inyectar TLS vars en instalaciones existentes (upgrade desde pre-TLS)
+        if [[ "$ENABLE_TLS" == "true" ]]; then
+            grep -q "AEGIS_TLS_CERT" "$ENV_FILE" || echo "AEGIS_TLS_CERT=${CONFIG_DIR}/cert.pem" >> "$ENV_FILE"
+            grep -q "AEGIS_TLS_KEY"  "$ENV_FILE" || echo "AEGIS_TLS_KEY=${CONFIG_DIR}/key.pem"   >> "$ENV_FILE"
+        fi
     fi
 
     # Write mode file

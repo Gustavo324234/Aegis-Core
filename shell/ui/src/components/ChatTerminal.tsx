@@ -181,7 +181,7 @@ const ChatTerminal: React.FC = () => {
                 <header className="shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/40 backdrop-blur-3xl z-50" style={{ height: '56px' }}>
                     <div className="flex items-center gap-4">
                         <AegisLogo variant="icon" className="w-5 h-5 text-aegis-cyan drop-shadow-[0_0_8px_rgba(0,242,254,0.4)]" />
-                        <h1 className="text-[10px] font-mono tracking-[0.4em] text-white font-bold uppercase">Aegis Shell v0.1.14</h1>
+                        <h1 className="text-[10px] font-mono tracking-[0.4em] text-white font-bold uppercase">Aegis Shell v0.1.15</h1>
                     </div>
                     <div className="flex items-center gap-4">
                         <StatusBadge status={status} />

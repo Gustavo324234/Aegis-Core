@@ -118,13 +118,14 @@ cmd_version() {
 }
 
 cmd_update() {
-    local CHANNEL="stable"
-    local TAG="latest"
-    
+    # Default: nightly (único canal activo mientras el proyecto está en desarrollo)
+    local CHANNEL="nightly"
+    local TAG="nightly"
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --beta) CHANNEL="beta"; TAG="nightly"; shift ;;
-            --stable) CHANNEL="stable"; TAG="latest"; shift ;;
+            --beta|--nightly) CHANNEL="nightly"; TAG="nightly"; shift ;;
+            --stable)         CHANNEL="stable";  TAG="latest";  shift ;;
             *) shift ;;
         esac
     done
@@ -135,16 +136,15 @@ cmd_update() {
 
     printf "${CYAN}%s${NC}\n" "--- Aegis OS Upgrade Tool ---"
     printf "Canal: ${YELLOW}%s${NC} (Tag: %s)\n" "$CHANNEL" "$TAG"
-    
+
     printf "Versión actual: "
     cmd_version || true
 
-    # Obtener info de la release remota
     local remote_info
     remote_info=$(curl -s "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${TAG}")
     local remote_date
     remote_date=$(echo "$remote_info" | grep '"published_at"' | head -1 | grep -oP '"\K[^"]+(?=")' || echo "unknown")
-    
+
     printf "Última disponible: ${GREEN}%s${NC}\n\n" "$remote_date"
 
     printf "  → Deteniendo servicio...\n"
@@ -154,7 +154,8 @@ cmd_update() {
     if ! curl -L --fail --progress-bar \
         "${RELEASE_URL}/ank-server-linux-${ARCH}.tar.gz" \
         -o /tmp/ank-update.tar.gz; then
-        printf "${RED}Error: No se pudo descargar el binario para el canal %s.${NC}\n" "$CHANNEL"
+        printf "${RED}Error: No se pudo descargar el binario (canal: %s, tag: %s).${NC}\n" "$CHANNEL" "$TAG"
+        printf "${YELLOW}Sugerencia: intentá con 'sudo aegis update' (usa nightly por defecto).${NC}\n"
         sudo systemctl start "$SERVICE_NAME"
         exit 1
     fi
@@ -173,7 +174,7 @@ cmd_update() {
         sudo chown -R aegis:aegis "$UI_PATH" 2>/dev/null || true
         rm -f /tmp/ui-update.tar.gz
     else
-        printf "${YELLOW}%s${NC}\n" "  Aviso: UI no disponible en este canal, manteniendo actual."
+        printf "${YELLOW}%s${NC}\n" "  Aviso: UI no disponible en este release, manteniendo actual."
     fi
 
     printf "  → Iniciando servicio...\n"
@@ -227,15 +228,16 @@ case "${1:-help}" in
         echo "Usage: aegis {command} [args]"
         echo ""
         echo "Commands:"
-        echo "  start       Start Aegis service"
-        echo "  stop        Stop Aegis service"
-        echo "  restart     Restart Aegis service"
-        echo "  status      Check status and health"
-        echo "  diag        Run deep diagnostic report"
-        echo "  version     Show installed core version"
-        echo "  logs [N]    Follow logs (default 100)"
-        echo "  update      Update Aegis (options: --beta, --stable)"
-        echo "  token       Get setup URL"
-        echo "  uninstall   Remove Aegis from system"
+        echo "  start         Start Aegis service"
+        echo "  stop          Stop Aegis service"
+        echo "  restart       Restart Aegis service"
+        echo "  status        Check status and health"
+        echo "  diag          Run deep diagnostic report"
+        echo "  version       Show installed core version"
+        echo "  logs [N]      Follow logs (default 100)"
+        echo "  update        Update to latest nightly build"
+        echo "  update --stable  Update to latest stable release"
+        echo "  token         Get setup URL"
+        echo "  uninstall     Remove Aegis from system"
         ;;
 esac
