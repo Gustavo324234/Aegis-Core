@@ -69,7 +69,7 @@ export function connectSiren(
   onError: (msg: string) => void
 ): WebSocket {
   const url = bffClient.buildWsUrl(serverUrl, `/ws/siren/${tenantId}`);
-  const ws = new WebSocket(url, [sessionKey]);
+  const ws = new WebSocket(url, [`session-key.${sessionKey}`]);
   
   // Siren Bridge (Marzo 2026): El BFF envía JSON con los SirenEvents del Kernel
   ws.onmessage = (event) => {
