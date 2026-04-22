@@ -154,6 +154,8 @@ impl TenantDB {
 
 const PERSONA_KEY: &str = "agent_persona";
 const PERSONA_MAX_LEN: usize = 4000;
+const ONBOARDING_STEP_KEY: &str = "onboarding_step";
+const ONBOARDING_NAME_KEY: &str = "onboarding_pending_name";
 
 impl TenantDB {
     pub fn set_persona(&self, persona: &str) -> Result<()> {
@@ -175,6 +177,32 @@ impl TenantDB {
             .execute("DELETE FROM kv_store WHERE key = ?1", [PERSONA_KEY])
             .context("Failed to delete agent persona")?;
         Ok(())
+    }
+
+    /// Retorna el step actual del onboarding:
+    /// None = no iniciado, Some("name") = esperando nombre, Some("style") = esperando estilo
+    pub fn get_onboarding_step(&self) -> Result<Option<String>> {
+        self.get_kv(ONBOARDING_STEP_KEY)
+    }
+
+    pub fn set_onboarding_step(&self, step: &str) -> Result<()> {
+        self.set_kv(ONBOARDING_STEP_KEY, step)
+    }
+
+    pub fn clear_onboarding(&self) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM kv_store WHERE key IN (?1, ?2)",
+            [ONBOARDING_STEP_KEY, ONBOARDING_NAME_KEY],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_onboarding_name(&self, name: &str) -> Result<()> {
+        self.set_kv(ONBOARDING_NAME_KEY, name)
+    }
+
+    pub fn get_onboarding_name(&self) -> Result<Option<String>> {
+        self.get_kv(ONBOARDING_NAME_KEY)
     }
 }
 

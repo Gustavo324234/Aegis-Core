@@ -37,7 +37,7 @@ Ver historial de tickets CORE-001 a CORE-143.
 
 ### Tickets
 
-*   **[CORE-145]** Feature: Onboarding conversacional de Persona en el chat — nombre y estilo `[TODO — Kernel Engineer + Shell Engineer]`
+*   **[CORE-145]** Feature: Onboarding conversacional de Persona en el chat — nombre y estilo `[DONE — Kernel Engineer]`
 *   **[CORE-146]** Feature: Conexión app por QR + acceso remoto via Cloudflare tunnel `[TODO — Kernel Engineer + Shell Engineer]`
 *   **[CORE-147]** Fix: TLS no levanta tras `aegis update` — regeneración automática `[DONE — Kernel Engineer]`
 
@@ -58,13 +58,13 @@ Ver historial de tickets CORE-001 a CORE-143.
 |---|---|
 | Epic 32–40 | ✅ DONE |
 | CORE-144: rustls-pemfile | ⏳ BLOCKED upstream |
-| Epic 41: UX & Reliability | 🔄 IN PROGRESS — 0/3 |
+| Epic 41: UX & Reliability | 🔄 IN PROGRESS — 2/3 |
 | TLS en producción | ✅ SOLUCIONADO (CORE-147) |
-| Onboarding Persona | ❌ UX incorrecto — fix en CORE-145 |
+| Onboarding Persona | ✅ IMPLEMENTADO KERNEL (CORE-145) |
 | Conexión app por QR | ❌ NO IMPLEMENTADO — CORE-146 |
 
-**Tickets pendientes: 3**
-**Próximo: CORE-145**
+**Tickets pendientes: 1**
+**Próximo: CORE-146**
 
 ---
 
