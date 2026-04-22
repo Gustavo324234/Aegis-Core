@@ -1,6 +1,0 @@
-## Summary
-- Added `fetchPersona` method to bffClient.ts to call `/api/persona` endpoint
-- Extended settingsStore with `agentPersona`, `isPersonaConfigured`, and `fetchAgentPersona` action
-- Added "Identidad del Agente" section in settings.tsx that shows when mode === 'satellite'
-- App displays badge when persona is configured, or fallback text when not
-- Best-effort error handling ensures no crash if endpoint fails

@@ -37,10 +37,13 @@ auto_push_ui.ps1
 dev.ps1
 dev.sh
 
-# Logs
+# Logs & build artifacts
 *.log
 kernel/crates/ank-server/build_error.log
 kernel/crates/ank-server/test_output.txt
+kernel/clippy_output.txt
+target_verify_fix/
+pr_body.txt
 
 # Compiled WASM plugins (build artifacts)
 kernel/plugins_src/target/
@@ -52,3 +55,21 @@ installer/models/
 
 # Docker local overrides
 docker-compose.override.yml
+
+# ── Internal development artifacts (not for public repo) ──
+
+# AI assistant instructions
+CLAUDE.md
+
+# Internal governance — tickets, agent prompts, dispatch plans
+governance/Tickets/
+governance/AGENT_PROMPTS.md
+governance/DISPATCH_PLAN.md
+governance/DISPATCH_EPICS_38_39_40.md
+governance/DISPATCH_EPIC_41.md
+governance/AEGIS_CONTEXT.md
+governance/AEGIS_MASTER_CODEX.md
+governance/TICKETS_MASTER.md
+
+# Internal AI model audits
+auditorias/
