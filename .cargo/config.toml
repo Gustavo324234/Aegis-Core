@@ -9,7 +9,10 @@
 # files under lib/VC/x64/MD (MD = MultiDynamic, matches Rust's default CRT).
 # Without these, libsqlite3-sys (sqlcipher feature) emits a wrong search path
 # and the linker fails with LNK1181: cannot open input file 'libcrypto.lib'.
-[target.x86_64-pc-windows-msvc.env]
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-L", "native=C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"]
+
+[env]
 OPENSSL_DIR         = "C:\\Program Files\\OpenSSL-Win64"
 OPENSSL_LIB_DIR     = "C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"
 OPENSSL_INCLUDE_DIR = "C:\\Program Files\\OpenSSL-Win64\\include"

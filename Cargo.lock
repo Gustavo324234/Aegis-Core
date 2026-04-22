@@ -231,6 +231,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "openssl",
+ "rustls",
  "tokio",
  "tokio-stream",
  "tonic",
