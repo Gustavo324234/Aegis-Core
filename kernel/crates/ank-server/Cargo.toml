@@ -23,6 +23,7 @@ tracing-appender.workspace   = true
 dirs.workspace               = true
 uuid.workspace               = true
 openssl                      = { workspace = true, optional = true }
+rustls                       = { version = "0.23", features = ["ring"] }
 
 [features]
 full_local       = ["ank-core/full_local"]

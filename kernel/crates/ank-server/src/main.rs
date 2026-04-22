@@ -34,6 +34,10 @@ fn resolve_data_dir() -> std::path::PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // CORE-147: Initialize rustls crypto provider (required for rustls 0.23+)
+    // We explicitly use 'ring' as the provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // 0. Handle immediate flags
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
