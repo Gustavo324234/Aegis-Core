@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.16](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.15...ank-server-v0.1.16) (2026-04-22)
+
+
+### Bug Fixes
+
+* **installer:** CORE-147 aegis update regenerates TLS cert + tls-rege… ([#84](https://github.com/Gustavo324234/Aegis-Core/issues/84)) ([3144e3c](https://github.com/Gustavo324234/Aegis-Core/commit/3144e3c8d328f042b8d9bf56bd018591fa389705))
+
 ## [0.1.15](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.14...ank-server-v0.1.15) (2026-04-22)
 
 
