@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.19](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.18...ank-server-v0.1.19) (2026-04-23)
+
+
+### Bug Fixes
+
+* **installer,ank-server:** CORE-147 improve cloudflared installation path and error logging ([#98](https://github.com/Gustavo324234/Aegis-Core/issues/98)) ([7a2dfaf](https://github.com/Gustavo324234/Aegis-Core/commit/7a2dfafbc702a4d03ee78bea19964586ca5c61d3))
+
 ## [0.1.18](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.17...ank-server-v0.1.18) (2026-04-22)
 
 
