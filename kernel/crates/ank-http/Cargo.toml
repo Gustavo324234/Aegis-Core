@@ -32,8 +32,6 @@ dirs.workspace            = true
 reqwest.workspace          = true
 regex.workspace            = true
 
-axum-server = { version = "0.7", features = ["tls-rustls"] }
-rustls = { version = "0.23", features = ["ring"] }
 dashmap = "5"
 utoipa = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
