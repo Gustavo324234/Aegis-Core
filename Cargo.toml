@@ -87,6 +87,7 @@ llama-cpp-2        = "0.1"
 wasmtime           = { version = "36", features = ["async"] }
 wasmtime-wasi      = { version = "36", features = ["preview1"] }
 reqwest            = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "multipart"] }
+boa_engine         = "0.20"
 
 # Arrow (VCM)
 arrow              = "58"
