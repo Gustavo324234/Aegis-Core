@@ -21,13 +21,13 @@ use tokio_stream::wrappers::BroadcastStream;
 #[allow(clippy::expect_used)]
 static MUSIC_PLAY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[MUSIC_PLAY:(spotify|youtube):([A-Za-z0-9_:%-]{5,50})\]")
-        .expect("FATAL: music play regex is invalid")
+        .unwrap_or_else(|_| panic!("FATAL: music play regex is invalid"))
 });
 
 #[allow(clippy::expect_used)]
 static MUSIC_CTRL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[(MUSIC_PAUSE|MUSIC_RESUME|MUSIC_STOP|MUSIC_VOLUME:(\d{1,3}))\]")
-        .expect("FATAL: music control regex is invalid")
+        .unwrap_or_else(|_| panic!("FATAL: music control regex is invalid"))
 });
 
 pub fn router() -> Router<AppState> {

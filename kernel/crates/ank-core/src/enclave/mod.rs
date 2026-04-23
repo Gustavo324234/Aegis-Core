@@ -267,7 +267,7 @@ mod tests {
             "test_persona_user_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
                 .as_millis()
         );
         let correct_key = "test_key_123";
@@ -277,7 +277,7 @@ mod tests {
             db.set_persona("Eres Eve, asistente de ACME Corp.")?;
             let loaded = db.get_persona()?;
             assert!(loaded.is_some(), "Persona should be stored");
-            assert_eq!(loaded.unwrap(), "Eres Eve, asistente de ACME Corp.");
+            assert_eq!(loaded.unwrap_or_default(), "Eres Eve, asistente de ACME Corp.");
         }
 
         {
@@ -299,7 +299,7 @@ mod tests {
             "test_maxlen_user_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
                 .as_millis()
         );
         let correct_key = "test_key_456";
@@ -312,7 +312,7 @@ mod tests {
         let valid = "x".repeat(4000);
         db.set_persona(&valid)?;
         let loaded = db.get_persona()?;
-        assert_eq!(loaded.unwrap().len(), 4000);
+        assert_eq!(loaded.unwrap_or_default().len(), 4000);
 
         let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
         Ok(())

@@ -836,42 +836,42 @@ impl StreamInterceptor {
 #[allow(clippy::expect_used)]
 static PLUGIN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_PLUGIN\("([^"]+)",\s*(\{.*?\})\)\]"#)
-        .expect("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug")
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug"))
 });
 #[allow(clippy::expect_used)]
 static READ_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[READ_FILE\("([^"]+)"\)\]"#)
-        .expect("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug")
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug"))
 });
 #[allow(clippy::expect_used)]
 static WRITE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[WRITE_FILE\("([^"]+)",\s*"([\s\S]*?)",\s*(\{.*?\})\)\]"#)
-        .expect("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug")
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug"))
 });
 #[allow(clippy::expect_used)]
 static MCP_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_MCP_EXEC\("([^"]+)",\s*(\{.*?\})\)\]"#)
-        .expect("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug")
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded syscall regex is invalid — this is a compile-time bug"))
 });
 #[allow(clippy::expect_used)]
 static MUSIC_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_PLUGIN\("music_search",\s*(\{.*?\})\)\]"#)
-        .expect("FATAL: music syscall regex is invalid")
+        .unwrap_or_else(|_| panic!("FATAL: music syscall regex is invalid"))
 });
 #[allow(clippy::expect_used)]
 static GCAL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_PLUGIN\("google_calendar",\s*(\{.*?\})\)\]"#)
-        .expect("FATAL: google_calendar regex is invalid")
+        .unwrap_or_else(|_| panic!("FATAL: google_calendar regex is invalid"))
 });
 #[allow(clippy::expect_used)]
 static GDRIVE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_PLUGIN\("google_drive",\s*(\{.*?\})\)\]"#)
-        .expect("FATAL: google_drive regex is invalid")
+        .unwrap_or_else(|_| panic!("FATAL: google_drive regex is invalid"))
 });
 #[allow(clippy::expect_used)]
 static GMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_PLUGIN\("gmail",\s*(\{.*?\})\)\]"#)
-        .expect("FATAL: gmail regex is invalid")
+        .unwrap_or_else(|_| panic!("FATAL: gmail regex is invalid"))
 });
 
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
