@@ -3,7 +3,12 @@ use boa_engine::{Context, JsError, JsValue, Source};
 use serde_json::Value;
 use std::path::Path;
 
-#[allow(clippy::get_first, clippy::to_string_in_format_args, clippy::useless_conversion, clippy::empty_line_after_outer_attr)]
+#[allow(
+    clippy::get_first,
+    clippy::to_string_in_format_args,
+    clippy::useless_conversion,
+    clippy::empty_line_after_outer_attr
+)]
 #[allow(clippy::new_without_default)]
 
 /// --- MAKER EXECUTOR (CORE-150) ---
@@ -171,10 +176,7 @@ impl MakerExecutor {
                 })?;
                 Ok(out)
             }
-            Err(e) => Err(SyscallError::InternalError(format!(
-                "JS Error: {}",
-                e
-            ))),
+            Err(e) => Err(SyscallError::InternalError(format!("JS Error: {}", e))),
         }
     }
 }
