@@ -419,8 +419,8 @@ mod tests {
             .l2_context_refs
             .push(format!("file://{}", file_name));
 
-        // Límite pequeño que no permite el archivo pero sí el resto
-        let context = vcm.assemble_context(&pcb, &swap, None, 100).await?;
+        // Límite que permite el contexto base (Project Context) pero no el archivo grande
+        let context = vcm.assemble_context(&pcb, &swap, None, 250).await?;
 
         // Limpiar
         let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
