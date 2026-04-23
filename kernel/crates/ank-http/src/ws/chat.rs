@@ -151,11 +151,7 @@ async fn handle_chat(
             let _ = db.set_onboarding_step("awaiting_name");
         }
         let greeting = "Hola! Soy tu nuevo asistente personal 👋\n¿Cómo querés que me llame?";
-        send_onboarding_message(
-            &mut socket,
-            greeting,
-        )
-        .await;
+        send_onboarding_message(&mut socket, greeting).await;
         let _ = append_to_chat_history(&tenant_id, "ASSISTANT", greeting).await;
     }
 
@@ -313,10 +309,14 @@ async fn handle_chat(
             pcb.model_pref = pref;
             pcb.tenant_id = Some(tenant_id.clone());
             pcb.session_key = Some(hash.clone());
-            
+
             // CORE-FIX: Enable conversation history and semantic memory
-            pcb.memory_pointers.l2_context_refs.push("file://chat_history.log".to_string());
-            pcb.memory_pointers.swap_refs.push("semantic_memory".to_string());
+            pcb.memory_pointers
+                .l2_context_refs
+                .push("file://chat_history.log".to_string());
+            pcb.memory_pointers
+                .swap_refs
+                .push("semantic_memory".to_string());
 
             // Save user prompt to history
             let _ = append_to_chat_history(&tenant_id, "USER", &prompt).await;
@@ -367,7 +367,7 @@ async fn handle_chat(
 
             // Streamear con el receiver ya suscrito antes del dispatch
             let full_response = stream_with_receiver(&mut socket, receiver).await;
-            
+
             // Save assistant response to history
             if !full_response.is_empty() {
                 let _ = append_to_chat_history(&tenant_id, "ASSISTANT", &full_response).await;
@@ -499,7 +499,7 @@ async fn append_to_chat_history(tenant_id: &str, role: &str, text: &str) -> anyh
         .join("users")
         .join(tenant_id)
         .join("workspace");
-    
+
     let _ = tokio::fs::create_dir_all(&workspace_path).await;
     let log_path = workspace_path.join("chat_history.log");
 
@@ -510,7 +510,12 @@ async fn append_to_chat_history(tenant_id: &str, role: &str, text: &str) -> anyh
         .open(log_path)
         .await?;
 
-    let entry = format!("\n[{}] {}: {}\n", chrono::Utc::now().to_rfc3339(), role, text);
+    let entry = format!(
+        "\n[{}] {}: {}\n",
+        chrono::Utc::now().to_rfc3339(),
+        role,
+        text
+    );
     file.write_all(entry.as_bytes()).await?;
     Ok(())
 }

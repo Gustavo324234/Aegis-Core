@@ -331,12 +331,18 @@ async fn main() -> Result<()> {
                                 );
                                 let hal_for_memory = hal_read.clone();
                                 let tenant_id_for_memory = tenant_id.clone();
-                                
+
                                 tokio::spawn(async move {
-                                    if let Err(e) = hal_for_memory.store_memory(&tenant_id_for_memory, &interaction).await {
+                                    if let Err(e) = hal_for_memory
+                                        .store_memory(&tenant_id_for_memory, &interaction)
+                                        .await
+                                    {
                                         tracing::warn!("Failed to store neuronal memory: {}", e);
                                     } else {
-                                        tracing::info!("Neuronal memory fragment stored for tenant {}", tenant_id_for_memory);
+                                        tracing::info!(
+                                            "Neuronal memory fragment stored for tenant {}",
+                                            tenant_id_for_memory
+                                        );
                                     }
                                 });
                             }
@@ -477,12 +483,12 @@ async fn main() -> Result<()> {
                         warn!("Tunnel Manager: cloudflared error: {}", e);
                     }
                 }
-                
+
                 {
                     let mut lock = tunnel_url_state.write().await;
                     *lock = None;
                 }
-                
+
                 info!("Tunnel Manager: Restarting in 10 seconds...");
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
@@ -495,7 +501,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_tunnel_and_monitor(port: u16, tunnel_url_state: Arc<RwLock<Option<String>>>) -> Result<()> {
+async fn run_tunnel_and_monitor(
+    port: u16,
+    tunnel_url_state: Arc<RwLock<Option<String>>>,
+) -> Result<()> {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
@@ -522,7 +531,7 @@ async fn run_tunnel_and_monitor(port: u16, tunnel_url_state: Arc<RwLock<Option<S
         .stderr
         .take()
         .context("Failed to capture cloudflared stderr")?;
-    
+
     let mut lines = BufReader::new(stderr).lines();
     let mut url_found = false;
 
