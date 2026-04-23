@@ -45,11 +45,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // CORE-147: Enforce internal HTTP by unsetting TLS environment variables.
-    // Cloudflare Tunnel handles HTTPS externally.
-    std::env::remove_var("AEGIS_TLS_CERT");
-    std::env::remove_var("AEGIS_TLS_KEY");
-
     // 1. Inicializar tracing
     let data_dir = resolve_data_dir();
     let logs_dir = data_dir.join("logs");
@@ -433,29 +428,7 @@ async fn main() -> Result<()> {
     let grpc_addr = "0.0.0.0:50051".parse()?;
     let mut tonic_builder = Server::builder();
 
-    match (
-        std::env::var("AEGIS_TLS_CERT"),
-        std::env::var("AEGIS_TLS_KEY"),
-    ) {
-        (Ok(cert_p), Ok(key_p)) => {
-            info!("TLS enabled for gRPC (Tonic)");
-            let cert = tokio::fs::read(cert_p).await?;
-            let key = tokio::fs::read(key_p).await?;
-            let id = tonic::transport::Identity::from_pem(cert, key);
-            tonic_builder =
-                tonic_builder.tls_config(tonic::transport::ServerTlsConfig::new().identity(id))?;
-        }
-        _ => {
-            let strict = std::env::var("AEGIS_MTLS_STRICT")
-                .unwrap_or_default()
-                .to_lowercase()
-                == "true";
-            if strict {
-                anyhow::bail!("AEGIS_MTLS_STRICT=true but certificates are missing.");
-            }
-            warn!("gRPC running in INSECURE mode");
-        }
-    }
+    warn!("gRPC running in INSECURE mode (h2c)");
 
     tokio::spawn(async move {
         if let Err(e) = tonic_builder.add_service(tonic_svc).serve(grpc_addr).await {

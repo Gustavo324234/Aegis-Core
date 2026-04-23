@@ -286,7 +286,6 @@ install_native() {
         cat > "$ENV_FILE" <<EOF
 AEGIS_ROOT_KEY=${root_key}
 AEGIS_DATA_DIR=${DATA_DIR}
-AEGIS_MTLS_STRICT=false
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
@@ -361,7 +360,6 @@ install_docker() {
         root_key=$(openssl rand -hex 32)
         cat > "${INSTALL_ROOT}/.env" <<EOF
 AEGIS_ROOT_KEY=${root_key}
-AEGIS_MTLS_STRICT=false
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}

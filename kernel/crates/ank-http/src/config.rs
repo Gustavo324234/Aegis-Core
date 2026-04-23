@@ -8,8 +8,6 @@ pub struct HttpConfig {
     pub dev_mode: bool,
     pub ui_dist_path: Option<PathBuf>,
     pub data_dir: PathBuf,
-    pub tls_cert: Option<PathBuf>,
-    pub tls_key: Option<PathBuf>,
 }
 
 impl Default for HttpConfig {
@@ -20,8 +18,6 @@ impl Default for HttpConfig {
             dev_mode: false,
             ui_dist_path: None,
             data_dir: PathBuf::from("."),
-            tls_cert: None,
-            tls_key: None,
         }
     }
 }
@@ -46,30 +42,12 @@ impl HttpConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."));
 
-        let tls_cert = std::env::var("AEGIS_TLS_CERT").ok().map(PathBuf::from);
-        let tls_key = std::env::var("AEGIS_TLS_KEY").ok().map(PathBuf::from);
-
         Self {
             port,
             static_dir,
             dev_mode,
             ui_dist_path,
             data_dir,
-            tls_cert,
-            tls_key,
         }
-    }
-
-    pub fn tls_enabled(&self) -> bool {
-        match (&self.tls_cert, &self.tls_key) {
-            (Some(c), Some(k)) => c.exists() && k.exists(),
-            _ => false,
-        }
-    }
-
-    pub fn tls_paths(&self) -> Option<(&PathBuf, &PathBuf)> {
-        self.tls_cert
-            .as_ref()
-            .and_then(|c| self.tls_key.as_ref().map(|k| (c, k)))
     }
 }

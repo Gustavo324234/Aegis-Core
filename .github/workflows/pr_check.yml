@@ -37,6 +37,9 @@ jobs:
       - name: test
         run: cargo test --workspace
 
+      - name: Clear cargo-deny advisory database
+        run: rm -rf ~/.cargo/advisory-dbs
+
       - name: deny
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
