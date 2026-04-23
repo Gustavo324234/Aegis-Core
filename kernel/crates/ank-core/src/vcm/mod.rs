@@ -1,5 +1,7 @@
 use crate::pcb::PCB;
 use crate::vcm::swap::LanceSwapManager;
+use crate::chal::EmbeddingDriver;
+use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 use thiserror::Error;
 use tracing::warn;
@@ -51,6 +53,7 @@ impl VirtualContextManager {
         &self,
         pcb: &PCB,
         swap_manager: &LanceSwapManager,
+        embedding_driver: Option<&dyn EmbeddingDriver>,
         token_limit: usize,
     ) -> Result<String, VCMError> {
         // Enlazar dependencias para la heurística basada en .env si es CloudOnly
@@ -91,20 +94,16 @@ impl VirtualContextManager {
 
         if !pcb.memory_pointers.swap_refs.is_empty() {
             for swap_query in &pcb.memory_pointers.swap_refs {
-                let vector = if let Some(stripped) = swap_query.strip_prefix("vec:") {
-                    stripped
-                        .split(',')
-                        .filter_map(|s| s.trim().parse::<f32>().ok())
-                        .collect::<Vec<f32>>()
+                let query_vector = if let Some(driver) = embedding_driver {
+                    driver
+                        .embed(&pcb.memory_pointers.l1_instruction)
+                        .await
+                        .unwrap_or_else(|_| vec![0.0; 128])
                 } else {
-                    vec![0.0; 128] // FUTURE(ANK-2401): Replace with local ONNX embedding server call
+                    vec![0.0; 128]
                 };
 
-                if vector.is_empty() {
-                    continue;
-                }
-
-                if let Ok(fragments) = swap_manager.search(tenant_id, vector, 3).await {
+                if let Ok(fragments) = swap_manager.search(tenant_id, query_vector, 5).await {
                     for fragment in fragments {
                         let fragment_text =
                             format!("[Memory ID: {}]\n{}\n", fragment.id, fragment.text);
