@@ -542,7 +542,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_build_prompt_no_tools_is_clean() -> anyhow::Result<()> {
+    async fn test_build_prompt_default_tools_presence() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let hal = CognitiveHAL::new(pm)?;
         let pcb = PCB::new("test".into(), 5, "hola".into());
@@ -552,8 +552,12 @@ mod tests {
             "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
         );
         assert!(
-            !prompt.contains("HERRAMIENTAS DISPONIBLES"),
-            "Sin tools, no debe haber sección de herramientas"
+            prompt.contains("HERRAMIENTAS (PLUGINS) DISPONIBLES:"),
+            "Deben aparecer los plugins de dominio por defecto"
+        );
+        assert!(
+            prompt.contains("ledger") && prompt.contains("chronos"),
+            "Debe contener las herramientas ledger y chronos"
         );
         assert!(
             prompt.contains("hola"),

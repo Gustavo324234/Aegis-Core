@@ -63,6 +63,34 @@ impl TenantDB {
             )
             .context("Failed to initialize kv_store table")?;
 
+        // Domain: Ledger (Finanzas)
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                amount REAL NOT NULL,
+                description TEXT NOT NULL,
+                category TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+                [],
+            )
+            .context("Failed to initialize expenses table")?;
+
+        // Domain: Chronos (Tiempo/Recordatorios)
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                remind_at DATETIME NOT NULL,
+                description TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+                [],
+            )
+            .context("Failed to initialize reminders table")?;
+
         Ok(())
     }
 
@@ -203,6 +231,75 @@ impl TenantDB {
 
     pub fn get_onboarding_name(&self) -> Result<Option<String>> {
         self.get_kv(ONBOARDING_NAME_KEY)
+    }
+
+    // --- LEDGER METHODS ---
+    pub fn add_expense(
+        &self,
+        amount: f64,
+        description: &str,
+        category: Option<&str>,
+    ) -> Result<()> {
+        use anyhow::Context;
+        self.connection
+            .execute(
+                "INSERT INTO expenses (amount, description, category) VALUES (?1, ?2, ?3)",
+                (amount, description, category),
+            )
+            .context("Failed to insert expense")?;
+        Ok(())
+    }
+
+    pub fn get_expenses(&self, limit: u32) -> Result<Vec<serde_json::Value>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT amount, description, category, created_at FROM expenses ORDER BY created_at DESC LIMIT ?1"
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok(serde_json::json!({
+                "amount": row.get::<_, f64>(0)?,
+                "description": row.get::<_, String>(1)?,
+                "category": row.get::<_, Option<String>>(2)?,
+                "created_at": row.get::<_, String>(3)?,
+            }))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+
+    // --- CHRONOS METHODS ---
+    pub fn add_reminder(&self, remind_at: &str, description: &str) -> Result<()> {
+        use anyhow::Context;
+        self.connection
+            .execute(
+                "INSERT INTO reminders (remind_at, description) VALUES (?1, ?2)",
+                [remind_at, description],
+            )
+            .context("Failed to insert reminder")?;
+        Ok(())
+    }
+
+    pub fn get_reminders(&self, limit: u32) -> Result<Vec<serde_json::Value>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT remind_at, description, status, created_at FROM reminders ORDER BY remind_at ASC LIMIT ?1"
+        )?;
+        let rows = stmt.query_map([limit], |row| {
+            Ok(serde_json::json!({
+                "remind_at": row.get::<_, String>(0)?,
+                "description": row.get::<_, String>(1)?,
+                "status": row.get::<_, String>(2)?,
+                "created_at": row.get::<_, String>(3)?,
+            }))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
     }
 }
 
