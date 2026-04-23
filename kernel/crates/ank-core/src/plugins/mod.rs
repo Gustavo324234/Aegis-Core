@@ -547,15 +547,12 @@ impl PluginManager {
         }
 
         let mut prompt = String::from("HERRAMIENTAS (PLUGINS) DISPONIBLES:\n");
-        
+
         // Plugins Nativos (Dominios)
         for plugin in self.domain_plugins.values() {
             prompt.push_str(&format!(
                 "- {}: {} -> Uso: [SYS_CALL_PLUGIN(\"{}\", {})]\n",
-                plugin.name,
-                plugin.description,
-                plugin.name,
-                plugin.parameter_example
+                plugin.name, plugin.description, plugin.name, plugin.parameter_example
             ));
         }
 
@@ -633,7 +630,9 @@ impl PluginManager {
                     .map_err(|e| PluginError::IOError(e.to_string()))?;
                 Ok(serde_json::json!({ "status": "success", "data": reminders }).to_string())
             }
-            (_, "get_metadata") => Ok(serde_json::json!({ "status": "success", "data": metadata }).to_string()),
+            (_, "get_metadata") => {
+                Ok(serde_json::json!({ "status": "success", "data": metadata }).to_string())
+            }
             _ => Err(PluginError::FunctionNotFound(format!(
                 "Action {} not found in plugin {}",
                 action, name

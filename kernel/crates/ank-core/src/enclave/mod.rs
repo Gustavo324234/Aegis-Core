@@ -64,28 +64,32 @@ impl TenantDB {
             .context("Failed to initialize kv_store table")?;
 
         // Domain: Ledger (Finanzas)
-        self.connection.execute(
-            "CREATE TABLE IF NOT EXISTS expenses (
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS expenses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 amount REAL NOT NULL,
                 description TEXT NOT NULL,
                 category TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
-            [],
-        ).context("Failed to initialize expenses table")?;
+                [],
+            )
+            .context("Failed to initialize expenses table")?;
 
         // Domain: Chronos (Tiempo/Recordatorios)
-        self.connection.execute(
-            "CREATE TABLE IF NOT EXISTS reminders (
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS reminders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 remind_at DATETIME NOT NULL,
                 description TEXT NOT NULL,
                 status TEXT DEFAULT 'pending',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
-            [],
-        ).context("Failed to initialize reminders table")?;
+                [],
+            )
+            .context("Failed to initialize reminders table")?;
 
         Ok(())
     }
@@ -230,12 +234,19 @@ impl TenantDB {
     }
 
     // --- LEDGER METHODS ---
-    pub fn add_expense(&self, amount: f64, description: &str, category: Option<&str>) -> Result<()> {
+    pub fn add_expense(
+        &self,
+        amount: f64,
+        description: &str,
+        category: Option<&str>,
+    ) -> Result<()> {
         use anyhow::Context;
-        self.connection.execute(
-            "INSERT INTO expenses (amount, description, category) VALUES (?1, ?2, ?3)",
-            (amount, description, category),
-        ).context("Failed to insert expense")?;
+        self.connection
+            .execute(
+                "INSERT INTO expenses (amount, description, category) VALUES (?1, ?2, ?3)",
+                (amount, description, category),
+            )
+            .context("Failed to insert expense")?;
         Ok(())
     }
 
@@ -262,10 +273,12 @@ impl TenantDB {
     // --- CHRONOS METHODS ---
     pub fn add_reminder(&self, remind_at: &str, description: &str) -> Result<()> {
         use anyhow::Context;
-        self.connection.execute(
-            "INSERT INTO reminders (remind_at, description) VALUES (?1, ?2)",
-            [remind_at, description],
-        ).context("Failed to insert reminder")?;
+        self.connection
+            .execute(
+                "INSERT INTO reminders (remind_at, description) VALUES (?1, ?2)",
+                [remind_at, description],
+            )
+            .context("Failed to insert reminder")?;
         Ok(())
     }
 
