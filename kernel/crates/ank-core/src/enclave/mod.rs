@@ -277,7 +277,10 @@ mod tests {
             db.set_persona("Eres Eve, asistente de ACME Corp.")?;
             let loaded = db.get_persona()?;
             assert!(loaded.is_some(), "Persona should be stored");
-            assert_eq!(loaded.unwrap_or_default(), "Eres Eve, asistente de ACME Corp.");
+            assert_eq!(
+                loaded.unwrap_or_default(),
+                "Eres Eve, asistente de ACME Corp."
+            );
         }
 
         {

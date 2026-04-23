@@ -493,7 +493,8 @@ mod tests {
     async fn test_master_admin_flow() -> anyhow::Result<()> {
         let dir = tempdir().context("Failed to create tempdir")?;
         let db_path = dir.path().join("admin.db");
-        let enclave = MasterEnclave::open(db_path.to_str().unwrap_or_default(), "secret_key").await?;
+        let enclave =
+            MasterEnclave::open(db_path.to_str().unwrap_or_default(), "secret_key").await?;
 
         assert!(!enclave.admin_exists().await?);
 
