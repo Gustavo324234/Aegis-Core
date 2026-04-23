@@ -3,10 +3,19 @@ use boa_engine::{Context, JsError, JsValue, Source};
 use serde_json::Value;
 use std::path::Path;
 
+#[allow(clippy::get_first, clippy::to_string_in_format_args, clippy::useless_conversion, clippy::empty_line_after_outer_attr)]
+#[allow(clippy::new_without_default)]
+
 /// --- MAKER EXECUTOR (CORE-150) ---
 /// Provee un entorno de ejecución aislado para scripts JavaScript (Boa Engine).
 /// Permite automatizar tareas complejas dentro del workspace del tenant.
 pub struct MakerExecutor;
+
+impl Default for MakerExecutor {
+    fn default() -> Self {
+        Self
+    }
+}
 
 impl MakerExecutor {
     pub fn new() -> Self {
@@ -38,14 +47,13 @@ impl MakerExecutor {
             SyscallError::InternalError(format!("Failed to convert params to JS: {}", e))
         })?;
 
-        context.register_global_property(
+        let _ = context.register_global_property(
             boa_engine::js_string!("params"),
             params_js,
             boa_engine::property::Attribute::all(),
         );
 
-        // 2. Inyectar variables de entorno (Jailed)
-        context.register_global_property(
+        let _ = context.register_global_property(
             boa_engine::js_string!("__TENANT_ID__"),
             boa_engine::js_string!(tenant_id),
             boa_engine::property::Attribute::READONLY,
@@ -56,9 +64,8 @@ impl MakerExecutor {
             boa_engine::js_string!("read_file"),
             1,
             boa_engine::native_function::NativeFunction::from_copy_closure(|_this, args, ctx| {
-                // ...
                 let path_str = args
-                    .get(0)
+                    .first()
                     .and_then(|v| v.as_string())
                     .map(|s| s.to_std_string().unwrap_or_default())
                     .unwrap_or_default();
@@ -104,7 +111,7 @@ impl MakerExecutor {
             2,
             boa_engine::native_function::NativeFunction::from_copy_closure(|_this, args, ctx| {
                 let path_str = args
-                    .get(0)
+                    .first()
                     .and_then(|v| v.as_string())
                     .map(|s| s.to_std_string().unwrap_or_default())
                     .unwrap_or_default();
@@ -166,7 +173,7 @@ impl MakerExecutor {
             }
             Err(e) => Err(SyscallError::InternalError(format!(
                 "JS Error: {}",
-                e.to_string()
+                e
             ))),
         }
     }
