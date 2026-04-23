@@ -1,4 +1,6 @@
-use crate::chal::{DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError};
+use crate::chal::{
+    DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError,
+};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -162,8 +164,7 @@ impl InferenceDriver for CloudProxyDriver {
         &self,
         prompt: String,
         grammar: Option<Grammar>,
-    ) -> GenerateStreamResult
-    {
+    ) -> GenerateStreamResult {
         let mut request_body = ChatCompletionRequest {
             model: self.model_id.clone(),
             messages: vec![Message {

@@ -90,7 +90,8 @@ pub enum Grammar {
     JsonSchema(serde_json::Value),
 }
 
-pub type GenerateStreamResult = Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>;
+pub type GenerateStreamResult =
+    Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>;
 
 /// --- INFERENCE DRIVER INTERFACE ---
 #[async_trait]
@@ -331,7 +332,10 @@ impl CognitiveHAL {
                         fallback.api_key.clone(),
                         fallback.model_id.clone(),
                     );
-                    if let Ok(stream) = fallback_driver.generate_stream(final_prompt.clone(), None).await {
+                    if let Ok(stream) = fallback_driver
+                        .generate_stream(final_prompt.clone(), None)
+                        .await
+                    {
                         return Ok(stream);
                     }
                 }
@@ -435,8 +439,7 @@ impl InferenceDriver for DummyDriver {
         &self,
         _prompt: String,
         _grammar: Option<Grammar>,
-    ) -> GenerateStreamResult
-    {
+    ) -> GenerateStreamResult {
         let response = format!("[{}] OK", self.name);
         let stream = tokio_stream::iter(vec![Ok(response)]);
         Ok(Box::pin(stream))

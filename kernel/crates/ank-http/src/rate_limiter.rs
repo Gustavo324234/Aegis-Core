@@ -159,7 +159,9 @@ mod tests {
             max_attempts: 5,
             window_secs: 60,
         });
-        let ip: IpAddr = "127.0.0.1".parse().unwrap_or_else(|_| panic!("Invalid test IP"));
+        let ip: IpAddr = "127.0.0.1"
+            .parse()
+            .unwrap_or_else(|_| panic!("Invalid test IP"));
         let outcome = limiter.check_and_record_failed(ip, "tenant1");
         match outcome {
             RateLimitOutcome::Allowed {
@@ -179,7 +181,9 @@ mod tests {
             max_attempts: 3,
             window_secs: 60,
         });
-        let ip: IpAddr = "127.0.0.1".parse().unwrap_or_else(|_| panic!("Invalid test IP"));
+        let ip: IpAddr = "127.0.0.1"
+            .parse()
+            .unwrap_or_else(|_| panic!("Invalid test IP"));
 
         // Los primeros max_attempts intentos deben ser Allowed
         for i in 0..3u32 {
@@ -219,7 +223,9 @@ mod tests {
             max_attempts: 3,
             window_secs: 60,
         });
-        let ip: IpAddr = "127.0.0.1".parse().unwrap_or_else(|_| panic!("Invalid test IP"));
+        let ip: IpAddr = "127.0.0.1"
+            .parse()
+            .unwrap_or_else(|_| panic!("Invalid test IP"));
 
         // Agotar los intentos
         for _ in 0..3 {

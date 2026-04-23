@@ -1,6 +1,8 @@
 // #![cfg(feature = "local_llm")]
 
-use crate::chal::{DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError};
+use crate::chal::{
+    DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError,
+};
 use async_trait::async_trait;
 use std::pin::Pin;
 use tokio_stream::Stream;
@@ -29,8 +31,7 @@ impl InferenceDriver for LlamaNativeDriver {
         &self,
         _prompt: String,
         _grammar: Option<Grammar>,
-    ) -> GenerateStreamResult
-    {
+    ) -> GenerateStreamResult {
         Err(SystemError::ModelNotFound(
             "Native driver disabled for tests".into(),
         ))
