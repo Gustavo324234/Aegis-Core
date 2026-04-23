@@ -208,7 +208,11 @@ pub async fn get_connection_info(State(state): State<AppState>) -> Json<Connecti
         "active".to_string()
     } else {
         // Best effort check if cloudflared is available
-        let bin = if cfg!(windows) { "cloudflared.exe" } else { "cloudflared" };
+        let bin = if cfg!(windows) {
+            "cloudflared.exe"
+        } else {
+            "cloudflared"
+        };
         let exists = std::process::Command::new(bin)
             .arg("--version")
             .output()
