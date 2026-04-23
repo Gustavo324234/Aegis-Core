@@ -306,7 +306,10 @@ impl SyscallExecutor {
                     .maker
                     .execute(tenant_id, &script_type, &code, &params_json)
                     .await?;
-                Ok(format!("[SYSTEM_RESULT: Maker script executed. Output: {}]", result))
+                Ok(format!(
+                    "[SYSTEM_RESULT: Maker script executed. Output: {}]",
+                    result
+                ))
             }
         }
     }
@@ -902,9 +905,8 @@ static GMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 #[allow(clippy::expect_used)]
 static MAKER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\[SYS_CALL_MAKER\("([^"]+)",\s*"([\s\S]*?)",\s*(\{.*?\})\)\]"#).unwrap_or_else(|_| {
-        panic!("FATAL: hardcoded maker regex is invalid")
-    })
+    Regex::new(r#"\[SYS_CALL_MAKER\("([^"]+)",\s*"([\s\S]*?)",\s*(\{.*?\})\)\]"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded maker regex is invalid"))
 });
 
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
