@@ -454,12 +454,12 @@ async fn main() -> Result<()> {
                         warn!("Tunnel Manager: cloudflared error: {}", e);
                     }
                 }
-                
+
                 {
                     let mut lock = tunnel_url_state.write().await;
                     *lock = None;
                 }
-                
+
                 info!("Tunnel Manager: Restarting in 10 seconds...");
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
@@ -472,7 +472,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_tunnel_and_monitor(port: u16, tunnel_url_state: Arc<RwLock<Option<String>>>) -> Result<()> {
+async fn run_tunnel_and_monitor(
+    port: u16,
+    tunnel_url_state: Arc<RwLock<Option<String>>>,
+) -> Result<()> {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
@@ -499,7 +502,7 @@ async fn run_tunnel_and_monitor(port: u16, tunnel_url_state: Arc<RwLock<Option<S
         .stderr
         .take()
         .context("Failed to capture cloudflared stderr")?;
-    
+
     let mut lines = BufReader::new(stderr).lines();
     let mut url_found = false;
 
