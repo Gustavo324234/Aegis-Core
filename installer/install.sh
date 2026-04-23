@@ -212,10 +212,13 @@ install_cloudflared() {
     [[ "$(uname -m)" == "aarch64" ]] && arch_str="arm64"
     local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch_str}"
     
+    # Limpia instalaciones previas rotas
+    rm -f /usr/bin/cloudflared /usr/local/bin/cloudflared
+    
     # Intenta instalar en /usr/bin que es el PATH estándar para servicios
-    if curl -L --fail --silent "$url" -o /usr/bin/cloudflared && chmod +x /usr/bin/cloudflared; then
+    if curl -L --fail --silent "$url" -o /usr/bin/cloudflared && chmod 755 /usr/bin/cloudflared; then
         success "cloudflared instalado en /usr/bin"
-    elif curl -L --fail --silent "$url" -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared; then
+    elif curl -L --fail --silent "$url" -o /usr/local/bin/cloudflared && chmod 755 /usr/local/bin/cloudflared; then
         success "cloudflared instalado en /usr/local/bin"
     else
         warn "No se pudo instalar cloudflared — acceso remoto deshabilitado"
@@ -417,6 +420,13 @@ wait_and_show() {
                 | grep -oP '(?<=setup_token=)\S+' | tail -n 1 || true)
         fi
 
+        local tunnel_url=""
+        local conn_info
+        conn_info=$(curl -s "${PROTOCOL}://localhost:8000/api/system/connection-info" || true)
+        if [[ -n "$conn_info" ]]; then
+            tunnel_url=$(echo "$conn_info" | grep -oP '(?<="tunnel_url":")[^"]+')
+        fi
+
         echo ""
         echo -e "${GREEN}################################################################${NC}"
         echo -e "${GREEN}#          AEGIS OS — INSTALLATION COMPLETE                    #${NC}"
@@ -428,15 +438,27 @@ wait_and_show() {
         echo -e "  Inference profile: ${CYAN}${INFERENCE_PROFILE}${NC}"
         echo ""
 
+        if [[ -n "$tunnel_url" ]]; then
+            echo -e "${GREEN}  Remote Access (HTTPS):${NC}"
+            echo -e "  ${CYAN}${tunnel_url}${NC}"
+            echo ""
+        fi
+
         if [[ -n "$token" ]]; then
-            echo -e "${CYAN}  First-time setup URL:${NC}"
+            echo -e "${CYAN}  Local Setup URL:${NC}"
             echo -e "  ${GREEN}${PROTOCOL}://${ip}:8000?setup_token=${token}${NC}"
             echo ""
             echo -e "  Token expires in 30 minutes."
             echo -e "  To regenerate: ${CYAN}sudo aegis token${NC}"
         else
-            echo -e "  Access URL: ${CYAN}${PROTOCOL}://${ip}:8000${NC}"
+            echo -e "  Local Access (HTTP): ${CYAN}${PROTOCOL}://${ip}:8000${NC}"
             echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
+        fi
+        
+        if [[ -z "$tunnel_url" ]]; then
+            echo ""
+            echo -e "${YELLOW}  Note: Cloudflare Tunnel is still initializing.${NC}"
+            echo -e "  Run ${CYAN}sudo aegis status${NC} in a few minutes to get the HTTPS URL."
         fi
         echo -e "${GREEN}################################################################${NC}"
         echo ""
