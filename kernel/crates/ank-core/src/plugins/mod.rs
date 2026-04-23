@@ -68,6 +68,7 @@ pub struct PluginManager {
     linker: Linker<PluginState>,
     plugins: HashMap<String, Plugin>,
     signer: PluginSigner,
+    domain_plugins: HashMap<String, PluginMetadata>,
 }
 
 impl PluginManager {
@@ -101,11 +102,34 @@ impl PluginManager {
         wasmtime_wasi::preview1::add_to_linker_async(&mut linker, |s: &mut PluginState| &mut s.ctx)
             .map_err(|e: anyhow::Error| PluginError::CompilationFailed(e.to_string()))?;
 
+        let mut domain_plugins = HashMap::new();
+        domain_plugins.insert(
+            "ledger".to_string(),
+            PluginMetadata {
+                name: "ledger".to_string(),
+                description: "Gestión de gastos financieros (Ledger)".to_string(),
+                version: "1.0.0".to_string(),
+                author: "Aegis Kernel".to_string(),
+                parameter_example: r#"{"action": "add_expense", "params": {"amount": 50.5, "description": "Cena", "category": "comida"}}"#.to_string(),
+            },
+        );
+        domain_plugins.insert(
+            "chronos".to_string(),
+            PluginMetadata {
+                name: "chronos".to_string(),
+                description: "Gestión de recordatorios y tiempo (Chronos)".to_string(),
+                version: "1.0.0".to_string(),
+                author: "Aegis Kernel".to_string(),
+                parameter_example: r#"{"action": "add_reminder", "params": {"remind_at": "2026-04-24 10:00", "description": "Reunión"}}"#.to_string(),
+            },
+        );
+
         Ok(Self {
             engine,
             linker,
             plugins: HashMap::new(),
             signer,
+            domain_plugins,
         })
     }
 
@@ -316,6 +340,13 @@ impl PluginManager {
         input_json: &str,
         session_key: Option<&str>,
     ) -> Result<String, PluginError> {
+        // 0. Interceptar Domain Plugins (Native)
+        if let Some(metadata) = self.domain_plugins.get(plugin_name) {
+            return self
+                .execute_domain_plugin(tenant_id, session_key, plugin_name, input_json, metadata)
+                .await;
+        }
+
         let plugin = self.plugins.get(plugin_name).ok_or_else(|| {
             PluginError::FunctionNotFound(format!("Plugin {} not loaded", plugin_name))
         })?;
@@ -509,11 +540,24 @@ impl PluginManager {
 
     /// Genera la "Tarjeta de Habilidades" (Tool Discovery) para inyectar en el System Prompt.
     pub fn get_available_tools_prompt(&self) -> String {
-        if self.plugins.is_empty() {
+        if self.plugins.is_empty() && self.domain_plugins.is_empty() {
             return String::new();
         }
 
         let mut prompt = String::from("HERRAMIENTAS (PLUGINS) DISPONIBLES:\n");
+        
+        // Plugins Nativos (Dominios)
+        for plugin in self.domain_plugins.values() {
+            prompt.push_str(&format!(
+                "- {}: {} -> Uso: [SYS_CALL_PLUGIN(\"{}\", {})]\n",
+                plugin.name,
+                plugin.description,
+                plugin.name,
+                plugin.parameter_example
+            ));
+        }
+
+        // Plugins WASM
         for plugin in self.plugins.values() {
             prompt.push_str(&format!(
                 "- {}: {} -> Uso: [SYS_CALL_PLUGIN(\"{}\", {})]\n",
@@ -524,6 +568,75 @@ impl PluginManager {
             ));
         }
         prompt
+    }
+
+    /// Ejecutor de Plugins de Dominio (Native Bridge to SQLCipher)
+    async fn execute_domain_plugin(
+        &self,
+        tenant_id: &str,
+        session_key: Option<&str>,
+        name: &str,
+        input: &str,
+        metadata: &PluginMetadata,
+    ) -> Result<String, PluginError> {
+        let key = session_key.ok_or_else(|| {
+            PluginError::SecurityViolation("Session key required for domain plugins".into())
+        })?;
+
+        let db = TenantDB::open(tenant_id, key).map_err(|e| PluginError::IOError(e.to_string()))?;
+
+        let req: serde_json::Value =
+            serde_json::from_str(input).map_err(|e| PluginError::LogicError(e.to_string()))?;
+        let action = req.get("action").and_then(|v| v.as_str()).unwrap_or("");
+        let params = req.get("params").unwrap_or(&serde_json::Value::Null);
+
+        match (name, action) {
+            ("ledger", "add_expense") => {
+                let amount = params["amount"]
+                    .as_f64()
+                    .ok_or_else(|| PluginError::LogicError("Missing amount".into()))?;
+                let desc = params["description"]
+                    .as_str()
+                    .ok_or_else(|| PluginError::LogicError("Missing description".into()))?;
+                let category = params["category"].as_str();
+                db.add_expense(amount, desc, category)
+                    .map_err(|e| PluginError::IOError(e.to_string()))?;
+                Ok(r#"{"status": "success", "message": "Gasto registrado correctamente."}"#.into())
+            }
+            ("ledger", "get_expenses") => {
+                let limit = params["limit"].as_u64().unwrap_or(10) as u32;
+                let expenses = db
+                    .get_expenses(limit)
+                    .map_err(|e| PluginError::IOError(e.to_string()))?;
+                Ok(serde_json::json!({ "status": "success", "data": expenses }).to_string())
+            }
+            ("chronos", "add_reminder") => {
+                let remind_at = params["remind_at"]
+                    .as_str()
+                    .ok_or_else(|| PluginError::LogicError("Missing remind_at".into()))?;
+                let desc = params["description"]
+                    .as_str()
+                    .ok_or_else(|| PluginError::LogicError("Missing description".into()))?;
+                db.add_reminder(remind_at, desc)
+                    .map_err(|e| PluginError::IOError(e.to_string()))?;
+                Ok(
+                    r#"{"status": "success", "message": "Recordatorio guardado correctamente."}"#
+                        .into(),
+                )
+            }
+            ("chronos", "get_reminders") => {
+                let limit = params["limit"].as_u64().unwrap_or(10) as u32;
+                let reminders = db
+                    .get_reminders(limit)
+                    .map_err(|e| PluginError::IOError(e.to_string()))?;
+                Ok(serde_json::json!({ "status": "success", "data": reminders }).to_string())
+            }
+            (_, "get_metadata") => Ok(serde_json::json!({ "status": "success", "data": metadata }).to_string()),
+            _ => Err(PluginError::FunctionNotFound(format!(
+                "Action {} not found in plugin {}",
+                action, name
+            ))),
+        }
     }
 
     /// Verifica si un plugin está cargado y activo.
@@ -587,6 +700,44 @@ mod tests {
 
         // Limpiar firma manual
         let _ = std::fs::remove_file(sig_path);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_domain_plugin_execution() -> anyhow::Result<()> {
+        let manager = PluginManager::new()?;
+        let tenant_id = "test_domain_user_clean";
+        let session_key = "test_key_123";
+
+        // Test Ledger
+        let ledger_input = r#"{"action": "add_expense", "params": {"amount": 100.0, "description": "Test expense", "category": "test"}}"#;
+        let res = manager
+            .execute_plugin(tenant_id, "ledger", ledger_input, Some(session_key))
+            .await?;
+        assert!(res.contains("success"));
+
+        let get_input = r#"{"action": "get_expenses", "params": {"limit": 1}}"#;
+        let res = manager
+            .execute_plugin(tenant_id, "ledger", get_input, Some(session_key))
+            .await?;
+        assert!(res.contains("Test expense"));
+
+        // Test Chronos
+        let chronos_input = r#"{"action": "add_reminder", "params": {"remind_at": "2026-05-01 12:00", "description": "Test reminder"}}"#;
+        let res = manager
+            .execute_plugin(tenant_id, "chronos", chronos_input, Some(session_key))
+            .await?;
+        assert!(res.contains("success"));
+
+        let get_input = r#"{"action": "get_reminders", "params": {"limit": 1}}"#;
+        let res = manager
+            .execute_plugin(tenant_id, "chronos", get_input, Some(session_key))
+            .await?;
+        assert!(res.contains("Test reminder"));
+
+        // Limpiar
+        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
 
         Ok(())
     }
