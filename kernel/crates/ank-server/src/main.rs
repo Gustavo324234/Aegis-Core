@@ -45,7 +45,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-
     // 1. Inicializar tracing
     let data_dir = resolve_data_dir();
     let logs_dir = data_dir.join("logs");
