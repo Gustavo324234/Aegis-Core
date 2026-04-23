@@ -1,9 +1,9 @@
+use crate::pcb::PCB;
 use crate::plugins::PluginManager;
 use crate::router::{CognitiveRouter, RoutingDecision};
 use crate::scheduler::{ModelPreference, SharedPCB};
-use crate::vcm::VirtualContextManager;
 use crate::vcm::swap::LanceSwapManager;
-use crate::pcb::PCB;
+use crate::vcm::VirtualContextManager;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -11,13 +11,17 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tokio_stream::Stream;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 pub mod drivers;
 pub mod hardware;
-pub mod embeddings;
 
-pub use embeddings::EmbeddingDriver;
+use async_trait::async_trait;
+#[async_trait]
+pub trait EmbeddingDriver: Send + Sync {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, SystemError>;
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, SystemError>;
+}
 
 /// --- SYSTEM PROMPT ---
 /// CORE-128: System prompt base honesto y sin alucinaciones.
@@ -138,18 +142,22 @@ impl CognitiveHAL {
         let data_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
         let swap_manager = Arc::new(LanceSwapManager::new(&data_dir));
 
-        let embedding_driver: Option<Arc<dyn EmbeddingDriver>> = 
-            if let Some(cloud_driver) = crate::chal::drivers::CloudProxyDriver::from_env(Arc::clone(&http_client)) {
-                let model = std::env::var("AEGIS_CLOUD_EMBEDDING_MODEL").unwrap_or_else(|_| "text-embedding-3-small".to_string());
-                Some(Arc::new(crate::chal::drivers::embeddings::CloudEmbeddingDriver::new(
+        let embedding_driver: Option<Arc<dyn EmbeddingDriver>> = if let Some(cloud_driver) =
+            crate::chal::drivers::CloudProxyDriver::from_env(Arc::clone(&http_client))
+        {
+            let model = std::env::var("AEGIS_CLOUD_EMBEDDING_MODEL")
+                .unwrap_or_else(|_| "text-embedding-3-small".to_string());
+            Some(Arc::new(
+                crate::chal::drivers::embeddings::CloudEmbeddingDriver::new(
                     Arc::clone(&http_client),
-                    cloud_driver.api_url,
-                    cloud_driver.api_key,
+                    cloud_driver.api_url.clone(),
+                    cloud_driver.api_key.clone(),
                     model,
-                )))
-            } else {
-                None
-            };
+                ),
+            ))
+        } else {
+            None
+        };
 
         Ok(Self {
             drivers,
@@ -265,7 +273,7 @@ impl CognitiveHAL {
                 }
             }
         };
-        
+
         let pcb_snapshot = shared_pcb.read().await.clone();
 
         let driver = self.drivers.get(driver_id).ok_or_else(|| {
@@ -348,15 +356,20 @@ impl CognitiveHAL {
     /// Construye el prompt final para el LLM usando VCM para ensamblar contexto.
     pub async fn build_prompt(&self, pcb: &PCB, persona: Option<&str>) -> String {
         // 1. Ensamblar contexto via VCM (L1 + L2 + L3)
-        let assembled_context = self.vcm.assemble_context(
-            pcb, 
-            &self.swap_manager, 
-            self.embedding_driver.as_deref(),
-            4096
-        )
+        let assembled_context = self
+            .vcm
+            .assemble_context(
+                pcb,
+                &self.swap_manager,
+                self.embedding_driver.as_deref(),
+                4096,
+            )
             .await
             .unwrap_or_else(|e| {
-                warn!("VCM assembly failed: {}. Falling back to raw instruction.", e);
+                warn!(
+                    "VCM assembly failed: {}. Falling back to raw instruction.",
+                    e
+                );
                 pcb.memory_pointers.l1_instruction.clone()
             });
 

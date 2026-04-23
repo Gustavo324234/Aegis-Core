@@ -1,6 +1,6 @@
+use crate::chal::EmbeddingDriver;
 use crate::pcb::PCB;
 use crate::vcm::swap::LanceSwapManager;
-use crate::chal::EmbeddingDriver;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 use thiserror::Error;

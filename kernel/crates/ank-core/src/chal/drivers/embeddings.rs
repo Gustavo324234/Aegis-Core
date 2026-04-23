@@ -1,14 +1,8 @@
-use crate::chal::SystemError;
+use crate::chal::{EmbeddingDriver, SystemError};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-#[async_trait]
-pub trait EmbeddingDriver: Send + Sync {
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, SystemError>;
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, SystemError>;
-}
 
 pub struct CloudEmbeddingDriver {
     pub api_url: String,
@@ -67,7 +61,7 @@ impl EmbeddingDriver for CloudEmbeddingDriver {
         } else if self.api_url.ends_with("/completions") {
             self.api_url.replace("/completions", "/embeddings")
         } else if !self.api_url.contains("/embeddings") {
-             format!("{}/embeddings", self.api_url.trim_end_matches('/'))
+            format!("{}/embeddings", self.api_url.trim_end_matches('/'))
         } else {
             self.api_url.clone()
         };
@@ -79,7 +73,9 @@ impl EmbeddingDriver for CloudEmbeddingDriver {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| SystemError::HardwareFailure(format!("Embedding request failed: {}", e)))?;
+            .map_err(|e| {
+                SystemError::HardwareFailure(format!("Embedding request failed: {}", e))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
