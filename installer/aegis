@@ -191,9 +191,9 @@ cmd_update() {
         local arch_str="amd64"
         [[ "$(uname -m)" == "aarch64" ]] && arch_str="arm64"
         local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch_str}"
-        if sudo curl -L --fail --silent "$url" -o /usr/bin/cloudflared && sudo chmod +x /usr/bin/cloudflared; then
+        if sudo curl -L --fail --silent "$url" -o /usr/bin/cloudflared && sudo chmod 755 /usr/bin/cloudflared; then
             printf '%b  → cloudflared instalado en /usr/bin%b\n' "$GREEN" "$NC"
-        elif sudo curl -L --fail --silent "$url" -o /usr/local/bin/cloudflared && sudo chmod +x /usr/local/bin/cloudflared; then
+        elif sudo curl -L --fail --silent "$url" -o /usr/local/bin/cloudflared && sudo chmod 755 /usr/local/bin/cloudflared; then
             printf '%b  → cloudflared instalado en /usr/local/bin%b\n' "$GREEN" "$NC"
         else
             printf '%b  → cloudflared no disponible — acceso solo LAN%b\n' "$YELLOW" "$NC"
@@ -207,8 +207,6 @@ cmd_update() {
     printf "Nueva versión: "
     cmd_version
 }
-
-
 
 cmd_token() {
     printf '%sRetrieving Setup Token...%s\n' "$CYAN" "$NC"
@@ -233,6 +231,23 @@ cmd_uninstall() {
     sudo bash -c "$(curl -sSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/uninstall.sh)" -- "$@"
 }
 
+cmd_tunnel() {
+    printf '%b--- Aegis OS Cloudflare Tunnel ---%b\n' "$CYAN" "$NC"
+    if ! command -v cloudflared &>/dev/null; then
+        printf '%bError: cloudflared no está instalado.%b\n' "$RED" "$NC"
+        printf 'Ejecutá %bsudo aegis update%b para instalarlo.\n' "$YELLOW" "$NC"
+        exit 1
+    fi
+    
+    local protocol="http"
+    local port=8000
+    
+    printf 'Iniciando túnel hacia %s://localhost:%s...\n' "$protocol" "$port"
+    printf '%bPresioná Ctrl+C para detener el túnel.%b\n\n' "$YELLOW" "$NC"
+    
+    cloudflared tunnel --url "${protocol}://localhost:${port}"
+}
+
 case "${1:-help}" in
     start)     shift; cmd_start "$@" ;;
     stop)      shift; cmd_stop "$@" ;;
@@ -241,7 +256,7 @@ case "${1:-help}" in
     diag)      shift; cmd_diag "$@" ;;
     logs)      shift; cmd_logs "$@" ;;
     update)    shift; cmd_update "$@" ;;
-
+    tunnel)    shift; cmd_tunnel "$@" ;;
     version)   shift; cmd_version "$@" ;;
     token)     shift; cmd_token "$@" ;;
     uninstall) shift; cmd_uninstall "$@" ;;
@@ -258,6 +273,7 @@ case "${1:-help}" in
         echo "  diag          Run deep diagnostic report"
         echo "  version       Show installed core version"
         echo "  logs [N]      Follow logs (default 100)"
+        echo "  tunnel           Manually start Cloudflare Tunnel"
         echo "  update           Update to latest nightly build (installs cloudflared if missing)"
         echo "  update --stable  Update to latest stable release (installs cloudflared if missing)"
         echo "  token            Get setup URL"
