@@ -1,7 +1,6 @@
 use crate::chal::EmbeddingDriver;
 use crate::pcb::PCB;
 use crate::vcm::swap::LanceSwapManager;
-use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 use thiserror::Error;
 use tracing::warn;
@@ -93,7 +92,7 @@ impl VirtualContextManager {
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
         if !pcb.memory_pointers.swap_refs.is_empty() {
-            for swap_query in &pcb.memory_pointers.swap_refs {
+            for _swap_query in &pcb.memory_pointers.swap_refs {
                 let query_vector = if let Some(driver) = embedding_driver {
                     driver
                         .embed(&pcb.memory_pointers.l1_instruction)

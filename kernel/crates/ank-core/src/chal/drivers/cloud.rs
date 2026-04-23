@@ -1,11 +1,10 @@
-use crate::chal::{DriverStatus, ExecutionError, Grammar, InferenceDriver, SystemError};
+use crate::chal::{DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError};
 use async_trait::async_trait;
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -161,15 +160,15 @@ struct Delta {
 impl InferenceDriver for CloudProxyDriver {
     async fn generate_stream(
         &self,
-        prompt: &str,
+        prompt: String,
         grammar: Option<Grammar>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
+    ) -> GenerateStreamResult
     {
         let mut request_body = ChatCompletionRequest {
             model: self.model_id.clone(),
             messages: vec![Message {
                 role: "user".to_string(),
-                content: prompt.to_string(),
+                content: prompt,
             }],
             stream: true,
             response_format: None,

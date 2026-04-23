@@ -329,11 +329,13 @@ async fn main() -> Result<()> {
                                     "User: {}\nAssistant: {}",
                                     pcb_ref.memory_pointers.l1_instruction, full_output
                                 );
-                                let hal_for_memory = hal_read.clone();
+                                let hal_for_memory = Arc::clone(&hal_runner);
                                 let tenant_id_for_memory = tenant_id.clone();
 
                                 tokio::spawn(async move {
                                     if let Err(e) = hal_for_memory
+                                        .read()
+                                        .await
                                         .store_memory(&tenant_id_for_memory, &interaction)
                                         .await
                                     {

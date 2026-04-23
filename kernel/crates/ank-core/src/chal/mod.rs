@@ -11,12 +11,10 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tokio_stream::Stream;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 pub mod drivers;
 pub mod hardware;
-
-use async_trait::async_trait;
 #[async_trait]
 pub trait EmbeddingDriver: Send + Sync {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, SystemError>;
@@ -92,14 +90,16 @@ pub enum Grammar {
     JsonSchema(serde_json::Value),
 }
 
+pub type GenerateStreamResult = Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>;
+
 /// --- INFERENCE DRIVER INTERFACE ---
 #[async_trait]
 pub trait InferenceDriver: Send + Sync {
     async fn generate_stream(
         &self,
-        prompt: &str,
+        prompt: String,
         grammar: Option<Grammar>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>;
+    ) -> GenerateStreamResult;
 
     async fn get_health_status(&self) -> DriverStatus;
 
@@ -287,7 +287,7 @@ impl CognitiveHAL {
         })?;
 
         let final_prompt = self.build_prompt(&pcb_snapshot, persona.as_deref()).await;
-        driver.generate_stream(&final_prompt, None).await
+        driver.generate_stream(final_prompt, None).await
     }
 
     async fn execute_with_decision(
@@ -316,7 +316,7 @@ impl CognitiveHAL {
 
         let final_prompt = self.build_prompt(pcb, persona).await;
 
-        match driver.generate_stream(&final_prompt, None).await {
+        match driver.generate_stream(final_prompt.clone(), None).await {
             Ok(stream) => Ok(stream),
             Err(e) => {
                 for fallback in &decision.fallback_chain {
@@ -331,7 +331,7 @@ impl CognitiveHAL {
                         fallback.api_key.clone(),
                         fallback.model_id.clone(),
                     );
-                    if let Ok(stream) = fallback_driver.generate_stream(&final_prompt, None).await {
+                    if let Ok(stream) = fallback_driver.generate_stream(final_prompt.clone(), None).await {
                         return Ok(stream);
                     }
                 }
@@ -433,9 +433,9 @@ pub struct DummyDriver {
 impl InferenceDriver for DummyDriver {
     async fn generate_stream(
         &self,
-        _prompt: &str,
+        _prompt: String,
         _grammar: Option<Grammar>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
+    ) -> GenerateStreamResult
     {
         let response = format!("[{}] OK", self.name);
         let stream = tokio_stream::iter(vec![Ok(response)]);
