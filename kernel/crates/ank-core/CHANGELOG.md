@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.12](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.11...ank-core-v0.1.12) (2026-04-23)
+
+
+### Features
+
+* **core-152:** implement domain plugins for ledger and chronos ([#106](https://github.com/Gustavo324234/Aegis-Core/issues/106)) ([c06f408](https://github.com/Gustavo324234/Aegis-Core/commit/c06f408d18e49fc946bf74d93026eb68b075978b))
+
 ## [0.1.11](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.10...ank-core-v0.1.11) (2026-04-22)
 
 

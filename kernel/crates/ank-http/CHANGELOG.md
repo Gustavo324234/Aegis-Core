@@ -2,6 +2,8 @@
 
 
 
+## [0.1.17](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.16...ank-http-v0.1.17) (2026-04-23)
+
 ## [0.1.16](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.15...ank-http-v0.1.16) (2026-04-22)
 
 
