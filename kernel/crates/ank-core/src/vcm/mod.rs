@@ -1,3 +1,4 @@
+use crate::chal::EmbeddingDriver;
 use crate::pcb::PCB;
 use crate::vcm::swap::LanceSwapManager;
 use std::path::{Component, Path};
@@ -51,6 +52,7 @@ impl VirtualContextManager {
         &self,
         pcb: &PCB,
         swap_manager: &LanceSwapManager,
+        embedding_driver: Option<&dyn EmbeddingDriver>,
         token_limit: usize,
     ) -> Result<String, VCMError> {
         // Enlazar dependencias para la heurística basada en .env si es CloudOnly
@@ -90,21 +92,17 @@ impl VirtualContextManager {
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
         if !pcb.memory_pointers.swap_refs.is_empty() {
-            for swap_query in &pcb.memory_pointers.swap_refs {
-                let vector = if let Some(stripped) = swap_query.strip_prefix("vec:") {
-                    stripped
-                        .split(',')
-                        .filter_map(|s| s.trim().parse::<f32>().ok())
-                        .collect::<Vec<f32>>()
+            for _swap_query in &pcb.memory_pointers.swap_refs {
+                let query_vector = if let Some(driver) = embedding_driver {
+                    driver
+                        .embed(&pcb.memory_pointers.l1_instruction)
+                        .await
+                        .unwrap_or_else(|_| vec![0.0; 128])
                 } else {
-                    vec![0.0; 128] // FUTURE(ANK-2401): Replace with local ONNX embedding server call
+                    vec![0.0; 128]
                 };
 
-                if vector.is_empty() {
-                    continue;
-                }
-
-                if let Ok(fragments) = swap_manager.search(tenant_id, vector, 3).await {
+                if let Ok(fragments) = swap_manager.search(tenant_id, query_vector, 5).await {
                     for fragment in fragments {
                         let fragment_text =
                             format!("[Memory ID: {}]\n{}\n", fragment.id, fragment.text);
@@ -307,7 +305,7 @@ mod tests {
         let pcb = PCB::new("TestProcess".into(), 5, "Summarize this".into());
 
         // Límite generoso
-        let context = vcm.assemble_context(&pcb, &swap, 1000).await?;
+        let context = vcm.assemble_context(&pcb, &swap, None, 1000).await?;
 
         assert!(context.contains("SYSTEM: Aegis Neural Kernel VCM"));
         assert!(context.contains("Summarize this"));
@@ -324,7 +322,7 @@ mod tests {
             "test_tenant_vcm_overflow_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
                 .as_millis()
         );
         let workspace_path = format!("./users/{}/workspace", tenant_id);
@@ -355,7 +353,7 @@ mod tests {
             .push(format!("file://{}", file_name));
 
         // Límite pequeño que no permite el archivo pero sí el resto
-        let context = vcm.assemble_context(&pcb, &swap, 100).await?;
+        let context = vcm.assemble_context(&pcb, &swap, None, 100).await?;
 
         // Limpiar
         let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
@@ -380,7 +378,7 @@ mod tests {
         let mut pcb = PCB::new("SwapProc".into(), 5, "Check memory".into());
         pcb.memory_pointers.swap_refs.push("vec:0.1,0.2".into());
 
-        let context = vcm.assemble_context(&pcb, &swap, 1000).await?;
+        let context = vcm.assemble_context(&pcb, &swap, None, 1000).await?;
 
         // No debería fallar, aunque la lista esté vacía.
         assert!(context.contains("Check memory"));
@@ -395,7 +393,7 @@ mod tests {
         pcb.inlined_context
             .insert("parent_node".into(), "parent_output".into());
 
-        let context = vcm.assemble_context(&pcb, &swap, 1000).await?;
+        let context = vcm.assemble_context(&pcb, &swap, None, 1000).await?;
         assert!(context.contains("## DAG CONTEXT (DEPENDENCIES)"));
         assert!(context.contains("[Node: parent_node]"));
         assert!(context.contains("parent_output"));

@@ -45,11 +45,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // CORE-147: Enforce internal HTTP by unsetting TLS environment variables.
-    // Cloudflare Tunnel handles HTTPS externally.
-    std::env::remove_var("AEGIS_TLS_CERT");
-    std::env::remove_var("AEGIS_TLS_KEY");
-
     // 1. Inicializar tracing
     let data_dir = resolve_data_dir();
     let logs_dir = data_dir.join("logs");
@@ -249,6 +244,7 @@ async fn main() -> Result<()> {
                     Ok(mut stream) => {
                         use tokio_stream::StreamExt as _;
                         let mut tokens_emitted: u32 = 0;
+                        let mut full_output = String::new();
 
                         while let Some(token_result) = stream.next().await {
                             // CORE-097: Verificar cancelación en cada chunk
@@ -279,6 +275,7 @@ async fn main() -> Result<()> {
                             match token_result {
                                 Ok(token) => {
                                     tokens_emitted = tokens_emitted.saturating_add(1);
+                                    full_output.push_str(&token);
                                     let event = ank_proto::v1::TaskEvent {
                                         pid: pid.clone(),
                                         timestamp: None,
@@ -319,10 +316,39 @@ async fn main() -> Result<()> {
                         };
                         telemetry_runner.add_inference(inference).await;
 
+                        // CORE-FIX: Neuronal Memory Storage (L3)
+                        if tokens_emitted > 0 {
+                            let pcb_ref = shared_pcb.read().await;
+                            if let Some(tenant_id) = &pcb_ref.tenant_id {
+                                let interaction = format!(
+                                    "User: {}\nAssistant: {}",
+                                    pcb_ref.memory_pointers.l1_instruction, full_output
+                                );
+                                let hal_for_memory = Arc::clone(&hal_runner);
+                                let tenant_id_for_memory = tenant_id.clone();
+
+                                tokio::spawn(async move {
+                                    if let Err(e) = hal_for_memory
+                                        .read()
+                                        .await
+                                        .store_memory(&tenant_id_for_memory, &interaction)
+                                        .await
+                                    {
+                                        tracing::warn!("Failed to store neuronal memory: {}", e);
+                                    } else {
+                                        tracing::info!(
+                                            "Neuronal memory fragment stored for tenant {}",
+                                            tenant_id_for_memory
+                                        );
+                                    }
+                                });
+                            }
+                        }
+
                         let _ = scheduler_tx_runner
                             .send(SchedulerEvent::ProcessCompleted {
                                 pid: pid.clone(),
-                                output: "stream_complete".to_string(),
+                                output: full_output,
                             })
                             .await;
 
@@ -402,29 +428,7 @@ async fn main() -> Result<()> {
     let grpc_addr = "0.0.0.0:50051".parse()?;
     let mut tonic_builder = Server::builder();
 
-    match (
-        std::env::var("AEGIS_TLS_CERT"),
-        std::env::var("AEGIS_TLS_KEY"),
-    ) {
-        (Ok(cert_p), Ok(key_p)) => {
-            info!("TLS enabled for gRPC (Tonic)");
-            let cert = tokio::fs::read(cert_p).await?;
-            let key = tokio::fs::read(key_p).await?;
-            let id = tonic::transport::Identity::from_pem(cert, key);
-            tonic_builder =
-                tonic_builder.tls_config(tonic::transport::ServerTlsConfig::new().identity(id))?;
-        }
-        _ => {
-            let strict = std::env::var("AEGIS_MTLS_STRICT")
-                .unwrap_or_default()
-                .to_lowercase()
-                == "true";
-            if strict {
-                anyhow::bail!("AEGIS_MTLS_STRICT=true but certificates are missing.");
-            }
-            warn!("gRPC running in INSECURE mode");
-        }
-    }
+    warn!("gRPC running in INSECURE mode (h2c)");
 
     tokio::spawn(async move {
         if let Err(e) = tonic_builder.add_service(tonic_svc).serve(grpc_addr).await {
@@ -454,12 +458,12 @@ async fn main() -> Result<()> {
                         warn!("Tunnel Manager: cloudflared error: {}", e);
                     }
                 }
-                
+
                 {
                     let mut lock = tunnel_url_state.write().await;
                     *lock = None;
                 }
-                
+
                 info!("Tunnel Manager: Restarting in 10 seconds...");
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
@@ -472,7 +476,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_tunnel_and_monitor(port: u16, tunnel_url_state: Arc<RwLock<Option<String>>>) -> Result<()> {
+async fn run_tunnel_and_monitor(
+    port: u16,
+    tunnel_url_state: Arc<RwLock<Option<String>>>,
+) -> Result<()> {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
@@ -499,7 +506,7 @@ async fn run_tunnel_and_monitor(port: u16, tunnel_url_state: Arc<RwLock<Option<S
         .stderr
         .take()
         .context("Failed to capture cloudflared stderr")?;
-    
+
     let mut lines = BufReader::new(stderr).lines();
     let mut url_found = false;
 

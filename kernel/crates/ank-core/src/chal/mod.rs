@@ -1,6 +1,9 @@
+use crate::pcb::PCB;
 use crate::plugins::PluginManager;
 use crate::router::{CognitiveRouter, RoutingDecision};
 use crate::scheduler::{ModelPreference, SharedPCB};
+use crate::vcm::swap::LanceSwapManager;
+use crate::vcm::VirtualContextManager;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -12,6 +15,11 @@ use tracing::{info, warn};
 
 pub mod drivers;
 pub mod hardware;
+#[async_trait]
+pub trait EmbeddingDriver: Send + Sync {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, SystemError>;
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, SystemError>;
+}
 
 /// --- SYSTEM PROMPT ---
 /// CORE-128: System prompt base honesto y sin alucinaciones.
@@ -82,14 +90,17 @@ pub enum Grammar {
     JsonSchema(serde_json::Value),
 }
 
+pub type GenerateStreamResult =
+    Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>;
+
 /// --- INFERENCE DRIVER INTERFACE ---
 #[async_trait]
 pub trait InferenceDriver: Send + Sync {
     async fn generate_stream(
         &self,
-        prompt: &str,
+        prompt: String,
         grammar: Option<Grammar>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>;
+    ) -> GenerateStreamResult;
 
     async fn get_health_status(&self) -> DriverStatus;
 
@@ -104,6 +115,9 @@ pub struct CognitiveHAL {
     pub router: Option<Arc<RwLock<CognitiveRouter>>>,
     pub hardware: TokioMutex<hardware::HardwareMonitor>,
     pub http_client: Arc<reqwest::Client>,
+    pub vcm: VirtualContextManager,
+    pub swap_manager: Arc<LanceSwapManager>,
+    pub embedding_driver: Option<Arc<dyn EmbeddingDriver>>,
 }
 
 impl CognitiveHAL {
@@ -126,6 +140,26 @@ impl CognitiveHAL {
             tracing::info!("CloudProxyDriver initialized via ENV vars and registered.");
         }
 
+        let data_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let swap_manager = Arc::new(LanceSwapManager::new(&data_dir));
+
+        let embedding_driver: Option<Arc<dyn EmbeddingDriver>> = if let Some(cloud_driver) =
+            crate::chal::drivers::CloudProxyDriver::from_env(Arc::clone(&http_client))
+        {
+            let model = std::env::var("AEGIS_CLOUD_EMBEDDING_MODEL")
+                .unwrap_or_else(|_| "text-embedding-3-small".to_string());
+            Some(Arc::new(
+                crate::chal::drivers::embeddings::CloudEmbeddingDriver::new(
+                    Arc::clone(&http_client),
+                    cloud_driver.api_url.clone(),
+                    cloud_driver.api_key.clone(),
+                    model,
+                ),
+            ))
+        } else {
+            None
+        };
+
         Ok(Self {
             drivers,
             plugin_manager,
@@ -133,6 +167,9 @@ impl CognitiveHAL {
             router: None,
             hardware: TokioMutex::new(hardware::HardwareMonitor::new()),
             http_client,
+            vcm: VirtualContextManager::new(),
+            swap_manager,
+            embedding_driver,
         })
     }
 
@@ -183,7 +220,7 @@ impl CognitiveHAL {
             match router.decide(&pcb_snapshot).await {
                 Ok(decision) => {
                     return self
-                        .execute_with_decision(decision, &instruction, &pid, persona.as_deref())
+                        .execute_with_decision(decision, &pcb_snapshot, &pid, persona.as_deref())
                         .await;
                 }
                 Err(e) => {
@@ -238,6 +275,8 @@ impl CognitiveHAL {
             }
         };
 
+        let pcb_snapshot = shared_pcb.read().await.clone();
+
         let driver = self.drivers.get(driver_id).ok_or_else(|| {
             if driver_id == "cloud-driver" {
                 SystemError::HardwareFailure(
@@ -248,14 +287,14 @@ impl CognitiveHAL {
             }
         })?;
 
-        let final_prompt = self.build_prompt(&instruction, persona.as_deref()).await;
-        driver.generate_stream(&final_prompt, None).await
+        let final_prompt = self.build_prompt(&pcb_snapshot, persona.as_deref()).await;
+        driver.generate_stream(final_prompt, None).await
     }
 
     async fn execute_with_decision(
         &self,
         decision: RoutingDecision,
-        instruction: &str,
+        pcb: &PCB,
         pid: &str,
         persona: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
@@ -276,9 +315,9 @@ impl CognitiveHAL {
             decision.model_id.clone(),
         );
 
-        let final_prompt = self.build_prompt(instruction, persona).await;
+        let final_prompt = self.build_prompt(pcb, persona).await;
 
-        match driver.generate_stream(&final_prompt, None).await {
+        match driver.generate_stream(final_prompt.clone(), None).await {
             Ok(stream) => Ok(stream),
             Err(e) => {
                 for fallback in &decision.fallback_chain {
@@ -293,7 +332,10 @@ impl CognitiveHAL {
                         fallback.api_key.clone(),
                         fallback.model_id.clone(),
                     );
-                    if let Ok(stream) = fallback_driver.generate_stream(&final_prompt, None).await {
+                    if let Ok(stream) = fallback_driver
+                        .generate_stream(final_prompt.clone(), None)
+                        .await
+                    {
                         return Ok(stream);
                     }
                 }
@@ -302,10 +344,39 @@ impl CognitiveHAL {
         }
     }
 
-    /// Construye el prompt final para el LLM.
-    /// CORE-123: sin tag [USER_PROCESS_INSTRUCTION] que confundía al modelo.
-    /// CORE-128: system prompt honesto sin alucinaciones.
-    pub async fn build_prompt(&self, instruction: &str, persona: Option<&str>) -> String {
+    /// Almacena un fragmento de texto en la base de datos neuronal (L3).
+    pub async fn store_memory(&self, tenant_id: &str, text: &str) -> Result<String, SystemError> {
+        let driver = self.embedding_driver.as_ref().ok_or_else(|| {
+            SystemError::HardwareFailure("No embedding driver configured for memory storage".into())
+        })?;
+
+        let vector = driver.embed(text).await?;
+        self.swap_manager
+            .store_fragment(tenant_id, text, vector)
+            .await
+            .map_err(|e| SystemError::HardwareFailure(format!("Swap storage failed: {}", e)))
+    }
+
+    /// Construye el prompt final para el LLM usando VCM para ensamblar contexto.
+    pub async fn build_prompt(&self, pcb: &PCB, persona: Option<&str>) -> String {
+        // 1. Ensamblar contexto via VCM (L1 + L2 + L3)
+        let assembled_context = self
+            .vcm
+            .assemble_context(
+                pcb,
+                &self.swap_manager,
+                self.embedding_driver.as_deref(),
+                4096,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                warn!(
+                    "VCM assembly failed: {}. Falling back to raw instruction.",
+                    e
+                );
+                pcb.memory_pointers.l1_instruction.clone()
+            });
+
         let tool_prompt = self
             .plugin_manager
             .read()
@@ -341,17 +412,17 @@ impl CognitiveHAL {
         if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
                 "{}{}{}\n\n{}",
-                SYSTEM_PROMPT_MASTER, persona_section, music_section, instruction
+                SYSTEM_PROMPT_MASTER, persona_section, music_section, assembled_context
             )
         } else {
             format!(
-                "{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nMENSAJE DEL USUARIO:\n{}",
+                "{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nCONTENIDO ENSAMBLADO (CONTEXTO):\n{}",
                 SYSTEM_PROMPT_MASTER,
                 persona_section,
                 music_section,
                 tool_prompt,
                 mcp_tool_prompt,
-                instruction
+                assembled_context
             )
         }
     }
@@ -366,10 +437,9 @@ pub struct DummyDriver {
 impl InferenceDriver for DummyDriver {
     async fn generate_stream(
         &self,
-        _prompt: &str,
+        _prompt: String,
         _grammar: Option<Grammar>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
-    {
+    ) -> GenerateStreamResult {
         let response = format!("[{}] OK", self.name);
         let stream = tokio_stream::iter(vec![Ok(response)]);
         Ok(Box::pin(stream))
@@ -459,7 +529,8 @@ mod tests {
     async fn test_build_prompt_no_tools_is_clean() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let hal = CognitiveHAL::new(pm)?;
-        let prompt = hal.build_prompt("hola", None).await;
+        let pcb = PCB::new("test".into(), 5, "hola".into());
+        let prompt = hal.build_prompt(&pcb, None).await;
         assert!(
             !prompt.contains("[USER_PROCESS_INSTRUCTION]"),
             "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
@@ -484,8 +555,9 @@ mod tests {
     async fn test_build_prompt_with_persona() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let hal = CognitiveHAL::new(pm)?;
+        let pcb = PCB::new("test".into(), 5, "hola".into());
         let prompt = hal
-            .build_prompt("hola", Some("Eres Eve, asistente de ACME Corp."))
+            .build_prompt(&pcb, Some("Eres Eve, asistente de ACME Corp."))
             .await;
         assert!(prompt.contains("Eve"), "El prompt debe contener la persona");
         assert!(

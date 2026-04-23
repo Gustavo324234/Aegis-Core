@@ -10,6 +10,7 @@ use axum::{
     routing::get,
     Router,
 };
+use chrono;
 use futures::StreamExt;
 use regex::Regex;
 use serde::Deserialize;
@@ -21,13 +22,13 @@ use tokio_stream::wrappers::BroadcastStream;
 #[allow(clippy::expect_used)]
 static MUSIC_PLAY_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[MUSIC_PLAY:(spotify|youtube):([A-Za-z0-9_:%-]{5,50})\]")
-        .expect("FATAL: music play regex is invalid")
+        .unwrap_or_else(|_| panic!("FATAL: music play regex is invalid"))
 });
 
 #[allow(clippy::expect_used)]
 static MUSIC_CTRL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[(MUSIC_PAUSE|MUSIC_RESUME|MUSIC_STOP|MUSIC_VOLUME:(\d{1,3}))\]")
-        .expect("FATAL: music control regex is invalid")
+        .unwrap_or_else(|_| panic!("FATAL: music control regex is invalid"))
 });
 
 pub fn router() -> Router<AppState> {
@@ -150,11 +151,9 @@ async fn handle_chat(
         if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
             let _ = db.set_onboarding_step("awaiting_name");
         }
-        send_onboarding_message(
-            &mut socket,
-            "Hola! Soy tu nuevo asistente personal 👋\n¿Cómo querés que me llame?",
-        )
-        .await;
+        let greeting = "Hola! Soy tu nuevo asistente personal 👋\n¿Cómo querés que me llame?";
+        send_onboarding_message(&mut socket, greeting).await;
+        let _ = append_to_chat_history(&tenant_id, "ASSISTANT", greeting).await;
     }
 
     // 3. Loop
@@ -239,7 +238,9 @@ async fn handle_chat(
                          (o describímela con tus palabras)",
                         name, name
                     );
+                    let _ = append_to_chat_history(&tenant_id, "USER", &prompt).await;
                     send_onboarding_message(&mut socket, &msg).await;
+                    let _ = append_to_chat_history(&tenant_id, "ASSISTANT", &msg).await;
                     continue;
                 }
 
@@ -275,7 +276,9 @@ async fn handle_chat(
                             name,
                             friendly_style_label(&style_input)
                         );
+                        let _ = append_to_chat_history(&tenant_id, "USER", &prompt).await;
                         send_onboarding_message(&mut socket, &msg).await;
+                        let _ = append_to_chat_history(&tenant_id, "ASSISTANT", &msg).await;
                     }
                     continue;
                 }
@@ -303,10 +306,22 @@ async fn handle_chat(
                         })
                         .unwrap_or(ank_core::scheduler::ModelPreference::HybridSmart)
                 };
-            let mut pcb = PCB::new(tenant_id.clone(), 5, prompt);
+            let mut pcb = PCB::new(tenant_id.clone(), 5, prompt.clone());
             pcb.model_pref = pref;
             pcb.tenant_id = Some(tenant_id.clone());
             pcb.session_key = Some(hash.clone());
+
+            // CORE-FIX: Enable conversation history and semantic memory
+            pcb.memory_pointers
+                .l2_context_refs
+                .push("file://chat_history.log".to_string());
+            pcb.memory_pointers
+                .swap_refs
+                .push("semantic_memory".to_string());
+
+            // Save user prompt to history
+            let _ = append_to_chat_history(&tenant_id, "USER", &prompt).await;
+
             let pid = pcb.pid.clone();
 
             // CORE-FIX: Suscribirse al broadcast channel ANTES de enviar la tarea
@@ -352,7 +367,12 @@ async fn handle_chat(
                 .await;
 
             // Streamear con el receiver ya suscrito antes del dispatch
-            stream_with_receiver(&mut socket, receiver).await;
+            let full_response = stream_with_receiver(&mut socket, receiver).await;
+
+            // Save assistant response to history
+            if !full_response.is_empty() {
+                let _ = append_to_chat_history(&tenant_id, "ASSISTANT", &full_response).await;
+            }
         }
     }
 }
@@ -372,7 +392,8 @@ async fn stream_task_events(socket: &mut WebSocket, pid: &str, state: &AppState)
 async fn stream_with_receiver(
     socket: &mut WebSocket,
     receiver: tokio::sync::broadcast::Receiver<ank_proto::v1::TaskEvent>,
-) {
+) -> String {
+    let mut full_output = String::new();
     let mut stream = BroadcastStream::new(receiver);
 
     while let Some(Ok(proto_event)) = stream.next().await {
@@ -436,7 +457,10 @@ async fn stream_with_receiver(
 
             let data = match payload {
                 ank_proto::v1::task_event::Payload::Thought(t) => json!({ "thought": t }),
-                ank_proto::v1::task_event::Payload::Output(o) => json!({ "output": o }),
+                ank_proto::v1::task_event::Payload::Output(o) => {
+                    full_output.push_str(o);
+                    json!({ "output": o })
+                }
                 ank_proto::v1::task_event::Payload::StatusUpdate(s) => {
                     let state_str = match s.state {
                         0 => "STATE_NEW",
@@ -466,6 +490,35 @@ async fn stream_with_receiver(
             }
         }
     }
+    full_output
+}
+
+/// Appends a message to the tenant's chat history log.
+async fn append_to_chat_history(tenant_id: &str, role: &str, text: &str) -> anyhow::Result<()> {
+    let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+    let workspace_path = std::path::Path::new(&base_dir)
+        .join("users")
+        .join(tenant_id)
+        .join("workspace");
+
+    let _ = tokio::fs::create_dir_all(&workspace_path).await;
+    let log_path = workspace_path.join("chat_history.log");
+
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .await?;
+
+    let entry = format!(
+        "\n[{}] {}: {}\n",
+        chrono::Utc::now().to_rfc3339(),
+        role,
+        text
+    );
+    file.write_all(entry.as_bytes()).await?;
+    Ok(())
 }
 
 /// Convierte la elección del usuario en una instrucción de Persona.

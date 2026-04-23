@@ -132,12 +132,13 @@ Agente:  No tengo acceso a tu información financiera, así que no puedo
 
 ## Criterios de aceptación
 
-- [ ] `cargo build --workspace` sin errores
-- [ ] El test `test_build_prompt_no_tools_is_clean` sigue pasando
-- [ ] El test `test_build_prompt_with_persona` sigue pasando
-- [ ] Actualizar el test para que no requiera `MÚSICA` cuando no hay plugin activo
-- [ ] Con plugin de música activo: la sección de música aparece en el prompt
-- [ ] Sin plugin de música: la sección de música NO aparece en el prompt
+- [x] `cargo build --workspace` sin errores
+- [x] El test `test_build_prompt_no_tools_is_clean` sigue pasando
+- [x] El test `test_build_prompt_with_persona` sigue pasando
+- [x] Actualizar el test para que no requiera `MÚSICA` cuando no hay plugin activo
+- [x] Con plugin de música activo: la sección de música aparece en el prompt
+- [x] Sin plugin de música: la sección de música NO aparece en el prompt
+- [x] **EXTRA:** Implementación de Memoria Neuronal (L3) y Historial de Chat (L2).
 
 ---
 
