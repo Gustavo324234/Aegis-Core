@@ -55,8 +55,10 @@ interface AegisState {
     lastTenantsUpdate: string | null;
     tenantsError: string | null;
     sttAvailable: boolean;
+    currentView: 'chat' | 'dashboard';
 
     setHydrated: (val: boolean) => void;
+    setCurrentView: (view: 'chat' | 'dashboard') => void;
     setNeedsPasswordReset: (val: boolean) => void;
     setAdminActiveTab: (tab: string) => void;
     fetchSirenConfig: () => Promise<void>;
@@ -133,8 +135,10 @@ export const useAegisStore = create<AegisState>()(
             lastTenantsUpdate: null,
             tenantsError: null,
             sttAvailable: true,
+            currentView: 'chat',
 
             setHydrated: (val) => set({ _hydrated: val }),
+            setCurrentView: (view) => set({ currentView: view }),
             setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
             setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
 
@@ -626,6 +630,7 @@ export const useAegisStore = create<AegisState>()(
                 lastError: state.lastError,
                 needsPasswordReset: state.needsPasswordReset,
                 lastTenantsUpdate: state.lastTenantsUpdate,
+                currentView: state.currentView,
             }),
         }
     )

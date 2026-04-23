@@ -9,6 +9,7 @@ import AdminDashboard from './components/AdminDashboard';
 import ForcePasswordChangeScreen from './components/ForcePasswordChangeScreen';
 import BootstrapSetup from './components/BootstrapSetup';
 import EngineSetupWizard from './components/EngineSetupWizard';
+import Dashboard from './components/Dashboard';
 
 // SRE-FIX: Error boundary para atrapar crashes de React y mostrar pantalla de recuperación
 // en lugar de pantalla negra. Limpia el localStorage y redirige al login.
@@ -60,7 +61,8 @@ function App() {
         _hydrated, status, isAuthenticated, isAdmin, systemState, 
         tenantId, sessionKey, connect, logout, fetchSystemState, 
         isEngineConfigured, setEngineConfigured, 
-        needsPasswordReset, setNeedsPasswordReset 
+        needsPasswordReset, setNeedsPasswordReset,
+        currentView
     } = useAegisStore();
     
     const [setupToken, setSetupToken] = useState<string | null>(null);
@@ -168,7 +170,7 @@ function App() {
                         </motion.div>
                     ) : (
                         <motion.div key="terminal" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: "easeOut" }} className="h-screen w-full">
-                            <ChatTerminal />
+                            {currentView === 'chat' ? <ChatTerminal /> : <Dashboard />}
                         </motion.div>
                     )}
                 </AnimatePresence>
