@@ -3,6 +3,7 @@ use crate::pcb::PCB;
 use crate::vcm::swap::LanceSwapManager;
 use std::path::{Component, Path};
 use thiserror::Error;
+use tokio::process::Command;
 use tracing::warn;
 
 pub mod swap;
@@ -45,6 +46,52 @@ impl VirtualContextManager {
         Self
     }
 
+    /// Obtiene el estado actual de Git (rama, cambios, último commit).
+    async fn fetch_git_state(&self) -> String {
+        let branch = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        let status = Command::new("git")
+            .args(["status", "--short"])
+            .output()
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "error fetching status".to_string());
+
+        let last_commit = Command::new("git")
+            .args(["log", "-1", "--pretty=%B"])
+            .output()
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "no commits found".to_string());
+
+        format!("[Git Branch]: {}\n[Git Status]:\n{}\n[Last Commit]: {}", branch, status, last_commit)
+    }
+
+    /// Obtiene el estado de los tickets desde TICKETS_MASTER.md.
+    async fn fetch_governance_state(&self) -> String {
+        let master_path = "governance/TICKETS_MASTER.md";
+        match tokio::fs::read_to_string(master_path).await {
+            Ok(content) => {
+                let in_progress: Vec<&str> = content
+                    .lines()
+                    .filter(|l| l.contains("🚧 In Progress"))
+                    .collect();
+
+                if in_progress.is_empty() {
+                    "[Governance]: No active tickets found in progress.".to_string()
+                } else {
+                    format!("[Governance - Active Tickets]:\n{}", in_progress.join("\n"))
+                }
+            }
+            Err(_) => "[Governance]: Error reading TICKETS_MASTER.md (file not found or unreadable)".to_string(),
+        }
+    }
+
     /// Ensambla el contexto final a partir de un PCB y acceso a la memoria L3.
     /// Resuelve las referencias de memoria y aplica límites de tokens.
     /// Estructura: [SYSTEM_INSTRUCTIONS] + \n + [L2_CONTEXT] + \n + [L3_MEMORY] + \n + [L1_INSTRUCTION]
@@ -78,7 +125,18 @@ impl VirtualContextManager {
         }
         let inlined_tokens = estimate_tokens(&inlined_str);
 
-        let base_tokens = sys_tokens + instr_tokens + inlined_tokens;
+        // --- PROJECT CONTEXT INJECTION (CORE-151) ---
+        let mut project_state_str = String::new();
+        project_state_str.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
+        let git_state = self.fetch_git_state().await;
+        let gov_state = self.fetch_governance_state().await;
+        project_state_str.push_str(&git_state);
+        project_state_str.push_str("\n\n");
+        project_state_str.push_str(&gov_state);
+        project_state_str.push('\n');
+
+        let project_tokens = estimate_tokens(&project_state_str);
+        let base_tokens = sys_tokens + instr_tokens + inlined_tokens + project_tokens;
 
         if base_tokens > actual_token_limit {
             return Err(VCMError::ContextOverflow(actual_token_limit));
@@ -232,6 +290,9 @@ impl VirtualContextManager {
 
         if !inlined_str.is_empty() {
             final_context.push_str(&inlined_str);
+        }
+        if !project_state_str.is_empty() {
+            final_context.push_str(&project_state_str);
         }
         if has_l2 {
             final_context.push_str(&l2_str);
