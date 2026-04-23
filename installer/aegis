@@ -178,12 +178,14 @@ cmd_update() {
         printf "  → Instalando cloudflared...\n"
         local arch_str="amd64"
         [[ "$(uname -m)" == "aarch64" ]] && arch_str="arm64"
-        curl -L --fail --silent \
-            "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch_str}" \
-            -o /usr/local/bin/cloudflared \
-            && chmod +x /usr/local/bin/cloudflared \
-            && printf '%b  → cloudflared instalado%b\n' "$GREEN" "$NC" \
-            || printf '%b  → cloudflared no disponible — acceso solo LAN%b\n' "$YELLOW" "$NC"
+        local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch_str}"
+        if sudo curl -L --fail --silent "$url" -o /usr/bin/cloudflared && sudo chmod +x /usr/bin/cloudflared; then
+            printf '%b  → cloudflared instalado en /usr/bin%b\n' "$GREEN" "$NC"
+        elif sudo curl -L --fail --silent "$url" -o /usr/local/bin/cloudflared && sudo chmod +x /usr/local/bin/cloudflared; then
+            printf '%b  → cloudflared instalado en /usr/local/bin%b\n' "$GREEN" "$NC"
+        else
+            printf '%b  → cloudflared no disponible — acceso solo LAN%b\n' "$YELLOW" "$NC"
+        fi
     fi
 
     printf "  \u2192 Iniciando servicio...\n"
