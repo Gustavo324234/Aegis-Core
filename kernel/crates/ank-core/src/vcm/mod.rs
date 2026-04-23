@@ -305,7 +305,7 @@ mod tests {
         let pcb = PCB::new("TestProcess".into(), 5, "Summarize this".into());
 
         // Límite generoso
-        let context = vcm.assemble_context(&pcb, &swap, 1000).await?;
+        let context = vcm.assemble_context(&pcb, &swap, None, 1000).await?;
 
         assert!(context.contains("SYSTEM: Aegis Neural Kernel VCM"));
         assert!(context.contains("Summarize this"));
@@ -353,7 +353,7 @@ mod tests {
             .push(format!("file://{}", file_name));
 
         // Límite pequeño que no permite el archivo pero sí el resto
-        let context = vcm.assemble_context(&pcb, &swap, 100).await?;
+        let context = vcm.assemble_context(&pcb, &swap, None, 100).await?;
 
         // Limpiar
         let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
@@ -378,7 +378,7 @@ mod tests {
         let mut pcb = PCB::new("SwapProc".into(), 5, "Check memory".into());
         pcb.memory_pointers.swap_refs.push("vec:0.1,0.2".into());
 
-        let context = vcm.assemble_context(&pcb, &swap, 1000).await?;
+        let context = vcm.assemble_context(&pcb, &swap, None, 1000).await?;
 
         // No debería fallar, aunque la lista esté vacía.
         assert!(context.contains("Check memory"));
@@ -393,7 +393,7 @@ mod tests {
         pcb.inlined_context
             .insert("parent_node".into(), "parent_output".into());
 
-        let context = vcm.assemble_context(&pcb, &swap, 1000).await?;
+        let context = vcm.assemble_context(&pcb, &swap, None, 1000).await?;
         assert!(context.contains("## DAG CONTEXT (DEPENDENCIES)"));
         assert!(context.contains("[Node: parent_node]"));
         assert!(context.contains("parent_output"));
