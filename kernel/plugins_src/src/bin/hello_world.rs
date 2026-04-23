@@ -66,7 +66,10 @@ mod tests {
         };
         let res = handle_request(&req)?;
         assert_eq!(res.status, "success");
-        assert_eq!(res.data.unwrap()["message"], "Hello, Alice! From Aegis OS.");
+        assert_eq!(
+            res.data.as_ref().unwrap_or_else(|| panic!("Missing data"))["message"],
+            "Hello, Alice! From Aegis OS."
+        );
         Ok(())
     }
 
@@ -78,7 +81,7 @@ mod tests {
         };
         let res = handle_request(&req)?;
         assert_eq!(res.status, "error");
-        assert!(res.error.unwrap().contains("Unknown action"));
+        assert!(res.error.unwrap_or_default().contains("Unknown action"));
         Ok(())
     }
 }

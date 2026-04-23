@@ -208,7 +208,12 @@ pub async fn get_connection_info(State(state): State<AppState>) -> Json<Connecti
         "active".to_string()
     } else {
         // Best effort check if cloudflared is available
-        let exists = std::process::Command::new("cloudflared")
+        let bin = if cfg!(windows) {
+            "cloudflared.exe"
+        } else {
+            "cloudflared"
+        };
+        let exists = std::process::Command::new(bin)
             .arg("--version")
             .output()
             .is_ok();
@@ -221,7 +226,11 @@ pub async fn get_connection_info(State(state): State<AppState>) -> Json<Connecti
     };
 
     // Get local IP
-    let local_ip = get_local_ip().unwrap_or_else(|| "localhost".to_string());
+    let local_ip = get_local_ip().unwrap_or_else(|| {
+        tracing::warn!("Failed to detect local IP, falling back to localhost");
+        "localhost".to_string()
+    });
+
     let protocol = if std::env::var("AEGIS_TLS_CERT").is_ok() {
         "https"
     } else {
@@ -229,7 +238,15 @@ pub async fn get_connection_info(State(state): State<AppState>) -> Json<Connecti
     };
     let local_url = format!("{}://{}:8000", protocol, local_ip);
 
+    // CORE-146: If tunnel is active, it's the preferred URL for the app
     let qr_url = tunnel_url.clone().unwrap_or_else(|| local_url.clone());
+
+    tracing::info!(
+        local = %local_url,
+        tunnel = ?tunnel_url,
+        status = %tunnel_status,
+        "System connection info requested"
+    );
 
     Json(ConnectionInfoResponse {
         local_url,

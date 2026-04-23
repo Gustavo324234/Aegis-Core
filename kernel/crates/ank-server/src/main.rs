@@ -249,6 +249,7 @@ async fn main() -> Result<()> {
                     Ok(mut stream) => {
                         use tokio_stream::StreamExt as _;
                         let mut tokens_emitted: u32 = 0;
+                        let mut full_output = String::new();
 
                         while let Some(token_result) = stream.next().await {
                             // CORE-097: Verificar cancelación en cada chunk
@@ -279,6 +280,7 @@ async fn main() -> Result<()> {
                             match token_result {
                                 Ok(token) => {
                                     tokens_emitted = tokens_emitted.saturating_add(1);
+                                    full_output.push_str(&token);
                                     let event = ank_proto::v1::TaskEvent {
                                         pid: pid.clone(),
                                         timestamp: None,
@@ -319,10 +321,39 @@ async fn main() -> Result<()> {
                         };
                         telemetry_runner.add_inference(inference).await;
 
+                        // CORE-FIX: Neuronal Memory Storage (L3)
+                        if tokens_emitted > 0 {
+                            let pcb_ref = shared_pcb.read().await;
+                            if let Some(tenant_id) = &pcb_ref.tenant_id {
+                                let interaction = format!(
+                                    "User: {}\nAssistant: {}",
+                                    pcb_ref.memory_pointers.l1_instruction, full_output
+                                );
+                                let hal_for_memory = Arc::clone(&hal_runner);
+                                let tenant_id_for_memory = tenant_id.clone();
+
+                                tokio::spawn(async move {
+                                    if let Err(e) = hal_for_memory
+                                        .read()
+                                        .await
+                                        .store_memory(&tenant_id_for_memory, &interaction)
+                                        .await
+                                    {
+                                        tracing::warn!("Failed to store neuronal memory: {}", e);
+                                    } else {
+                                        tracing::info!(
+                                            "Neuronal memory fragment stored for tenant {}",
+                                            tenant_id_for_memory
+                                        );
+                                    }
+                                });
+                            }
+                        }
+
                         let _ = scheduler_tx_runner
                             .send(SchedulerEvent::ProcessCompleted {
                                 pid: pid.clone(),
-                                output: "stream_complete".to_string(),
+                                output: full_output,
                             })
                             .await;
 
@@ -445,36 +476,23 @@ async fn main() -> Result<()> {
         let tunnel_url_state = Arc::clone(&state.tunnel_url);
         tokio::spawn(async move {
             loop {
-                match start_cloudflare_tunnel(8000).await {
-                    Ok(url) => {
-                        info!("Cloudflare tunnel active: {}", url);
-                        {
-                            let mut lock = tunnel_url_state.write().await;
-                            *lock = Some(url);
-                        }
-
-                        // If we are here, start_cloudflare_tunnel returned successfully,
-                        // which means it detected the URL but we need to wait for the child process.
-                        // Actually, the current start_cloudflare_tunnel implementation returns
-                        // as soon as it finds the URL. We should probably keep the child process
-                        // running or monitor it.
-                        // For CORE-146, we'll keep it simple: if the function returns, it means
-                        // the tunnel process might have exited or we just got the URL.
-                        // Re-reading the ticket: start_cloudflare_tunnel is supposed to be a best-effort
-                        // that might stay alive or we might need to restart it if it fails.
-
-                        // Let's wait a bit before checking again if it's still alive (best effort)
-                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                info!("Tunnel Manager: Starting cloudflared...");
+                match run_tunnel_and_monitor(8000, Arc::clone(&tunnel_url_state)).await {
+                    Ok(_) => {
+                        warn!("Tunnel Manager: cloudflared exited normally.");
                     }
                     Err(e) => {
-                        warn!("Tunnel unavailable: {}", e);
-                        {
-                            let mut lock = tunnel_url_state.write().await;
-                            *lock = None;
-                        }
-                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                        warn!("Tunnel Manager: cloudflared error: {}", e);
                     }
                 }
+
+                {
+                    let mut lock = tunnel_url_state.write().await;
+                    *lock = None;
+                }
+
+                info!("Tunnel Manager: Restarting in 10 seconds...");
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
             }
         });
     }
@@ -485,15 +503,18 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn start_cloudflare_tunnel(port: u16) -> Result<String> {
+async fn run_tunnel_and_monitor(
+    port: u16,
+    tunnel_url_state: Arc<RwLock<Option<String>>>,
+) -> Result<()> {
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
 
-    info!("Starting cloudflared tunnel on port {}...", port);
-
-    // CORE-147: Check common locations for cloudflared
-    let bin = if std::path::Path::new("/usr/bin/cloudflared").exists() {
+    // CORE-147: Support both Linux and Windows binary paths
+    let bin = if cfg!(windows) {
+        "cloudflared.exe"
+    } else if std::path::Path::new("/usr/bin/cloudflared").exists() {
         "/usr/bin/cloudflared"
     } else if std::path::Path::new("/usr/local/bin/cloudflared").exists() {
         "/usr/local/bin/cloudflared"
@@ -506,22 +527,38 @@ async fn start_cloudflare_tunnel(port: u16) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to spawn {}: {}", bin, e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to spawn {}: {}. Is it installed?", bin, e))?;
 
     let stderr = child
         .stderr
         .take()
         .context("Failed to capture cloudflared stderr")?;
-    let mut lines = BufReader::new(stderr).lines();
 
-    // cloudflared prints the URL in stderr
+    let mut lines = BufReader::new(stderr).lines();
+    let mut url_found = false;
+
+    // Monitor stderr for the URL and keeps reading to prevent buffer fill
     while let Ok(Some(line)) = lines.next_line().await {
-        if let Some(url) = extract_tunnel_url(&line) {
-            return Ok(url);
+        if !url_found {
+            if let Some(url) = extract_tunnel_url(&line) {
+                info!("Cloudflare tunnel active: {}", url);
+                {
+                    let mut lock = tunnel_url_state.write().await;
+                    *lock = Some(url);
+                }
+                url_found = true;
+            }
         }
+        // Log tunnel output for debugging (optional, keep it quiet for now)
+        // tracing::debug!("cloudflared: {}", line);
     }
 
-    anyhow::bail!("cloudflared exited or failed to provide a URL")
+    let status = child.wait().await?;
+    if !status.success() {
+        anyhow::bail!("cloudflared exited with status: {}", status);
+    }
+
+    Ok(())
 }
 
 fn extract_tunnel_url(line: &str) -> Option<String> {
