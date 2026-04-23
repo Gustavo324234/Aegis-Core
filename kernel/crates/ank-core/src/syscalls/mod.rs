@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
 use thiserror::Error;
 
+pub mod maker;
+
 /// --- SYSCALL ENUM ---
 /// Representa las operaciones privilegiadas que la IA puede solicitar al Kernel.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,6 +45,14 @@ pub enum Syscall {
 
     /// Gmail — listar emails recientes o buscar
     Gmail { query: String, max_results: u8 },
+
+    /// --- MAKER (CORE-150) ---
+    /// Ejecución de scripts aislados (JS) para automatización
+    MakerCall {
+        script_type: String,
+        code: String,
+        params_json: String,
+    },
 }
 
 /// --- SYSCALL ERROR ---
@@ -75,6 +85,7 @@ pub struct SyscallExecutor {
     swap: Arc<LanceSwapManager>,
     mcp_registry: Arc<ank_mcp::registry::McpToolRegistry>,
     http_client: Arc<reqwest::Client>,
+    maker: maker::MakerExecutor,
 }
 
 impl SyscallExecutor {
@@ -93,6 +104,7 @@ impl SyscallExecutor {
             swap,
             mcp_registry,
             http_client,
+            maker: maker::MakerExecutor::new(),
         }
     }
 
@@ -284,6 +296,20 @@ impl SyscallExecutor {
                 }
 
                 self.gmail(&db, &query, max_results).await
+            }
+            Syscall::MakerCall {
+                script_type,
+                code,
+                params_json,
+            } => {
+                let result = self
+                    .maker
+                    .execute(tenant_id, &script_type, &code, &params_json)
+                    .await?;
+                Ok(format!(
+                    "[SYSTEM_RESULT: Maker script executed. Output: {}]",
+                    result
+                ))
             }
         }
     }
@@ -877,6 +903,11 @@ static GMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_PLUGIN\("gmail",\s*(\{.*?\})\)\]"#)
         .unwrap_or_else(|_| panic!("FATAL: gmail regex is invalid"))
 });
+#[allow(clippy::expect_used)]
+static MAKER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[SYS_CALL_MAKER\("([^"]+)",\s*"([\s\S]*?)",\s*(\{.*?\})\)\]"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded maker regex is invalid"))
+});
 
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
 pub fn init_syscall_regexes() {}
@@ -980,6 +1011,15 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
                 max_results: max.clamp(1, 10),
             });
         }
+    }
+
+    // 9. Check for Maker Call
+    if let Some(caps) = MAKER_RE.captures(text) {
+        return Some(Syscall::MakerCall {
+            script_type: caps[1].to_string(),
+            code: caps[2].to_string(),
+            params_json: caps[3].to_string(),
+        });
     }
 
     None
