@@ -10,7 +10,6 @@ use std::path::Path;
     clippy::empty_line_after_outer_attr
 )]
 #[allow(clippy::new_without_default)]
-
 /// --- MAKER EXECUTOR (CORE-150) ---
 /// Provee un entorno de ejecución aislado para scripts JavaScript (Boa Engine).
 /// Permite automatizar tareas complejas dentro del workspace del tenant.
@@ -21,7 +20,6 @@ impl Default for MakerExecutor {
         Self
     }
 }
-
 impl MakerExecutor {
     pub fn new() -> Self {
         Self

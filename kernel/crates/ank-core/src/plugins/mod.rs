@@ -32,8 +32,10 @@ pub enum PluginError {
     ExecutionFailed(String),
 }
 
+use serde::{Deserialize, Serialize};
+
 /// --- PLUGIN METADATA ---
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginMetadata {
     pub name: String,
     pub description: String,
