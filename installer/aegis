@@ -71,6 +71,18 @@ cmd_status() {
 
     if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:8000/health" > /dev/null 2>&1; then
         printf '%sAPI is UP (%s://localhost:8000)%s\n' "$GREEN" "$PROTOCOL" "$NC"
+        
+        local conn_info
+        conn_info=$(curl -s "${PROTOCOL}://localhost:8000/api/system/connection-info" || true)
+        if [[ -n "$conn_info" ]]; then
+            local tunnel_url
+            tunnel_url=$(echo "$conn_info" | grep -oP '(?<="tunnel_url":")[^"]+')
+            if [[ -n "$tunnel_url" ]]; then
+                printf '%sRemote Access (HTTPS): %s%s%s\n' "$GREEN" "$CYAN" "$tunnel_url" "$NC"
+            else
+                printf '%sRemote Access: %sConnecting...%s\n' "$YELLOW" "$CYAN" "$NC"
+            fi
+        fi
     else
         printf '%sAPI is DOWN or unreachable%s\n' "$RED" "$NC"
     fi
