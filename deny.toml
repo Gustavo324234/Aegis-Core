@@ -1,12 +1,10 @@
 [advisories]
 ignore = [
     "RUSTSEC-2025-0057",
-    # proc-macro-error es una dependencia transitiva (utoipa y similares).
-    # No hay upgrade disponible; el mantenedor está inactivo pero no hay
-    # vector de ataque conocido — solo se usa en tiempo de compilación (proc-macro).
+    # paste is unmaintained (pulled by boa_engine). No safe upgrade available.
+    "RUSTSEC-2024-0436",
+    # proc-macro-error is unmaintained (pulled by utoipa). No safe upgrade available.
     "RUSTSEC-2024-0370",
-    # rustls-pemfile is unmaintained (pulled by axum-server). No safe upgrade block available.
-    "RUSTSEC-2025-0134",
 ]
 
 [bans]

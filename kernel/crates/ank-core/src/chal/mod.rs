@@ -46,6 +46,19 @@ PRECISIÓN:\n\
 - Si ejecutaste una herramienta y no devolvió resultados útiles, lo decís claramente.\n\
 ";
 
+/// CORE-150: Instrucciones para la capacidad Maker (Scripting Autónomo).
+pub const MAKER_INSTRUCTIONS: &str = "\
+\n\n[CAPACIDAD: MAKER]\n\
+Podés ejecutar scripts JavaScript para automatizar tareas complejas o procesar datos. \
+El entorno es un sandbox seguro con acceso al /workspace del usuario.\n\
+Sintaxis: [SYS_CALL_MAKER(\"js\", \"código aquí\", {\"param1\": \"valor\"})]\n\
+Funciones disponibles en JS:\n\
+- read_file(path): Lee un archivo del workspace.\n\
+- write_file(path, content): Escribe un archivo en el workspace.\n\
+- params: Objeto que contiene los parámetros pasados en el tercer argumento.\n\
+Usa esta capacidad cuando necesites realizar operaciones repetitivas, \
+procesamiento de archivos pesados o lógica que no podés expresar solo con texto.\n";
+
 /// Template para inyectar la Persona del tenant cuando está configurada (CORE-129).
 /// `{persona}` se reemplaza con el texto libre del operador.
 pub const PERSONA_SECTION_TEMPLATE: &str =
@@ -409,7 +422,7 @@ impl CognitiveHAL {
             ""
         };
 
-        if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
+        let final_prompt = if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
                 "{}{}{}\n\n{}",
                 SYSTEM_PROMPT_MASTER, persona_section, music_section, assembled_context
@@ -424,7 +437,10 @@ impl CognitiveHAL {
                 mcp_tool_prompt,
                 assembled_context
             )
-        }
+        };
+
+        // CORE-150: Maker Instructions
+        format!("{}{}", MAKER_INSTRUCTIONS, final_prompt)
     }
 }
 
