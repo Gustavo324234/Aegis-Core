@@ -212,10 +212,13 @@ install_cloudflared() {
     [[ "$(uname -m)" == "aarch64" ]] && arch_str="arm64"
     local url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch_str}"
     
+    # Limpia instalaciones previas rotas
+    rm -f /usr/bin/cloudflared /usr/local/bin/cloudflared
+    
     # Intenta instalar en /usr/bin que es el PATH estándar para servicios
-    if curl -L --fail --silent "$url" -o /usr/bin/cloudflared && chmod +x /usr/bin/cloudflared; then
+    if curl -L --fail --silent "$url" -o /usr/bin/cloudflared && chmod 755 /usr/bin/cloudflared; then
         success "cloudflared instalado en /usr/bin"
-    elif curl -L --fail --silent "$url" -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared; then
+    elif curl -L --fail --silent "$url" -o /usr/local/bin/cloudflared && chmod 755 /usr/local/bin/cloudflared; then
         success "cloudflared instalado en /usr/local/bin"
     else
         warn "No se pudo instalar cloudflared — acceso remoto deshabilitado"
