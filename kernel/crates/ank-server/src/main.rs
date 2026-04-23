@@ -492,8 +492,10 @@ async fn start_cloudflare_tunnel(port: u16) -> Result<String> {
 
     info!("Starting cloudflared tunnel on port {}...", port);
 
-    // CORE-147: Use absolute path if available to ensure service can find it
-    let bin = if std::path::Path::new("/usr/local/bin/cloudflared").exists() {
+    // CORE-147: Check common locations for cloudflared
+    let bin = if std::path::Path::new("/usr/bin/cloudflared").exists() {
+        "/usr/bin/cloudflared"
+    } else if std::path::Path::new("/usr/local/bin/cloudflared").exists() {
         "/usr/local/bin/cloudflared"
     } else {
         "cloudflared"
@@ -504,7 +506,7 @@ async fn start_cloudflare_tunnel(port: u16) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context(format!("Failed to spawn {}. Is it installed?", bin))?;
+        .map_err(|e| anyhow::anyhow!("Failed to spawn {}: {}", bin, e))?;
 
     let stderr = child
         .stderr
