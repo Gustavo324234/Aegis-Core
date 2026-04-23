@@ -1,19 +1,22 @@
 import { ENDPOINTS } from '@/constants/endpoints';
 import type { LoginResponse } from '@/types/auth';
 
+function ensureProtocol(url: string): string {
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  return `http://${url}`;
+}
+
 function buildUrl(serverUrl: string, path: string): string {
-  return `${serverUrl.replace(/\/$/, '')}${path}`;
+  const base = ensureProtocol(serverUrl).replace(/\/$/, '');
+  return `${base}${path}`;
 }
 
 function buildWsUrl(serverUrl: string, path: string): string {
-  const base = serverUrl.replace(/\/$/, '');
+  const base = ensureProtocol(serverUrl).replace(/\/$/, '');
   if (base.startsWith('https://')) {
     return base.replace('https://', 'wss://') + path;
   }
-  if (base.startsWith('http://')) {
-    return base.replace('http://', 'ws://') + path;
-  }
-  return `ws://${base}${path}`;
+  return base.replace('http://', 'ws://') + path;
 }
 
 // NOTE: No pre-hashing here. The ank-server (auth.rs) hashes the session_key
