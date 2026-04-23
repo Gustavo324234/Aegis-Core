@@ -69,7 +69,10 @@ impl VirtualContextManager {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_else(|_| "no commits found".to_string());
 
-        format!("[Git Branch]: {}\n[Git Status]:\n{}\n[Last Commit]: {}", branch, status, last_commit)
+        format!(
+            "[Git Branch]: {}\n[Git Status]:\n{}\n[Last Commit]: {}",
+            branch, status, last_commit
+        )
     }
 
     /// Obtiene el estado de los tickets desde TICKETS_MASTER.md.
@@ -88,7 +91,10 @@ impl VirtualContextManager {
                     format!("[Governance - Active Tickets]:\n{}", in_progress.join("\n"))
                 }
             }
-            Err(_) => "[Governance]: Error reading TICKETS_MASTER.md (file not found or unreadable)".to_string(),
+            Err(_) => {
+                "[Governance]: Error reading TICKETS_MASTER.md (file not found or unreadable)"
+                    .to_string()
+            }
         }
     }
 
