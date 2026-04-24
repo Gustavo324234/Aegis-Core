@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Settings, AlertCircle, Cpu, Mic, MicOff, Paperclip, Loader2, LogOut } from 'lucide-react';
+import { Send, Settings, AlertCircle, Cpu, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { AegisLogo } from './AegisLogo';
@@ -182,9 +182,19 @@ const ChatTerminal: React.FC = () => {
 
                 {/* Header */}
                 <header className="shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/40 backdrop-blur-3xl z-50" style={{ height: '56px' }}>
-                    <div className="flex items-center gap-4">
-                        <AegisLogo variant="icon" className="w-5 h-5 text-aegis-cyan drop-shadow-[0_0_8px_rgba(0,242,254,0.4)]" />
-                        <h1 className="text-[10px] font-mono tracking-[0.4em] text-white font-bold uppercase">Aegis Shell v0.1.15</h1>
+                    <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-4">
+                            <AegisLogo variant="icon" className="w-5 h-5 text-aegis-cyan drop-shadow-[0_0_8px_rgba(0,242,254,0.4)]" />
+                            <h1 className="text-[10px] font-mono tracking-[0.4em] text-white font-bold uppercase">Aegis Shell v0.1.15</h1>
+                        </div>
+                        <div className="h-4 w-px bg-white/10" />
+                        <button 
+                            onClick={() => useAegisStore.getState().setCurrentView('dashboard')}
+                            className="group flex items-center gap-2 text-white/40 hover:text-aegis-cyan transition-colors"
+                        >
+                            <LayoutDashboard className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
+                            <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Dashboard</span>
+                        </button>
                     </div>
                     <div className="flex items-center gap-4">
                         <StatusBadge status={status} />
