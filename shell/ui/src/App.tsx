@@ -9,7 +9,8 @@ import AdminDashboard from './components/AdminDashboard';
 import ForcePasswordChangeScreen from './components/ForcePasswordChangeScreen';
 import BootstrapSetup from './components/BootstrapSetup';
 import EngineSetupWizard from './components/EngineSetupWizard';
-import Dashboard from './components/Dashboard';
+import Dashboard from '@/components/Dashboard';
+
 
 // SRE-FIX: Error boundary para atrapar crashes de React y mostrar pantalla de recuperación
 // en lugar de pantalla negra. Limpia el localStorage y redirige al login.
