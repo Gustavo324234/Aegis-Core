@@ -255,6 +255,13 @@ async fn main() -> Result<()> {
                                     ank_core::syscalls::StreamItem::Token(token) => {
                                         tokens_emitted += 1;
                                         full_output.push_str(&token);
+                                        let _ = event_tx.send(ank_proto::v1::TaskEvent {
+                                            pid: pid.clone(),
+                                            timestamp: None,
+                                            payload: Some(
+                                                ank_proto::v1::task_event::Payload::Output(token),
+                                            ),
+                                        });
                                     }
                                     ank_core::syscalls::StreamItem::Syscall(syscall) => {
                                         let _ = event_tx.send(ank_proto::v1::TaskEvent {
