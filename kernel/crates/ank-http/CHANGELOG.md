@@ -2,6 +2,13 @@
 
 
 
+## [0.1.20](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.19...ank-http-v0.1.20) (2026-04-24)
+
+
+### Features
+
+* **agents:** Epic 43 — Hierarchical Multi-Agent Orchestration ([#115](https://github.com/Gustavo324234/Aegis-Core/issues/115)) ([6b640a7](https://github.com/Gustavo324234/Aegis-Core/commit/6b640a7f9ab53a7aa5f8111f00e8f6d8db8e9f59))
+
 ## [0.1.19](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.18...ank-http-v0.1.19) (2026-04-24)
 
 ## [0.1.18](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.17...ank-http-v0.1.18) (2026-04-24)
