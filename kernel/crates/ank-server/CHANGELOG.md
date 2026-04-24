@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.22](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.21...ank-server-v0.1.22) (2026-04-24)
+
+
+### Bug Fixes
+
+* **ws:** stream tokens to WebSocket event_broker during inference ([#113](https://github.com/Gustavo324234/Aegis-Core/issues/113)) ([beb0285](https://github.com/Gustavo324234/Aegis-Core/commit/beb0285e6b88a4b3c2c3b0c2340e6ced62ce74db))
+
 ## [0.1.21](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.20...ank-server-v0.1.21) (2026-04-24)
 
 
