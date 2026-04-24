@@ -48,6 +48,12 @@ pr_body.txt
 # Scratch / temp
 scratch/
 
+# Test artifact databases (created by cargo test runs)
+kernel/crates/ank-core/users/
+
+# Claude Code local config
+.claude/settings.local.json
+
 # Compiled WASM plugins (build artifacts)
 kernel/plugins_src/target/
 
