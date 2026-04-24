@@ -1,9 +1,14 @@
 use crate::enclave::TenantDB;
 use crate::plugins::PluginManager;
 use crate::scribe::CommitMetadata;
+use crate::scribe::ScribeManager;
+use crate::vcm::swap::LanceSwapManager;
+use crate::vcm::VirtualContextManager;
+use crate::scheduler::SchedulerEvent;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
+use tokio::sync::mpsc;
 use thiserror::Error;
 
 pub mod maker;
@@ -53,6 +58,13 @@ pub enum Syscall {
         code: String,
         params_json: String,
     },
+
+    /// --- MULTI-AGENT (CORE-154) ---
+    /// Despacha un sub-agente especializado
+    Spawn {
+        task_description: String,
+        role: String,
+    },
 }
 
 /// --- SYSCALL ERROR ---
@@ -70,9 +82,6 @@ pub enum SyscallError {
     InternalError(String),
 }
 
-use crate::scribe::ScribeManager;
-use crate::vcm::swap::LanceSwapManager;
-use crate::vcm::VirtualContextManager;
 
 /// --- SYSCALL EXECUTOR ---
 /// El ejecutor de Syscalls es el puente entre el parser y los subsistemas del Kernel.
@@ -86,6 +95,7 @@ pub struct SyscallExecutor {
     mcp_registry: Arc<ank_mcp::registry::McpToolRegistry>,
     http_client: Arc<reqwest::Client>,
     maker: maker::MakerExecutor,
+    scheduler_tx: mpsc::Sender<crate::scheduler::SchedulerEvent>,
 }
 
 impl SyscallExecutor {
@@ -96,6 +106,7 @@ impl SyscallExecutor {
         swap: Arc<LanceSwapManager>,
         mcp_registry: Arc<ank_mcp::registry::McpToolRegistry>,
         http_client: Arc<reqwest::Client>,
+        scheduler_tx: mpsc::Sender<crate::scheduler::SchedulerEvent>,
     ) -> Self {
         Self {
             plugin_manager,
@@ -105,6 +116,7 @@ impl SyscallExecutor {
             mcp_registry,
             http_client,
             maker: maker::MakerExecutor::new(),
+            scheduler_tx,
         }
     }
 
@@ -210,23 +222,32 @@ impl SyscallExecutor {
                 let session_key = pcb.session_key.as_deref().unwrap_or("default");
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
-                let db = match TenantDB::open(tenant_id, session_key) {
-                    Ok(db) => db,
+                // Extract tokens synchronously, drop TenantDB before any await (TenantDB: !Sync)
+                let (spotify_token, google_token) = match TenantDB::open(tenant_id, session_key) {
                     Err(_) => {
                         return Ok("[SYSTEM_RESULT: No music provider connected. \
                              Tell the user to connect Spotify or Google in Settings.]"
                             .to_string());
                     }
+                    Ok(db) => {
+                        let sp = if db.is_oauth_connected("spotify").unwrap_or(false) {
+                            db.get_valid_access_token("spotify")
+                                .map_err(|e| SyscallError::IOError(format!("Spotify token error: {}", e)))?
+                        } else { None };
+                        let yt = if sp.is_none() && db.is_oauth_connected("google").unwrap_or(false) {
+                            db.get_valid_access_token("google")
+                                .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?
+                        } else { None };
+                        (sp, yt)
+                        // db dropped here — before any await
+                    }
                 };
 
-                if db.is_oauth_connected("spotify").unwrap_or(false) {
-                    return self
-                        .search_spotify(&db, &query, max_results, tenant_id)
-                        .await;
+                if let Some(token) = spotify_token {
+                    return self.search_spotify(&token, &query, max_results, tenant_id).await;
                 }
-
-                if db.is_oauth_connected("google").unwrap_or(false) {
-                    return self.search_youtube_oauth(&db, &query, max_results).await;
+                if let Some(token) = google_token {
+                    return self.search_youtube_oauth(&token, &query, max_results).await;
                 }
 
                 Ok("[SYSTEM_RESULT: No music provider connected. \
@@ -238,64 +259,73 @@ impl SyscallExecutor {
                 let session_key = pcb.session_key.as_deref().unwrap_or("default");
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
-                let db = match TenantDB::open(tenant_id, session_key) {
-                    Ok(db) => db,
+                let token = match TenantDB::open(tenant_id, session_key) {
                     Err(_) => {
                         return Ok("[SYSTEM_RESULT: Google Calendar not available. \
                             Tell the user to connect Google in Settings.]"
                             .to_string());
                     }
+                    Ok(db) => {
+                        if !db.is_oauth_connected("google").unwrap_or(false) {
+                            return Ok("[SYSTEM_RESULT: Google Calendar not connected. \
+                                Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
+                                .to_string());
+                        }
+                        db.get_valid_access_token("google")
+                            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?
+                        // db dropped here
+                    }
                 };
 
-                if !db.is_oauth_connected("google").unwrap_or(false) {
-                    return Ok("[SYSTEM_RESULT: Google Calendar not connected. \
-                        Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
-                        .to_string());
-                }
-
-                self.google_calendar(&db, days, max_results).await
+                self.google_calendar(token, days, max_results).await
             }
             Syscall::GoogleDrive { query, max_results } => {
                 let session_key = pcb.session_key.as_deref().unwrap_or("default");
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
-                let db = match TenantDB::open(tenant_id, session_key) {
-                    Ok(db) => db,
+                let token = match TenantDB::open(tenant_id, session_key) {
                     Err(_) => {
                         return Ok("[SYSTEM_RESULT: Google Drive not available. \
                             Tell the user to connect Google in Settings.]"
                             .to_string());
                     }
+                    Ok(db) => {
+                        if !db.is_oauth_connected("google").unwrap_or(false) {
+                            return Ok("[SYSTEM_RESULT: Google Drive not connected. \
+                                Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
+                                .to_string());
+                        }
+                        db.get_valid_access_token("google")
+                            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?
+                        // db dropped here
+                    }
                 };
 
-                if !db.is_oauth_connected("google").unwrap_or(false) {
-                    return Ok("[SYSTEM_RESULT: Google Drive not connected. \
-                        Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
-                        .to_string());
-                }
-
-                self.google_drive(&db, &query, max_results).await
+                self.google_drive(token, &query, max_results).await
             }
             Syscall::Gmail { query, max_results } => {
                 let session_key = pcb.session_key.as_deref().unwrap_or("default");
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
-                let db = match TenantDB::open(tenant_id, session_key) {
-                    Ok(db) => db,
+                let token = match TenantDB::open(tenant_id, session_key) {
                     Err(_) => {
                         return Ok("[SYSTEM_RESULT: Gmail not available. \
                             Tell the user to connect Google in Settings.]"
                             .to_string());
                     }
+                    Ok(db) => {
+                        if !db.is_oauth_connected("google").unwrap_or(false) {
+                            return Ok("[SYSTEM_RESULT: Gmail not connected. \
+                                Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
+                                .to_string());
+                        }
+                        db.get_valid_access_token("google")
+                            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?
+                        // db dropped here
+                    }
                 };
 
-                if !db.is_oauth_connected("google").unwrap_or(false) {
-                    return Ok("[SYSTEM_RESULT: Gmail not connected. \
-                        Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
-                        .to_string());
-                }
-
-                self.gmail(&db, &query, max_results).await
+                self.gmail(token, &query, max_results).await
             }
             Syscall::MakerCall {
                 script_type,
@@ -309,6 +339,33 @@ impl SyscallExecutor {
                 Ok(format!(
                     "[SYSTEM_RESULT: Maker script executed. Output: {}]",
                     result
+                ))
+            }
+            Syscall::Spawn {
+                task_description,
+                role,
+            } => {
+                let mut sub_pcb = crate::pcb::PCB::new(
+                    format!("Worker ({})", role),
+                    pcb.priority.saturating_sub(1),
+                    task_description.clone(),
+                );
+                sub_pcb.parent_pid = Some(pcb.pid.clone());
+                sub_pcb.role = crate::pcb::ProcessRole::Worker;
+                sub_pcb.tenant_id = pcb.tenant_id.clone();
+                sub_pcb.session_key = pcb.session_key.clone();
+
+                let sub_pid = sub_pcb.pid.clone();
+
+                let event = SchedulerEvent::ScheduleTask(Box::new(sub_pcb));
+                self.scheduler_tx
+                    .send(event)
+                    .await
+                    .map_err(|e| SyscallError::InternalError(format!("Failed to spawn sub-agent: {}", e)))?;
+
+                Ok(format!(
+                    "[SYSTEM_RESULT: Sub-agent spawned with PID: {}. It will report back when finished.]",
+                    sub_pid
                 ))
             }
         }
@@ -330,16 +387,12 @@ impl SyscallExecutor {
 
     async fn search_spotify(
         &self,
-        db: &TenantDB,
+        token: &str,
         query: &str,
         max_results: u8,
         _tenant_id: &str,
     ) -> Result<String, SyscallError> {
-        let token = db
-            .get_valid_access_token("spotify")
-            .map_err(|e| SyscallError::IOError(format!("Spotify token error: {}", e)))?;
-
-        let token = match token {
+        let token = match (!token.is_empty()).then(|| token.to_string()) {
             Some(t) => t,
             None => {
                 return Ok(
@@ -410,15 +463,11 @@ impl SyscallExecutor {
 
     async fn search_youtube_oauth(
         &self,
-        db: &TenantDB,
+        token: &str,
         query: &str,
         max_results: u8,
     ) -> Result<String, SyscallError> {
-        let token = db
-            .get_valid_access_token("google")
-            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?;
-
-        let token = match token {
+        let token = match (!token.is_empty()).then(|| token.to_string()) {
             Some(t) => t,
             None => {
                 return Ok(
@@ -486,14 +535,10 @@ impl SyscallExecutor {
 
     async fn google_calendar(
         &self,
-        db: &TenantDB,
+        token: Option<String>,
         days: u8,
         max_results: u8,
     ) -> Result<String, SyscallError> {
-        let token = db
-            .get_valid_access_token("google")
-            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?;
-
         let token = match token {
             Some(t) => t,
             None => {
@@ -576,14 +621,10 @@ impl SyscallExecutor {
 
     async fn google_drive(
         &self,
-        db: &TenantDB,
+        token: Option<String>,
         query: &str,
         max_results: u8,
     ) -> Result<String, SyscallError> {
-        let token = db
-            .get_valid_access_token("google")
-            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?;
-
         let token = match token {
             Some(t) => t,
             None => {
@@ -672,14 +713,10 @@ impl SyscallExecutor {
 
     async fn gmail(
         &self,
-        db: &TenantDB,
+        token: Option<String>,
         query: &str,
         max_results: u8,
     ) -> Result<String, SyscallError> {
-        let token = db
-            .get_valid_access_token("google")
-            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?;
-
         let token = match token {
             Some(t) => t,
             None => {
@@ -785,74 +822,7 @@ impl SyscallExecutor {
     }
 }
 
-/// --- STREAM INTERCEPTOR (REAL-TIME) ---
-/// Esta estructura se encarga de analizar el stream de tokens mientras se generan
-/// para detectar triggers ([SYS) y detener la inferencia inmediatamente.
-pub struct StreamInterceptor {
-    buffer: String,
-    trigger_detected: bool,
-    max_buffer_size: usize,
-}
 
-impl Default for StreamInterceptor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum InterceptorResult {
-    Continue,
-    PossibleSyscall,       // Detectamos el inicio '[' o '[SYS'
-    SyscallReady(Syscall), // Ya tenemos la syscall completa
-}
-
-impl StreamInterceptor {
-    pub fn new() -> Self {
-        Self {
-            buffer: String::with_capacity(512),
-            trigger_detected: false,
-            max_buffer_size: 1024, // Ventana de seguridad
-        }
-    }
-
-    /// Procesa un nuevo token y decide si se debe abortar la inferencia.
-    pub fn push_token(&mut self, token: &str) -> InterceptorResult {
-        self.buffer.push_str(token);
-
-        // Si el buffer crece demasiado sin detectar nada, lo limpiamos manteniendo el final
-        if self.buffer.len() > self.max_buffer_size {
-            let drain_amount = self.buffer.len() - self.max_buffer_size;
-            self.buffer.drain(..drain_amount);
-        }
-
-        // Detección de Trigger inicial
-        if !self.trigger_detected {
-            // Buscamos patrones conocidos de Syscall
-            if self.buffer.contains("[")
-                && (self.buffer.contains("[SYS")
-                    || self.buffer.contains("[READ")
-                    || self.buffer.contains("[WRITE"))
-            {
-                self.trigger_detected = true;
-                return InterceptorResult::PossibleSyscall;
-            }
-            InterceptorResult::Continue
-        } else {
-            // Ya detectamos un trigger, buscamos el cierre ']'
-            if self.buffer.contains(']') {
-                if let Some(syscall) = parse_syscall(&self.buffer) {
-                    return InterceptorResult::SyscallReady(syscall);
-                }
-            }
-            InterceptorResult::PossibleSyscall
-        }
-    }
-
-    pub fn buffer(&self) -> &str {
-        &self.buffer
-    }
-}
 
 /// --- REGEX PATTERNS ---
 // The patterns below are hardcoded string literals that are valid regex syntax by construction.
@@ -907,6 +877,11 @@ static GMAIL_RE: LazyLock<Regex> = LazyLock::new(|| {
 static MAKER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_MAKER\("([^"]+)",\s*"([\s\S]*?)",\s*(\{.*?\})\)\]"#)
         .unwrap_or_else(|_| panic!("FATAL: hardcoded maker regex is invalid"))
+});
+#[allow(clippy::expect_used)]
+static SPAWN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[SYS_CALL_SPAWN\("([^"]+)",\s*"([^"]+)"\)\]"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded spawn syscall regex is invalid"))
 });
 
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
@@ -1022,7 +997,114 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
         });
     }
 
+    // 10. Check for Spawn
+    if let Some(caps) = SPAWN_RE.captures(text) {
+        return Some(Syscall::Spawn {
+            task_description: caps[1].to_string(),
+            role: caps[2].to_string(),
+        });
+    }
+
     None
+}
+
+/// --- STREAM INTERCEPTOR ---
+/// Detecta syscalls en tiempo real dentro de un stream de tokens.
+pub enum StreamItem {
+    Token(String),
+    Syscall(Syscall),
+}
+
+pub struct StreamInterceptor<S> {
+    stream: S,
+    buffer: String,
+    finished: bool,
+}
+
+// SAFETY: StreamInterceptor is owned by a single task at a time.
+// S is Send, which allows moving between threads. Sync is forced here to satisfy
+// tokio::spawn requirements for the composite Future.
+unsafe impl<S: Send> Sync for StreamInterceptor<S> {}
+
+impl<S> StreamInterceptor<S>
+where
+    S: tokio_stream::Stream<Item = Result<String, crate::chal::ExecutionError>> + Unpin + Send + Sync,
+{
+    pub fn new(stream: S) -> Self {
+        Self {
+            stream,
+            buffer: String::new(),
+            finished: false,
+        }
+    }
+
+    pub async fn next_item(&mut self) -> Option<StreamItem> {
+        use tokio_stream::StreamExt;
+
+        if self.finished && self.buffer.is_empty() {
+            return None;
+        }
+
+        // Si tenemos una syscall completa en el buffer, la extraemos
+        if let Some(syscall) = parse_syscall(&self.buffer) {
+            // Limpiar el buffer hasta el final de la syscall (asumiendo que termina con ])
+            if let Some(pos) = self.buffer.find(']') {
+                self.buffer.drain(0..=pos);
+            } else {
+                self.buffer.clear();
+            }
+            return Some(StreamItem::Syscall(syscall));
+        }
+
+        // Si no hay syscall, leemos el siguiente token
+        while let Some(res) = self.stream.next().await {
+            match res {
+                Ok(token) => {
+                    self.buffer.push_str(&token);
+                    
+                    // Si el token parece ser parte de una syscall potencial, seguimos acumulando
+                    if self.buffer.contains('[') {
+                        // Si ya tenemos el cierre, intentamos parsear
+                        if self.buffer.contains(']') {
+                             if let Some(syscall) = parse_syscall(&self.buffer) {
+                                 if let Some(pos) = self.buffer.find(']') {
+                                     self.buffer.drain(0..=pos);
+                                 } else {
+                                     self.buffer.clear();
+                                 }
+                                 return Some(StreamItem::Syscall(syscall));
+                             }
+                        }
+                        // Si no cerramos pero el buffer crece mucho sin cerrar, soltamos como tokens
+                        if self.buffer.len() > 2048 {
+                            let content = self.buffer.clone();
+                            self.buffer.clear();
+                            return Some(StreamItem::Token(content));
+                        }
+                        continue;
+                    } else {
+                        // Es un token normal
+                        let content = self.buffer.clone();
+                        self.buffer.clear();
+                        return Some(StreamItem::Token(content));
+                    }
+                }
+                Err(_) => {
+                    self.finished = true;
+                    return None;
+                }
+            }
+        }
+
+        self.finished = true;
+        if !self.buffer.is_empty() {
+            let content = self.buffer.clone();
+            self.buffer.clear();
+            Some(StreamItem::Token(content))
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1083,7 +1165,8 @@ mod tests {
         let swap = Arc::new(LanceSwapManager::new("./swap_test"));
         let mcp_registry = Arc::new(ank_mcp::registry::McpToolRegistry::new());
         let http_client = Arc::new(reqwest::Client::new());
-        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client);
+        let (tx, _) = tokio::sync::mpsc::channel(1);
+        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx);
 
         let pcb = crate::pcb::PCB::new("test".into(), 5, "test".into());
 
@@ -1106,7 +1189,8 @@ mod tests {
         let swap = Arc::new(LanceSwapManager::new("./swap_test"));
         let mcp_registry = Arc::new(ank_mcp::registry::McpToolRegistry::new());
         let http_client = Arc::new(reqwest::Client::new());
-        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client);
+        let (tx, _) = tokio::sync::mpsc::channel(1);
+        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx);
 
         // Intentar acceder a localhost
         let res = executor.fetch_url_safe("http://127.0.0.1:8080/admin").await;

@@ -63,6 +63,12 @@ pub struct LanceSwapManager {
     tenants: RwLock<HashMap<String, Arc<RwLock<TenantSwap>>>>,
 }
 
+#[cfg(test)]
+fn _assert_swap_is_sync() {
+    fn assert_sync<T: Sync>() {}
+    assert_sync::<LanceSwapManager>();
+}
+
 impl LanceSwapManager {
     pub fn new(base_path: &str) -> Self {
         Self {

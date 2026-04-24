@@ -1,4 +1,5 @@
 use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
+use ank_core::SchedulerEvent;
 use axum::{
     extract::State,
     http::HeaderMap,
@@ -122,13 +123,26 @@ pub async fn get_system_status(
     };
 
     let (cpu_load, vram_allocated_mb, vram_total_mb) = {
-        let hal = state.hal.read().await;
-        let mut monitor = hal.hardware.lock().await;
+        let mut monitor = state.hal.hardware.lock().await;
         let status = monitor.get_status();
         (status.cpu_usage, status.used_mem_mb, status.total_mem_mb)
     };
 
     let metrics = state.telemetry.metrics().await;
+
+    // CORE-154: Query live scheduler stats
+    let (total_processes, active_workers) = {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if state.scheduler_tx.send(SchedulerEvent::GetStats(tx)).await.is_ok() {
+            if let Ok(stats) = rx.await {
+                (stats.total_processes, stats.active_workers)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        }
+    };
 
     Ok(Json(SystemStatusResponse {
         cpu_load,
@@ -136,8 +150,8 @@ pub async fn get_system_status(
         vram_total_mb,
         hw_profile: hw_profile_name.to_string(),
         state: "STATE_OPERATIONAL".to_string(),
-        total_processes: 0,
-        active_workers: 0,
+        total_processes,
+        active_workers,
         tokens_per_second: metrics.tokens_per_second,
         total_tokens_session: metrics.total_tokens_session,
         estimated_cost_usd: metrics.estimated_cost_usd,

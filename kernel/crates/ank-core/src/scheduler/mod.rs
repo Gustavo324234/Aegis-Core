@@ -3,13 +3,13 @@ pub mod graph;
 pub mod persistence;
 
 use crate::dag::{DagNodeStatus, ExecutionGraph, GraphManager, NodeResult};
-use crate::pcb::{PcbByPriority, ProcessState, PCB};
+use crate::pcb::{PcbByPriority, ProcessRole, ProcessState, PCB};
 use crate::scheduler::persistence::StatePersistor;
 use crate::swarm::client::SwarmClient;
 use crate::swarm::{NodeStatus, SwarmManager};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, instrument, warn};
@@ -53,6 +53,13 @@ impl PCB {
     }
 }
 
+/// CORE-154: Lightweight stats snapshot for the status API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchedulerStats {
+    pub total_processes: u32,
+    pub active_workers: u32,
+}
+
 /// --- EVENT BUS (Canales MPSC) ---
 #[derive(Debug)]
 pub enum SchedulerEvent {
@@ -78,6 +85,8 @@ pub enum SchedulerEvent {
     HalRunnerDied {
         reason: String,
     },
+    /// CORE-154: Lightweight stats request for the HTTP status endpoint.
+    GetStats(tokio::sync::oneshot::Sender<SchedulerStats>),
 }
 
 /// --- COGNITIVE SCHEDULER ---
@@ -85,7 +94,9 @@ pub struct CognitiveScheduler {
     pub ready_queue: BinaryHeap<PcbByPriority>,
     pub waiting_queue: HashMap<String, PCB>,
     pub process_table: HashMap<String, PCB>,
-    pub current_running: Option<String>,
+    pub current_running: Vec<String>, // CORE-154: Soporte para múltiples procesos paralelos
+    /// CORE-154: Maps supervisor_pid → set of pending worker_pids.
+    pub worker_tracker: HashMap<String, HashSet<String>>,
     pub last_activity: DateTime<Utc>,
 
     pub swarm_manager: Option<Arc<SwarmManager>>,
@@ -102,7 +113,8 @@ impl CognitiveScheduler {
             ready_queue: BinaryHeap::new(),
             waiting_queue: HashMap::new(),
             process_table: HashMap::new(),
-            current_running: None,
+            current_running: Vec::new(),
+            worker_tracker: HashMap::new(),
             last_activity: Utc::now(),
             swarm_manager: None,
             swarm_client: Arc::new(SwarmClient),
@@ -158,25 +170,41 @@ impl CognitiveScheduler {
         self.last_activity = Utc::now();
         match event {
             SchedulerEvent::ScheduleTask(pcb_box) => {
-                info!(
-                    "DEBUG_SCHEDULER: Received ScheduleTask. PID: {}",
-                    pcb_box.pid
-                );
                 info!(pid = %pcb_box.pid, prio = pcb_box.priority, "Task queued (ScheduleTask).");
                 let mut pcb = *pcb_box;
+
+                // CORE-154: Register worker → supervisor relationship
+                let parent_pid = pcb.parent_pid.clone();
+                if parent_pid.is_some() {
+                    pcb.role = ProcessRole::Worker;
+                }
 
                 self.persistence
                     .save_pcb(&pcb)
                     .await
                     .context("Atomic persistence failed during ScheduleTask")?;
 
+                let worker_pid = pcb.pid.clone();
                 pcb.state = ProcessState::Ready;
                 self.process_table.insert(pcb.pid.clone(), pcb.clone());
                 self.ready_queue.push(PcbByPriority(pcb));
+
+                if let Some(ppid) = parent_pid {
+                    self.worker_tracker.entry(ppid.clone()).or_default().insert(worker_pid.clone());
+                    if let Some(parent) = self.process_table.get_mut(&ppid) {
+                        parent.role = ProcessRole::Supervisor;
+                    }
+                    info!(supervisor = %ppid, worker = %worker_pid, "CORE-154: Worker registered for supervisor.");
+                }
             }
             SchedulerEvent::ScheduleTaskConfirmed(pcb_box, confirm_tx) => {
                 info!(pid = %pcb_box.pid, prio = pcb_box.priority, "Task queued (ScheduleTaskConfirmed).");
                 let mut pcb = *pcb_box;
+
+                let parent_pid = pcb.parent_pid.clone();
+                if parent_pid.is_some() {
+                    pcb.role = ProcessRole::Worker;
+                }
 
                 self.persistence
                     .save_pcb(&pcb)
@@ -187,6 +215,13 @@ impl CognitiveScheduler {
                 pcb.state = ProcessState::Ready;
                 self.process_table.insert(pcb.pid.clone(), pcb.clone());
                 self.ready_queue.push(PcbByPriority(pcb));
+
+                if let Some(ppid) = parent_pid {
+                    self.worker_tracker.entry(ppid.clone()).or_default().insert(confirmed_pid.clone());
+                    if let Some(parent) = self.process_table.get_mut(&ppid) {
+                        parent.role = ProcessRole::Supervisor;
+                    }
+                }
 
                 let _ = confirm_tx.send(confirmed_pid);
             }
@@ -289,17 +324,58 @@ impl CognitiveScheduler {
                 }
             }
             SchedulerEvent::ProcessCompleted { pid, output } => {
-                info!(pid = %pid, "Process completed locally. Notifying DAG.");
-                if let Some(pcb) = self.process_table.get_mut(&pid) {
-                    pcb.registers
-                        .temp_vars
-                        .insert("final_output".to_string(), output.clone());
+                info!(pid = %pid, "Process completed locally.");
+                let (parent_pid, pcb_name, pcb_id) = if let Some(pcb) = self.process_table.get_mut(&pid) {
+                    pcb.registers.temp_vars.insert("final_output".to_string(), output.clone());
 
-                    self.persistence
-                        .save_pcb(pcb)
-                        .await
-                        .context("Failed to persist Local Completed state")?;
-                    pcb.state = ProcessState::Completed;
+                    // CORE-154: If this supervisor still has pending workers, suspend it.
+                    let has_pending_workers = self.worker_tracker
+                        .get(&pid)
+                        .map(|s| !s.is_empty())
+                        .unwrap_or(false);
+
+                    if has_pending_workers {
+                        pcb.state = ProcessState::WaitingWorkers;
+                        warn!(pid = %pid, "CORE-154: Supervisor suspended — workers still pending.");
+                    } else {
+                        pcb.state = ProcessState::Completed;
+                    }
+
+                    let _ = self.persistence.save_pcb(pcb).await;
+                    (pcb.parent_pid.clone(), pcb.process_name.clone(), pcb.pid.clone())
+                } else {
+                    (None, String::new(), String::new())
+                };
+
+                // CORE-154: Worker completion — update tracker, store report, maybe resume supervisor.
+                if let Some(ppid) = &parent_pid {
+                    let report = format!(
+                        "[WORKER: {} | PID: {}]\n{}",
+                        pcb_name, pcb_id, output
+                    );
+
+                    if let Some(parent_pcb) = self.process_table.get_mut(ppid) {
+                        parent_pcb.registers.temp_vars.insert(
+                            format!("worker_report_{}", pcb_id),
+                            report,
+                        );
+                    }
+
+                    let all_done = if let Some(workers) = self.worker_tracker.get_mut(ppid) {
+                        workers.remove(&pcb_id);
+                        workers.is_empty()
+                    } else {
+                        false
+                    };
+
+                    if all_done {
+                        self.worker_tracker.remove(ppid);
+                        let ppid_owned = ppid.clone();
+                        self.resume_supervisor(&ppid_owned);
+                        info!(supervisor = %ppid_owned, worker = %pcb_id, "CORE-154: All workers done — supervisor re-queued for synthesis.");
+                    } else {
+                        info!(worker = %pcb_id, supervisor = %ppid, "CORE-154: Worker report stored. Supervisor still waiting.");
+                    }
                 }
 
                 {
@@ -326,13 +402,10 @@ impl CognitiveScheduler {
                     self.ready_queue.push(PcbByPriority(pcb));
                 }
 
-                // Liberar current_running si era este proceso
-                if self.current_running.as_deref() == Some(&pid) {
-                    self.current_running = None;
-                }
+                self.current_running.retain(|id| id != &pid);
             }
             SchedulerEvent::PreemptCurrent => {
-                if let Some(pid) = self.current_running.take() {
+                if let Some(pid) = self.current_running.pop() {
                     warn!(pid = %pid, "Preemption triggered. Cancelling current process.");
                     if let Some(pcb) = self.process_table.get_mut(&pid) {
                         pcb.cancel_token.cancel();
@@ -345,14 +418,13 @@ impl CognitiveScheduler {
                 info!(pid = %pid, "Manual process termination.");
                 self.process_table.remove(&pid);
                 self.waiting_queue.remove(&pid);
-                if self.current_running.as_ref() == Some(&pid) {
-                    self.current_running = None;
-                }
+                self.current_running.retain(|id| id != &pid);
             }
             // CORE-092: HAL Runner watchdog — limpia estado huerfano si el canal cierra
             SchedulerEvent::HalRunnerDied { reason } => {
                 warn!("CORE-092: HAL Runner terminated: {}", reason);
-                if let Some(pid) = self.current_running.take() {
+                let pids_to_clean: Vec<String> = self.current_running.drain(..).collect();
+                for pid in pids_to_clean {
                     error!(
                         pid = %pid,
                         reason = %reason,
@@ -373,20 +445,68 @@ impl CognitiveScheduler {
                     // No se requiere acción adicional aquí — el estado del PCB es suficiente
                     // para que la próxima consulta devuelva state=Failed.
                     info!(pid = %pid, "Scheduler ready to accept new tasks after HAL Runner recovery.");
-                } else {
-                    info!("HAL Runner died with no active process — no cleanup needed.");
                 }
             }
             SchedulerEvent::ListProcesses(reply_channel) => {
                 let processes = self.process_table.values().cloned().collect();
                 let _ = reply_channel.send(processes);
             }
+            SchedulerEvent::GetStats(reply_tx) => {
+                let total_processes = self.process_table.len() as u32;
+                let active_workers = self.process_table.values()
+                    .filter(|p| {
+                        p.role == ProcessRole::Worker
+                            && matches!(
+                                p.state,
+                                ProcessState::Running
+                                    | ProcessState::Ready
+                                    | ProcessState::WaitingSyscall
+                            )
+                    })
+                    .count() as u32;
+                let _ = reply_tx.send(SchedulerStats { total_processes, active_workers });
+            }
         }
         Ok(())
     }
 
+    /// CORE-154: Re-queue a supervisor after all its workers have completed.
+    /// Injects aggregated worker reports into the supervisor's context so the
+    /// next inference cycle can synthesize a final response.
+    fn resume_supervisor(&mut self, supervisor_pid: &str) {
+        let Some(supervisor) = self.process_table.get_mut(supervisor_pid) else {
+            return;
+        };
+
+        if supervisor.state != ProcessState::WaitingWorkers {
+            return;
+        }
+
+        // Aggregate all worker reports stored in temp_vars
+        let reports: String = supervisor.registers.temp_vars
+            .iter()
+            .filter(|(k, _)| k.starts_with("worker_report_"))
+            .map(|(_, v)| v.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+
+        let original_task = supervisor.memory_pointers.l1_instruction.clone();
+        supervisor.inlined_context.insert("worker_reports".to_string(), reports);
+        supervisor.inlined_context.insert("original_task".to_string(), original_task);
+        supervisor.memory_pointers.l1_instruction =
+            "Todos tus sub-agentes completaron. Revisá los reportes en el contexto \
+             'worker_reports' y elaborá una respuesta final consolidada para el usuario."
+                .to_string();
+        supervisor.state = ProcessState::Ready;
+
+        let supervisor_clone = supervisor.clone();
+        self.ready_queue.push(PcbByPriority(supervisor_clone));
+    }
+
     async fn reconcile(&mut self) -> anyhow::Result<()> {
-        if self.current_running.is_none() && !self.ready_queue.is_empty() {
+        let max_concurrency = 4; // CORE-154: Permitir hasta 4 agentes paralelos
+
+        while self.current_running.len() < max_concurrency && !self.ready_queue.is_empty() {
             if let Some(PcbByPriority(pcb)) = self.ready_queue.pop() {
                 if pcb.model_pref.is_complex() {
                     if let Some(swarm) = &self.swarm_manager {
@@ -439,7 +559,7 @@ impl CognitiveScheduler {
                     }
                 }
 
-                self.current_running = Some(pcb.pid.clone());
+                self.current_running.push(pcb.pid.clone());
                 let pcb_to_run = pcb.clone();
                 self.process_table.insert(pcb.pid.clone(), pcb);
 
@@ -448,7 +568,7 @@ impl CognitiveScheduler {
                     let pid = pcb_to_run.pid.clone();
                     if let Err(e) = tx.try_send(Box::new(pcb_to_run)) {
                         error!(pid = %pid, error = %e, "Failed to dispatch to local runner.");
-                        self.current_running = None;
+                        self.current_running.retain(|id| id != &pid);
                         return Err(anyhow::anyhow!("Local runner dispatch failed: {}", e));
                     }
                 }
@@ -513,6 +633,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_supervisor_worker_pattern() -> anyhow::Result<()> {
+        let mut scheduler = CognitiveScheduler::new(Arc::new(persistence::MockPersistor));
+
+        // Schedule supervisor
+        let supervisor = PCB::new("Supervisor".into(), 10, "orchestrate task".into());
+        let supervisor_pid = supervisor.pid.clone();
+        scheduler.handle_event(SchedulerEvent::ScheduleTask(Box::new(supervisor))).await?;
+
+        // Schedule worker with parent_pid pointing to supervisor
+        let mut worker = PCB::new("Worker-Programmer".into(), 9, "write code".into());
+        worker.parent_pid = Some(supervisor_pid.clone());
+        let worker_pid = worker.pid.clone();
+        scheduler.handle_event(SchedulerEvent::ScheduleTask(Box::new(worker))).await?;
+
+        // Worker must be tracked under supervisor
+        assert!(scheduler.worker_tracker.contains_key(&supervisor_pid), "Supervisor must be in tracker");
+        assert!(scheduler.worker_tracker[&supervisor_pid].contains(&worker_pid), "Worker must be tracked");
+
+        // Supervisor's role should be updated to Supervisor
+        let sup_role = scheduler.process_table[&supervisor_pid].role;
+        assert_eq!(sup_role, crate::pcb::ProcessRole::Supervisor);
+
+        // Supervisor completes its own inference — still has a pending worker
+        scheduler.handle_event(SchedulerEvent::ProcessCompleted {
+            pid: supervisor_pid.clone(),
+            output: "I'm waiting for workers".into(),
+        }).await?;
+
+        // Supervisor must be suspended, not Completed
+        let sup_state = &scheduler.process_table[&supervisor_pid].state;
+        assert_eq!(*sup_state, crate::pcb::ProcessState::WaitingWorkers, "Supervisor must wait for workers");
+
+        // Worker completes
+        scheduler.handle_event(SchedulerEvent::ProcessCompleted {
+            pid: worker_pid.clone(),
+            output: "fn hello() {}".into(),
+        }).await?;
+
+        // Tracker should be cleared for this supervisor
+        assert!(!scheduler.worker_tracker.contains_key(&supervisor_pid), "Tracker must be empty after last worker");
+
+        // Supervisor must be re-queued as Ready for synthesis
+        let sup_state = &scheduler.process_table[&supervisor_pid].state;
+        assert_eq!(*sup_state, crate::pcb::ProcessState::Ready, "Supervisor must be Ready for synthesis");
+
+        // Worker report must be in supervisor's context
+        assert!(
+            scheduler.process_table[&supervisor_pid].inlined_context.contains_key("worker_reports"),
+            "Worker reports must be injected into supervisor context"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_hal_runner_died_cleans_current_running() -> anyhow::Result<()> {
         let mut scheduler = CognitiveScheduler::new(Arc::new(persistence::MockPersistor));
 
@@ -520,7 +695,7 @@ mod tests {
         let pcb = PCB::new("running-task".into(), 5, "mock".into());
         let pid = pcb.pid.clone();
         scheduler.process_table.insert(pid.clone(), pcb);
-        scheduler.current_running = Some(pid.clone());
+        scheduler.current_running.push(pid.clone());
 
         // Disparar HalRunnerDied
         scheduler
@@ -531,8 +706,8 @@ mod tests {
 
         // current_running debe estar limpio
         assert!(
-            scheduler.current_running.is_none(),
-            "current_running debe ser None después de HalRunnerDied"
+            scheduler.current_running.is_empty(),
+            "current_running debe estar vacío después de HalRunnerDied"
         );
 
         // El PCB debe estar marcado como Failed

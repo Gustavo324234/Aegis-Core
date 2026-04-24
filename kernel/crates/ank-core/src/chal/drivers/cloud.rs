@@ -246,7 +246,7 @@ impl InferenceDriver for CloudProxyDriver {
                 }
             });
 
-        Ok(Box::pin(parsed_stream))
+        Ok(Box::pin(crate::chal::SyncStream(parsed_stream)))
     }
 
     async fn get_health_status(&self) -> DriverStatus {

@@ -33,6 +33,7 @@ const MAX_FILE_SIZE_BYTES: u64 = 2 * 1024 * 1024;
 /// --- VIRTUAL CONTEXT MANAGER ---
 /// El VCM es responsable de construir la "ventana de atención" (Context Window)
 /// para el LLM, agregando instrucciones L1, referencias L2 y memoria swap L3.
+#[derive(Clone, Copy)]
 pub struct VirtualContextManager;
 
 impl Default for VirtualContextManager {
