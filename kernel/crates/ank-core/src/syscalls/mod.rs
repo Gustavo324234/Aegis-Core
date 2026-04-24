@@ -1,15 +1,15 @@
 use crate::enclave::TenantDB;
 use crate::plugins::PluginManager;
+use crate::scheduler::SchedulerEvent;
 use crate::scribe::CommitMetadata;
 use crate::scribe::ScribeManager;
 use crate::vcm::swap::LanceSwapManager;
 use crate::vcm::VirtualContextManager;
-use crate::scheduler::SchedulerEvent;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
-use tokio::sync::mpsc;
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 pub mod maker;
 
@@ -81,7 +81,6 @@ pub enum SyscallError {
     #[error("Internal Kernel Error: {0}")]
     InternalError(String),
 }
-
 
 /// --- SYSCALL EXECUTOR ---
 /// El ejecutor de Syscalls es el puente entre el parser y los subsistemas del Kernel.
@@ -231,20 +230,29 @@ impl SyscallExecutor {
                     }
                     Ok(db) => {
                         let sp = if db.is_oauth_connected("spotify").unwrap_or(false) {
-                            db.get_valid_access_token("spotify")
-                                .map_err(|e| SyscallError::IOError(format!("Spotify token error: {}", e)))?
-                        } else { None };
-                        let yt = if sp.is_none() && db.is_oauth_connected("google").unwrap_or(false) {
-                            db.get_valid_access_token("google")
-                                .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?
-                        } else { None };
+                            db.get_valid_access_token("spotify").map_err(|e| {
+                                SyscallError::IOError(format!("Spotify token error: {}", e))
+                            })?
+                        } else {
+                            None
+                        };
+                        let yt = if sp.is_none() && db.is_oauth_connected("google").unwrap_or(false)
+                        {
+                            db.get_valid_access_token("google").map_err(|e| {
+                                SyscallError::IOError(format!("Google token error: {}", e))
+                            })?
+                        } else {
+                            None
+                        };
                         (sp, yt)
                         // db dropped here — before any await
                     }
                 };
 
                 if let Some(token) = spotify_token {
-                    return self.search_spotify(&token, &query, max_results, tenant_id).await;
+                    return self
+                        .search_spotify(&token, &query, max_results, tenant_id)
+                        .await;
                 }
                 if let Some(token) = google_token {
                     return self.search_youtube_oauth(&token, &query, max_results).await;
@@ -271,8 +279,9 @@ impl SyscallExecutor {
                                 Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
                                 .to_string());
                         }
-                        db.get_valid_access_token("google")
-                            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?
+                        db.get_valid_access_token("google").map_err(|e| {
+                            SyscallError::IOError(format!("Google token error: {}", e))
+                        })?
                         // db dropped here
                     }
                 };
@@ -295,8 +304,9 @@ impl SyscallExecutor {
                                 Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
                                 .to_string());
                         }
-                        db.get_valid_access_token("google")
-                            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?
+                        db.get_valid_access_token("google").map_err(|e| {
+                            SyscallError::IOError(format!("Google token error: {}", e))
+                        })?
                         // db dropped here
                     }
                 };
@@ -319,8 +329,9 @@ impl SyscallExecutor {
                                 Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
                                 .to_string());
                         }
-                        db.get_valid_access_token("google")
-                            .map_err(|e| SyscallError::IOError(format!("Google token error: {}", e)))?
+                        db.get_valid_access_token("google").map_err(|e| {
+                            SyscallError::IOError(format!("Google token error: {}", e))
+                        })?
                         // db dropped here
                     }
                 };
@@ -358,10 +369,9 @@ impl SyscallExecutor {
                 let sub_pid = sub_pcb.pid.clone();
 
                 let event = SchedulerEvent::ScheduleTask(Box::new(sub_pcb));
-                self.scheduler_tx
-                    .send(event)
-                    .await
-                    .map_err(|e| SyscallError::InternalError(format!("Failed to spawn sub-agent: {}", e)))?;
+                self.scheduler_tx.send(event).await.map_err(|e| {
+                    SyscallError::InternalError(format!("Failed to spawn sub-agent: {}", e))
+                })?;
 
                 Ok(format!(
                     "[SYSTEM_RESULT: Sub-agent spawned with PID: {}. It will report back when finished.]",
@@ -822,8 +832,6 @@ impl SyscallExecutor {
     }
 }
 
-
-
 /// --- REGEX PATTERNS ---
 // The patterns below are hardcoded string literals that are valid regex syntax by construction.
 // `expect` is the only way to initialize `LazyLock<Regex>` from a `Result`; a failure here
@@ -1028,7 +1036,10 @@ unsafe impl<S: Send> Sync for StreamInterceptor<S> {}
 
 impl<S> StreamInterceptor<S>
 where
-    S: tokio_stream::Stream<Item = Result<String, crate::chal::ExecutionError>> + Unpin + Send + Sync,
+    S: tokio_stream::Stream<Item = Result<String, crate::chal::ExecutionError>>
+        + Unpin
+        + Send
+        + Sync,
 {
     pub fn new(stream: S) -> Self {
         Self {
@@ -1061,19 +1072,19 @@ where
             match res {
                 Ok(token) => {
                     self.buffer.push_str(&token);
-                    
+
                     // Si el token parece ser parte de una syscall potencial, seguimos acumulando
                     if self.buffer.contains('[') {
                         // Si ya tenemos el cierre, intentamos parsear
                         if self.buffer.contains(']') {
-                             if let Some(syscall) = parse_syscall(&self.buffer) {
-                                 if let Some(pos) = self.buffer.find(']') {
-                                     self.buffer.drain(0..=pos);
-                                 } else {
-                                     self.buffer.clear();
-                                 }
-                                 return Some(StreamItem::Syscall(syscall));
-                             }
+                            if let Some(syscall) = parse_syscall(&self.buffer) {
+                                if let Some(pos) = self.buffer.find(']') {
+                                    self.buffer.drain(0..=pos);
+                                } else {
+                                    self.buffer.clear();
+                                }
+                                return Some(StreamItem::Syscall(syscall));
+                            }
                         }
                         // Si no cerramos pero el buffer crece mucho sin cerrar, soltamos como tokens
                         if self.buffer.len() > 2048 {
@@ -1166,7 +1177,8 @@ mod tests {
         let mcp_registry = Arc::new(ank_mcp::registry::McpToolRegistry::new());
         let http_client = Arc::new(reqwest::Client::new());
         let (tx, _) = tokio::sync::mpsc::channel(1);
-        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx);
+        let executor =
+            SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx);
 
         let pcb = crate::pcb::PCB::new("test".into(), 5, "test".into());
 
@@ -1190,7 +1202,8 @@ mod tests {
         let mcp_registry = Arc::new(ank_mcp::registry::McpToolRegistry::new());
         let http_client = Arc::new(reqwest::Client::new());
         let (tx, _) = tokio::sync::mpsc::channel(1);
-        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx);
+        let executor =
+            SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx);
 
         // Intentar acceder a localhost
         let res = executor.fetch_url_safe("http://127.0.0.1:8080/admin").await;

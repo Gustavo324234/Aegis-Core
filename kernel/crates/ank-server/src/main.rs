@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
 
     // 9. Scribe (Git-backed filesystem)
     let scribe = Arc::new(ank_core::scribe::ScribeManager::new(
-        data_dir.to_str().unwrap_or(".")
+        data_dir.to_str().unwrap_or("."),
     ));
 
     // 10. HAL
@@ -210,7 +210,10 @@ async fn main() -> Result<()> {
                     let started_at = std::time::Instant::now();
                     let (tenant_id, session_key) = {
                         let p = shared_pcb.read().await;
-                        (p.tenant_id.clone().unwrap_or_default(), p.session_key.clone().unwrap_or_default())
+                        (
+                            p.tenant_id.clone().unwrap_or_default(),
+                            p.session_key.clone().unwrap_or_default(),
+                        )
                     };
 
                     let persona = if !tenant_id.is_empty() && !session_key.is_empty() {
@@ -237,7 +240,10 @@ async fn main() -> Result<()> {
                         scheduler_tx_runner.clone(),
                     );
 
-                    match hal_runner.route_and_execute(Arc::clone(&shared_pcb), persona).await {
+                    match hal_runner
+                        .route_and_execute(Arc::clone(&shared_pcb), persona)
+                        .await
+                    {
                         Ok(stream) => {
                             use ank_core::syscalls::StreamInterceptor;
                             let mut interceptor = StreamInterceptor::new(stream);
@@ -254,12 +260,14 @@ async fn main() -> Result<()> {
                                         let _ = event_tx.send(ank_proto::v1::TaskEvent {
                                             pid: pid.clone(),
                                             timestamp: None,
-                                            payload: Some(ank_proto::v1::task_event::Payload::Syscall(
-                                                ank_proto::v1::Syscall {
-                                                    name: format!("{:?}", syscall),
-                                                    ..Default::default()
-                                                }
-                                            )),
+                                            payload: Some(
+                                                ank_proto::v1::task_event::Payload::Syscall(
+                                                    ank_proto::v1::Syscall {
+                                                        name: format!("{:?}", syscall),
+                                                        ..Default::default()
+                                                    },
+                                                ),
+                                            ),
                                         });
 
                                         let pcb_snapshot = shared_pcb.read().await.clone();
@@ -271,7 +279,11 @@ async fn main() -> Result<()> {
                                                 let _ = event_tx.send(ank_proto::v1::TaskEvent {
                                                     pid: pid.clone(),
                                                     timestamp: None,
-                                                    payload: Some(ank_proto::v1::task_event::Payload::Output(format!("\n{}", result))),
+                                                    payload: Some(
+                                                        ank_proto::v1::task_event::Payload::Output(
+                                                            format!("\n{}", result),
+                                                        ),
+                                                    ),
                                                 });
                                                 full_output.push_str(&result);
                                             }
@@ -280,7 +292,11 @@ async fn main() -> Result<()> {
                                                 let _ = event_tx.send(ank_proto::v1::TaskEvent {
                                                     pid: pid.clone(),
                                                     timestamp: None,
-                                                    payload: Some(ank_proto::v1::task_event::Payload::Error(e.to_string())),
+                                                    payload: Some(
+                                                        ank_proto::v1::task_event::Payload::Error(
+                                                            e.to_string(),
+                                                        ),
+                                                    ),
                                                 });
                                             }
                                         }
@@ -290,33 +306,46 @@ async fn main() -> Result<()> {
 
                             // Telemetry & Finalization
                             let duration_ms = started_at.elapsed().as_millis() as u64;
-                            telemetry_runner.add_inference(CompletedInference {
-                                tokens_per_second: if duration_ms > 0 { tokens_emitted as f64 / (duration_ms as f64 / 1000.0) } else { 0.0 },
-                                tokens_emitted,
-                                model_id: "routed-model".to_string(),
-                                duration_ms,
-                                cost_usd: None,
-                            }).await;
+                            telemetry_runner
+                                .add_inference(CompletedInference {
+                                    tokens_per_second: if duration_ms > 0 {
+                                        tokens_emitted as f64 / (duration_ms as f64 / 1000.0)
+                                    } else {
+                                        0.0
+                                    },
+                                    tokens_emitted,
+                                    model_id: "routed-model".to_string(),
+                                    duration_ms,
+                                    cost_usd: None,
+                                })
+                                .await;
 
-                            let _ = scheduler_tx_runner.send(SchedulerEvent::ProcessCompleted {
-                                pid: pid.clone(),
-                                output: full_output,
-                            }).await;
+                            let _ = scheduler_tx_runner
+                                .send(SchedulerEvent::ProcessCompleted {
+                                    pid: pid.clone(),
+                                    output: full_output,
+                                })
+                                .await;
 
                             let _ = event_tx.send(ank_proto::v1::TaskEvent {
                                 pid: pid.clone(),
                                 timestamp: None,
-                                payload: Some(ank_proto::v1::task_event::Payload::StatusUpdate(Box::new(
-                                    ank_proto::v1::Pcb { state: 4, ..Default::default() }
-                                ))),
+                                payload: Some(ank_proto::v1::task_event::Payload::StatusUpdate(
+                                    Box::new(ank_proto::v1::Pcb {
+                                        state: 4,
+                                        ..Default::default()
+                                    }),
+                                )),
                             });
                         }
                         Err(e) => {
                             error!(pid = %pid, "HAL Runner failed: {}", e);
-                            let _ = scheduler_tx_runner.send(SchedulerEvent::ProcessCompleted {
-                                pid,
-                                output: format!("error: {}", e),
-                            }).await;
+                            let _ = scheduler_tx_runner
+                                .send(SchedulerEvent::ProcessCompleted {
+                                    pid,
+                                    output: format!("error: {}", e),
+                                })
+                                .await;
                         }
                     }
                 });

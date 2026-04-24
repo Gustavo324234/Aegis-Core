@@ -133,7 +133,12 @@ pub async fn get_system_status(
     // CORE-154: Query live scheduler stats
     let (total_processes, active_workers) = {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if state.scheduler_tx.send(SchedulerEvent::GetStats(tx)).await.is_ok() {
+        if state
+            .scheduler_tx
+            .send(SchedulerEvent::GetStats(tx))
+            .await
+            .is_ok()
+        {
             if let Ok(stats) = rx.await {
                 (stats.total_processes, stats.active_workers)
             } else {
