@@ -239,8 +239,7 @@ impl CognitiveHAL {
         &self,
         shared_pcb: SharedPCB,
         persona: Option<String>,
-    ) -> GenerateStreamResult
-    {
+    ) -> GenerateStreamResult {
         let (instruction, priority, model_pref, pid) = {
             let pcb = shared_pcb.read().await;
             (
@@ -340,8 +339,7 @@ impl CognitiveHAL {
         pcb: &PCB,
         pid: &str,
         persona: Option<&str>,
-    ) -> GenerateStreamResult
-    {
+    ) -> GenerateStreamResult {
         use crate::chal::drivers::CloudProxyDriver;
 
         tracing::info!(
@@ -471,7 +469,10 @@ impl CognitiveHAL {
 
         // CORE-150: Maker Instructions
         // CORE-154: Multi-Agent Instructions
-        format!("{}{}{}", MAKER_INSTRUCTIONS, SPAWN_INSTRUCTIONS, final_prompt)
+        format!(
+            "{}{}{}",
+            MAKER_INSTRUCTIONS, SPAWN_INSTRUCTIONS, final_prompt
+        )
     }
 }
 
@@ -522,13 +523,15 @@ mod tests {
             Box::new(DummyDriver {
                 name: "local".to_string(),
             }),
-        ).await;
+        )
+        .await;
         hal.register_driver(
             "cloud-driver",
             Box::new(DummyDriver {
                 name: "cloud".to_string(),
             }),
-        ).await;
+        )
+        .await;
         let mut pcb = PCB::mock("Complex Mission", 10);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
@@ -552,13 +555,15 @@ mod tests {
             Box::new(DummyDriver {
                 name: "local".to_string(),
             }),
-        ).await;
+        )
+        .await;
         hal.register_driver(
             "cloud-driver",
             Box::new(DummyDriver {
                 name: "cloud".to_string(),
             }),
-        ).await;
+        )
+        .await;
         let mut pcb = PCB::mock("Simple task", 5);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
