@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.2.0...shell-ui-v1.3.0) (2026-04-24)
+
+
+### Features
+
+* **core-153:** implement dashboard with kanban and financial widgets ([#108](https://github.com/Gustavo324234/Aegis-Core/issues/108)) ([dbbcf37](https://github.com/Gustavo324234/Aegis-Core/commit/dbbcf377641086d4c40b39c3b9ba62eff9ea8087))
+
 ## [1.2.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.1.2...shell-ui-v1.2.0) (2026-04-22)
 
 
