@@ -160,6 +160,7 @@ impl SwarmClient {
                 crate::pcb::ProcessState::Ready => ProtoProcessState::StatePending.into(),
                 crate::pcb::ProcessState::Running => ProtoProcessState::StateRunning.into(),
                 crate::pcb::ProcessState::WaitingSyscall => ProtoProcessState::StateBlocked.into(),
+                crate::pcb::ProcessState::WaitingWorkers => ProtoProcessState::StateBlocked.into(),
                 crate::pcb::ProcessState::Completed => ProtoProcessState::StateCompleted.into(),
                 crate::pcb::ProcessState::Failed => ProtoProcessState::StateTerminated.into(),
                 crate::pcb::ProcessState::Preempted => ProtoProcessState::StatePending.into(),
