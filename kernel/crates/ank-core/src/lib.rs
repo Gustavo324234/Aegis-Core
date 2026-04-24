@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod chal;
 pub mod chronos;
 pub mod citadel;
