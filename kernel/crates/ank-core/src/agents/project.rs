@@ -89,21 +89,19 @@ impl ProjectRegistry {
                 })
                 .with_context(|| "Failed to query agent_projects")?
                 .filter_map(|r| r.ok())
-                .filter_map(
-                    |(pid, name, desc, last_active_str, prompt, domains_json)| {
-                        let last_active = last_active_str.parse::<DateTime<Utc>>().ok()?;
-                        let known_domains: Vec<String> =
-                            serde_json::from_str(&domains_json).unwrap_or_default();
-                        Some(ProjectMetadata {
-                            project_id: pid,
-                            display_name: name,
-                            description: desc,
-                            last_active,
-                            supervisor_prompt: prompt,
-                            known_domains,
-                        })
-                    },
-                )
+                .filter_map(|(pid, name, desc, last_active_str, prompt, domains_json)| {
+                    let last_active = last_active_str.parse::<DateTime<Utc>>().ok()?;
+                    let known_domains: Vec<String> =
+                        serde_json::from_str(&domains_json).unwrap_or_default();
+                    Some(ProjectMetadata {
+                        project_id: pid,
+                        display_name: name,
+                        description: desc,
+                        last_active,
+                        supervisor_prompt: prompt,
+                        known_domains,
+                    })
+                })
                 .collect();
 
             Ok(rows)

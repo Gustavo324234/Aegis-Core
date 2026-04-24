@@ -22,18 +22,15 @@ impl AgentTree {
         let agent_id = node.agent_id;
 
         if let Some(parent_id) = node.parent_id {
-            let parent = self.nodes.get_mut(&parent_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Parent agent {} not found in tree",
-                    parent_id
-                )
-            })?;
+            let parent = self
+                .nodes
+                .get_mut(&parent_id)
+                .ok_or_else(|| anyhow::anyhow!("Parent agent {} not found in tree", parent_id))?;
             parent.add_child(agent_id);
         }
 
         if node.role == AgentRole::ProjectSupervisor {
-            self.project_roots
-                .insert(node.project_id.clone(), agent_id);
+            self.project_roots.insert(node.project_id.clone(), agent_id);
         }
 
         self.nodes.insert(agent_id, node);
@@ -100,15 +97,15 @@ impl AgentTree {
             anyhow::bail!("Agent {} not found in tree", id);
         }
 
-        let descendants: Vec<AgentId> = self
-            .descendants(id)
-            .iter()
-            .map(|n| n.agent_id)
-            .collect();
+        let descendants: Vec<AgentId> = self.descendants(id).iter().map(|n| n.agent_id).collect();
 
         let parent_id = self.nodes.get(id).and_then(|n| n.parent_id);
         let project_id = self.nodes.get(id).map(|n| n.project_id.clone());
-        let is_root = self.nodes.get(id).map(|n| n.role == AgentRole::ProjectSupervisor).unwrap_or(false);
+        let is_root = self
+            .nodes
+            .get(id)
+            .map(|n| n.role == AgentRole::ProjectSupervisor)
+            .unwrap_or(false);
 
         let mut count = 0;
         for desc_id in &descendants {
@@ -153,8 +150,20 @@ mod tests {
     use crate::agents::node::{AgentRole, AgentState};
     use crate::pcb::TaskType;
 
-    fn make_node(role: AgentRole, project: &str, domain: &str, parent: Option<AgentId>) -> AgentNode {
-        AgentNode::new(role, project.to_string(), domain, parent, "prompt", TaskType::Planning)
+    fn make_node(
+        role: AgentRole,
+        project: &str,
+        domain: &str,
+        parent: Option<AgentId>,
+    ) -> AgentNode {
+        AgentNode::new(
+            role,
+            project.to_string(),
+            domain,
+            parent,
+            "prompt",
+            TaskType::Planning,
+        )
     }
 
     #[test]
@@ -170,7 +179,12 @@ mod tests {
     fn test_insert_with_missing_parent_returns_err() {
         let mut tree = AgentTree::new();
         let fake_parent = uuid::Uuid::new_v4();
-        let node = make_node(AgentRole::Specialist, "aegis", "scheduler", Some(fake_parent));
+        let node = make_node(
+            AgentRole::Specialist,
+            "aegis",
+            "scheduler",
+            Some(fake_parent),
+        );
         assert!(tree.insert(node).is_err());
     }
 
@@ -180,7 +194,12 @@ mod tests {
         let root = make_node(AgentRole::ProjectSupervisor, "aegis", "Aegis OS", None);
         let root_id = tree.insert(root).unwrap();
 
-        let domain = make_node(AgentRole::DomainSupervisor, "aegis", "Kernel", Some(root_id));
+        let domain = make_node(
+            AgentRole::DomainSupervisor,
+            "aegis",
+            "Kernel",
+            Some(root_id),
+        );
         let domain_id = tree.insert(domain).unwrap();
 
         let spec = make_node(AgentRole::Specialist, "aegis", "scheduler", Some(domain_id));
@@ -199,7 +218,12 @@ mod tests {
         let root = make_node(AgentRole::ProjectSupervisor, "aegis", "Aegis OS", None);
         let root_id = tree.insert(root).unwrap();
 
-        let domain = make_node(AgentRole::DomainSupervisor, "aegis", "Kernel", Some(root_id));
+        let domain = make_node(
+            AgentRole::DomainSupervisor,
+            "aegis",
+            "Kernel",
+            Some(root_id),
+        );
         let domain_id = tree.insert(domain).unwrap();
 
         let spec = make_node(AgentRole::Specialist, "aegis", "scheduler", Some(domain_id));
@@ -208,7 +232,7 @@ mod tests {
         let removed = tree.prune(&domain_id).unwrap();
         assert_eq!(removed, 2); // domain + specialist
         assert_eq!(tree.len(), 1); // only root remains
-        // Root's children list must be updated
+                                   // Root's children list must be updated
         assert!(tree.get(&root_id).unwrap().children.is_empty());
     }
 

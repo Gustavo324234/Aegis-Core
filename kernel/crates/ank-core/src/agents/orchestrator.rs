@@ -1,5 +1,5 @@
-use crate::agents::node::{AgentId, AgentRole, AgentState, ProjectId};
 use crate::agents::message::{AgentContext, AgentMessage, AgentResult, ReportStatus};
+use crate::agents::node::{AgentId, AgentRole, AgentState, ProjectId};
 use crate::agents::tree::AgentTree;
 use crate::pcb::TaskType;
 use crate::router::CognitiveRouter;
@@ -21,10 +21,7 @@ pub struct AgentOrchestrator {
 }
 
 impl AgentOrchestrator {
-    pub fn new(
-        router: Arc<RwLock<CognitiveRouter>>,
-        vcm: Arc<VirtualContextManager>,
-    ) -> Self {
+    pub fn new(router: Arc<RwLock<CognitiveRouter>>, vcm: Arc<VirtualContextManager>) -> Self {
         Self {
             tree: Arc::new(RwLock::new(AgentTree::new())),
             router,
@@ -199,9 +196,9 @@ impl AgentOrchestrator {
             .get(&agent_id)
             .ok_or_else(|| anyhow::anyhow!("No channel found for agent {}", agent_id))?;
 
-        tx.send(msg).await.map_err(|e| {
-            anyhow::anyhow!("Failed to dispatch to agent {}: {}", agent_id, e)
-        })?;
+        tx.send(msg)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to dispatch to agent {}: {}", agent_id, e))?;
 
         {
             let mut tree = self.tree.write().await;
@@ -291,7 +288,10 @@ impl AgentOrchestrator {
                                     from: agent_id,
                                     result: AgentResult {
                                         agent_id,
-                                        role_description: format!("{}/{}", role_label, domain_label),
+                                        role_description: format!(
+                                            "{}/{}",
+                                            role_label, domain_label
+                                        ),
                                         summary: format!("Agent failed: {}", e),
                                         artifacts: Vec::new(),
                                         metadata: serde_json::Value::Null,
@@ -379,7 +379,11 @@ impl AgentOrchestrator {
                     ch.remove(&agent_id);
                     return;
                 }
-                AgentMessage::Report { from, result, status } => {
+                AgentMessage::Report {
+                    from,
+                    result,
+                    status,
+                } => {
                     info!(
                         "[{}][{}] Received report from child {}: {:?}",
                         role_label, domain_label, from, status
@@ -391,7 +395,10 @@ impl AgentOrchestrator {
                             node.children.iter().all(|child_id| {
                                 t.get(child_id)
                                     .map(|c| {
-                                        matches!(c.state, AgentState::Complete | AgentState::Failed { .. })
+                                        matches!(
+                                            c.state,
+                                            AgentState::Complete | AgentState::Failed { .. }
+                                        )
                                     })
                                     .unwrap_or(true)
                             })
@@ -426,7 +433,8 @@ impl AgentOrchestrator {
                         };
 
                         let synth_msg = AgentMessage::Dispatch {
-                            task_description: "Synthesize all child reports into a final summary.".to_string(),
+                            task_description: "Synthesize all child reports into a final summary."
+                                .to_string(),
                             context: AgentContext {
                                 child_reports: child_results,
                                 relevant_files: Vec::new(),
@@ -466,9 +474,13 @@ impl AgentOrchestrator {
         if let Some(pid) = parent_id {
             let channels = self.channels.read().await;
             if let Some(ptx) = channels.get(&pid) {
-                ptx.send(AgentMessage::Report { from, result, status })
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to forward report: {}", e))?;
+                ptx.send(AgentMessage::Report {
+                    from,
+                    result,
+                    status,
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to forward report: {}", e))?;
             }
         }
         Ok(())
@@ -524,11 +536,7 @@ impl AgentOrchestrator {
         snapshot
     }
 
-    fn clone_subtree(
-        src: &AgentTree,
-        dst: &mut AgentTree,
-        id: AgentId,
-    ) -> anyhow::Result<()> {
+    fn clone_subtree(src: &AgentTree, dst: &mut AgentTree, id: AgentId) -> anyhow::Result<()> {
         if let Some(node) = src.get(&id) {
             let cloned = node.clone();
             dst.insert(cloned)?;

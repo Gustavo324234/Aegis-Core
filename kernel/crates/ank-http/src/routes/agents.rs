@@ -125,9 +125,7 @@ async fn get_agent(
         .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 
     let snapshot = state.agent_orchestrator.tree_snapshot().await;
-    let node = snapshot
-        .get(&id)
-        .ok_or(axum::http::StatusCode::NOT_FOUND)?;
+    let node = snapshot.get(&id).ok_or(axum::http::StatusCode::NOT_FOUND)?;
 
     Ok(Json(AgentNodeDto {
         agent_id: node.agent_id.to_string(),

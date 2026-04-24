@@ -418,18 +418,17 @@ impl SyscallExecutor {
             } => {
                 let orchestrator = self.agent_orchestrator.as_ref().ok_or_else(|| {
                     SyscallError::InternalError(
-                        "AgentOrchestrator not configured — SYS_AGENT_SPAWN unavailable".to_string(),
+                        "AgentOrchestrator not configured — SYS_AGENT_SPAWN unavailable"
+                            .to_string(),
                     )
                 })?;
 
-                let requesting_id = requesting_agent_id
-                    .parse::<uuid::Uuid>()
-                    .map_err(|_| {
-                        SyscallError::InternalError(format!(
-                            "Invalid requesting_agent_id UUID: {}",
-                            requesting_agent_id
-                        ))
-                    })?;
+                let requesting_id = requesting_agent_id.parse::<uuid::Uuid>().map_err(|_| {
+                    SyscallError::InternalError(format!(
+                        "Invalid requesting_agent_id UUID: {}",
+                        requesting_agent_id
+                    ))
+                })?;
 
                 // Parse role and validate hierarchy constraint
                 let agent_role = match role.to_uppercase().as_str() {

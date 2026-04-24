@@ -27,7 +27,9 @@ pub enum AgentState {
     /// Esperando que sus subordinados terminen.
     WaitingReport,
     Complete,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 /// Nodo fundamental del árbol de agentes.
