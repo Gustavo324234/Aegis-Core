@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod agents;
 pub mod auth;
 pub mod engine;
 pub mod music_api;
@@ -39,6 +40,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/system", status::system_router())
         .nest("/api/siren", siren_api::router())
         .nest("/api/persona", persona_api::router())
+        .nest("/api/agents", agents::router())
         .nest("/api/music", music_api::router())
         // WebSocket Routes
         .nest("/ws/chat", ws::chat::router())
