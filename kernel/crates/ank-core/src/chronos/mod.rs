@@ -67,7 +67,7 @@ impl ChronosDaemon {
         let scheduler = self.scheduler.read().await;
 
         // Reglas de Inactividad SRE:
-        let alu_free = scheduler.current_running.is_none();
+        let alu_free = scheduler.current_running.is_empty();
         let ready_empty = scheduler.ready_queue.is_empty();
         let waiting_empty = scheduler.waiting_queue.is_empty();
         let time_since_activity = Utc::now() - scheduler.last_activity;
@@ -157,7 +157,7 @@ mod tests {
         // Caso 3: Inyectamos una tarea (deja de ser idle)
         {
             let mut sched_w = scheduler.write().await;
-            sched_w.current_running = Some("proc_1".to_string());
+            sched_w.current_running.push("proc_1".to_string());
         }
         assert!(!chronos.check_idle_state().await);
     }

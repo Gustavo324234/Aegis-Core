@@ -134,8 +134,13 @@ async fn main() -> Result<()> {
         }
     });
 
-    // 9. HAL
-    let hal = Arc::new(RwLock::new(CognitiveHAL::new(Arc::clone(&plugin_manager))?));
+    // 9. Scribe (Git-backed filesystem)
+    let scribe = Arc::new(ank_core::scribe::ScribeManager::new(
+        data_dir.to_str().unwrap_or("."),
+    ));
+
+    // 10. HAL
+    let hal = Arc::new(CognitiveHAL::new(Arc::clone(&plugin_manager))?);
 
     // 10. Router & Catalog — filtrado por AEGIS_MODEL_PROFILE
     let model_profile = ModelProfile::from_env();
@@ -153,7 +158,7 @@ async fn main() -> Result<()> {
         catalog.clone(),
         key_pool.clone(),
     )));
-    hal.write().await.set_router(router.clone());
+    hal.set_router(router.clone()).await;
 
     let catalog_syncer = Arc::new(ank_core::router::syncer::CatalogSyncer::new(
         catalog, key_pool,
@@ -172,222 +177,178 @@ async fn main() -> Result<()> {
     // CORE-092: Al cerrarse execution_rx, notifica al scheduler via HalRunnerDied
     // para que limpie current_running y evite un deadlock silencioso.
     {
-        let hal_runner = Arc::clone(&hal);
+        let hal_runner = hal.clone();
         let event_broker_runner = Arc::clone(&event_broker);
         let scheduler_tx_runner = scheduler_tx.clone();
-        let scheduler_tx_watchdog = scheduler_tx.clone();
         let telemetry_runner = telemetry.clone();
+        let scribe_runner = Arc::clone(&scribe);
+        let scheduler_tx_watchdog = scheduler_tx.clone();
 
         tokio::spawn(async move {
             while let Some(pcb) = execution_rx.recv().await {
-                let pid = pcb.pid.clone();
-                let shared_pcb = Arc::new(RwLock::new(*pcb));
+                let hal_runner = hal_runner.clone();
+                let event_broker_runner = Arc::clone(&event_broker_runner);
+                let scheduler_tx_runner = scheduler_tx_runner.clone();
+                let telemetry_runner = telemetry_runner.clone();
+                let scribe_runner = Arc::clone(&scribe_runner);
 
-                let event_tx = {
-                    let mut broker = event_broker_runner.write().await;
-                    broker
-                        .entry(pid.clone())
-                        .or_insert_with(|| {
-                            let (tx, _) = tokio::sync::broadcast::channel(256);
-                            tx
-                        })
-                        .clone()
-                };
+                tokio::spawn(async move {
+                    let pid = pcb.pid.clone();
+                    let shared_pcb = Arc::new(RwLock::new(*pcb));
 
-                let started_at = std::time::Instant::now();
-                let hal_read = hal_runner.read().await;
+                    let event_tx = {
+                        let mut broker = event_broker_runner.write().await;
+                        broker
+                            .entry(pid.clone())
+                            .or_insert_with(|| {
+                                let (tx, _) = tokio::sync::broadcast::channel(512);
+                                tx
+                            })
+                            .clone()
+                    };
 
-                // CORE-097: Extraer cancel_token del PCB para soportar preemption
-                let cancel_token = {
-                    let pcb_lock = shared_pcb.read().await;
-                    pcb_lock.cancel_token.clone()
-                };
+                    let started_at = std::time::Instant::now();
+                    let (tenant_id, session_key) = {
+                        let p = shared_pcb.read().await;
+                        (
+                            p.tenant_id.clone().unwrap_or_default(),
+                            p.session_key.clone().unwrap_or_default(),
+                        )
+                    };
 
-                // Resolver model_id para telemetría (best-effort, no bloquea ejecución)
-                let model_id = {
-                    if let Some(ref router_rw) = hal_read.router {
-                        let router = router_rw.read().await;
-                        let pcb_snapshot = shared_pcb.read().await;
-                        router
-                            .decide(&pcb_snapshot)
-                            .await
+                    let persona = if !tenant_id.is_empty() && !session_key.is_empty() {
+                        ank_core::enclave::TenantDB::open(&tenant_id, &session_key)
                             .ok()
-                            .map(|d| d.model_id)
-                            .unwrap_or_else(|| "unknown".to_string())
-                    } else {
-                        "unknown".to_string()
-                    }
-                };
-
-                let (tenant_id, session_key) = {
-                    let pcb = shared_pcb.read().await;
-                    (
-                        pcb.tenant_id.clone().unwrap_or_default(),
-                        pcb.session_key.clone().unwrap_or_default(),
-                    )
-                };
-
-                let persona: Option<String> = if !tenant_id.is_empty() && !session_key.is_empty() {
-                    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &session_key) {
-                        db.get_persona().unwrap_or(None)
+                            .and_then(|db| db.get_persona().unwrap_or(None))
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
 
-                match hal_read
-                    .route_and_execute(Arc::clone(&shared_pcb), persona)
-                    .await
-                {
-                    Ok(mut stream) => {
-                        use tokio_stream::StreamExt as _;
-                        let mut tokens_emitted: u32 = 0;
-                        let mut full_output = String::new();
+                    let mcp_registry = hal_runner.mcp_registry.clone();
+                    let http_client = hal_runner.http_client.clone();
+                    let vcm = Arc::new(hal_runner.vcm);
+                    let swap = hal_runner.swap_manager.clone();
+                    let plugin_manager = hal_runner.plugin_manager.clone();
 
-                        while let Some(token_result) = stream.next().await {
-                            // CORE-097: Verificar cancelación en cada chunk
-                            if cancel_token.is_cancelled() {
-                                tracing::warn!(pid = %pid, "Process preempted via CancellationToken");
-                                let cancel_event = ank_proto::v1::TaskEvent {
-                                    pid: pid.clone(),
-                                    timestamp: None,
-                                    payload: Some(
-                                        ank_proto::v1::task_event::Payload::StatusUpdate(Box::new(
-                                            ank_proto::v1::Pcb {
-                                                state: 5, // STATE_PREEMPTED
-                                                ..Default::default()
-                                            },
-                                        )),
-                                    ),
-                                };
-                                let _ = event_tx.send(cancel_event);
-                                let _ = scheduler_tx_runner
-                                    .send(SchedulerEvent::ProcessCompleted {
-                                        pid: pid.clone(),
-                                        output: "preempted".to_string(),
-                                    })
-                                    .await;
-                                break;
-                            }
+                    let executor = ank_core::syscalls::SyscallExecutor::new(
+                        plugin_manager,
+                        vcm,
+                        scribe_runner,
+                        swap,
+                        mcp_registry,
+                        http_client,
+                        scheduler_tx_runner.clone(),
+                    );
 
-                            match token_result {
-                                Ok(token) => {
-                                    tokens_emitted = tokens_emitted.saturating_add(1);
-                                    full_output.push_str(&token);
-                                    let event = ank_proto::v1::TaskEvent {
-                                        pid: pid.clone(),
-                                        timestamp: None,
-                                        payload: Some(ank_proto::v1::task_event::Payload::Output(
-                                            token,
-                                        )),
-                                    };
-                                    let _ = event_tx.send(event);
-                                }
-                                Err(e) => {
-                                    let event = ank_proto::v1::TaskEvent {
-                                        pid: pid.clone(),
-                                        timestamp: None,
-                                        payload: Some(ank_proto::v1::task_event::Payload::Error(
-                                            e.to_string(),
-                                        )),
-                                    };
-                                    let _ = event_tx.send(event);
-                                    break;
-                                }
-                            }
-                        }
+                    match hal_runner
+                        .route_and_execute(Arc::clone(&shared_pcb), persona)
+                        .await
+                    {
+                        Ok(stream) => {
+                            use ank_core::syscalls::StreamInterceptor;
+                            let mut interceptor = StreamInterceptor::new(stream);
+                            let mut tokens_emitted = 0;
+                            let mut full_output = String::new();
 
-                        // CORE-105: Registrar telemetría de la inferencia completada
-                        let duration_ms = started_at.elapsed().as_millis() as u64;
-                        let tokens_per_second = if duration_ms > 0 {
-                            (tokens_emitted as f64 / (duration_ms as f64 / 1000.0)).min(1_000_000.0)
-                        } else {
-                            0.0
-                        };
-
-                        let inference = CompletedInference {
-                            tokens_per_second,
-                            tokens_emitted,
-                            model_id: model_id.clone(),
-                            duration_ms,
-                            cost_usd: None,
-                        };
-                        telemetry_runner.add_inference(inference).await;
-
-                        // CORE-FIX: Neuronal Memory Storage (L3)
-                        if tokens_emitted > 0 {
-                            let pcb_ref = shared_pcb.read().await;
-                            if let Some(tenant_id) = &pcb_ref.tenant_id {
-                                let interaction = format!(
-                                    "User: {}\nAssistant: {}",
-                                    pcb_ref.memory_pointers.l1_instruction, full_output
-                                );
-                                let hal_for_memory = Arc::clone(&hal_runner);
-                                let tenant_id_for_memory = tenant_id.clone();
-
-                                tokio::spawn(async move {
-                                    if let Err(e) = hal_for_memory
-                                        .read()
-                                        .await
-                                        .store_memory(&tenant_id_for_memory, &interaction)
-                                        .await
-                                    {
-                                        tracing::warn!("Failed to store neuronal memory: {}", e);
-                                    } else {
-                                        tracing::info!(
-                                            "Neuronal memory fragment stored for tenant {}",
-                                            tenant_id_for_memory
-                                        );
+                            while let Some(item) = interceptor.next_item().await {
+                                match item {
+                                    ank_core::syscalls::StreamItem::Token(token) => {
+                                        tokens_emitted += 1;
+                                        full_output.push_str(&token);
                                     }
-                                });
+                                    ank_core::syscalls::StreamItem::Syscall(syscall) => {
+                                        let _ = event_tx.send(ank_proto::v1::TaskEvent {
+                                            pid: pid.clone(),
+                                            timestamp: None,
+                                            payload: Some(
+                                                ank_proto::v1::task_event::Payload::Syscall(
+                                                    ank_proto::v1::Syscall {
+                                                        name: format!("{:?}", syscall),
+                                                        ..Default::default()
+                                                    },
+                                                ),
+                                            ),
+                                        });
+
+                                        let pcb_snapshot = shared_pcb.read().await.clone();
+                                        match executor.execute(&pcb_snapshot, syscall).await {
+                                            Ok(result) => {
+                                                info!(pid = %pid, "Syscall executed successfully.");
+                                                // Inject result back into PCB context for next turns if needed,
+                                                // or just send to UI.
+                                                let _ = event_tx.send(ank_proto::v1::TaskEvent {
+                                                    pid: pid.clone(),
+                                                    timestamp: None,
+                                                    payload: Some(
+                                                        ank_proto::v1::task_event::Payload::Output(
+                                                            format!("\n{}", result),
+                                                        ),
+                                                    ),
+                                                });
+                                                full_output.push_str(&result);
+                                            }
+                                            Err(e) => {
+                                                error!(pid = %pid, "Syscall failed: {}", e);
+                                                let _ = event_tx.send(ank_proto::v1::TaskEvent {
+                                                    pid: pid.clone(),
+                                                    timestamp: None,
+                                                    payload: Some(
+                                                        ank_proto::v1::task_event::Payload::Error(
+                                                            e.to_string(),
+                                                        ),
+                                                    ),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                        }
 
-                        let _ = scheduler_tx_runner
-                            .send(SchedulerEvent::ProcessCompleted {
+                            // Telemetry & Finalization
+                            let duration_ms = started_at.elapsed().as_millis() as u64;
+                            telemetry_runner
+                                .add_inference(CompletedInference {
+                                    tokens_per_second: if duration_ms > 0 {
+                                        tokens_emitted as f64 / (duration_ms as f64 / 1000.0)
+                                    } else {
+                                        0.0
+                                    },
+                                    tokens_emitted,
+                                    model_id: "routed-model".to_string(),
+                                    duration_ms,
+                                    cost_usd: None,
+                                })
+                                .await;
+
+                            let _ = scheduler_tx_runner
+                                .send(SchedulerEvent::ProcessCompleted {
+                                    pid: pid.clone(),
+                                    output: full_output,
+                                })
+                                .await;
+
+                            let _ = event_tx.send(ank_proto::v1::TaskEvent {
                                 pid: pid.clone(),
-                                output: full_output,
-                            })
-                            .await;
-
-                        let done_event = ank_proto::v1::TaskEvent {
-                            pid: pid.clone(),
-                            timestamp: None,
-                            payload: Some(ank_proto::v1::task_event::Payload::StatusUpdate(
-                                Box::new(ank_proto::v1::Pcb {
-                                    state: 4, // STATE_COMPLETED
-                                    ..Default::default()
-                                }),
-                            )),
-                        };
-                        let _ = event_tx.send(done_event);
-
-                        tracing::debug!(
-                            pid = %pid,
-                            model = %model_id,
-                            tokens = tokens_emitted,
-                            tps = %format!("{:.2}", tokens_per_second),
-                            "Inference completed"
-                        );
+                                timestamp: None,
+                                payload: Some(ank_proto::v1::task_event::Payload::StatusUpdate(
+                                    Box::new(ank_proto::v1::Pcb {
+                                        state: 4,
+                                        ..Default::default()
+                                    }),
+                                )),
+                            });
+                        }
+                        Err(e) => {
+                            error!(pid = %pid, "HAL Runner failed: {}", e);
+                            let _ = scheduler_tx_runner
+                                .send(SchedulerEvent::ProcessCompleted {
+                                    pid,
+                                    output: format!("error: {}", e),
+                                })
+                                .await;
+                        }
                     }
-                    Err(e) => {
-                        tracing::error!(pid = %pid, "HAL execution failed: {}", e);
-                        let event = ank_proto::v1::TaskEvent {
-                            pid: pid.clone(),
-                            timestamp: None,
-                            payload: Some(ank_proto::v1::task_event::Payload::Error(e.to_string())),
-                        };
-                        let _ = event_tx.send(event);
-                        let _ = scheduler_tx_runner
-                            .send(SchedulerEvent::ProcessCompleted {
-                                pid,
-                                output: format!("error: {}", e),
-                            })
-                            .await;
-                    }
-                }
+                });
             }
 
             // CORE-092: El canal execution_rx se cerró — el Scheduler debe saberlo
@@ -410,7 +371,8 @@ async fn main() -> Result<()> {
         scheduler_tx: scheduler_tx.clone(),
         event_broker: Arc::clone(&event_broker),
         citadel: Arc::clone(&citadel),
-        hal: Arc::clone(&hal),
+        hal: hal.clone(),
+        scribe: Arc::clone(&scribe),
         router: Arc::clone(&router),
         siren_router: Arc::clone(&siren_router),
         catalog_syncer: Some(catalog_syncer),

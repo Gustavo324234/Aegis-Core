@@ -127,14 +127,14 @@ pub async fn configure(
     auth: CitadelAuthenticated,
     Json(body): Json<EngineConfig>,
 ) -> Result<Json<ConfigureResponse>, AegisHttpError> {
-    {
-        let mut hal = state.hal.write().await;
-        hal.update_cloud_credentials(
+    state
+        .hal
+        .update_cloud_credentials(
             body.api_url.clone(),
             body.model_name.clone(),
             body.api_key.clone(),
-        );
-    }
+        )
+        .await;
 
     let config_to_save = json!({
         "configured": true,

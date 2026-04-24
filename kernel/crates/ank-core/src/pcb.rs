@@ -17,12 +17,23 @@ pub enum TaskType {
     Local,
 }
 
+/// CORE-154: Role of a process within the multi-agent hierarchy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ProcessRole {
+    #[default]
+    Standalone,
+    Supervisor,
+    Worker,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProcessState {
     New,
     Ready,
     Running,
     WaitingSyscall,
+    /// CORE-154: Supervisor suspended until all spawned workers report back.
+    WaitingWorkers,
     Completed,
     Failed,
     Preempted,
@@ -74,6 +85,9 @@ pub struct PCB {
     /// Archivos o contenido empaquetado para migración (Teleportación)
     #[serde(default)]
     pub inlined_context: HashMap<String, String>,
+    /// CORE-154: Supervisor, Worker, or Standalone.
+    #[serde(default)]
+    pub role: ProcessRole,
     // --- Multi-Tenant & Zero-Knowledge ---
     #[serde(default)]
     pub tenant_id: Option<String>,
@@ -171,6 +185,7 @@ impl PCB {
             model_pref: ModelPreference::HybridSmart,
             task_type: TaskType::default(),
             inlined_context: HashMap::new(),
+            role: ProcessRole::Standalone,
             tenant_id: None,
             public_id: None,
             session_key: None,

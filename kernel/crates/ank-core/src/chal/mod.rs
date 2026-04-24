@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{Mutex as TokioMutex, RwLock};
+use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tracing::{info, warn};
 
@@ -59,6 +59,15 @@ Funciones disponibles en JS:\n\
 Usa esta capacidad cuando necesites realizar operaciones repetitivas, \
 procesamiento de archivos pesados o lógica que no podés expresar solo con texto.\n";
 
+/// CORE-154: Instrucciones para la capacidad Multi-Agente (Orquestación).
+pub const SPAWN_INSTRUCTIONS: &str = "\
+\n\n[CAPACIDAD: MULTI-AGENTE]\n\
+Podés despachar sub-agentes especializados para tareas paralelas o complejas. \
+Cada sub-agente corre con un contexto enfocado.\n\
+Sintaxis: [SYS_CALL_SPAWN(\"descripción de la tarea\", \"rol del agente\")]\n\
+Ejemplo: [SYS_CALL_SPAWN(\"analizar logs de errores en /workspace\", \"SRE Specialist\")]\n\
+Los sub-agentes te devolverán un reporte cuando terminen.\n";
+
 /// Template para inyectar la Persona del tenant cuando está configurada (CORE-129).
 /// `{persona}` se reemplaza con el texto libre del operador.
 pub const PERSONA_SECTION_TEMPLATE: &str =
@@ -103,8 +112,19 @@ pub enum Grammar {
     JsonSchema(serde_json::Value),
 }
 
+use std::task::{Context, Poll};
+
+pub struct SyncStream<S>(pub S);
+unsafe impl<S: Send> Sync for SyncStream<S> {}
+impl<S: Stream> Stream for SyncStream<S> {
+    type Item = S::Item;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        unsafe { self.map_unchecked_mut(|s| &mut s.0).poll_next(cx) }
+    }
+}
+
 pub type GenerateStreamResult =
-    Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>;
+    Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send + Sync>>, SystemError>;
 
 /// --- INFERENCE DRIVER INTERFACE ---
 #[async_trait]
@@ -122,15 +142,21 @@ pub trait InferenceDriver: Send + Sync {
 
 /// --- COGNITIVE HAL (Hardware Abstraction Layer) ---
 pub struct CognitiveHAL {
-    pub drivers: HashMap<String, Box<dyn InferenceDriver>>,
+    pub drivers: RwLock<HashMap<String, Box<dyn InferenceDriver + Send + Sync>>>,
     pub plugin_manager: Arc<RwLock<PluginManager>>,
     pub mcp_registry: Arc<ank_mcp::registry::McpToolRegistry>,
-    pub router: Option<Arc<RwLock<CognitiveRouter>>>,
-    pub hardware: TokioMutex<hardware::HardwareMonitor>,
+    pub router: RwLock<Option<Arc<RwLock<CognitiveRouter>>>>,
+    pub hardware: tokio::sync::Mutex<hardware::HardwareMonitor>,
     pub http_client: Arc<reqwest::Client>,
     pub vcm: VirtualContextManager,
     pub swap_manager: Arc<LanceSwapManager>,
     pub embedding_driver: Option<Arc<dyn EmbeddingDriver>>,
+}
+
+#[cfg(test)]
+fn _assert_hal_is_sync() {
+    fn assert_sync<T: Sync>() {}
+    assert_sync::<CognitiveHAL>();
 }
 
 impl CognitiveHAL {
@@ -144,7 +170,7 @@ impl CognitiveHAL {
                 })?,
         );
 
-        let mut drivers: HashMap<String, Box<dyn InferenceDriver>> = HashMap::new();
+        let mut drivers: HashMap<String, Box<dyn InferenceDriver + Send + Sync>> = HashMap::new();
 
         if let Some(cloud_driver) =
             crate::chal::drivers::CloudProxyDriver::from_env(Arc::clone(&http_client))
@@ -174,11 +200,11 @@ impl CognitiveHAL {
         };
 
         Ok(Self {
-            drivers,
+            drivers: RwLock::new(drivers),
             plugin_manager,
             mcp_registry: Arc::new(ank_mcp::registry::McpToolRegistry::new()),
-            router: None,
-            hardware: TokioMutex::new(hardware::HardwareMonitor::new()),
+            router: RwLock::new(None),
+            hardware: tokio::sync::Mutex::new(hardware::HardwareMonitor::new()),
             http_client,
             vcm: VirtualContextManager::new(),
             swap_manager,
@@ -186,24 +212,26 @@ impl CognitiveHAL {
         })
     }
 
-    pub fn set_router(&mut self, router: Arc<RwLock<CognitiveRouter>>) {
-        self.router = Some(router);
+    pub async fn set_router(&self, router: Arc<RwLock<CognitiveRouter>>) {
+        let mut r = self.router.write().await;
+        *r = Some(router);
     }
 
-    pub fn register_driver(&mut self, id: &str, driver: Box<dyn InferenceDriver>) {
-        self.drivers.insert(id.to_string(), driver);
+    pub async fn register_driver(&self, id: &str, driver: Box<dyn InferenceDriver + Send + Sync>) {
+        let mut drivers = self.drivers.write().await;
+        drivers.insert(id.to_string(), driver);
         tracing::info!(driver_id = %id, "New driver registered in HAL.");
     }
 
-    pub fn update_cloud_credentials(&mut self, api_url: String, model: String, api_key: String) {
+    pub async fn update_cloud_credentials(&self, api_url: String, model: String, api_key: String) {
         let cloud_driver = crate::chal::drivers::CloudProxyDriver::new(
             Arc::clone(&self.http_client),
             api_url,
             api_key,
             model.clone(),
         );
-        self.drivers
-            .insert("cloud-driver".to_string(), Box::new(cloud_driver));
+        let mut drivers = self.drivers.write().await;
+        drivers.insert("cloud-driver".to_string(), Box::new(cloud_driver));
         tracing::info!(model = %model, "CloudProxyDriver credentials updated dynamically and driver re-registered in HAL.");
     }
 
@@ -211,8 +239,7 @@ impl CognitiveHAL {
         &self,
         shared_pcb: SharedPCB,
         persona: Option<String>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
-    {
+    ) -> GenerateStreamResult {
         let (instruction, priority, model_pref, pid) = {
             let pcb = shared_pcb.read().await;
             (
@@ -224,7 +251,8 @@ impl CognitiveHAL {
         };
 
         // Try CognitiveRouter first if available
-        if let Some(router_rw) = &self.router {
+        let router_opt = self.router.read().await.clone();
+        if let Some(router_rw) = router_opt {
             let router = router_rw.read().await;
             let pcb_snapshot = {
                 let pcb = shared_pcb.read().await;
@@ -268,7 +296,7 @@ impl CognitiveHAL {
             }
             ModelPreference::HybridSmart => {
                 let is_complex = priority > 8 || instruction.len() > 1000;
-                let has_local_driver = self.drivers.contains_key("local-driver");
+                let has_local_driver = self.drivers.read().await.contains_key("local-driver");
                 if is_complex || !has_local_driver {
                     info!(
                         pid = %pid,
@@ -290,7 +318,8 @@ impl CognitiveHAL {
 
         let pcb_snapshot = shared_pcb.read().await.clone();
 
-        let driver = self.drivers.get(driver_id).ok_or_else(|| {
+        let drivers = self.drivers.read().await;
+        let driver = drivers.get(driver_id).ok_or_else(|| {
             if driver_id == "cloud-driver" {
                 SystemError::HardwareFailure(
                     "Driver cloud no configurado o sin credenciales.".to_string(),
@@ -310,8 +339,7 @@ impl CognitiveHAL {
         pcb: &PCB,
         pid: &str,
         persona: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send>>, SystemError>
-    {
+    ) -> GenerateStreamResult {
         use crate::chal::drivers::CloudProxyDriver;
 
         tracing::info!(
@@ -440,7 +468,11 @@ impl CognitiveHAL {
         };
 
         // CORE-150: Maker Instructions
-        format!("{}{}", MAKER_INSTRUCTIONS, final_prompt)
+        // CORE-154: Multi-Agent Instructions
+        format!(
+            "{}{}{}",
+            MAKER_INSTRUCTIONS, SPAWN_INSTRUCTIONS, final_prompt
+        )
     }
 }
 
@@ -491,13 +523,15 @@ mod tests {
             Box::new(DummyDriver {
                 name: "local".to_string(),
             }),
-        );
+        )
+        .await;
         hal.register_driver(
             "cloud-driver",
             Box::new(DummyDriver {
                 name: "cloud".to_string(),
             }),
-        );
+        )
+        .await;
         let mut pcb = PCB::mock("Complex Mission", 10);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));
@@ -521,13 +555,15 @@ mod tests {
             Box::new(DummyDriver {
                 name: "local".to_string(),
             }),
-        );
+        )
+        .await;
         hal.register_driver(
             "cloud-driver",
             Box::new(DummyDriver {
                 name: "cloud".to_string(),
             }),
-        );
+        )
+        .await;
         let mut pcb = PCB::mock("Simple task", 5);
         pcb.model_pref = ModelPreference::HybridSmart;
         let shared_pcb = Arc::new(RwLock::new(pcb));

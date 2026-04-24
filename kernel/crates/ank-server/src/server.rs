@@ -193,7 +193,8 @@ impl KernelService for AnkRpcServer {
                         ProtoProcessState::StatePending as i32
                     }
                     ank_core::ProcessState::Running => ProtoProcessState::StateRunning as i32,
-                    ank_core::ProcessState::WaitingSyscall => {
+                    ank_core::ProcessState::WaitingSyscall
+                    | ank_core::ProcessState::WaitingWorkers => {
                         ProtoProcessState::StateBlocked as i32
                     }
                     ank_core::ProcessState::Completed => ProtoProcessState::StateCompleted as i32,
