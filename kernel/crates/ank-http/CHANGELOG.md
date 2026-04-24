@@ -2,6 +2,13 @@
 
 
 
+## [0.1.18](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.17...ank-http-v0.1.18) (2026-04-24)
+
+
+### Features
+
+* **core-154:** implement multi-agent supervisor/worker orchestration ([#110](https://github.com/Gustavo324234/Aegis-Core/issues/110)) ([9abd10f](https://github.com/Gustavo324234/Aegis-Core/commit/9abd10f9154bd88247434e3eb2f626b834d60638))
+
 ## [0.1.17](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.16...ank-http-v0.1.17) (2026-04-23)
 
 ## [0.1.16](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.15...ank-http-v0.1.16) (2026-04-22)

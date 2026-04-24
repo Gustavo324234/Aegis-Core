@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.21](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.20...ank-server-v0.1.21) (2026-04-24)
+
+
+### Features
+
+* **core-154:** implement multi-agent supervisor/worker orchestration ([#110](https://github.com/Gustavo324234/Aegis-Core/issues/110)) ([9abd10f](https://github.com/Gustavo324234/Aegis-Core/commit/9abd10f9154bd88247434e3eb2f626b834d60638))
+
 ## [0.1.20](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.19...ank-server-v0.1.20) (2026-04-23)
 
 ## [0.1.19](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.18...ank-server-v0.1.19) (2026-04-23)

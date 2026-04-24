@@ -1,8 +1,8 @@
 {
   "kernel/crates/ank-proto": "0.1.1",
-  "kernel/crates/ank-core": "0.1.12",
-  "kernel/crates/ank-http": "0.1.17",
-  "kernel/crates/ank-server": "0.1.20",
+  "kernel/crates/ank-core": "0.1.13",
+  "kernel/crates/ank-http": "0.1.18",
+  "kernel/crates/ank-server": "0.1.21",
   "kernel/crates/ank-cli": "0.1.1",
   "kernel/crates/ank-mcp": "0.1.1",
   "kernel/crates/aegis-supervisor": "0.1.1",
