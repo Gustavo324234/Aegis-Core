@@ -517,7 +517,7 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_smart_routing_high_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let mut hal = CognitiveHAL::new(pm)?;
+        let hal = CognitiveHAL::new(pm)?;
         hal.register_driver(
             "local-driver",
             Box::new(DummyDriver {
@@ -549,7 +549,7 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_smart_routing_low_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let mut hal = CognitiveHAL::new(pm)?;
+        let hal = CognitiveHAL::new(pm)?;
         hal.register_driver(
             "local-driver",
             Box::new(DummyDriver {

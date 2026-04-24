@@ -132,24 +132,28 @@ impl VirtualContextManager {
         }
         let inlined_tokens = estimate_tokens(&inlined_str);
 
-        // --- PROJECT CONTEXT INJECTION (CORE-151) ---
-        let mut project_state_str = String::new();
-        project_state_str.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
-        let git_state = self.fetch_git_state().await;
-        let gov_state = self.fetch_governance_state().await;
-        project_state_str.push_str(&git_state);
-        project_state_str.push_str("\n\n");
-        project_state_str.push_str(&gov_state);
-        project_state_str.push('\n');
-
-        let project_tokens = estimate_tokens(&project_state_str);
-        let base_tokens = sys_tokens + instr_tokens + inlined_tokens + project_tokens;
-
-        if base_tokens > actual_token_limit {
+        let mandatory_tokens = sys_tokens + instr_tokens + inlined_tokens;
+        if mandatory_tokens > actual_token_limit {
             return Err(VCMError::ContextOverflow(actual_token_limit));
         }
+        let mut current_tokens = mandatory_tokens;
 
-        let mut current_tokens = base_tokens;
+        // --- PROJECT CONTEXT INJECTION (CORE-151) ---
+        // Project state is best-effort: omitted silently when budget is tight.
+        let mut project_state_str = String::new();
+        let git_state = self.fetch_git_state().await;
+        let gov_state = self.fetch_governance_state().await;
+        let mut candidate = String::new();
+        candidate.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
+        candidate.push_str(&git_state);
+        candidate.push_str("\n\n");
+        candidate.push_str(&gov_state);
+        candidate.push('\n');
+        let project_tokens = estimate_tokens(&candidate);
+        if current_tokens + project_tokens <= actual_token_limit {
+            project_state_str = candidate;
+            current_tokens += project_tokens;
+        }
 
         // L3 SEMANTIC MEMORY - Medium Priority
         let mut l3_added = false;
