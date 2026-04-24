@@ -100,6 +100,11 @@ pub struct PCB {
 
     #[serde(skip)]
     pub cancel_token: CancellationToken,
+
+    /// CORE-160 (Epic 43): Si este PCB corresponde a un agente en el árbol jerárquico,
+    /// aquí está su AgentId (= uuid::Uuid). None para procesos cognitivos normales.
+    #[serde(default)]
+    pub agent_id: Option<uuid::Uuid>,
 }
 
 use std::cmp::Ordering;
@@ -191,6 +196,7 @@ impl PCB {
             session_key: None,
             teleport_token: None,
             cancel_token: CancellationToken::new(),
+            agent_id: None,
         }
     }
 
