@@ -214,7 +214,7 @@ impl ProjectRegistry {
     /// Lista todos los proyectos conocidos, ordenados por last_active descendente.
     pub fn list_recent(&self) -> Vec<&ProjectMetadata> {
         let mut list: Vec<&ProjectMetadata> = self.known_projects.values().collect();
-        list.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        list.sort_by_key(|b| std::cmp::Reverse(b.last_active));
         list
     }
 }
