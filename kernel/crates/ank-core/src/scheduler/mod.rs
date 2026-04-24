@@ -2,6 +2,7 @@ pub mod compiler;
 pub mod graph;
 pub mod persistence;
 
+use crate::agents::orchestrator::AgentOrchestrator;
 use crate::dag::{DagNodeStatus, ExecutionGraph, GraphManager, NodeResult};
 use crate::pcb::{PcbByPriority, ProcessRole, ProcessState, PCB};
 use crate::scheduler::persistence::StatePersistor;
@@ -105,6 +106,9 @@ pub struct CognitiveScheduler {
     pub graph_manager: Arc<RwLock<GraphManager>>,
     pub persistence: Arc<dyn StatePersistor>,
     pub execution_tx: Option<mpsc::Sender<Box<PCB>>>,
+    /// CORE-158 (Epic 43): Orquestador del árbol de agentes jerárquico.
+    /// None hasta que se inicialice con el CognitiveRouter y VCM.
+    pub agent_orchestrator: Option<Arc<AgentOrchestrator>>,
 }
 
 impl CognitiveScheduler {
@@ -122,6 +126,7 @@ impl CognitiveScheduler {
             graph_manager: Arc::new(RwLock::new(GraphManager::new())),
             persistence,
             execution_tx: None,
+            agent_orchestrator: None,
         }
     }
 

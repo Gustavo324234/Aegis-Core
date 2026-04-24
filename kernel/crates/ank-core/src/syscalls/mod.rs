@@ -65,6 +65,22 @@ pub enum Syscall {
         task_description: String,
         role: String,
     },
+
+    /// --- HIERARCHICAL AGENTS (CORE-162 / Epic 43) ---
+    /// Un agente en ejecución solicita crear un subordinado dinámicamente.
+    /// Parámetros validados por el SyscallExecutor antes de llamar al AgentOrchestrator.
+    AgentSpawn {
+        /// "PROJECT_SUPERVISOR" | "DOMAIN_SUPERVISOR" | "SPECIALIST"
+        role: String,
+        /// Nombre del dominio del nuevo agente (ej: "devops", "testing")
+        domain: String,
+        /// Tipo cognitivo del nuevo agente (ej: "CODE", "PLANNING")
+        task_type: String,
+        /// Descripción del rol para generar el system prompt base
+        system_prompt_hint: String,
+        /// AgentId del agente solicitante (quien llama a la syscall)
+        requesting_agent_id: String,
+    },
 }
 
 /// --- SYSCALL ERROR ---
@@ -95,6 +111,9 @@ pub struct SyscallExecutor {
     http_client: Arc<reqwest::Client>,
     maker: maker::MakerExecutor,
     scheduler_tx: mpsc::Sender<crate::scheduler::SchedulerEvent>,
+    /// CORE-162 (Epic 43): Orquestador de agentes, para SYS_AGENT_SPAWN.
+    /// None si el ejecutor fue creado antes de que se inicializara el orquestador.
+    agent_orchestrator: Option<std::sync::Arc<crate::agents::orchestrator::AgentOrchestrator>>,
 }
 
 impl SyscallExecutor {
@@ -116,7 +135,17 @@ impl SyscallExecutor {
             http_client,
             maker: maker::MakerExecutor::new(),
             scheduler_tx,
+            agent_orchestrator: None,
         }
+    }
+
+    /// Asocia el AgentOrchestrator para habilitar SYS_AGENT_SPAWN (CORE-162).
+    pub fn with_orchestrator(
+        mut self,
+        orchestrator: std::sync::Arc<crate::agents::orchestrator::AgentOrchestrator>,
+    ) -> Self {
+        self.agent_orchestrator = Some(orchestrator);
+        self
     }
 
     pub async fn execute(
@@ -376,6 +405,108 @@ impl SyscallExecutor {
                 Ok(format!(
                     "[SYSTEM_RESULT: Sub-agent spawned with PID: {}. It will report back when finished.]",
                     sub_pid
+                ))
+            }
+
+            // CORE-162 (Epic 43): SYS_AGENT_SPAWN — spawn dinámico de agente subordinado
+            Syscall::AgentSpawn {
+                role,
+                domain,
+                task_type,
+                system_prompt_hint,
+                requesting_agent_id,
+            } => {
+                let orchestrator = self.agent_orchestrator.as_ref().ok_or_else(|| {
+                    SyscallError::InternalError(
+                        "AgentOrchestrator not configured — SYS_AGENT_SPAWN unavailable"
+                            .to_string(),
+                    )
+                })?;
+
+                let requesting_id = requesting_agent_id.parse::<uuid::Uuid>().map_err(|_| {
+                    SyscallError::InternalError(format!(
+                        "Invalid requesting_agent_id UUID: {}",
+                        requesting_agent_id
+                    ))
+                })?;
+
+                // Parse role and validate hierarchy constraint
+                let agent_role = match role.to_uppercase().as_str() {
+                    "PROJECT_SUPERVISOR" => crate::agents::node::AgentRole::ProjectSupervisor,
+                    "DOMAIN_SUPERVISOR" => crate::agents::node::AgentRole::DomainSupervisor,
+                    "SPECIALIST" => crate::agents::node::AgentRole::Specialist,
+                    other => {
+                        return Err(SyscallError::InternalError(format!(
+                            "Invalid agent role: {}",
+                            other
+                        )))
+                    }
+                };
+
+                // Validate hierarchy: a Specialist cannot spawn any agent;
+                // a DomainSupervisor cannot spawn a ProjectSupervisor.
+                let requesting_role = {
+                    let tree = orchestrator.tree.read().await;
+                    tree.get(&requesting_id).map(|n| n.role.clone())
+                };
+
+                match &requesting_role {
+                    None => {
+                        return Err(SyscallError::InternalError(format!(
+                            "Requesting agent {} not found in tree",
+                            requesting_id
+                        )))
+                    }
+                    Some(crate::agents::node::AgentRole::Specialist) => {
+                        return Err(SyscallError::AccessDenied(
+                            "Specialist agents cannot spawn subordinates".to_string(),
+                        ))
+                    }
+                    Some(crate::agents::node::AgentRole::DomainSupervisor) => {
+                        if agent_role == crate::agents::node::AgentRole::ProjectSupervisor {
+                            return Err(SyscallError::AccessDenied(
+                                "DomainSupervisor cannot spawn ProjectSupervisors".to_string(),
+                            ));
+                        }
+                    }
+                    Some(crate::agents::node::AgentRole::ProjectSupervisor) => {}
+                }
+
+                let task_type_parsed = match task_type.to_uppercase().as_str() {
+                    "CODE" | "CODING" => crate::pcb::TaskType::Coding,
+                    "PLANNING" => crate::pcb::TaskType::Planning,
+                    "ANALYSIS" => crate::pcb::TaskType::Analysis,
+                    "SUMMARIZATION" => crate::pcb::TaskType::Summarization,
+                    _ => crate::pcb::TaskType::Chat,
+                };
+
+                let project_id = {
+                    let tree = orchestrator.tree.read().await;
+                    tree.get(&requesting_id)
+                        .map(|n| n.project_id.clone())
+                        .unwrap_or_else(|| "default".to_string())
+                };
+
+                let system_prompt = format!(
+                    "Eres un agente {} en el dominio «{}». {}",
+                    role, domain, system_prompt_hint
+                );
+
+                let new_agent_id = orchestrator
+                    .spawn_agent(
+                        agent_role,
+                        project_id,
+                        domain.clone(),
+                        requesting_id,
+                        system_prompt,
+                        task_type_parsed,
+                    )
+                    .await
+                    .map_err(|e| SyscallError::InternalError(e.to_string()))?;
+
+                Ok(format!(
+                    "[SYSTEM_RESULT: SYS_AGENT_SPAWN OK. New agent spawned. agent_id={}, domain={}, role={}]",
+                    new_agent_id, domain, role
                 ))
             }
         }
@@ -892,6 +1023,14 @@ static SPAWN_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap_or_else(|_| panic!("FATAL: hardcoded spawn syscall regex is invalid"))
 });
 
+/// CORE-162: SYS_AGENT_SPAWN — el LLM emite un bloque JSON con esta estructura:
+/// {"syscall":"SYS_AGENT_SPAWN","params":{"role":"...","domain":"...","task_type":"...","system_prompt_hint":"..."}}
+#[allow(clippy::expect_used)]
+static AGENT_SPAWN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\{"syscall"\s*:\s*"SYS_AGENT_SPAWN"\s*,\s*"params"\s*:\s*(\{[^}]+\})\}"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded agent_spawn regex is invalid"))
+});
+
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
 pub fn init_syscall_regexes() {}
 
@@ -1011,6 +1150,30 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
             task_description: caps[1].to_string(),
             role: caps[2].to_string(),
         });
+    }
+
+    // 11. CORE-162: Check for SYS_AGENT_SPAWN (JSON block from LLM output)
+    if let Some(caps) = AGENT_SPAWN_RE.captures(text) {
+        if let Ok(params) = serde_json::from_str::<serde_json::Value>(&caps[1]) {
+            let role = params["role"].as_str().unwrap_or("SPECIALIST").to_string();
+            let domain = params["domain"].as_str().unwrap_or("").to_string();
+            let task_type = params["task_type"].as_str().unwrap_or("CODE").to_string();
+            let system_prompt_hint = params["system_prompt_hint"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let requesting_agent_id = params["requesting_agent_id"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            return Some(Syscall::AgentSpawn {
+                role,
+                domain,
+                task_type,
+                system_prompt_hint,
+                requesting_agent_id,
+            });
+        }
     }
 
     None

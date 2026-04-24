@@ -76,3 +76,6 @@ governance/TICKETS_MASTER.md
 
 # Internal AI model audits
 auditorias/
+
+# Claude assistant local settings
+.claude/

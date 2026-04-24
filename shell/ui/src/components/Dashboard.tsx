@@ -1,20 +1,22 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { 
-    LayoutDashboard, 
-    Trello, 
-    Wallet, 
-    ArrowLeft, 
-    Plus, 
-    MoreVertical, 
-    CheckCircle2, 
-    Clock, 
+import {
+    LayoutDashboard,
+    Trello,
+    Wallet,
+    ArrowLeft,
+    Plus,
+    MoreVertical,
+    CheckCircle2,
+    Clock,
     AlertCircle,
     TrendingUp,
     Calendar,
-    ChevronRight
+    ChevronRight,
+    Bot,
 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
+import AgentTreeWidget from './AgentTreeWidget';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -162,7 +164,7 @@ const FinancialWidget = () => {
 };
 
 const Dashboard: React.FC = () => {
-    const { setCurrentView, system_metrics } = useAegisStore();
+    const { setCurrentView, system_metrics, tenantId, sessionKey } = useAegisStore();
 
     return (
         <div className="h-full w-full flex flex-col bg-black text-white overflow-hidden">
@@ -281,6 +283,16 @@ const Dashboard: React.FC = () => {
                                 color="bg-green-500/20 text-green-500"
                             />
                         </div>
+                    </div>
+
+                    {/* Agent Tree — Epic 43 */}
+                    <div className="col-span-12 space-y-6">
+                        <div className="flex items-center gap-3">
+                            <Bot className="w-5 h-5 text-aegis-cyan" />
+                            <h2 className="text-xl font-bold uppercase tracking-widest">Active Agents</h2>
+                            <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest ml-2">— Hierarchical Orchestration</span>
+                        </div>
+                        <AgentTreeWidget tenantId={tenantId} sessionKey={sessionKey} />
                     </div>
                 </div>
             </main>
