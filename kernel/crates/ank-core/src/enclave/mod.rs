@@ -91,6 +91,37 @@ impl TenantDB {
             )
             .context("Failed to initialize reminders table")?;
 
+        // Epic 44: Developer Workspace — configuración del workspace por tenant
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS workspace_config (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+                [],
+            )
+            .context("Failed to initialize workspace_config table")?;
+
+        // Epic 44: PR Manager — PRs gestionados por Aegis
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS managed_prs (
+                pr_number         INTEGER PRIMARY KEY,
+                title             TEXT NOT NULL,
+                branch            TEXT NOT NULL,
+                base_branch       TEXT NOT NULL DEFAULT 'main',
+                url               TEXT NOT NULL,
+                merge_mode        TEXT NOT NULL DEFAULT 'manual',
+                auto_fix_ci       INTEGER NOT NULL DEFAULT 1,
+                auto_fix_attempts INTEGER NOT NULL DEFAULT 0,
+                status            TEXT NOT NULL DEFAULT 'open',
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL
+            )",
+                [],
+            )
+            .context("Failed to initialize managed_prs table")?;
+
         Ok(())
     }
 
@@ -159,6 +190,60 @@ impl TenantDB {
 
     pub fn get_refresh_token(&self, provider: &str) -> Result<Option<String>> {
         self.get_kv(&format!("oauth_{}_refresh_token", provider))
+    }
+
+    // ── Internal accessor (Epic 44) ──────────────────────────────────────
+    pub fn connection(&self) -> &rusqlite::Connection {
+        &self.connection
+    }
+
+    // ── Managed PRs helpers (Epic 44) ─────────────────────────────────────
+    pub fn pr_set_merge_mode(&self, pr_number: u64, mode: &str) -> Result<()> {
+        use anyhow::Context;
+        let now = chrono::Utc::now().to_rfc3339();
+        self.connection
+            .execute(
+                "UPDATE managed_prs SET merge_mode = ?1, updated_at = ?2 WHERE pr_number = ?3",
+                rusqlite::params![mode, now, pr_number as i64],
+            )
+            .context("Failed to update merge_mode")?;
+        Ok(())
+    }
+
+    pub fn pr_set_auto_fix_ci(&self, pr_number: u64, enabled: bool) -> Result<()> {
+        use anyhow::Context;
+        let now = chrono::Utc::now().to_rfc3339();
+        self.connection
+            .execute(
+                "UPDATE managed_prs SET auto_fix_ci = ?1, updated_at = ?2 WHERE pr_number = ?3",
+                rusqlite::params![enabled as i64, now, pr_number as i64],
+            )
+            .context("Failed to update auto_fix_ci")?;
+        Ok(())
+    }
+
+    // ── Workspace Config (Epic 44) ────────────────────────────────────────
+    pub fn workspace_config_set(&self, key: &str, value: &str) -> Result<()> {
+        use anyhow::Context;
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO workspace_config (key, value) VALUES (?1, ?2)",
+                [key, value],
+            )
+            .with_context(|| format!("Failed to set workspace_config key: {}", key))?;
+        Ok(())
+    }
+
+    pub fn workspace_config_get(&self, key: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT value FROM workspace_config WHERE key = ?1")?;
+        let mut rows = stmt.query([key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn get_oauth_scope(&self, provider: &str) -> Result<Option<String>> {

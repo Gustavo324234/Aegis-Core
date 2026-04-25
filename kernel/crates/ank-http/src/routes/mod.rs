@@ -2,11 +2,13 @@ pub mod admin;
 pub mod agents;
 pub mod auth;
 pub mod engine;
+pub mod fs;
 pub mod music_api;
 pub mod oauth_api;
 pub mod openapi;
 pub mod persona_api;
 pub mod providers;
+pub mod prs;
 pub mod router_api;
 pub mod siren_api;
 pub mod status;
@@ -35,6 +37,9 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/oauth", oauth_api::router())
         .nest("/api/router", router_api::router())
         .nest("/api/workspace", workspace::router())
+        .nest("/api/fs", fs::router())
+        .nest("/api/prs", prs::router())
+        .nest("/api/git", prs::git_router())
         .nest("/api/providers", providers::router())
         .nest("/api/status", status::router())
         .nest("/api/system", status::system_router())

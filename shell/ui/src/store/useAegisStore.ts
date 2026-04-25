@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { ttsPlayer } from '../audio/TTSPlayer';
 import { useMusicStore } from './musicStore';
+import { useTerminalStore } from './terminalStore';
+import { usePrStore } from './prStore';
 
 export type MessageType = 'text' | 'thought' | 'system' | 'error';
 export type SystemStatus = 'disconnected' | 'connecting' | 'idle' | 'thinking' | 'executing_syscall' | 'error' | 'listening' | 'transcribing';
@@ -399,6 +401,47 @@ export const useAegisStore = create<AegisState>()(
                                     provider: 'spotify',
                                 });
                             }
+                            break;
+                        }
+                        // CORE-175: Developer Workspace events
+                        case 'terminal_output': {
+                            const line = data as { kind: string; content: string; timestamp: string };
+                            useTerminalStore.getState().appendLine({
+                                kind: (line.kind || 'Stdout') as import('./terminalStore').LineKind,
+                                content: line.content || '',
+                                timestamp: line.timestamp || new Date().toISOString(),
+                            });
+                            break;
+                        }
+                        case 'pr_update': {
+                            const d = data as { pr_number: number; status: string };
+                            if (d.pr_number) {
+                                usePrStore.getState().updatePr(d.pr_number, {
+                                    status: d.status?.toLowerCase().replace(/([A-Z])/g, '_$1').replace(/^_/, '') as import('./prStore').PrStatus,
+                                });
+                            }
+                            break;
+                        }
+                        case 'pr_merged': {
+                            const d = data as { pr_number: number };
+                            if (d.pr_number) usePrStore.getState().updatePr(d.pr_number, { status: 'merged' });
+                            break;
+                        }
+                        case 'git_push': {
+                            const d = data as { branch: string };
+                            useTerminalStore.getState().addSystemLine(`Git push completed: ${d.branch ?? ''}`);
+                            break;
+                        }
+                        case 'ci_fix_attempt': {
+                            const d = data as { pr_number: number; attempt: number; max_attempts: number; error_summary: string };
+                            useTerminalStore.getState().addSystemLine(
+                                `[PR #${d.pr_number}] Auto-fix attempt ${d.attempt}/${d.max_attempts}: ${d.error_summary}`,
+                            );
+                            break;
+                        }
+                        case 'chat_notification': {
+                            const d = data as { message: string };
+                            get().addSystemMessage(d.message || '');
                             break;
                         }
                         case 'music_control': {
