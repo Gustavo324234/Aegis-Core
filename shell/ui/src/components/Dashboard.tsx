@@ -14,9 +14,15 @@ import {
     Calendar,
     ChevronRight,
     Bot,
+    Code2,
 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import AgentTreeWidget from './AgentTreeWidget';
+import TerminalPanel from './workspace/TerminalPanel';
+import CodeViewer from './workspace/CodeViewer';
+import GitTimeline from './workspace/GitTimeline';
+import PRManagerPanel from './workspace/PRManagerPanel';
+import WorkspaceSettings from './workspace/WorkspaceSettings';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -293,6 +299,38 @@ const Dashboard: React.FC = () => {
                             <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest ml-2">— Hierarchical Orchestration</span>
                         </div>
                         <AgentTreeWidget tenantId={tenantId} sessionKey={sessionKey} />
+                    </div>
+
+                    {/* Developer Workspace — Epic 44 */}
+                    <div className="col-span-12 space-y-6">
+                        <div className="flex items-center gap-3">
+                            <Code2 className="w-5 h-5 text-aegis-cyan" />
+                            <h2 className="text-xl font-bold uppercase tracking-widest">Developer Workspace</h2>
+                            <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest ml-2">— Epic 44</span>
+                        </div>
+
+                        {/* Row 1: Terminal + Git Timeline */}
+                        <div className="grid grid-cols-12 gap-6">
+                            <div className="col-span-12 lg:col-span-6">
+                                <TerminalPanel />
+                            </div>
+                            <div className="col-span-12 lg:col-span-6">
+                                <GitTimeline />
+                            </div>
+                        </div>
+
+                        {/* Row 2: Code Viewer (full width) */}
+                        <CodeViewer />
+
+                        {/* Row 3: PR Manager + Workspace Settings */}
+                        <div className="grid grid-cols-12 gap-6">
+                            <div className="col-span-12 lg:col-span-7">
+                                <PRManagerPanel />
+                            </div>
+                            <div className="col-span-12 lg:col-span-5">
+                                <WorkspaceSettings />
+                            </div>
+                        </div>
                     </div>
                 </div>
             </main>
