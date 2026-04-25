@@ -390,7 +390,8 @@ impl PluginManager {
         let stdout = MemoryOutputPipe::new(4096 * 10);
 
         // 2. Construir el contexto WASI (Dynamic Jailing)
-        let workspace_path = format!("./users/{}/workspace", tenant_id);
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let workspace_path = format!("{}/users/{}/workspace", base_dir, tenant_id);
         std::fs::create_dir_all(&workspace_path)
             .map_err(|e| PluginError::IOError(format!("Failed to create jail: {}", e)))?;
 
@@ -738,7 +739,8 @@ mod tests {
         assert!(res.contains("Test reminder"));
 
         // Limpiar
-        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let _ = std::fs::remove_dir_all(format!("{}/users/{}", base_dir, tenant_id));
 
         Ok(())
     }

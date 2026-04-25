@@ -46,7 +46,7 @@ PRECISIÓN:\n\
 - Si ejecutaste una herramienta y no devolvió resultados útiles, lo decís claramente.\n\
 ";
 
-/// CORE-150: Instrucciones para la capacidad Maker (Scripting Autónomo).
+/// CORE-150 / CORE-181: Instrucciones para la capacidad Maker (Scripting Autónomo).
 pub const MAKER_INSTRUCTIONS: &str = "\
 \n\n[CAPACIDAD: MAKER]\n\
 Podés ejecutar scripts JavaScript para automatizar tareas complejas o procesar datos. \
@@ -57,7 +57,15 @@ Funciones disponibles en JS:\n\
 - write_file(path, content): Escribe un archivo en el workspace.\n\
 - params: Objeto que contiene los parámetros pasados en el tercer argumento.\n\
 Usa esta capacidad cuando necesites realizar operaciones repetitivas, \
-procesamiento de archivos pesados o lógica que no podés expresar solo con texto.\n";
+procesamiento de archivos pesados o lógica que no podés expresar solo con texto.\n\
+\n\
+MAKER — ENTORNO DE EJECUCIÓN JS:\n\
+- El entorno es Boa Engine embebido (NO Node.js, NO browser).\n\
+- No existe `require`, `import`, `module`, `exports`, `process`, `__dirname`.\n\
+- Solo están disponibles: read_file(path), write_file(path, content), params (objeto con los parámetros).\n\
+- Podés usar `return` para retornar el resultado — el script se ejecuta como función.\n\
+- El resultado del script es el valor retornado (o el último valor evaluado).\n\
+- Usá solo JavaScript puro ES2020 sin módulos externos.\n";
 
 /// CORE-154: Instrucciones para la capacidad Multi-Agente (Orquestación).
 pub const SPAWN_INSTRUCTIONS: &str = "\
