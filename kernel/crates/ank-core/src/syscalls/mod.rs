@@ -205,7 +205,8 @@ impl SyscallExecutor {
 
                 // Intentamos leer el archivo usando el motor de contexto (VCM)
                 // Pero como ReadFile es una Syscall puntual, delegamos a la lógica de Jailing del VCM
-                let tenant_root = format!("./users/{}/workspace", tenant_id);
+                let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+                let tenant_root = format!("{}/users/{}/workspace", base_dir, tenant_id);
                 let full_path = std::path::Path::new(&tenant_root).join(file_path);
 
                 let content =

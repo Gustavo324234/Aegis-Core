@@ -18,7 +18,8 @@ impl TenantDB {
     /// Aplica la session_key mediante PRAGMA key para desencriptar en reposo.
     pub fn open(tenant_id: &str, session_key: &str) -> Result<Self> {
         use anyhow::Context;
-        let db_path = format!("./users/{}/memory.db", tenant_id);
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let db_path = format!("{}/users/{}/memory.db", base_dir, tenant_id);
 
         // Asegurar que el directorio del tenant existe
         if let Some(parent) = Path::new(&db_path).parent() {
