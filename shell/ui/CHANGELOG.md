@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.5.0...shell-ui-v1.6.0) (2026-04-25)
+
+
+### Features
+
+* **voice:** ElevenLabs TTS driver + Whisper STT model manager ([#119](https://github.com/Gustavo324234/Aegis-Core/issues/119)) ([ef26da9](https://github.com/Gustavo324234/Aegis-Core/commit/ef26da954c5f62c8bdd84c1474f1177aa0389a82))
+
 ## [1.5.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.4.0...shell-ui-v1.5.0) (2026-04-25)
 
 

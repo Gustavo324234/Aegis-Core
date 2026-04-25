@@ -8,4 +8,4 @@ pub mod siren;
 pub use cloud::CloudProxyDriver;
 #[cfg(feature = "local_llm")]
 pub use native::LlamaNativeDriver;
-pub use siren::VoxtralDriver;
+pub use siren::{ElevenLabsDriver, VoxtralDriver};

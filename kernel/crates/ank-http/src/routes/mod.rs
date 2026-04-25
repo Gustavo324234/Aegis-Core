@@ -12,6 +12,7 @@ pub mod prs;
 pub mod router_api;
 pub mod siren_api;
 pub mod status;
+pub mod stt_download;
 pub mod system_config_api;
 pub mod workspace;
 
@@ -44,6 +45,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/status", status::router())
         .nest("/api/system", status::system_router())
         .nest("/api/siren", siren_api::router())
+        .nest("/api/siren/stt", stt_download::router())
         .nest("/api/persona", persona_api::router())
         .nest("/api/agents", agents::router())
         .nest("/api/music", music_api::router())
