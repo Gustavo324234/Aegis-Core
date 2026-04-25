@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.15](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.14...ank-core-v0.1.15) (2026-04-24)
+
+
+### Features
+
+* **agents:** Epic 43 — Hierarchical Multi-Agent Orchestration ([#115](https://github.com/Gustavo324234/Aegis-Core/issues/115)) ([6b640a7](https://github.com/Gustavo324234/Aegis-Core/commit/6b640a7f9ab53a7aa5f8111f00e8f6d8db8e9f59))
+
 ## [0.1.14](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.13...ank-core-v0.1.14) (2026-04-24)
 
 

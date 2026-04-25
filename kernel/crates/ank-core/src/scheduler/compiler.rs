@@ -93,6 +93,7 @@ impl GraphCompiler {
                 task_hint: None,
                 expected_output: None,
                 status: DagNodeStatus::Pending,
+                agent_id: None,
             },
         );
 
@@ -123,6 +124,7 @@ mod tests {
             task_hint: None,
             expected_output: None,
             status: DagNodeStatus::Pending,
+            agent_id: None,
         }
     }
 

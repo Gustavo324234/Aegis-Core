@@ -24,6 +24,11 @@ pub struct DagNode {
     pub task_hint: Option<TaskType>,
     pub expected_output: Option<String>,
     pub status: DagNodeStatus,
+    /// CORE-161 (Epic 43): Si este nodo debe ser ejecutado por un agente específico
+    /// del árbol jerárquico, aquí está su AgentId (= uuid::Uuid).
+    /// None para nodos ejecutados directamente por el Scheduler.
+    #[serde(default)]
+    pub agent_id: Option<uuid::Uuid>,
 }
 
 /// --- GRAFO DE EJECUCIÓN (DAG) ---
@@ -156,6 +161,7 @@ impl GraphManager {
                 task_hint: None,
                 expected_output: None,
                 status: DagNodeStatus::Pending,
+                agent_id: None,
             },
         );
         Ok(ExecutionGraph {
@@ -188,6 +194,7 @@ mod tests {
                 task_hint: None,
                 expected_output: None,
                 status: DagNodeStatus::Pending,
+                agent_id: None,
             },
         );
 
@@ -201,6 +208,7 @@ mod tests {
                 task_hint: None,
                 expected_output: None,
                 status: DagNodeStatus::Pending,
+                agent_id: None,
             },
         );
 
@@ -214,6 +222,7 @@ mod tests {
                 task_hint: None,
                 expected_output: None,
                 status: DagNodeStatus::Pending,
+                agent_id: None,
             },
         );
 
@@ -227,6 +236,7 @@ mod tests {
                 task_hint: None,
                 expected_output: None,
                 status: DagNodeStatus::Pending,
+                agent_id: None,
             },
         );
 

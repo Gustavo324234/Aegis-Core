@@ -1,7 +1,9 @@
+use ank_core::agents::orchestrator::AgentOrchestrator;
 use ank_core::plugins::watcher::watch_plugins_dir;
 use ank_core::plugins::PluginManager;
 use ank_core::router::catalog::ModelProfile;
 use ank_core::telemetry::{CompletedInference, TelemetryState};
+use ank_core::vcm::VirtualContextManager;
 use ank_core::{
     citadel::identity::Citadel, enclave::master::MasterEnclave, router::CognitiveRouter,
     router::SirenRouter, CognitiveHAL, CognitiveScheduler, SQLCipherPersistor, SchedulerEvent,
@@ -167,6 +169,12 @@ async fn main() -> Result<()> {
 
     let siren_router = Arc::new(SirenRouter::new(
         Arc::clone(&persistence) as Arc<dyn StatePersistor>
+    ));
+
+    // CORE-158 (Epic 43): AgentOrchestrator — inicializado con router y VCM
+    let agent_orchestrator = Arc::new(AgentOrchestrator::new(
+        Arc::clone(&router),
+        Arc::new(VirtualContextManager::new()),
     ));
 
     // 11. AppState
@@ -388,6 +396,7 @@ async fn main() -> Result<()> {
         auth_rate_limiter,
         telemetry,
         tunnel_url: Arc::new(RwLock::new(None)),
+        agent_orchestrator: Arc::clone(&agent_orchestrator),
     };
 
     // 12. Tonic Server
