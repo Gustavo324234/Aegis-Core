@@ -104,8 +104,17 @@ fn is_allowed_extension(path: &Path) -> bool {
         .to_lowercase();
     matches!(
         ext.as_str(),
-        "rs" | "ts" | "tsx" | "js" | "jsx" | "toml" | "json" | "md" | "yaml" | "yml"
-            | "gitignore" | "sh"
+        "rs" | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "toml"
+            | "json"
+            | "md"
+            | "yaml"
+            | "yml"
+            | "gitignore"
+            | "sh"
     ) || path
         .file_name()
         .and_then(|n| n.to_str())
@@ -113,17 +122,12 @@ fn is_allowed_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-const IGNORED_DIRS: &[&str] = &[
-    "node_modules",
-    "target",
-    ".git",
-    "dist",
-    "build",
-    ".aegis",
-];
+const IGNORED_DIRS: &[&str] = &["node_modules", "target", ".git", "dist", "build", ".aegis"];
 
 fn ext_str(path: &Path) -> Option<String> {
-    path.extension().and_then(|e| e.to_str()).map(|s| s.to_string())
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_string())
 }
 
 fn language_from_ext(path: &Path) -> String {
@@ -246,14 +250,13 @@ async fn fs_file(
     let result = tokio::task::spawn_blocking(move || -> Result<FileContentDto, FsFileError> {
         let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
             .map_err(|e| FsFileError::Internal(e.to_string()))?;
-        let settings = WorkspaceConfig::load_all(&db)
-            .map_err(|e| FsFileError::Internal(e.to_string()))?;
+        let settings =
+            WorkspaceConfig::load_all(&db).map_err(|e| FsFileError::Internal(e.to_string()))?;
         let project_root = settings
             .project_root
             .ok_or_else(|| FsFileError::Internal("project_root not configured".to_string()))?;
         let root = PathBuf::from(&project_root);
-        let resolved =
-            resolve_safe_path(&root, &requested).map_err(|_| FsFileError::Traversal)?;
+        let resolved = resolve_safe_path(&root, &requested).map_err(|_| FsFileError::Traversal)?;
 
         if is_blocked_file(&resolved) {
             return Err(FsFileError::Forbidden);

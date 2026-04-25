@@ -103,10 +103,7 @@ impl TerminalExecutor {
                 let _ = tx
                     .send(TerminalLine {
                         kind: LineKind::System,
-                        content: format!(
-                            "Command timed out after {} seconds",
-                            self.timeout_secs
-                        ),
+                        content: format!("Command timed out after {} seconds", self.timeout_secs),
                         timestamp: chrono::Utc::now(),
                     })
                     .await;

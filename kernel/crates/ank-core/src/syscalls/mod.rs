@@ -91,21 +91,13 @@ pub enum Syscall {
     },
 
     /// --- EPIC 44: CORE-172 --- Crea una branch Git desde la base indicada.
-    GitBranch {
-        branch_name: String,
-        from: String,
-    },
+    GitBranch { branch_name: String, from: String },
 
     /// --- EPIC 44: CORE-172 --- Stage + commit de archivos con identidad del bot.
-    GitCommit {
-        files: Vec<String>,
-        message: String,
-    },
+    GitCommit { files: Vec<String>, message: String },
 
     /// --- EPIC 44: CORE-172 --- Push de la branch al remoto.
-    GitPush {
-        branch_name: String,
-    },
+    GitPush { branch_name: String },
 }
 
 /// --- SYSCALL ERROR ---
@@ -438,13 +430,11 @@ impl SyscallExecutor {
                 command,
                 args,
                 blocking: _,
-            } => {
-                Ok(format!(
-                    "[SYSTEM_RESULT: SYS_EXEC acknowledged. command={} args={:?}. \
+            } => Ok(format!(
+                "[SYSTEM_RESULT: SYS_EXEC acknowledged. command={} args={:?}. \
                      TerminalExecutor requires runtime context — integrate via AgentOrchestrator.]",
-                    command, args
-                ))
-            }
+                command, args
+            )),
 
             // CORE-172 (Epic 44): SYS_GIT_BRANCH
             Syscall::GitBranch { branch_name, from } => Ok(format!(

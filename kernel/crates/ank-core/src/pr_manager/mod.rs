@@ -84,10 +84,7 @@ pub struct PrManager {
 }
 
 impl PrManager {
-    pub fn new(
-        git: Arc<GitHubBridge>,
-        ws_tx: broadcast::Sender<WorkspaceWsEvent>,
-    ) -> Self {
+    pub fn new(git: Arc<GitHubBridge>, ws_tx: broadcast::Sender<WorkspaceWsEvent>) -> Self {
         Self { git, ws_tx }
     }
 
@@ -179,7 +176,11 @@ impl PrManager {
         )
     }
 
-    fn query_prs(&self, db: &crate::enclave::TenantDB, sql: &str) -> anyhow::Result<Vec<ManagedPr>> {
+    fn query_prs(
+        &self,
+        db: &crate::enclave::TenantDB,
+        sql: &str,
+    ) -> anyhow::Result<Vec<ManagedPr>> {
         let mut stmt = db.connection().prepare(sql)?;
         let prs = stmt
             .query_map([], |row| {
@@ -269,8 +270,7 @@ impl PrManager {
             for (tenant_id, session_key_hash) in tenants {
                 if let Ok(prs) = self.list_active(&tenant_id, &session_key_hash) {
                     for pr in prs {
-                        if let Err(e) = self.evaluate_pr(&tenant_id, &session_key_hash, &pr).await
-                        {
+                        if let Err(e) = self.evaluate_pr(&tenant_id, &session_key_hash, &pr).await {
                             warn!(
                                 tenant = %tenant_id,
                                 pr = pr.pr_number,
@@ -305,7 +305,12 @@ impl PrManager {
                     &PrStatus::AutoFixInProgress,
                 )?;
             } else if pr.status != PrStatus::AutoFixInProgress {
-                self.update_status(tenant_id, session_key_hash, pr.pr_number, &PrStatus::CiFailed)?;
+                self.update_status(
+                    tenant_id,
+                    session_key_hash,
+                    pr.pr_number,
+                    &PrStatus::CiFailed,
+                )?;
                 self.send_ws_event(
                     tenant_id,
                     serde_json::json!({
@@ -315,7 +320,12 @@ impl PrManager {
                 );
             }
         } else if all_success {
-            self.update_status(tenant_id, session_key_hash, pr.pr_number, &PrStatus::CiPassed)?;
+            self.update_status(
+                tenant_id,
+                session_key_hash,
+                pr.pr_number,
+                &PrStatus::CiPassed,
+            )?;
             match pr.merge_mode {
                 MergeMode::Automatic => {
                     self.merge_pr(tenant_id, session_key_hash, pr).await?;
@@ -419,7 +429,12 @@ impl PrManager {
         );
 
         if pr.auto_fix_attempts >= 2 {
-            self.update_status(tenant_id, session_key_hash, pr.pr_number, &PrStatus::CiFailed)?;
+            self.update_status(
+                tenant_id,
+                session_key_hash,
+                pr.pr_number,
+                &PrStatus::CiFailed,
+            )?;
             self.send_ws_event(
                 tenant_id,
                 serde_json::json!({
@@ -466,9 +481,7 @@ impl PrManager {
             stmt.query_row(rusqlite::params![pr_number as i64], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(|_| {
-                anyhow::anyhow!("PR {} not found or not in MergeReady state", pr_number)
-            })?
+            .map_err(|_| anyhow::anyhow!("PR {} not found or not in MergeReady state", pr_number))?
         };
 
         let api_url = format!(
