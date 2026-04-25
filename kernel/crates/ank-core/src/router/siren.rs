@@ -97,7 +97,9 @@ impl SirenRouter {
         if let Some(ref profile) = profile {
             // ElevenLabs: crear driver dinámicamente desde settings_json del tenant
             if profile.engine_id == "elevenlabs" {
-                if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&profile.settings_json) {
+                if let Ok(settings) =
+                    serde_json::from_str::<serde_json::Value>(&profile.settings_json)
+                {
                     if let Some(api_key) = settings["api_key"].as_str() {
                         if !api_key.is_empty() {
                             match crate::chal::drivers::ElevenLabsDriver::new(
@@ -105,7 +107,9 @@ impl SirenRouter {
                                 profile.voice_id.clone(),
                             ) {
                                 Ok(driver) => return Ok(Arc::new(driver)),
-                                Err(e) => warn!("SirenRouter: Failed to create ElevenLabsDriver: {}", e),
+                                Err(e) => {
+                                    warn!("SirenRouter: Failed to create ElevenLabsDriver: {}", e)
+                                }
                             }
                         }
                     }

@@ -28,19 +28,20 @@ async fn get_siren_config(
 ) -> Result<Json<Value>, AegisHttpError> {
     let models_dir = state.config.data_dir.join("models");
     let active_model_path = models_dir.join("active_model.txt");
-    let (stt_available, active_model) = if let Ok(name) = std::fs::read_to_string(&active_model_path) {
-        let name = name.trim().to_string();
-        let model_file = models_dir.join(format!("ggml-{}.bin", name));
-        (model_file.exists(), Some(name))
-    } else {
-        // backwards-compat: accept ggml-base.bin without active_model.txt
-        let legacy = models_dir.join("ggml-base.bin");
-        if legacy.exists() {
-            (true, Some("base".to_string()))
+    let (stt_available, active_model) =
+        if let Ok(name) = std::fs::read_to_string(&active_model_path) {
+            let name = name.trim().to_string();
+            let model_file = models_dir.join(format!("ggml-{}.bin", name));
+            (model_file.exists(), Some(name))
         } else {
-            (false, None)
-        }
-    };
+            // backwards-compat: accept ggml-base.bin without active_model.txt
+            let legacy = models_dir.join("ggml-base.bin");
+            if legacy.exists() {
+                (true, Some("base".to_string()))
+            } else {
+                (false, None)
+            }
+        };
 
     let profile = state
         .persistence

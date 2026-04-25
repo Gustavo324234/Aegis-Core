@@ -109,9 +109,7 @@ pub fn router() -> Router<AppState> {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn list_models(
-    _auth: CitadelAuthenticated,
-) -> Json<Value> {
+async fn list_models(_auth: CitadelAuthenticated) -> Json<Value> {
     Json(json!({ "models": WHISPER_MODELS }))
 }
 
@@ -128,9 +126,7 @@ async fn start_download(
     let model_info = WHISPER_MODELS
         .iter()
         .find(|m| m.id == req.model)
-        .ok_or_else(|| {
-            AegisHttpError::Internal(anyhow::anyhow!("Unknown model: {}", req.model))
-        })?;
+        .ok_or_else(|| AegisHttpError::Internal(anyhow::anyhow!("Unknown model: {}", req.model)))?;
 
     {
         let stt_arc = stt_state();
@@ -165,9 +161,7 @@ async fn start_download(
     Ok(Json(json!({ "ok": true, "message": "Descarga iniciada." })))
 }
 
-async fn get_download_status(
-    _auth: CitadelAuthenticated,
-) -> Json<Value> {
+async fn get_download_status(_auth: CitadelAuthenticated) -> Json<Value> {
     let stt_arc = stt_state();
     let st = stt_arc.lock().await;
     Json(json!({

@@ -11,8 +11,8 @@ pub mod providers;
 pub mod prs;
 pub mod router_api;
 pub mod siren_api;
-pub mod stt_download;
 pub mod status;
+pub mod stt_download;
 pub mod system_config_api;
 pub mod workspace;
 
