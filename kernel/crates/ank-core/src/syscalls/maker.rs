@@ -163,8 +163,28 @@ impl MakerExecutor {
             }),
         );
 
+        // CORE-181: stub require() — retorna error descriptivo en lugar de ReferenceError
+        let _ = context.register_global_builtin_callable(
+            boa_engine::js_string!("require"),
+            1,
+            boa_engine::native_function::NativeFunction::from_copy_closure(|_this, args, _ctx| {
+                let module = args
+                    .first()
+                    .and_then(|v| v.as_string())
+                    .map(|s| s.to_std_string().unwrap_or_default())
+                    .unwrap_or_else(|| "unknown".to_string());
+                Ok(JsValue::from(boa_engine::js_string!(format!(
+                    "Error: require('{}') is not available in Aegis Maker sandbox. Use read_file() and write_file() instead.",
+                    module
+                ))))
+            }),
+        );
+
+        // CORE-181: wrap en IIFE para que top-level `return` sea JS válido
+        let wrapped = format!("(function() {{\n{}\n}})();", code);
+
         // 3. Ejecutar
-        match context.eval(Source::from_bytes(code)) {
+        match context.eval(Source::from_bytes(wrapped.as_bytes())) {
             Ok(res) => {
                 let js_str = res.to_string(&mut context).map_err(|e| {
                     SyscallError::InternalError(format!("Result conversion failed: {}", e))
