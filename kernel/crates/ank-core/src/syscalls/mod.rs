@@ -81,6 +81,31 @@ pub enum Syscall {
         /// AgentId del agente solicitante (quien llama a la syscall)
         requesting_agent_id: String,
     },
+
+    /// --- EPIC 44: CORE-169 --- Ejecución de comando de terminal por un agente.
+    Exec {
+        command: String,
+        args: Vec<String>,
+        /// Si true, el agente espera el resultado antes de continuar.
+        blocking: bool,
+    },
+
+    /// --- EPIC 44: CORE-172 --- Crea una branch Git desde la base indicada.
+    GitBranch {
+        branch_name: String,
+        from: String,
+    },
+
+    /// --- EPIC 44: CORE-172 --- Stage + commit de archivos con identidad del bot.
+    GitCommit {
+        files: Vec<String>,
+        message: String,
+    },
+
+    /// --- EPIC 44: CORE-172 --- Push de la branch al remoto.
+    GitPush {
+        branch_name: String,
+    },
 }
 
 /// --- SYSCALL ERROR ---
@@ -407,6 +432,40 @@ impl SyscallExecutor {
                     sub_pid
                 ))
             }
+
+            // CORE-169 (Epic 44): SYS_EXEC — terminal execution for agents
+            Syscall::Exec {
+                command,
+                args,
+                blocking: _,
+            } => {
+                Ok(format!(
+                    "[SYSTEM_RESULT: SYS_EXEC acknowledged. command={} args={:?}. \
+                     TerminalExecutor requires runtime context — integrate via AgentOrchestrator.]",
+                    command, args
+                ))
+            }
+
+            // CORE-172 (Epic 44): SYS_GIT_BRANCH
+            Syscall::GitBranch { branch_name, from } => Ok(format!(
+                "[SYSTEM_RESULT: SYS_GIT_BRANCH acknowledged. branch={} from={}. \
+                 GitHubBridge requires runtime context — integrate via AgentOrchestrator.]",
+                branch_name, from
+            )),
+
+            // CORE-172 (Epic 44): SYS_GIT_COMMIT
+            Syscall::GitCommit { files, message } => Ok(format!(
+                "[SYSTEM_RESULT: SYS_GIT_COMMIT acknowledged. files={:?} message={}. \
+                 GitHubBridge requires runtime context — integrate via AgentOrchestrator.]",
+                files, message
+            )),
+
+            // CORE-172 (Epic 44): SYS_GIT_PUSH
+            Syscall::GitPush { branch_name } => Ok(format!(
+                "[SYSTEM_RESULT: SYS_GIT_PUSH acknowledged. branch={}. \
+                 GitHubBridge requires runtime context — integrate via AgentOrchestrator.]",
+                branch_name
+            )),
 
             // CORE-162 (Epic 43): SYS_AGENT_SPAWN — spawn dinámico de agente subordinado
             Syscall::AgentSpawn {
@@ -1031,6 +1090,34 @@ static AGENT_SPAWN_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap_or_else(|_| panic!("FATAL: hardcoded agent_spawn regex is invalid"))
 });
 
+/// CORE-169: SYS_EXEC
+#[allow(clippy::expect_used)]
+static EXEC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\{"syscall"\s*:\s*"SYS_EXEC"\s*,\s*"params"\s*:\s*(\{.*?\})\}"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded SYS_EXEC regex is invalid"))
+});
+
+/// CORE-172: SYS_GIT_BRANCH
+#[allow(clippy::expect_used)]
+static GIT_BRANCH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\{"syscall"\s*:\s*"SYS_GIT_BRANCH"\s*,\s*"params"\s*:\s*(\{.*?\})\}"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded SYS_GIT_BRANCH regex is invalid"))
+});
+
+/// CORE-172: SYS_GIT_COMMIT
+#[allow(clippy::expect_used)]
+static GIT_COMMIT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\{"syscall"\s*:\s*"SYS_GIT_COMMIT"\s*,\s*"params"\s*:\s*(\{.*?\})\}"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded SYS_GIT_COMMIT regex is invalid"))
+});
+
+/// CORE-172: SYS_GIT_PUSH
+#[allow(clippy::expect_used)]
+static GIT_PUSH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\{"syscall"\s*:\s*"SYS_GIT_PUSH"\s*,\s*"params"\s*:\s*(\{.*?\})\}"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded SYS_GIT_PUSH regex is invalid"))
+});
+
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
 pub fn init_syscall_regexes() {}
 
@@ -1173,6 +1260,69 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
                 system_prompt_hint,
                 requesting_agent_id,
             });
+        }
+    }
+
+    // 12. CORE-169: SYS_EXEC
+    // {"syscall":"SYS_EXEC","params":{"command":"cargo","args":["build"],"blocking":true}}
+    if let Some(caps) = EXEC_RE.captures(text) {
+        if let Ok(params) = serde_json::from_str::<serde_json::Value>(&caps[1]) {
+            let command = params["command"].as_str().unwrap_or("").to_string();
+            let args = params["args"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let blocking = params["blocking"].as_bool().unwrap_or(true);
+            if !command.is_empty() {
+                return Some(Syscall::Exec {
+                    command,
+                    args,
+                    blocking,
+                });
+            }
+        }
+    }
+
+    // 13. CORE-172: SYS_GIT_BRANCH
+    if let Some(caps) = GIT_BRANCH_RE.captures(text) {
+        if let Ok(params) = serde_json::from_str::<serde_json::Value>(&caps[1]) {
+            let branch_name = params["branch_name"].as_str().unwrap_or("").to_string();
+            let from = params["from"].as_str().unwrap_or("main").to_string();
+            if !branch_name.is_empty() {
+                return Some(Syscall::GitBranch { branch_name, from });
+            }
+        }
+    }
+
+    // 14. CORE-172: SYS_GIT_COMMIT
+    if let Some(caps) = GIT_COMMIT_RE.captures(text) {
+        if let Ok(params) = serde_json::from_str::<serde_json::Value>(&caps[1]) {
+            let files = params["files"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let message = params["message"].as_str().unwrap_or("").to_string();
+            if !message.is_empty() {
+                return Some(Syscall::GitCommit { files, message });
+            }
+        }
+    }
+
+    // 15. CORE-172: SYS_GIT_PUSH
+    if let Some(caps) = GIT_PUSH_RE.captures(text) {
+        if let Ok(params) = serde_json::from_str::<serde_json::Value>(&caps[1]) {
+            let branch_name = params["branch_name"].as_str().unwrap_or("").to_string();
+            if !branch_name.is_empty() {
+                return Some(Syscall::GitPush { branch_name });
+            }
         }
     }
 
