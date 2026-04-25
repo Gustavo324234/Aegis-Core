@@ -60,8 +60,10 @@ interface AegisState {
     sttProvider: string;
     sttApiKey: string;
     currentView: 'chat' | 'dashboard';
+    inputMode: 'text' | 'audio' | 'conversation';
 
     setHydrated: (val: boolean) => void;
+    setInputMode: (mode: 'text' | 'audio' | 'conversation') => void;
     setCurrentView: (view: 'chat' | 'dashboard') => void;
     setNeedsPasswordReset: (val: boolean) => void;
     setAdminActiveTab: (tab: string) => void;
@@ -142,9 +144,11 @@ export const useAegisStore = create<AegisState>()(
             sttProvider: 'browser',
             sttApiKey: '',
             currentView: 'chat',
+            inputMode: 'text',
 
             setHydrated: (val) => set({ _hydrated: val }),
             setCurrentView: (view) => set({ currentView: view }),
+            setInputMode: (mode) => set({ inputMode: mode }),
             setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
             setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
 
@@ -362,7 +366,24 @@ export const useAegisStore = create<AegisState>()(
                             else if (payload.error) { get().appendToken(payload.pid as string, payload.error as string, 'error'); set({ status: 'error' }); }
                             else if (payload.status_update) {
                                 const su = payload.status_update as { state: string };
-                                if (su.state === 'STATE_COMPLETED') set({ status: 'idle', activePid: null });
+                                if (su.state === 'STATE_COMPLETED') {
+                                    set({ status: 'idle', activePid: null });
+                                    // CORE-183: reactivar mic en modo conversación tras terminar el TTS
+                                    if (get().inputMode === 'conversation') {
+                                        const ctx = ttsPlayer.getAudioContext();
+                                        if (ctx) {
+                                            const remaining = (ttsPlayer.getNextStartTime() - ctx.currentTime) * 1000;
+                                            const delay = Math.max(0, remaining) + 200;
+                                            setTimeout(() => {
+                                                if (get().inputMode === 'conversation') {
+                                                    get().startSirenStream().catch(console.error);
+                                                }
+                                            }, delay);
+                                        } else {
+                                            get().startSirenStream().catch(console.error);
+                                        }
+                                    }
+                                }
                             }
                             break;
                         }
@@ -628,6 +649,10 @@ export const useAegisStore = create<AegisState>()(
                                     set((state) => ({ messages: [...state.messages, { id: `voice-${Date.now()}`, role: 'user', content: payload.transcript, type: 'text', timestamp: Date.now() }], activePid: payload.pid, status: 'thinking' }));
                                     const chatSocket = get().socket;
                                     if (chatSocket?.readyState === WebSocket.OPEN) chatSocket.send(JSON.stringify({ action: 'watch', pid: payload.pid }));
+                                    // CORE-183: en modo audio detener el mic al terminar la transcripción
+                                    if (get().inputMode === 'audio') {
+                                        get().stopSirenStream();
+                                    }
                                 } catch (e) { console.error('Failed to parse STT_DONE payload', e); set({ status: 'idle' }); }
                             } else if (sirenEvent.event_type === 'STT_ERROR') set({ status: 'error' });
                         } else if (msg.error) { console.error('❌ Siren Kernel Error:', msg.error); get().stopSirenStream(); }
@@ -710,6 +735,7 @@ export const useAegisStore = create<AegisState>()(
                 needsPasswordReset: state.needsPasswordReset,
                 lastTenantsUpdate: state.lastTenantsUpdate,
                 currentView: state.currentView,
+                inputMode: state.inputMode,
             }),
         }
     )
