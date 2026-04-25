@@ -29,9 +29,10 @@ pub struct ProjectRegistry {
 
 impl ProjectRegistry {
     pub fn new(tenant_id: &str, session_key: &str) -> Self {
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
         Self {
             known_projects: HashMap::new(),
-            db_path: format!("./users/{}/memory.db", tenant_id),
+            db_path: format!("{}/users/{}/memory.db", base_dir, tenant_id),
             session_key: session_key.to_string(),
         }
     }

@@ -94,7 +94,9 @@ impl MakerExecutor {
                     )));
                 }
 
-                let full_path = Path::new("./users")
+                let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+                let full_path = Path::new(&base_dir)
+                    .join("users")
                     .join(&tid)
                     .join("workspace")
                     .join(&path_str);
@@ -145,7 +147,9 @@ impl MakerExecutor {
                     )));
                 }
 
-                let full_path = Path::new("./users")
+                let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+                let full_path = Path::new(&base_dir)
+                    .join("users")
                     .join(&tid)
                     .join("workspace")
                     .join(&path_str);
@@ -208,7 +212,7 @@ mod tests {
     #[tokio::test]
     async fn test_maker_js_execution() {
         let maker = MakerExecutor::new();
-        let code = "1 + 1";
+        let code = "return 1 + 1";
         let res = maker.execute("test", "js", code, "{}").await.unwrap();
         assert_eq!(res, "2");
     }
@@ -216,7 +220,7 @@ mod tests {
     #[tokio::test]
     async fn test_maker_params_injection() {
         let maker = MakerExecutor::new();
-        let code = "params.name + ' ' + params.age";
+        let code = "return params.name + ' ' + params.age";
         let params = r#"{"name": "Aegis", "age": 1}"#;
         let res = maker.execute("test", "js", code, params).await.unwrap();
         assert_eq!(res, "Aegis 1");
@@ -230,25 +234,30 @@ mod tests {
         let workspace = dir.path().join("users").join(tenant_id).join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
 
-        // Cambiamos el directorio de trabajo para el test
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        // En lugar de set_current_dir, usamos AEGIS_DATA_DIR
+        let original_data_dir = std::env::var("AEGIS_DATA_DIR").ok();
+        std::env::set_var("AEGIS_DATA_DIR", dir.path());
 
         let maker = MakerExecutor::new();
 
         // Escribir y Leer
-        let code = "write_file('hello.txt', 'Sandboxed!'); read_file('hello.txt')";
+        let code = "write_file('hello.txt', 'Sandboxed!'); return read_file('hello.txt')";
         let res = maker.execute(tenant_id, "js", code, "{}").await.unwrap();
         assert_eq!(res, "Sandboxed!");
 
         // Intentar escape
-        let code_escape = "read_file('../../../secret.txt')";
+        let code_escape = "return read_file('../../../secret.txt')";
         let res_escape = maker
             .execute(tenant_id, "js", code_escape, "{}")
             .await
             .unwrap();
         assert!(res_escape.contains("Security Error"));
 
-        std::env::set_current_dir(original_dir).unwrap();
+        if let Some(old) = original_data_dir {
+            std::env::set_var("AEGIS_DATA_DIR", old);
+        } else {
+            std::env::remove_var("AEGIS_DATA_DIR");
+        }
     }
 }
+

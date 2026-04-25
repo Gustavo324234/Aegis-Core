@@ -397,7 +397,8 @@ mod tests {
                 .unwrap_or_else(|_| std::time::Duration::from_secs(0))
                 .as_millis()
         );
-        let workspace_path = format!("./users/{}/workspace", tenant_id);
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let workspace_path = format!("{}/users/{}/workspace", base_dir, tenant_id);
 
         let mut retries = 5;
         while retries > 0 {
@@ -428,7 +429,7 @@ mod tests {
         let context = vcm.assemble_context(&pcb, &swap, None, 250).await?;
 
         // Limpiar
-        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
+        let _ = std::fs::remove_dir_all(format!("{}/users/{}", base_dir, tenant_id));
 
         assert!(
             context.contains("omitido por falta de memoria")
