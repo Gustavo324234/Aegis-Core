@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2, AlertTriangle } from 'lucide-react';
+import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
+import SttModelManager from './SttModelManager';
 
 const SIREN_PROVIDERS = (t: (key: string) => string) => [
     { id: 'voxtral', label: 'Voxtral Local', desc: t('voxtral_desc'), icon: <Mic className="w-5 h-5 text-aegis-cyan" /> },
@@ -29,6 +30,7 @@ const SirenConfigTab: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState(false);
+    const [activeModel, setActiveModel] = useState<string | null>(null);
 
     const fetchConfig = useCallback(async () => {
         if (!tenantId || !sessionKey) return;
@@ -44,6 +46,7 @@ const SirenConfigTab: React.FC = () => {
                 setProvider(data.provider || 'voxtral');
                 setApiKey(data.api_key || '');
                 setVoiceId(data.voice_id || '');
+                setActiveModel(data.active_model ?? null);
             }
         } catch (err) {
             console.error('Fetch config error:', err);
@@ -138,7 +141,7 @@ const SirenConfigTab: React.FC = () => {
 
                 <form onSubmit={handleSave} className="space-y-6 relative z-10">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {provider !== 'voxtral' && (
+                        {provider !== 'voxtral' && provider !== 'mock' && (
                             <div className="space-y-2">
                                 <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">API Key</label>
                                 <div className="relative">
@@ -204,24 +207,15 @@ const SirenConfigTab: React.FC = () => {
                         <span className="text-white/60">~120ms (LAN)</span>
                     </div>
                 </div>
-                {!sttAvailable && (
-                    <motion.div 
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="mt-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg"
-                    >
-                        <div className="flex items-start gap-3">
-                            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                            <div className="space-y-2">
-                                <p className="text-[10px] font-mono text-amber-400 uppercase tracking-widest">{t('stt_not_available')}</p>
-                                <p className="text-[9px] font-mono text-white/40">{t('stt_unavailable_instructions')}</p>
-                                <code className="block mt-2 p-2 bg-black/40 rounded text-[9px] font-mono text-white/60">
-                                    mkdir -p $AEGIS_DATA_DIR/models &amp;&amp; wget -O $AEGIS_DATA_DIR/models/ggml-base.bin &lt;url&gt;
-                                </code>
-                            </div>
-                        </div>
-                    </motion.div>
-                )}
+                <div className="mt-4">
+                    <SttModelManager
+                        activeModel={activeModel}
+                        onModelActivated={() => {
+                            setActiveModel(null); // will re-fetch
+                            fetchConfig();
+                        }}
+                    />
+                </div>
                 {sttAvailable && (
                     <div className="mt-4 flex items-center gap-2 text-[10px] font-mono text-green-400/60">
                         <Check className="w-3 h-3" />
