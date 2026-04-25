@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, Settings, AlertCircle, Cpu, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
+import { InputModeSelector } from './InputModeSelector';
 import { useTranslation } from '../i18n';
 import { AegisLogo } from './AegisLogo';
 import { clsx, type ClassValue } from 'clsx';
@@ -86,7 +87,7 @@ const MessageItem: React.FC<{ message: Message }> = ({ message }) => {
 
 const ChatTerminal: React.FC = () => {
     const { t } = useTranslation();
-    const { messages, sendMessage, status, isRecording, sttAvailable, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout, fetchSirenConfig } = useAegisStore();
+    const { messages, sendMessage, status, isRecording, sttAvailable, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout, fetchSirenConfig, inputMode } = useAegisStore();
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const isAtBottom = useRef(true);
@@ -254,11 +255,29 @@ const ChatTerminal: React.FC = () => {
                             <button onClick={() => fileInputRef.current?.click()} disabled={isUploading} className={cn("p-2 rounded-lg transition-all", isUploading ? "text-aegis-cyan animate-pulse" : "bg-white/5 text-white/40 hover:text-white hover:bg-white/10")} title="Inject File">
                                 {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
                             </button>
-                            <button onClick={handleToggleMic} disabled={!sttAvailable} className={cn("p-2 rounded-lg transition-all", !sttAvailable && "opacity-30 cursor-not-allowed", status === 'listening' ? "bg-green-500 text-white shadow-[0_0_15px_rgba(34,197,94,0.5)] animate-pulse" : status === 'transcribing' ? "bg-yellow-500 text-black" : sttAvailable ? "bg-white/5 text-white/40 hover:text-white hover:bg-white/10" : "bg-white/5 text-white/20")} title={!sttAvailable ? t('stt_not_available') : isRecording ? "Stop" : "Voice"}>
-                                {!sttAvailable && <MicOff className="w-5 h-5" />}
-                                {sttAvailable && status === 'transcribing' && <Loader2 className="w-5 h-5 animate-spin" />}
-                                {sttAvailable && status !== 'transcribing' && <Mic className="w-5 h-5" />}
-                            </button>
+                            <InputModeSelector />
+                            {(inputMode === 'audio' || inputMode === 'conversation') && (
+                                <button
+                                    onClick={handleToggleMic}
+                                    disabled={!sttAvailable}
+                                    className={cn(
+                                        "p-2 rounded-lg transition-all",
+                                        status === 'listening'    && "bg-green-500 text-white animate-pulse shadow-[0_0_15px_rgba(34,197,94,0.5)]",
+                                        status === 'transcribing' && "bg-yellow-500 text-black",
+                                        isRecording && status !== 'listening' && status !== 'transcribing' && "bg-red-500/20 text-red-400",
+                                        !isRecording && status !== 'listening' && status !== 'transcribing' && "bg-white/5 text-white/40 hover:text-white hover:bg-white/10",
+                                        !sttAvailable && "opacity-30 cursor-not-allowed"
+                                    )}
+                                    title={isRecording ? "Stop" : "Voice"}
+                                >
+                                    {status === 'transcribing'
+                                        ? <Loader2 className="w-5 h-5 animate-spin" />
+                                        : isRecording
+                                            ? <MicOff className="w-5 h-5" />
+                                            : <Mic className="w-5 h-5" />
+                                    }
+                                </button>
+                            )}
                             <button onClick={() => setShowSettings(true)} className="p-2 rounded-lg bg-white/5 text-white/40 hover:text-aegis-cyan hover:bg-aegis-cyan/10 transition-all" title="Settings">
                                 <Settings className="w-5 h-5" />
                             </button>

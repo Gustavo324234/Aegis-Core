@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.19](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.18...ank-core-v0.1.19) (2026-04-25)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-181 MakerExecutor — wrap IIFE para top-level return + stub require con error descriptivo ([#123](https://github.com/Gustavo324234/Aegis-Core/issues/123)) ([7326d1f](https://github.com/Gustavo324234/Aegis-Core/commit/7326d1f812ec430aaa778efb0fb7cb5e27391042))
+
 ## [0.1.18](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.17...ank-core-v0.1.18) (2026-04-25)
 
 
