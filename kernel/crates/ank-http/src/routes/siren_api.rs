@@ -26,8 +26,21 @@ async fn get_siren_config(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let stt_model_path = state.config.data_dir.join("models").join("ggml-base.bin");
-    let stt_available = stt_model_path.exists();
+    let models_dir = state.config.data_dir.join("models");
+    let active_model_path = models_dir.join("active_model.txt");
+    let (stt_available, active_model) = if let Ok(name) = std::fs::read_to_string(&active_model_path) {
+        let name = name.trim().to_string();
+        let model_file = models_dir.join(format!("ggml-{}.bin", name));
+        (model_file.exists(), Some(name))
+    } else {
+        // backwards-compat: accept ggml-base.bin without active_model.txt
+        let legacy = models_dir.join("ggml-base.bin");
+        if legacy.exists() {
+            (true, Some("base".to_string()))
+        } else {
+            (false, None)
+        }
+    };
 
     let profile = state
         .persistence
@@ -36,18 +49,27 @@ async fn get_siren_config(
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
     match profile {
-        Some(p) => Ok(Json(json!({
-            "provider": p.engine_id,
-            "voice_id": p.voice_id,
-            "configured": true,
-            "settings": p.settings_json,
-            "stt_available": stt_available
-        }))),
+        Some(p) => {
+            let api_key = serde_json::from_str::<serde_json::Value>(&p.settings_json)
+                .ok()
+                .and_then(|v| v["api_key"].as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            Ok(Json(json!({
+                "provider": p.engine_id,
+                "voice_id": p.voice_id,
+                "api_key": api_key,
+                "configured": true,
+                "stt_available": stt_available,
+                "active_model": active_model
+            })))
+        }
         None => Ok(Json(json!({
             "provider": "mock",
             "voice_id": "",
+            "api_key": "",
             "configured": false,
-            "stt_available": stt_available
+            "stt_available": stt_available,
+            "active_model": active_model
         }))),
     }
 }
@@ -90,7 +112,14 @@ async fn list_siren_voices() -> Json<Value> {
         "voices": [
             { "id": "aura-asteria-en", "name": "Asteria (EN)", "provider": "voxtral" },
             { "id": "aura-luna-en", "name": "Luna (EN)", "provider": "voxtral" },
-            { "id": "mock-voice", "name": "Mock Voice", "provider": "mock" }
+            { "id": "mock-voice", "name": "Mock Voice", "provider": "mock" },
+            { "id": "21m00Tcm4TlvDq8ikWAM", "name": "Rachel (EN)", "provider": "elevenlabs" },
+            { "id": "AZnzlk1XvdvUeBnXmlld", "name": "Domi (EN)", "provider": "elevenlabs" },
+            { "id": "EXAVITQu4vr4xnSDxMaL", "name": "Bella (EN)", "provider": "elevenlabs" },
+            { "id": "ErXwobaYiN019PkySvjV", "name": "Antoni (EN)", "provider": "elevenlabs" },
+            { "id": "MF3mGyEYCl7XYWbV9V6O", "name": "Elli (EN)", "provider": "elevenlabs" },
+            { "id": "TxGEqnHWrfWFTfGW9XjX", "name": "Josh (EN)", "provider": "elevenlabs" },
+            { "id": "pNInz6obpgDQGcFmaJgB", "name": "Adam (EN)", "provider": "elevenlabs" }
         ]
     }))
 }

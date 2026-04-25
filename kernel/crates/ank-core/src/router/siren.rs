@@ -94,15 +94,31 @@ impl SirenRouter {
         let engines = self.engines.read().await;
 
         // 1. Intentar motor preferido del perfil
-        if let Some(profile) = profile {
-            if let Some(engine) = engines.get(&profile.engine_id) {
-                // [RESILIENCIA]: Aquí podríamos incluso probar si el motor está vivo.
+        if let Some(ref profile) = profile {
+            // ElevenLabs: crear driver dinámicamente desde settings_json del tenant
+            if profile.engine_id == "elevenlabs" {
+                if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&profile.settings_json) {
+                    if let Some(api_key) = settings["api_key"].as_str() {
+                        if !api_key.is_empty() {
+                            match crate::chal::drivers::ElevenLabsDriver::new(
+                                api_key.to_string(),
+                                profile.voice_id.clone(),
+                            ) {
+                                Ok(driver) => return Ok(Arc::new(driver)),
+                                Err(e) => warn!("SirenRouter: Failed to create ElevenLabsDriver: {}", e),
+                            }
+                        }
+                    }
+                }
+                warn!("SirenRouter: ElevenLabs selected but no valid api_key in profile. Falling back.");
+            } else if let Some(engine) = engines.get(&profile.engine_id) {
                 return Ok(engine.clone());
+            } else {
+                warn!(
+                    "SirenRouter: Profile found but engine '{}' not registered. Falling back.",
+                    profile.engine_id
+                );
             }
-            warn!(
-                "SirenRouter: Profile found but engine '{}' not registered. Falling back.",
-                profile.engine_id
-            );
         }
 
         // 2. Fallback Automático: Intentar Voxtral si está registrado (Local First)
