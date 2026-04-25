@@ -115,7 +115,15 @@ export default function ChatScreen() {
         hasReceivedMessage.current = true;
         appendToken(token);
       },
-      onDone: () => finalizeMessage(),
+      onDone: () => {
+        finalizeMessage();
+        const lastMsg = useChatStore.getState().messages.at(-1);
+        if (isConversationMode && lastMsg?.role === 'assistant') {
+          voiceService.speak(lastMsg.content, language === 'es' ? 'es-ES' : 'en-US', () => {
+            if (useChatStore.getState().isConversationMode) toggleVoice();
+          });
+        }
+      },
       onError: (msg) => {
         if (!hasReceivedMessage.current) {
           setMode('cloud');
