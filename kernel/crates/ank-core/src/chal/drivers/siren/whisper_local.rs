@@ -37,7 +37,10 @@ impl WhisperLocalEngine {
 
         let model_path = models_dir.join(format!("ggml-{}.bin", model_id));
         if !model_path.exists() {
-            warn!("WhisperLocalEngine: model file not found at {:?}", model_path);
+            warn!(
+                "WhisperLocalEngine: model file not found at {:?}",
+                model_path
+            );
             return None;
         }
 
@@ -58,7 +61,9 @@ impl SirenEngine for WhisperLocalEngine {
 
     /// Whisper es solo STT — no sintetiza voz.
     async fn synthesize(&self, _text: String) -> Result<Vec<u8>> {
-        Err(anyhow!("WhisperLocalEngine: TTS no soportado. Usá ElevenLabs o Voxtral para síntesis."))
+        Err(anyhow!(
+            "WhisperLocalEngine: TTS no soportado. Usá ElevenLabs o Voxtral para síntesis."
+        ))
     }
 
     /// Transcribe PCM 16kHz 16-bit mono a texto usando whisper-cli.
@@ -139,7 +144,7 @@ async fn run_whisper_cli(
         model_path.to_str().unwrap_or(""),
         "-f",
         wav_path.to_str().unwrap_or(""),
-        "-nt",  // sin timestamps
+        "-nt", // sin timestamps
         "-l",
         "auto", // auto-detectar idioma
         "-np",  // sin barra de progreso
@@ -147,10 +152,7 @@ async fn run_whisper_cli(
 
     // Intentar whisper-cli primero (versiones modernas de whisper.cpp)
     for cmd in &["whisper-cli", "whisper"] {
-        let result = tokio::process::Command::new(cmd)
-            .args(&args)
-            .output()
-            .await;
+        let result = tokio::process::Command::new(cmd).args(&args).output().await;
 
         match result {
             Ok(out) if out.status.success() => {

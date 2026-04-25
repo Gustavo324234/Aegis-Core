@@ -153,9 +153,9 @@ impl SirenRouter {
             .ok()
             .flatten();
 
-        let settings = profile.as_ref().and_then(|p| {
-            serde_json::from_str::<serde_json::Value>(&p.settings_json).ok()
-        });
+        let settings = profile
+            .as_ref()
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.settings_json).ok());
 
         let stt_provider = settings
             .as_ref()
