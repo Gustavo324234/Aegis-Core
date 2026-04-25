@@ -41,26 +41,25 @@ const SttModelManager: React.FC<{ activeModel: string | null; onModelActivated: 
     const [justCompleted, setJustCompleted] = useState<string | null>(null);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    const authHeaders = {
-        'x-citadel-tenant': tenantId ?? '',
-        'x-citadel-key': sessionKey ?? '',
-    };
-
     const fetchModels = useCallback(async () => {
         if (!tenantId || !sessionKey) return;
         try {
-            const res = await fetch('/api/siren/stt/models', { headers: authHeaders });
+            const res = await fetch('/api/siren/stt/models', {
+                headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey },
+            });
             if (res.ok) {
                 const data = await res.json();
                 setModels(data.models ?? []);
             }
-        } catch (_) {}
+        } catch { /* network errors are non-fatal here */ }
     }, [tenantId, sessionKey]);
 
     const fetchStatus = useCallback(async () => {
         if (!tenantId || !sessionKey) return;
         try {
-            const res = await fetch('/api/siren/stt/status', { headers: authHeaders });
+            const res = await fetch('/api/siren/stt/status', {
+                headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey },
+            });
             if (res.ok) {
                 const data: DownloadStatus = await res.json();
                 setStatus(data);
@@ -74,7 +73,7 @@ const SttModelManager: React.FC<{ activeModel: string | null; onModelActivated: 
                     }
                 }
             }
-        } catch (_) {}
+        } catch { /* network errors are non-fatal here */ }
     }, [tenantId, sessionKey, onModelActivated]);
 
     useEffect(() => {
@@ -102,13 +101,17 @@ const SttModelManager: React.FC<{ activeModel: string | null; onModelActivated: 
         try {
             const res = await fetch('/api/siren/stt/download', {
                 method: 'POST',
-                headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                    'Content-Type': 'application/json',
+                },
                 body: JSON.stringify({ model: modelId }),
             });
             if (res.ok) {
                 setStatus({ downloading: true, progress: 0, current_model: modelId, error: null });
             }
-        } catch (_) {}
+        } catch { /* network errors are non-fatal here */ }
     };
 
     if (models.length === 0) return null;
