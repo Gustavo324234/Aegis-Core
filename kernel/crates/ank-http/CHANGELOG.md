@@ -2,6 +2,13 @@
 
 
 
+## [0.1.21](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.20...ank-http-v0.1.21) (2026-04-25)
+
+
+### Features
+
+* **epic-44:** Developer Workspace — terminal, code viewer, git bridge, PR manager ([#117](https://github.com/Gustavo324234/Aegis-Core/issues/117)) ([9ca9a10](https://github.com/Gustavo324234/Aegis-Core/commit/9ca9a10f3e4b03812f9c19caf31fb52d27f5e884))
+
 ## [0.1.20](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.19...ank-http-v0.1.20) (2026-04-24)
 
 
