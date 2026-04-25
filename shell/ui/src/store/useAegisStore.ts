@@ -559,11 +559,7 @@ export const useAegisStore = create<AegisState>()(
 
                 // ── Opción A: Browser WebSpeech API ──────────────────────────────
                 if (sttProvider === 'browser') {
-                    type SR = typeof SpeechRecognition;
-                    const SpeechRecognitionCtor = (
-                        (window as unknown as { SpeechRecognition?: SR }).SpeechRecognition ??
-                        (window as unknown as { webkitSpeechRecognition?: SR }).webkitSpeechRecognition
-                    );
+                    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
                     if (!SpeechRecognitionCtor) throw new Error('WebSpeech API no disponible en este navegador. Usá Chrome o Edge.');
                     await ttsPlayer.initialize();
                     const recognition = new SpeechRecognitionCtor();
