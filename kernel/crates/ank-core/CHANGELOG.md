@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.18](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.17...ank-core-v0.1.18) (2026-04-25)
+
+
+### Features
+
+* **voice:** dual STT — Browser WebSpeech + Groq Cloud + Whisper Local ([#121](https://github.com/Gustavo324234/Aegis-Core/issues/121)) ([9c91fcb](https://github.com/Gustavo324234/Aegis-Core/commit/9c91fcbedd2c00a5dd8980811c356f1b77e55c78))
+
 ## [0.1.17](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.16...ank-core-v0.1.17) (2026-04-25)
 
 

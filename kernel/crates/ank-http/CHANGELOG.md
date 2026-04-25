@@ -2,6 +2,13 @@
 
 
 
+## [0.1.23](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.22...ank-http-v0.1.23) (2026-04-25)
+
+
+### Features
+
+* **voice:** dual STT — Browser WebSpeech + Groq Cloud + Whisper Local ([#121](https://github.com/Gustavo324234/Aegis-Core/issues/121)) ([9c91fcb](https://github.com/Gustavo324234/Aegis-Core/commit/9c91fcbedd2c00a5dd8980811c356f1b77e55c78))
+
 ## [0.1.22](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.21...ank-http-v0.1.22) (2026-04-25)
 
 
