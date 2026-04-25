@@ -152,7 +152,7 @@ async fn run_whisper_cli(
 
     // Intentar whisper-cli primero (versiones modernas de whisper.cpp)
     for cmd in &["whisper-cli", "whisper"] {
-        let result = tokio::process::Command::new(cmd).args(&args).output().await;
+        let result = tokio::process::Command::new(cmd).args(args).output().await;
 
         match result {
             Ok(out) if out.status.success() => {
