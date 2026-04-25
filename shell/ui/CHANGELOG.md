@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.6.0...shell-ui-v1.7.0) (2026-04-25)
+
+
+### Features
+
+* **voice:** dual STT — Browser WebSpeech + Groq Cloud + Whisper Local ([#121](https://github.com/Gustavo324234/Aegis-Core/issues/121)) ([9c91fcb](https://github.com/Gustavo324234/Aegis-Core/commit/9c91fcbedd2c00a5dd8980811c356f1b77e55c78))
+
 ## [1.6.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.5.0...shell-ui-v1.6.0) (2026-04-25)
 
 
