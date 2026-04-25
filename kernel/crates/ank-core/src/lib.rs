@@ -4,9 +4,12 @@ pub mod chronos;
 pub mod citadel;
 pub mod dag;
 pub mod enclave;
+pub mod executor;
+pub mod git;
 pub mod oauth;
 pub mod pcb;
 pub mod plugins;
+pub mod pr_manager;
 pub mod router;
 pub mod scheduler;
 pub mod scribe;
@@ -14,6 +17,7 @@ pub mod swarm; // Added pub mod swarm;
 pub mod syscalls;
 pub mod telemetry;
 pub mod vcm;
+pub mod workspace;
 
 // Re-exportar para fácil acceso
 pub use chal::{CognitiveHAL, InferenceDriver, SystemError};

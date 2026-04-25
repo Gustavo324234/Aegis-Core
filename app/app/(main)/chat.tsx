@@ -314,6 +314,22 @@ export default function ChatScreen() {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>{t.status_secure}</Text>
+            <View style={styles.emptyActions}>
+              <TouchableOpacity 
+                style={[styles.miniOauthBtn, { borderColor: '#4285F433' }]} 
+                onPress={() => router.push('/(main)/connected-accounts')}
+              >
+                <Ionicons name="logo-google" size={14} color="#4285F4" />
+                <Text style={styles.miniOauthText}>{t.link_services} Google</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.miniOauthBtn, { borderColor: '#1DB95433' }]} 
+                onPress={() => router.push('/(main)/connected-accounts')}
+              >
+                <Ionicons name="logo-spotify" size={14} color="#1DB954" />
+                <Text style={styles.miniOauthText}>{t.link_services} Spotify</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         }
       />
@@ -380,4 +396,7 @@ const styles = StyleSheet.create({
   input: { flex: 1, backgroundColor: '#111', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, marginRight: 8, color: '#FFF', fontSize: 15, maxHeight: 100 },
   sendButton: { backgroundColor: '#00E5CC', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
   sendButtonDisabled: { backgroundColor: '#1A1A1A' },
+  emptyActions: { flexDirection: 'row', gap: 12, marginTop: 24 },
+  miniOauthBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1, backgroundColor: 'rgba(255,255,255,0.03)' },
+  miniOauthText: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: 'bold' }
 });

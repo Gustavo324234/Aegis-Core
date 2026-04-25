@@ -1,7 +1,8 @@
 use crate::rate_limiter::AuthRateLimiter;
 use ank_core::{
     agents::orchestrator::AgentOrchestrator, chal::CognitiveHAL, citadel::identity::Citadel,
-    router::syncer::CatalogSyncer, telemetry::TelemetryState, SchedulerEvent, StatePersistor,
+    pr_manager::WorkspaceWsEvent, router::syncer::CatalogSyncer, telemetry::TelemetryState,
+    SchedulerEvent, StatePersistor,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,4 +25,6 @@ pub struct AppState {
     pub tunnel_url: Arc<RwLock<Option<String>>>,
     /// CORE-158 (Epic 43): Orquestador del árbol de agentes jerárquico.
     pub agent_orchestrator: Arc<AgentOrchestrator>,
+    /// CORE-175 (Epic 44): Broadcast channel para eventos del Developer Workspace.
+    pub workspace_events: Arc<broadcast::Sender<WorkspaceWsEvent>>,
 }

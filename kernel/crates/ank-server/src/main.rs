@@ -382,6 +382,11 @@ async fn main() -> Result<()> {
 
     let auth_rate_limiter = AuthRateLimiter::new(RateLimitConfig::from_env());
 
+    // CORE-175 (Epic 44): workspace event broadcast channel
+    let (workspace_events_tx, _workspace_events_rx) =
+        tokio::sync::broadcast::channel::<ank_core::pr_manager::WorkspaceWsEvent>(256);
+    let workspace_events = Arc::new(workspace_events_tx);
+
     let state = AppState {
         scheduler_tx: scheduler_tx.clone(),
         event_broker: Arc::clone(&event_broker),
@@ -397,6 +402,7 @@ async fn main() -> Result<()> {
         telemetry,
         tunnel_url: Arc::new(RwLock::new(None)),
         agent_orchestrator: Arc::clone(&agent_orchestrator),
+        workspace_events: Arc::clone(&workspace_events),
     };
 
     // 12. Tonic Server

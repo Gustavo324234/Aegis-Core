@@ -2,13 +2,14 @@
 
 Este archivo es la fuente única de verdad para el estado de todos los tickets del proyecto.
 
-## 🚀 Epics Activas
+## 🚀 Epics
 
 | ID | Título | Estado | Progreso |
 |---|---|---|---|
 | EPIC 41 | UX & Onboarding | En Curso | 80% |
 | EPIC 42 | Vision Realignment & Autonomy | En Curso | 40% |
-| EPIC 43 | Hierarchical Multi-Agent Orchestration | Planificada | 0% |
+| EPIC 43 | Hierarchical Multi-Agent Orchestration | ✅ Completa | 100% |
+| EPIC 44 | Developer Workspace | Planificada | 0% |
 
 ---
 
@@ -24,6 +25,8 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-148 | fix | Natural Conversational Tone (Prompt) | 🚧 In Progress | Alta |
 | CORE-149 | feat | Neuronal Memory (L3) & Semantic Retrieval | ✅ Done | Crítica |
 
+---
+
 ### EPIC 42 — Vision Realignment & Autonomy
 
 | ID | Tipo | Título | Estado | Prioridad |
@@ -34,9 +37,9 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-153 | feat | Dashboard Dinámico & Kanban UI | 📥 Todo | Alta |
 | CORE-154 | feat | Orquestación de Sub-Agentes especializados | 📥 Todo | Baja |
 
-### EPIC 43 — Hierarchical Multi-Agent Orchestration
+---
 
-**Descripción:** Sistema multiagente jerárquico n-ary. El usuario opera como CEO; el kernel activa ProjectSupervisors por proyecto, que spawnan DomainSupervisors y SpecialistAgents dinámicamente. El CMR asigna el mejor modelo disponible a cada agente según su TaskType.
+### EPIC 43 — Hierarchical Multi-Agent Orchestration ✅
 
 **Documento de diseño:** `governance/EPIC_43_HIERARCHICAL_AGENTS.md`
 
@@ -54,18 +57,41 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-165 | feat | Model-per-Agent — CMR integration con TaskType por AgentNode | ✅ Done | Alta | Kernel Engineer |
 | CORE-166 | feat | AgentTreeWidget — Árbol de Agentes en Dashboard del Tenant | ✅ Done | Alta | Shell Engineer |
 
-> **Nota:** CORE-164 descartado (diseñado para AdminDashboard — incorrecto). Reemplazado por CORE-166 que integra el widget en `Dashboard.tsx` del tenant.
+> **Nota:** CORE-164 descartado — era para AdminDashboard (incorrecto). Reemplazado por CORE-166.
 
-**Orden de implementación sugerido:**
-1. CORE-155 (tipos base) — fundacional
-2. CORE-156, CORE-157 en paralelo (árbol + mensajes)
-3. CORE-160, CORE-161 en paralelo (extensiones mínimas del PCB y DagNode)
-4. CORE-158 (orquestador — depende de 155, 156, 157, 160)
-5. CORE-159 (project registry — puede correr en paralelo a 158)
-6. CORE-162 (spawn syscall — depende de 158)
-7. CORE-165 (CMR integration — depende de 158)
-8. CORE-163 (HTTP routes — depende de 158)
-9. CORE-166 (Shell UI en Dashboard del tenant — depende de 163, pero puede implementarse antes con mock)
+---
+
+### EPIC 44 — Developer Workspace
+
+**Descripción:** Terminal para agentes con streaming, Code Viewer del proyecto, identidad GitHub del bot (Aegis OS), PR Manager con modo auto/manual, auto-fix de CI hasta 3 intentos, y Git Timeline en el Dashboard del tenant.
+
+**Documento de diseño:** `governance/EPIC_44_DEVELOPER_WORKSPACE.md`
+
+**Orden de implementación:**
+1. CORE-167 — fundacional, sin dependencias
+2. CORE-168, CORE-170, CORE-171 — en paralelo, dependen de 167
+3. CORE-169, CORE-172 — en paralelo, dependen de 168 y 171
+4. CORE-173 — depende de 171
+5. CORE-174 — depende de 173
+6. CORE-175 — depende de 173 (backend) + stubs para Shell
+7. CORE-176 a CORE-180 — Shell, en paralelo entre sí desde CORE-175
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-167 | feat | workspace_config — Tabla SQLCipher y Endpoint de Configuración | ✅ Done | Crítica | Kernel Engineer |
+| CORE-168 | feat | TerminalExecutor — Ejecución de Comandos con Streaming | ✅ Done | Crítica | Kernel Engineer |
+| CORE-169 | feat | SYS_EXEC — Syscall de Terminal para Agentes | ✅ Done | Alta | Kernel Engineer |
+| CORE-170 | feat | FileSystemBridge — Endpoints /api/fs/tree y /api/fs/file | ✅ Done | Alta | Kernel Engineer |
+| CORE-171 | feat | GitHubBridge — Identidad del Bot, Branch, Commit, Push y PR | ✅ Done | Crítica | Kernel Engineer |
+| CORE-172 | feat | SYS_GIT_* — Syscalls Git para Agentes | ✅ Done | Alta | Kernel Engineer |
+| CORE-173 | feat | PR Manager — Ciclo de Vida de PRs con Polling de CI | ✅ Done | Crítica | Kernel Engineer |
+| CORE-174 | feat | Auto-fix CI — Proceso Cognitivo Disparado por Fallo de CI | ✅ Done | Alta | Kernel Engineer |
+| CORE-175 | feat | Eventos WebSocket — terminal_output, pr_update, pr_merged, git_push, ci_fix_attempt | ✅ Done | Crítica | Kernel Engineer |
+| CORE-176 | feat | TerminalPanel — UI de Terminal en Dashboard del Tenant | ✅ Done | Alta | Shell Engineer |
+| CORE-177 | feat | CodeViewer — Árbol de Archivos y Contenido en Dashboard | ✅ Done | Alta | Shell Engineer |
+| CORE-178 | feat | GitTimeline — Branches, Commits y PRs en Dashboard | ✅ Done | Alta | Shell Engineer |
+| CORE-179 | feat | PRManagerPanel — Lista de PRs con Controles Auto/Manual | ✅ Done | Alta | Shell Engineer |
+| CORE-180 | feat | WorkspaceSettings — Configuración de Token, Repo y Opciones | ✅ Done | Alta | Shell Engineer |
 
 ---
 

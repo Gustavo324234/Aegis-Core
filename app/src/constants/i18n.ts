@@ -15,6 +15,8 @@ export const TRANSLATIONS = {
     model_selection: 'MODEL SELECTION',
     terminate_session: 'TERMINATE SESSION',
     language: 'SYSTEM LANGUAGE',
+    link_services: 'LINK SERVICES',
+    connected_accounts: 'CONNECTED ACCOUNTS',
   },
   es: {
     terminal_title: 'TERMINAL AEGIS',
@@ -30,5 +32,7 @@ export const TRANSLATIONS = {
     model_selection: 'SELECCIÓN DE MODELO',
     terminate_session: 'FINALIZAR SESIÓN',
     language: 'IDIOMA DEL SISTEMA',
+    link_services: 'VINCULAR SERVICIOS',
+    connected_accounts: 'CUENTAS CONECTADAS',
   }
 };

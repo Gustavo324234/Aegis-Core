@@ -6,11 +6,7 @@ target_verify_fix/
 # Node / UI
 shell/ui/node_modules/
 shell/ui/dist/
-app/node_modules/
-app/.expo/
-app/dist/
-app/android/
-app/.idea/
+
 
 # Python (legacy BFF)
 shell/bff/__pycache__/

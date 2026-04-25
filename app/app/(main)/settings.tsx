@@ -9,6 +9,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import * as secureStorage from '@/services/secureStorage';
 import { PROVIDERS } from '@/constants/providers';
 import { TRANSLATIONS, Language } from '@/constants/i18n';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -290,8 +291,29 @@ export default function SettingsScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.oauthLink} onPress={() => router.push('/(main)/connected-accounts')}>
-          <Text style={styles.oauthLinkText}>CUENTAS CONECTADAS</Text>
+          <Text style={styles.oauthLinkText}>{t.connected_accounts}</Text>
         </TouchableOpacity>
+
+        {/* SECTION: QUICK LINK SERVICES */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>{t.link_services}</Text>
+        </View>
+        <View style={styles.oauthRow}>
+          <TouchableOpacity 
+            style={[styles.oauthBtn, { borderColor: '#4285F4' }]} 
+            onPress={() => router.push('/(main)/connected-accounts')}
+          >
+            <Ionicons name="logo-google" size={18} color="#4285F4" />
+            <Text style={styles.oauthBtnText}>Google</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.oauthBtn, { borderColor: '#1DB954' }]} 
+            onPress={() => router.push('/(main)/connected-accounts')}
+          >
+            <Ionicons name="logo-spotify" size={18} color="#1DB954" />
+            <Text style={styles.oauthBtnText}>Spotify</Text>
+          </TouchableOpacity>
+        </View>
 
       </ScrollView>
     </SafeAreaView>
@@ -350,5 +372,8 @@ const styles = StyleSheet.create({
   personaPreview: { color: '#888', fontSize: 12, lineHeight: 18 },
   personaEmpty: { color: '#444', fontSize: 12, fontStyle: 'italic' },
   oauthLink: { marginTop: 10, padding: 16, borderRadius: 8, borderWidth: 1, borderColor: '#7C6FE033', backgroundColor: '#0A0A0A', alignItems: 'center' },
-  oauthLinkText: { color: '#7C6FE0', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 }
+  oauthLinkText: { color: '#7C6FE0', fontWeight: 'bold', fontSize: 11, letterSpacing: 2 },
+  oauthRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+  oauthBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#0A0A0A', padding: 14, borderRadius: 8, borderWidth: 1 },
+  oauthBtnText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' }
 });

@@ -156,8 +156,21 @@ async fn handle_chat(
         let _ = append_to_chat_history(&tenant_id, "ASSISTANT", greeting).await;
     }
 
-    // 3. Loop
+    // 3. Subscribe to workspace events (CORE-175)
+    let mut workspace_rx = state.workspace_events.subscribe();
+
+    // 4. Loop
     while let Some(Ok(msg)) = socket.next().await {
+        // Forward pending workspace events for this tenant before processing message
+        loop {
+            match workspace_rx.try_recv() {
+                Ok(event) if event.tenant_id == tenant_id => {
+                    let _ = socket.send(Message::Text(event.payload.to_string())).await;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
         let msg_text = match msg {
             Message::Text(t) => t,
             Message::Close(_) => break,
