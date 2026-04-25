@@ -57,6 +57,8 @@ interface AegisState {
     lastTenantsUpdate: string | null;
     tenantsError: string | null;
     sttAvailable: boolean;
+    sttProvider: string;
+    sttApiKey: string;
     currentView: 'chat' | 'dashboard';
 
     setHydrated: (val: boolean) => void;
@@ -137,6 +139,8 @@ export const useAegisStore = create<AegisState>()(
             lastTenantsUpdate: null,
             tenantsError: null,
             sttAvailable: true,
+            sttProvider: 'browser',
+            sttApiKey: '',
             currentView: 'chat',
 
             setHydrated: (val) => set({ _hydrated: val }),
@@ -155,8 +159,12 @@ export const useAegisStore = create<AegisState>()(
                         }
                     });
                     if (res.ok) {
-                        const data = await res.json() as { stt_available?: boolean };
-                        set({ sttAvailable: data.stt_available ?? true });
+                        const data = await res.json() as { stt_available?: boolean; stt_provider?: string; stt_api_key?: string };
+                        set({
+                            sttAvailable: data.stt_available ?? true,
+                            sttProvider: data.stt_provider ?? 'browser',
+                            sttApiKey: data.stt_api_key ?? '',
+                        });
                     }
                 } catch (err) {
                     console.error('Fetch siren config error:', err);
@@ -546,8 +554,36 @@ export const useAegisStore = create<AegisState>()(
             },
 
             startSirenStream: async () => {
-                const { tenantId, sessionKey, isRecording } = get();
+                const { tenantId, sessionKey, isRecording, sttProvider } = get();
                 if (isRecording || !tenantId || !sessionKey) return;
+
+                // ── Opción A: Browser WebSpeech API ──────────────────────────────
+                if (sttProvider === 'browser') {
+                    type SR = typeof SpeechRecognition;
+                    const SpeechRecognitionCtor = (
+                        (window as unknown as { SpeechRecognition?: SR }).SpeechRecognition ??
+                        (window as unknown as { webkitSpeechRecognition?: SR }).webkitSpeechRecognition
+                    );
+                    if (!SpeechRecognitionCtor) throw new Error('WebSpeech API no disponible en este navegador. Usá Chrome o Edge.');
+                    await ttsPlayer.initialize();
+                    const recognition = new SpeechRecognitionCtor();
+                    recognition.continuous = false;
+                    recognition.interimResults = false;
+                    set({ isRecording: true, status: 'listening' });
+                    recognition.onresult = (event: SpeechRecognitionEvent) => {
+                        const transcript = event.results[0][0].transcript.trim();
+                        set({ isRecording: false, status: 'thinking' });
+                        if (transcript) get().sendMessage(transcript);
+                    };
+                    recognition.onerror = () => set({ isRecording: false, status: 'idle' });
+                    recognition.onend = () => set({ isRecording: false });
+                    const audioRefs = window as Window & AegisAudioRefs;
+                    (audioRefs as unknown as Record<string, unknown>)._aegis_speech_recognition = recognition;
+                    recognition.start();
+                    return;
+                }
+
+                // ── Opciones B y C: Groq/Local via WebSocket PCM ─────────────────
                 try {
                     await ttsPlayer.initialize();
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true } });
@@ -621,6 +657,10 @@ export const useAegisStore = create<AegisState>()(
             },
 
             stopSirenStream: () => {
+                // Limpiar WebSpeech si estaba activo
+                const speechRec = (window as unknown as Record<string, unknown>)._aegis_speech_recognition as SpeechRecognition | undefined;
+                if (speechRec) { try { speechRec.stop(); } catch { /* already stopped */ } delete (window as unknown as Record<string, unknown>)._aegis_speech_recognition; }
+
                 const { sirenSocket } = get();
                 if (sirenSocket?.readyState === WebSocket.OPEN) {
                     sirenSocket.send(JSON.stringify({ sequence_number: 9999, data: '', format: 'VAD_END_SIGNAL', sample_rate: 16000 }));
