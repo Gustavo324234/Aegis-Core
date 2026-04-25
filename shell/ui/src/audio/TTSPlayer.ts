@@ -91,6 +91,14 @@ export class TTSPlayer {
             source.disconnect();
         };
     }
+
+    public getNextStartTime(): number {
+        return this.nextStartTime;
+    }
+
+    public getAudioContext(): AudioContext | null {
+        return this.audioContext;
+    }
 }
 
 // Singleton instance
