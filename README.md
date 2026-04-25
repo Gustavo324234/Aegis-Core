@@ -43,11 +43,20 @@ aegis-core/
 
 | Component | Status |
 |---|---|
-| Kernel (ANK unified) | In progress — Epic 32 |
-| Web UI | In progress — migrating from Aegis-Shell |
+| Kernel (ANK unified) | ✅ Operational — single Rust binary |
+| Web UI | ✅ Operational — React 18 / Vite, embedded in binary |
 | Mobile App | In progress — migrating from Aegis-App |
-| Installer | In progress — migrating from Aegis-Installer |
+| Installer | ✅ Operational — unified install.sh + systemd |
 | Linux distro | Planned — post-Epic 32 |
+
+## Completed Epics
+
+| Epic | Title |
+|---|---|
+| Epic 32 | Unification — single Rust binary (ank-server) |
+| Epic 42 | Realignment — technical debt, auth, OAuth, Router |
+| Epic 43 | Hierarchical Multi-Agent Orchestration |
+| Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) |
 
 ## Build
 

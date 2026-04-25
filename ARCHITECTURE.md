@@ -1,7 +1,7 @@
 # Aegis Core — Architecture
 
-> **Version:** 1.0.0
-> **Updated:** 2026-04-08
+> **Version:** 1.1.0
+> **Updated:** 2026-04-25
 
 ---
 
@@ -50,10 +50,18 @@ Browser / Aegis-App
  ank-server  (único binario Rust)
         │
         ├── crate: ank-http   ← servidor Axum (HTTP :8000)
-        │     ├── /api/*           REST endpoints
-        │     ├── /ws/chat/        streaming cognitivo
-        │     ├── /ws/siren/       audio bidireccional
-        │     └── /assets/*        SPA React embebida
+        │     ├── /api/auth          autenticación Citadel
+        │     ├── /api/admin         gestión de tenants
+        │     ├── /api/engine        configuración de modelos
+        │     ├── /api/workspace     configuración del workspace
+        │     ├── /api/fs            árbol de archivos + contenido (Epic 44)
+        │     ├── /api/prs           ciclo de vida de PRs (Epic 44)
+        │     ├── /api/git           status / branches / commits (Epic 44)
+        │     ├── /api/agents        orquestador jerárquico (Epic 43)
+        │     ├── /api/providers     pool de API keys
+        │     ├── /ws/chat/          streaming cognitivo
+        │     ├── /ws/siren/         audio bidireccional
+        │     └── /assets/*          SPA React embebida
         │
         ├── crate: ank-core   ← motor cognitivo
         │     ├── CognitiveScheduler
@@ -63,7 +71,13 @@ Browser / Aegis-App
         │     ├── DAG compiler
         │     ├── Plugin system (Wasm)
         │     ├── Siren Protocol (VAD+STT+TTS)
-        │     └── MCP client
+        │     ├── MCP client
+        │     ├── AgentOrchestrator (Epic 43)
+        │     └── Developer Workspace (Epic 44)
+        │           ├── WorkspaceConfig  — config cifrada por tenant
+        │           ├── TerminalExecutor — comandos con streaming + allowlist
+        │           ├── GitHubBridge     — git local + GitHub API
+        │           └── PrManager        — ciclo de vida de PRs + polling CI
         │
         ├── crate: ank-proto  ← contratos Protobuf
         │
@@ -113,7 +127,18 @@ aegis-core/
 
 ---
 
-## 5. ADRs
+## 5. Epics completados
+
+| Epic | Título | Estado |
+|---|---|---|
+| Epic 32 | Unificación — binario único Rust (ank-server) | ✅ Done |
+| Epic 42 | Realignment — deuda técnica, auth, OAuth, Router | ✅ Done |
+| Epic 43 | Hierarchical Multi-Agent Orchestration | ✅ Done |
+| Epic 44 | Developer Workspace | ✅ Done |
+
+---
+
+## 6. ADRs
 
 | # | Decisión | Estado |
 |---|---|---|
@@ -126,10 +151,13 @@ aegis-core/
 | ADR-022 | App mobile usa HTTP/WS (no gRPC nativo) | Activo |
 | ADR-027 | aegis-supervisor como process manager en Rust | Activo |
 | ADR-028 | Paths por OS via crate `dirs` | Activo |
-| ADR-030 | ank-http: Axum embebido en ank-server | **Epic 32** |
+| ADR-030 | ank-http: Axum embebido en ank-server | Activo |
 | ADR-031 | BFF Python es legacy — no se porta a Core | Activo |
 | ADR-032 | Monorepo aegis-core para el sistema unificado | Activo |
 | ADR-033 | distro/ reservado para futura distro Linux | Planificado |
+| ADR-034 | TenantDB es !Send — ops bloqueantes via spawn_blocking | Activo |
+| ADR-035 | GitHub token nunca serializado en respuestas HTTP | Activo |
+| ADR-036 | Rutas de FS validadas con canonicalize() + starts_with(root) | Activo |
 
 ---
 
