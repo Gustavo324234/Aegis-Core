@@ -70,6 +70,12 @@ impl SirenRouter {
             info!("SirenRouter: VoxtralDriver detected in environment and registered.");
         }
 
+        // Auto-Register WhisperLocalEngine if a model is downloaded
+        if let Some(whisper) = crate::chal::drivers::WhisperLocalEngine::from_env() {
+            engines.insert("whisper-local".to_string(), Arc::new(whisper));
+            info!("SirenRouter: WhisperLocalEngine detected and registered.");
+        }
+
         Self {
             engines: RwLock::new(engines),
             persistence,
@@ -137,16 +143,66 @@ impl SirenRouter {
             .ok_or_else(|| anyhow::anyhow!("SirenRouter: No default 'mock' engine registered"))
     }
 
-    /// Procesa audio crudo para un tenant (CORE-077).
+    /// Procesa audio crudo para un tenant eligiendo el STT engine configurado.
+    /// Prioridad: groq (cloud) → whisper-local → engine del perfil → fallback mock.
     pub async fn process_audio(&self, tenant_id: &str, pcm_data: Vec<u8>) -> Result<String> {
-        let engine = self.resolve(tenant_id).await?;
+        let profile = self
+            .persistence
+            .get_voice_profile(tenant_id)
+            .await
+            .ok()
+            .flatten();
+
+        let settings = profile
+            .as_ref()
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.settings_json).ok());
+
+        let stt_provider = settings
+            .as_ref()
+            .and_then(|s| s["stt_provider"].as_str())
+            .unwrap_or("browser");
+
         info!(
-            "SirenRouter: Processing {} bytes of audio with engine '{}'",
-            pcm_data.len(),
-            engine.id()
+            "SirenRouter: STT provider='{}', audio={} bytes",
+            stt_provider,
+            pcm_data.len()
         );
 
-        engine.transcribe(pcm_data).await
+        match stt_provider {
+            "groq" => {
+                if let Some(api_key) = settings
+                    .as_ref()
+                    .and_then(|s| s["stt_api_key"].as_str())
+                    .filter(|k| !k.is_empty())
+                    .map(|s| s.to_string())
+                {
+                    match crate::chal::drivers::GroqSttEngine::new(api_key) {
+                        Ok(engine) => return engine.transcribe(pcm_data).await,
+                        Err(e) => warn!("SirenRouter: GroqSttEngine init failed: {}", e),
+                    }
+                } else {
+                    warn!("SirenRouter: Groq STT selected but stt_api_key is empty.");
+                }
+            }
+            "local" => {
+                let engines = self.engines.read().await;
+                if let Some(whisper) = engines.get("whisper-local") {
+                    return whisper.transcribe(pcm_data).await;
+                }
+                warn!("SirenRouter: Local STT selected but WhisperLocalEngine not registered.");
+            }
+            // "browser" → el frontend maneja STT, el audio no debería llegar aquí.
+            // Devolvemos vacío en lugar de el placeholder roto.
+            _ => return Ok(String::new()),
+        }
+
+        // Último fallback si algo falló arriba
+        let engines = self.engines.read().await;
+        if let Some(whisper) = engines.get("whisper-local") {
+            return whisper.transcribe(pcm_data).await;
+        }
+
+        Ok(String::new())
     }
 }
 

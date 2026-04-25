@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2 } from 'lucide-react';
+import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2, Globe, Zap, HardDrive } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import SttModelManager from './SttModelManager';
@@ -31,6 +31,9 @@ const SirenConfigTab: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState(false);
     const [activeModel, setActiveModel] = useState<string | null>(null);
+    const [sttProvider, setSttProvider] = useState('browser');
+    const [sttApiKey, setSttApiKey] = useState('');
+    const [showSttKey, setShowSttKey] = useState(false);
 
     const fetchConfig = useCallback(async () => {
         if (!tenantId || !sessionKey) return;
@@ -47,6 +50,8 @@ const SirenConfigTab: React.FC = () => {
                 setApiKey(data.api_key || '');
                 setVoiceId(data.voice_id || '');
                 setActiveModel(data.active_model ?? null);
+                setSttProvider(data.stt_provider ?? 'browser');
+                setSttApiKey(data.stt_api_key ?? '');
             }
         } catch (err) {
             console.error('Fetch config error:', err);
@@ -92,7 +97,7 @@ const SirenConfigTab: React.FC = () => {
                     'x-citadel-tenant': tenantId,
                     'x-citadel-key': sessionKey,
                 },
-                body: JSON.stringify({ provider, api_key: apiKey, voice_id: voiceId })
+                body: JSON.stringify({ provider, api_key: apiKey, voice_id: voiceId, stt_provider: sttProvider, stt_api_key: sttApiKey })
             });
             if (response.ok) {
                 setSuccess(true);
@@ -161,6 +166,43 @@ const SirenConfigTab: React.FC = () => {
                                 ))}
                             </select>
                         </div>
+                    </div>
+
+                    {/* ── STT Provider ──────────────────────────────────────── */}
+                    <div className="pt-2 border-t border-white/5">
+                        <div className="mb-3">
+                            <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-white/50">{t('stt_provider_title')}</p>
+                            <p className="text-[9px] font-mono text-white/25 mt-0.5">{t('stt_provider_subtitle')}</p>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3 mb-4">
+                            {([
+                                { id: 'browser', label: t('stt_browser_label'), desc: t('stt_browser_desc'), icon: <Globe className="w-4 h-4 text-blue-400" /> },
+                                { id: 'groq',    label: t('stt_groq_label'),    desc: t('stt_groq_desc'),    icon: <Zap className="w-4 h-4 text-amber-400" /> },
+                                { id: 'local',   label: t('stt_local_label'),   desc: t('stt_local_desc'),   icon: <HardDrive className="w-4 h-4 text-green-400" /> },
+                            ] as const).map((p) => (
+                                <button key={p.id} type="button" onClick={() => setSttProvider(p.id)}
+                                    className={`p-4 rounded-xl border transition-all duration-300 text-left flex flex-col gap-2 ${sttProvider === p.id ? 'bg-aegis-cyan/15 border-aegis-cyan/40' : 'bg-white/3 border-white/8 hover:bg-white/8'}`}>
+                                    <div className="p-1.5 w-fit rounded-lg bg-black/30 border border-white/5">{p.icon}</div>
+                                    <div>
+                                        <p className="text-[9px] font-mono font-bold uppercase tracking-wider text-white/70">{p.label}</p>
+                                        <p className="text-[8px] font-mono text-white/25 mt-0.5 leading-snug">{p.desc}</p>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                        {sttProvider === 'groq' && (
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">{t('stt_groq_key_placeholder')}</label>
+                                <div className="relative">
+                                    <input type={showSttKey ? 'text' : 'password'} value={sttApiKey} onChange={(e) => setSttApiKey(e.target.value)}
+                                        placeholder="gsk_..." className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 pr-10 text-sm font-mono focus:border-amber-400/50 focus:ring-0 transition-all placeholder:text-white/10" />
+                                    <button type="button" onClick={() => setShowSttKey(!showSttKey)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors">
+                                        {showSttKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                    </button>
+                                </div>
+                                <p className="text-[8px] font-mono text-white/25 ml-1">{t('stt_groq_get_key')}</p>
+                            </div>
+                        )}
                     </div>
 
                     {error && (

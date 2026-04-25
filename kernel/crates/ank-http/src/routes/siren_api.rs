@@ -20,6 +20,10 @@ pub struct SirenConfigBody {
     pub provider: String,
     pub api_key: String,
     pub voice_id: String,
+    #[serde(default)]
+    pub stt_provider: String,
+    #[serde(default)]
+    pub stt_api_key: String,
 }
 
 async fn get_siren_config(
@@ -51,14 +55,25 @@ async fn get_siren_config(
 
     match profile {
         Some(p) => {
-            let api_key = serde_json::from_str::<serde_json::Value>(&p.settings_json)
-                .ok()
+            let settings = serde_json::from_str::<serde_json::Value>(&p.settings_json).ok();
+            let api_key = settings
+                .as_ref()
                 .and_then(|v| v["api_key"].as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            let stt_provider = settings
+                .as_ref()
+                .and_then(|v| v["stt_provider"].as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "browser".to_string());
+            let stt_api_key = settings
+                .as_ref()
+                .and_then(|v| v["stt_api_key"].as_str().map(|s| s.to_string()))
                 .unwrap_or_default();
             Ok(Json(json!({
                 "provider": p.engine_id,
                 "voice_id": p.voice_id,
                 "api_key": api_key,
+                "stt_provider": stt_provider,
+                "stt_api_key": stt_api_key,
                 "configured": true,
                 "stt_available": stt_available,
                 "active_model": active_model
@@ -68,6 +83,8 @@ async fn get_siren_config(
             "provider": "mock",
             "voice_id": "",
             "api_key": "",
+            "stt_provider": "browser",
+            "stt_api_key": "",
             "configured": false,
             "stt_available": stt_available,
             "active_model": active_model
@@ -93,7 +110,12 @@ async fn set_siren_config(
         model_pref: existing
             .map(|p| p.model_pref)
             .unwrap_or_else(|| "HybridSmart".to_string()),
-        settings_json: json!({ "api_key": req.api_key }).to_string(),
+        settings_json: json!({
+            "api_key": req.api_key,
+            "stt_provider": req.stt_provider,
+            "stt_api_key": req.stt_api_key
+        })
+        .to_string(),
     };
 
     state
