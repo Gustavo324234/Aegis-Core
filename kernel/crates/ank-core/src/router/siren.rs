@@ -76,6 +76,18 @@ impl SirenRouter {
             info!("SirenRouter: WhisperLocalEngine detected and registered.");
         }
 
+        // Auto-Register EspeakEngine si espeak-ng está disponible en PATH
+        if crate::chal::drivers::EspeakEngine::is_available() {
+            let voice = std::env::var("AEGIS_TTS_VOICE").unwrap_or_else(|_| "es".to_string());
+            let speed = std::env::var("AEGIS_TTS_SPEED")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(150u32);
+            let engine = crate::chal::drivers::EspeakEngine::new(voice, speed, 22050);
+            engines.insert("espeak".to_string(), Arc::new(engine));
+            info!("SirenRouter: EspeakEngine registered (espeak-ng found in PATH).");
+        }
+
         Self {
             engines: RwLock::new(engines),
             persistence,
@@ -131,12 +143,17 @@ impl SirenRouter {
             }
         }
 
-        // 2. Fallback Automático: Intentar Voxtral si está registrado (Local First)
+        // 2. Fallback: Voxtral si está registrado
         if let Some(voxtral) = engines.get("voxtral") {
             return Ok(voxtral.clone());
         }
 
-        // 3. Última instancia: Mock (Garantiza que el stream no se rompa)
+        // 3. Fallback: EspeakEngine (local, sin API key)
+        if let Some(espeak) = engines.get("espeak") {
+            return Ok(espeak.clone());
+        }
+
+        // 4. Última instancia: Mock (garantiza que el stream no se rompa)
         engines
             .get("mock")
             .cloned()
