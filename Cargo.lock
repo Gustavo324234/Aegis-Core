@@ -164,6 +164,7 @@ dependencies = [
  "async-trait",
  "axum 0.7.9",
  "axum-test",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "dashmap 5.5.3",
