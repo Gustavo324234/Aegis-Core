@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.20](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.19...ank-core-v0.1.20) (2026-04-26)
+
+
+### Features
+
+* **ank-core:** CORE-186 EspeakEngine — TTS local con espeak-ng sin API key ([#130](https://github.com/Gustavo324234/Aegis-Core/issues/130)) ([3676cdc](https://github.com/Gustavo324234/Aegis-Core/commit/3676cdc0612b0d942e91a9585e291a020a12e30e))
+* **ank-http:** CORE-185 TTS pipeline en WebSocket Siren — sintetizar respuesta y enviar chunks ([#132](https://github.com/Gustavo324234/Aegis-Core/issues/132)) ([e8f5d01](https://github.com/Gustavo324234/Aegis-Core/commit/e8f5d01470ec1a818c895a86af1a4ce82d57abbd))
+
 ## [0.1.19](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.18...ank-core-v0.1.19) (2026-04-25)
 
 
