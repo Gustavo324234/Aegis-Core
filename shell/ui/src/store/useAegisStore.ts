@@ -87,6 +87,7 @@ interface AegisState {
     changeOwnPassword: (newPass: string) => Promise<boolean>;
     startSirenStream: () => Promise<void>;
     stopSirenStream: () => void;
+    restartMicForConversation: () => Promise<void>;
     configureEngine: (apiUrl: string, model: string, apiKey: string, provider?: string) => Promise<boolean>;
     setEngineConfigured: (configured: boolean) => void;
     setTaskType: (taskType: TaskTypeValue) => void;
@@ -368,20 +369,27 @@ export const useAegisStore = create<AegisState>()(
                                 const su = payload.status_update as { state: string };
                                 if (su.state === 'STATE_COMPLETED') {
                                     set({ status: 'idle', activePid: null });
-                                    // CORE-183: reactivar mic en modo conversación tras terminar el TTS
+                                    // CORE-184: reactivar mic en modo conversación tras terminar el TTS
                                     if (get().inputMode === 'conversation') {
-                                        const ctx = ttsPlayer.getAudioContext();
-                                        if (ctx) {
-                                            const remaining = (ttsPlayer.getNextStartTime() - ctx.currentTime) * 1000;
-                                            const delay = Math.max(0, remaining) + 200;
-                                            setTimeout(() => {
-                                                if (get().inputMode === 'conversation') {
-                                                    get().startSirenStream().catch(console.error);
-                                                }
-                                            }, delay);
-                                        } else {
-                                            get().startSirenStream().catch(console.error);
-                                        }
+                                        const scheduleReactivation = () => {
+                                            const ctx = ttsPlayer.getAudioContext();
+                                            if (ctx) {
+                                                const remaining = (ttsPlayer.getNextStartTime() - ctx.currentTime) * 1000;
+                                                const delay = Math.max(300, remaining + 200);
+                                                setTimeout(() => {
+                                                    if (get().inputMode === 'conversation' && !get().isRecording) {
+                                                        get().restartMicForConversation().catch(console.error);
+                                                    }
+                                                }, delay);
+                                            } else {
+                                                setTimeout(() => {
+                                                    if (get().inputMode === 'conversation' && !get().isRecording) {
+                                                        get().restartMicForConversation().catch(console.error);
+                                                    }
+                                                }, 500);
+                                            }
+                                        };
+                                        scheduleReactivation();
                                     }
                                 }
                             }
@@ -625,7 +633,22 @@ export const useAegisStore = create<AegisState>()(
                         let sum = 0;
                         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
                         if (sum / dataArray.length < SILENCE_THRESHOLD) {
-                            if (Date.now() - silenceStart > MAX_SILENCE_MS) { vadRequestedStop = true; get().stopSirenStream(); return; }
+                            if (Date.now() - silenceStart > MAX_SILENCE_MS) {
+                                vadRequestedStop = true;
+                                if (get().inputMode === 'conversation') {
+                                    // CORE-184: solo detener mic, sirenWs permanece abierto para TTS
+                                    set({ isRecording: false });
+                                    stream.getTracks().forEach(t => t.stop());
+                                    scriptNode.disconnect();
+                                    ctx.close();
+                                    delete (window as Window & AegisAudioRefs)._aegis_audio_stream;
+                                    delete (window as Window & AegisAudioRefs)._aegis_audio_node;
+                                    delete (window as Window & AegisAudioRefs)._aegis_audio_ctx;
+                                } else {
+                                    get().stopSirenStream();
+                                }
+                                return;
+                            }
                         } else silenceStart = Date.now();
                         requestAnimationFrame(checkSilence);
                     };
@@ -649,15 +672,40 @@ export const useAegisStore = create<AegisState>()(
                                     set((state) => ({ messages: [...state.messages, { id: `voice-${Date.now()}`, role: 'user', content: payload.transcript, type: 'text', timestamp: Date.now() }], activePid: payload.pid, status: 'thinking' }));
                                     const chatSocket = get().socket;
                                     if (chatSocket?.readyState === WebSocket.OPEN) chatSocket.send(JSON.stringify({ action: 'watch', pid: payload.pid }));
-                                    // CORE-183: en modo audio detener el mic al terminar la transcripción
                                     if (get().inputMode === 'audio') {
+                                        // Modo audio: cerrar sirenWs completamente
                                         get().stopSirenStream();
+                                    } else if (get().inputMode === 'conversation') {
+                                        // CORE-184: modo conversación — solo detener captura de mic,
+                                        // mantener sirenWs abierto para recibir tts_audio_chunk
+                                        set({ isRecording: false });
+                                        const audioRefs = window as Window & AegisAudioRefs;
+                                        if (audioRefs._aegis_audio_stream) {
+                                            audioRefs._aegis_audio_stream.getTracks().forEach(track => track.stop());
+                                            delete audioRefs._aegis_audio_stream;
+                                        }
+                                        if (audioRefs._aegis_audio_node) {
+                                            audioRefs._aegis_audio_node.disconnect();
+                                            delete audioRefs._aegis_audio_node;
+                                        }
+                                        if (audioRefs._aegis_audio_ctx) {
+                                            audioRefs._aegis_audio_ctx.close();
+                                            delete audioRefs._aegis_audio_ctx;
+                                        }
                                     }
                                 } catch (e) { console.error('Failed to parse STT_DONE payload', e); set({ status: 'idle' }); }
                             } else if (sirenEvent.event_type === 'STT_ERROR') set({ status: 'error' });
                         } else if (msg.error) { console.error('❌ Siren Kernel Error:', msg.error); get().stopSirenStream(); }
                     };
-                    sirenWs.onclose = () => get().stopSirenStream();
+                    sirenWs.onclose = () => {
+                        // CORE-184: en modo conversación el sirenWs cierra solo cuando el usuario
+                        // cambia de modo o hace logout — no al terminar cada grabación
+                        if (get().inputMode !== 'conversation') {
+                            get().stopSirenStream();
+                        } else {
+                            set({ isRecording: false });
+                        }
+                    };
                     scriptNode.onaudioprocess = (audioEvent: AudioProcessingEvent) => {
                         if (sirenWs.readyState !== WebSocket.OPEN) return;
                         const inputData = audioEvent.inputBuffer.getChannelData(0);
@@ -680,19 +728,139 @@ export const useAegisStore = create<AegisState>()(
             stopSirenStream: () => {
                 // Limpiar WebSpeech si estaba activo
                 const speechRec = (window as unknown as Record<string, unknown>)._aegis_speech_recognition as SpeechRecognition | undefined;
-                if (speechRec) { try { speechRec.stop(); } catch { /* already stopped */ } delete (window as unknown as Record<string, unknown>)._aegis_speech_recognition; }
+                if (speechRec) {
+                    try { speechRec.stop(); } catch { /* already stopped */ }
+                    delete (window as unknown as Record<string, unknown>)._aegis_speech_recognition;
+                }
 
                 const { sirenSocket } = get();
                 if (sirenSocket?.readyState === WebSocket.OPEN) {
                     sirenSocket.send(JSON.stringify({ sequence_number: 9999, data: '', format: 'VAD_END_SIGNAL', sample_rate: 16000 }));
                     setTimeout(() => { if (sirenSocket.readyState === WebSocket.OPEN) sirenSocket.close(); }, 100);
-                } else if (sirenSocket) sirenSocket.close();
+                } else if (sirenSocket) {
+                    sirenSocket.close();
+                }
                 set({ sirenSocket: null });
+
                 const audioRefs = window as Window & AegisAudioRefs;
-                if (audioRefs._aegis_audio_stream) audioRefs._aegis_audio_stream.getTracks().forEach(track => track.stop());
-                if (audioRefs._aegis_audio_node) audioRefs._aegis_audio_node.disconnect();
-                if (audioRefs._aegis_audio_ctx) audioRefs._aegis_audio_ctx.close();
+                if (audioRefs._aegis_audio_stream) {
+                    audioRefs._aegis_audio_stream.getTracks().forEach(track => track.stop());
+                    delete audioRefs._aegis_audio_stream;
+                }
+                if (audioRefs._aegis_audio_node) {
+                    audioRefs._aegis_audio_node.disconnect();
+                    delete audioRefs._aegis_audio_node;
+                }
+                if (audioRefs._aegis_audio_ctx) {
+                    audioRefs._aegis_audio_ctx.close();
+                    delete audioRefs._aegis_audio_ctx;
+                }
                 set({ isRecording: false });
+            },
+
+            restartMicForConversation: async () => {
+                const { tenantId, sessionKey, sirenSocket, isRecording, sttProvider } = get();
+                if (isRecording || !tenantId || !sessionKey) return;
+
+                // Modo browser (WebSpeech): iniciar nuevo recognition
+                if (sttProvider === 'browser') {
+                    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    if (!SpeechRecognitionCtor) return;
+                    await ttsPlayer.initialize();
+                    const recognition = new SpeechRecognitionCtor();
+                    recognition.continuous = false;
+                    recognition.interimResults = false;
+                    set({ isRecording: true, status: 'listening' });
+                    recognition.onresult = (event: SpeechRecognitionEvent) => {
+                        const transcript = event.results[0][0].transcript.trim();
+                        set({ isRecording: false, status: 'thinking' });
+                        if (transcript) get().sendMessage(transcript);
+                    };
+                    recognition.onerror = () => set({ isRecording: false, status: 'idle' });
+                    recognition.onend = () => set({ isRecording: false });
+                    (window as unknown as Record<string, unknown>)._aegis_speech_recognition = recognition;
+                    recognition.start();
+                    return;
+                }
+
+                // Modo Groq/Local: el sirenWs ya está abierto — solo reabrir el mic
+                if (!sirenSocket || sirenSocket.readyState !== WebSocket.OPEN) {
+                    // sirenWs se cerró inesperadamente — reiniciar todo
+                    await get().startSirenStream();
+                    return;
+                }
+
+                try {
+                    await ttsPlayer.initialize();
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+                    });
+                    const win = window as WindowWithWebkit;
+                    const AudioCtx = win.AudioContext || win.webkitAudioContext;
+                    if (!AudioCtx) throw new Error('Web Audio API not supported');
+                    const ctx = new AudioCtx({ sampleRate: 16000 });
+                    const source = ctx.createMediaStreamSource(stream);
+                    const scriptNode = ctx.createScriptProcessor(4096, 1, 1);
+                    const analyser = ctx.createAnalyser();
+                    analyser.fftSize = 256;
+                    analyser.smoothingTimeConstant = 0.2;
+                    source.connect(analyser);
+
+                    let silenceStart = Date.now();
+                    const SILENCE_THRESHOLD = 5;
+                    const MAX_SILENCE_MS = 1500;
+                    let vadRequestedStop = false;
+
+                    const checkSilence = () => {
+                        if (!get().isRecording || vadRequestedStop) return;
+                        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+                        analyser.getByteFrequencyData(dataArray);
+                        let sum = 0;
+                        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+                        if (sum / dataArray.length < SILENCE_THRESHOLD) {
+                            if (Date.now() - silenceStart > MAX_SILENCE_MS) {
+                                vadRequestedStop = true;
+                                // Solo detener mic, sirenWs permanece abierto para TTS
+                                set({ isRecording: false });
+                                stream.getTracks().forEach(t => t.stop());
+                                scriptNode.disconnect();
+                                ctx.close();
+                                delete (window as Window & AegisAudioRefs)._aegis_audio_stream;
+                                delete (window as Window & AegisAudioRefs)._aegis_audio_node;
+                                delete (window as Window & AegisAudioRefs)._aegis_audio_ctx;
+                                return;
+                            }
+                        } else {
+                            silenceStart = Date.now();
+                        }
+                        requestAnimationFrame(checkSilence);
+                    };
+
+                    scriptNode.onaudioprocess = (audioEvent: AudioProcessingEvent) => {
+                        if (sirenSocket.readyState !== WebSocket.OPEN) return;
+                        const inputData = audioEvent.inputBuffer.getChannelData(0);
+                        const pcmBuffer = new Int16Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) {
+                            const s = Math.max(-1, Math.min(1, inputData[i]));
+                            pcmBuffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                        }
+                        sirenSocket.send(pcmBuffer.buffer);
+                    };
+
+                    source.connect(scriptNode);
+                    scriptNode.connect(ctx.destination);
+
+                    const audioRefs = window as Window & AegisAudioRefs;
+                    audioRefs._aegis_audio_stream = stream;
+                    audioRefs._aegis_audio_ctx = ctx;
+                    audioRefs._aegis_audio_node = scriptNode;
+
+                    set({ isRecording: true, status: 'listening' });
+                    requestAnimationFrame(checkSilence);
+                } catch (error) {
+                    console.error('🎤 Mic restart error:', error);
+                    set({ isRecording: false });
+                }
             },
 
             setEngineConfigured: (configured: boolean) => set({ isEngineConfigured: configured }),
