@@ -15,15 +15,27 @@ pub struct EspeakEngine {
 
 impl EspeakEngine {
     pub fn new(voice: String, speed: u32, sample_rate: u32) -> Self {
-        Self { voice, speed, sample_rate }
+        Self {
+            voice,
+            speed,
+            sample_rate,
+        }
     }
 
     pub fn default_es() -> Self {
-        Self { voice: "es".to_string(), speed: 150, sample_rate: 22050 }
+        Self {
+            voice: "es".to_string(),
+            speed: 150,
+            sample_rate: 22050,
+        }
     }
 
     pub fn default_en() -> Self {
-        Self { voice: "en".to_string(), speed: 150, sample_rate: 22050 }
+        Self {
+            voice: "en".to_string(),
+            speed: 150,
+            sample_rate: 22050,
+        }
     }
 
     /// Retorna true si espeak-ng está instalado en el sistema.
