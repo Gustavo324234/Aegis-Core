@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.8.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.8.0...shell-ui-v1.8.1) (2026-04-26)
+
+
+### Bug Fixes
+
+* **shell:** CORE-184 modo conversación — sirenWs persistente + TTS loop sin botón ([#128](https://github.com/Gustavo324234/Aegis-Core/issues/128)) ([a0abeb0](https://github.com/Gustavo324234/Aegis-Core/commit/a0abeb05efcc62c26320e07e72d39e15d7a4da3e))
+
+## [1.8.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.7.0...shell-ui-v1.8.0) (2026-04-25)
+
+
+### Features
+
+* **shell:** CORE-183 input mode selector — text / audio / conversation con TTS loop ([#126](https://github.com/Gustavo324234/Aegis-Core/issues/126)) ([046d2a9](https://github.com/Gustavo324234/Aegis-Core/commit/046d2a904920ed632e617f8bc210ab0071eadc62))
+
 ## [1.7.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.6.0...shell-ui-v1.7.0) (2026-04-25)
 
 
