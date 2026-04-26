@@ -180,22 +180,20 @@ async fn handle_siren(
                         .await;
 
                     // CORE-185: Wait for LLM output then synthesize and stream TTS chunks.
-                    let llm_output = match tokio::time::timeout(
-                        std::time::Duration::from_secs(60),
-                        output_rx,
-                    )
-                    .await
-                    {
-                        Ok(Ok(output)) => output,
-                        Ok(Err(_)) => {
-                            warn!("Siren: LLM output channel closed without sending.");
-                            continue;
-                        }
-                        Err(_) => {
-                            warn!("Siren: LLM output timeout after 60s for pid={}", pid);
-                            continue;
-                        }
-                    };
+                    let llm_output =
+                        match tokio::time::timeout(std::time::Duration::from_secs(60), output_rx)
+                            .await
+                        {
+                            Ok(Ok(output)) => output,
+                            Ok(Err(_)) => {
+                                warn!("Siren: LLM output channel closed without sending.");
+                                continue;
+                            }
+                            Err(_) => {
+                                warn!("Siren: LLM output timeout after 60s for pid={}", pid);
+                                continue;
+                            }
+                        };
 
                     let engine = match state.siren_router.resolve(&tenant_id).await {
                         Ok(e) => e,
