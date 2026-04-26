@@ -2,6 +2,13 @@
 
 
 
+## [0.1.25](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.24...ank-http-v0.1.25) (2026-04-26)
+
+
+### Features
+
+* **ank-http:** CORE-185 TTS pipeline en WebSocket Siren — sintetizar respuesta y enviar chunks ([#132](https://github.com/Gustavo324234/Aegis-Core/issues/132)) ([e8f5d01](https://github.com/Gustavo324234/Aegis-Core/commit/e8f5d01470ec1a818c895a86af1a4ce82d57abbd))
+
 ## [0.1.24](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.23...ank-http-v0.1.24) (2026-04-25)
 
 ## [0.1.23](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.22...ank-http-v0.1.23) (2026-04-25)
