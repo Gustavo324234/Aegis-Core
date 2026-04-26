@@ -32,6 +32,7 @@ dirs.workspace            = true
 reqwest.workspace          = true
 regex.workspace            = true
 
+base64 = "0.22"
 dashmap = "5"
 utoipa = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
