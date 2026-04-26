@@ -9,8 +9,10 @@ use axum::{
     routing::get,
     Router,
 };
+use base64::Engine as _;
 use futures::stream::StreamExt;
 use serde_json::json;
+use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
 pub fn router() -> Router<AppState> {
@@ -152,12 +154,18 @@ async fn handle_siren(
                     pcb.task_type = ank_core::pcb::TaskType::Chat;
                     let pid = pcb.pid.clone();
 
+                    let (output_tx, output_rx) = oneshot::channel::<String>();
+
                     if let Err(e) = state
                         .scheduler_tx
-                        .send(ank_core::SchedulerEvent::ScheduleTask(Box::new(pcb)))
+                        .send(ank_core::SchedulerEvent::ScheduleTaskConfirmed(
+                            Box::new(pcb),
+                            output_tx,
+                        ))
                         .await
                     {
                         error!("Failed to schedule STT transcript: {}", e);
+                        continue;
                     }
 
                     let payload = json!({ "transcript": transcript, "pid": pid }).to_string();
@@ -170,6 +178,68 @@ async fn handle_siren(
                             .to_string(),
                         ))
                         .await;
+
+                    // CORE-185: Wait for LLM output then synthesize and stream TTS chunks.
+                    let llm_output = match tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        output_rx,
+                    )
+                    .await
+                    {
+                        Ok(Ok(output)) => output,
+                        Ok(Err(_)) => {
+                            warn!("Siren: LLM output channel closed without sending.");
+                            continue;
+                        }
+                        Err(_) => {
+                            warn!("Siren: LLM output timeout after 60s for pid={}", pid);
+                            continue;
+                        }
+                    };
+
+                    let engine = match state.siren_router.resolve(&tenant_id).await {
+                        Ok(e) => e,
+                        Err(e) => {
+                            warn!("Siren: No TTS engine available: {}", e);
+                            continue;
+                        }
+                    };
+
+                    match engine.synthesize(llm_output).await {
+                        Ok(pcm_bytes) => {
+                            const CHUNK_SIZE: usize = 8 * 1024;
+                            let sample_rate = 22050u32;
+
+                            for chunk in pcm_bytes.chunks(CHUNK_SIZE) {
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(chunk);
+                                let msg = json!({
+                                    "event": "siren_event",
+                                    "data": {
+                                        "tts_audio_chunk": b64,
+                                        "sample_rate": sample_rate
+                                    }
+                                })
+                                .to_string();
+
+                                if socket.send(Message::Text(msg)).await.is_err() {
+                                    break;
+                                }
+                            }
+
+                            let _ = socket
+                                .send(Message::Text(
+                                    json!({
+                                        "event": "siren_event",
+                                        "data": { "event_type": "TTS_DONE" }
+                                    })
+                                    .to_string(),
+                                ))
+                                .await;
+                        }
+                        Err(e) => {
+                            warn!("Siren: TTS synthesis failed: {}", e);
+                        }
+                    }
                 } else {
                     warn!("Received unexpected text message on siren WS: {}", t);
                 }

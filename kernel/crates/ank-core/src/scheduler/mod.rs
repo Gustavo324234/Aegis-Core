@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tracing::{error, info, instrument, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +109,8 @@ pub struct CognitiveScheduler {
     /// CORE-158 (Epic 43): Orquestador del árbol de agentes jerárquico.
     /// None hasta que se inicialice con el CognitiveRouter y VCM.
     pub agent_orchestrator: Option<Arc<AgentOrchestrator>>,
+    /// CORE-185: Pending output senders keyed by pid — fired when ProcessCompleted arrives.
+    pub output_pending: HashMap<String, oneshot::Sender<String>>,
 }
 
 impl CognitiveScheduler {
@@ -127,6 +129,7 @@ impl CognitiveScheduler {
             persistence,
             execution_tx: None,
             agent_orchestrator: None,
+            output_pending: HashMap::new(),
         }
     }
 
@@ -234,7 +237,8 @@ impl CognitiveScheduler {
                     }
                 }
 
-                let _ = confirm_tx.send(confirmed_pid);
+                // CORE-185: Store sender so ProcessCompleted can deliver the LLM output.
+                self.output_pending.insert(confirmed_pid, confirm_tx);
             }
             SchedulerEvent::RegisterGraph(graph_box) => {
                 let graph = *graph_box;
@@ -336,6 +340,12 @@ impl CognitiveScheduler {
             }
             SchedulerEvent::ProcessCompleted { pid, output } => {
                 info!(pid = %pid, "Process completed locally.");
+
+                // CORE-185: Fire the output sender if a Siren WS handler is waiting.
+                if let Some(sender) = self.output_pending.remove(&pid) {
+                    let _ = sender.send(output.clone());
+                }
+
                 let (parent_pid, pcb_name, pcb_id) = if let Some(pcb) =
                     self.process_table.get_mut(&pid)
                 {
