@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/Gustavo324234/Aegis-Core/compare/aegis-sdk-v0.1.1...aegis-sdk-v0.1.2) (2026-04-27)
+
+
+### Features
+
+* **shell:** dashboard tree view ([#140](https://github.com/Gustavo324234/Aegis-Core/issues/140)) ([9788d1f](https://github.com/Gustavo324234/Aegis-Core/commit/9788d1fea31e695ac9cef9888c3e1e92171ef744))
+
 ## [0.1.1](https://github.com/Gustavo324234/Aegis-Core/compare/aegis-sdk-v0.1.0...aegis-sdk-v0.1.1) (2026-04-20)
 
 
