@@ -286,9 +286,7 @@ impl KeyPool {
         }
         drop(global);
         let tenants = self.tenant_keys.read().await;
-        tenants
-            .values()
-            .any(|keys| keys.iter().any(&model_ok))
+        tenants.values().any(|keys| keys.iter().any(&model_ok))
     }
 
     /// Check if at least one key is available for a given provider and model
