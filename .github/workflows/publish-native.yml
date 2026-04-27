@@ -238,7 +238,7 @@ jobs:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'nightly' }}
           name: ${{ startsWith(github.ref, 'refs/tags/v') && format('Aegis Core {0}', github.ref_name) || 'Aegis Core — Nightly Build' }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-          make_latest: "false"
+          make_latest: "true"
           files: all-dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
