@@ -28,7 +28,12 @@ impl InstructionLoader {
     }
 
     /// Crea un loader con la ruta estándar relativa al workspace de Aegis.
+    /// Respeta `AEGIS_AGENTS_CONFIG_DIR` si está seteada, permitiendo override
+    /// en deployments donde el binario no vive junto al repositorio.
     pub fn default_from_workspace(workspace_root: &Path) -> Self {
+        if let Ok(dir) = std::env::var("AEGIS_AGENTS_CONFIG_DIR") {
+            return Self::new(dir);
+        }
         Self::new(workspace_root.join("kernel").join("config").join("agents"))
     }
 
@@ -113,25 +118,23 @@ impl InstructionLoader {
         }
     }
 
-    /// Instrucciones de fallback embebidas — garantizan funcionalidad básica
-    /// si los archivos .md no están disponibles.
+    /// Instrucciones de fallback embebidas en el binario (include_str! en build-time).
+    /// Garantizan que el servidor funcione correctamente aunque los .md no estén
+    /// en el filesystem del deployment. El texto completo es idéntico al de los
+    /// archivos editables en kernel/config/agents/.
     fn fallback(key: &str) -> &'static str {
         match key {
             CHAT_AGENT_FILE => {
-                "Sos el Chat Agent de Aegis OS. Conversás con el usuario, \
-                 delegás trabajo a los supervisores y respondés con claridad."
+                include_str!("../../../../config/agents/chat_agent.md")
             }
             PROJECT_SUPERVISOR_FILE => {
-                "Sos un Project Supervisor de Aegis OS. Coordinás el trabajo \
-                 de un proyecto, delegás a supervisores de dominio y consolidás resultados."
+                include_str!("../../../../config/agents/project_supervisor.md")
             }
             SUPERVISOR_FILE => {
-                "Sos un Supervisor de dominio en Aegis OS. Coordinás tu área, \
-                 delegás a specialists y reportás al supervisor padre."
+                include_str!("../../../../config/agents/supervisor.md")
             }
             SPECIALIST_FILE => {
-                "Sos un Specialist Agent de Aegis OS. Ejecutás una tarea atómica \
-                 específica y reportás el resultado. No creás sub-agentes."
+                include_str!("../../../../config/agents/specialist.md")
             }
             _ => "Agente de Aegis OS. Ejecutá tu tarea y reportá el resultado.",
         }

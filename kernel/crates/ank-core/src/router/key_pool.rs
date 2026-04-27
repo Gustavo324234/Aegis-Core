@@ -22,6 +22,11 @@ pub struct ApiKeyEntry {
     pub rate_limited_until: Option<DateTime<Utc>>,
     #[serde(default)]
     pub active_models: Option<Vec<String>>,
+    /// Si es true, esta clave usa el nivel gratuito del proveedor.
+    /// El router prioriza claves gratuitas y cae a las pagas cuando
+    /// todas las gratuitas están rate-limitadas.
+    #[serde(default)]
+    pub is_free_tier: bool,
 }
 
 // Custom Debug to redact the api_key
@@ -107,51 +112,59 @@ impl KeyPool {
         Ok(())
     }
 
-    /// Get an available key for a provider and model, checking tenant override first, then global pool.
+    /// Get an available key for a provider and model.
+    /// Priority order:
+    ///   1. Tenant free-tier keys  (gratuitas primero — se agotan antes de usar pagas)
+    ///   2. Global free-tier keys
+    ///   3. Tenant paid keys
+    ///   4. Global paid keys
     pub async fn get_available_key(
         &self,
         provider: &str,
         model_id: &str,
         tenant_id: &str,
     ) -> Option<ApiKeyEntry> {
-        // 1. Try tenant override
-        {
-            let tenants = self.tenant_keys.read().await;
-            if let Some(keys) = tenants.get(tenant_id) {
-                let available: Vec<&ApiKeyEntry> = keys
-                    .iter()
-                    .filter(|k| {
-                        k.provider == provider
-                            && k.is_available()
-                            && k.active_models
-                                .as_ref()
-                                .map(|m| m.contains(&model_id.to_string()))
-                                .unwrap_or(true)
-                    })
-                    .collect();
-                if !available.is_empty() {
-                    let idx = self.next_rr_index(provider).await;
-                    return Some(available[idx % available.len()].clone());
-                }
-            }
-        }
-        // 2. Try global pool
-        {
-            let global = self.global_keys.read().await;
-            let available: Vec<&ApiKeyEntry> = global
+        let model_matches = |k: &&ApiKeyEntry| -> bool {
+            k.provider == provider
+                && k.is_available()
+                && k.active_models
+                    .as_ref()
+                    .map(|m| m.contains(&model_id.to_string()))
+                    .unwrap_or(true)
+        };
+
+        let tenant_keys = self.tenant_keys.read().await;
+        let global_keys = self.global_keys.read().await;
+
+        let tenant = tenant_keys
+            .get(tenant_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+
+        // Collect candidates in priority order: tenant-free, global-free, tenant-paid, global-paid
+        let buckets: [Vec<&ApiKeyEntry>; 4] = [
+            tenant
                 .iter()
-                .filter(|k| {
-                    k.provider == provider
-                        && k.is_available()
-                        && k.active_models
-                            .as_ref()
-                            .map(|m| m.contains(&model_id.to_string()))
-                            .unwrap_or(true)
-                })
-                .collect();
-            if !available.is_empty() {
+                .filter(|k| k.is_free_tier && model_matches(k))
+                .collect(),
+            global_keys
+                .iter()
+                .filter(|k| k.is_free_tier && model_matches(k))
+                .collect(),
+            tenant
+                .iter()
+                .filter(|k| !k.is_free_tier && model_matches(k))
+                .collect(),
+            global_keys
+                .iter()
+                .filter(|k| !k.is_free_tier && model_matches(k))
+                .collect(),
+        ];
+
+        for bucket in &buckets {
+            if !bucket.is_empty() {
                 let idx = self.next_rr_index(provider).await;
-                return Some(available[idx % available.len()].clone());
+                return Some(bucket[idx % bucket.len()].clone());
             }
         }
         None
@@ -254,6 +267,28 @@ impl KeyPool {
         Ok(())
     }
 
+    /// Returns true if at least one non-free-tier (paid) key is available for this provider+model.
+    /// When a paid key exists, free-tier rate limits can be safely ignored.
+    pub async fn has_paid_key(&self, provider: &str, model_id: &str) -> bool {
+        let model_ok = |k: &ApiKeyEntry| -> bool {
+            k.provider == provider
+                && !k.is_free_tier
+                && k.is_available()
+                && k.active_models
+                    .as_ref()
+                    .map(|m| m.contains(&model_id.to_string()))
+                    .unwrap_or(true)
+        };
+
+        let global = self.global_keys.read().await;
+        if global.iter().any(&model_ok) {
+            return true;
+        }
+        drop(global);
+        let tenants = self.tenant_keys.read().await;
+        tenants.values().any(|keys| keys.iter().any(&model_ok))
+    }
+
     /// Check if at least one key is available for a given provider and model
     pub async fn has_key_for_model(&self, provider: &str, model_id: &str) -> bool {
         let global = self.global_keys.read().await;
@@ -351,6 +386,7 @@ mod tests {
                 is_active: true,
                 rate_limited_until: None,
                 active_models: None,
+                is_free_tier: false,
             };
             pool.add_global_key(entry).await?;
         }
@@ -384,6 +420,7 @@ mod tests {
             is_active: true,
             rate_limited_until: None,
             active_models: None,
+            is_free_tier: false,
         })
         .await?;
 
@@ -399,6 +436,7 @@ mod tests {
                 is_active: true,
                 rate_limited_until: None,
                 active_models: None,
+                is_free_tier: false,
             },
         )
         .await?;

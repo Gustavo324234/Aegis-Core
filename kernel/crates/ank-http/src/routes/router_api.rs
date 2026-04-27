@@ -40,6 +40,9 @@ pub struct KeyAddRequest {
     pub label: Option<String>,
     #[schema(example = "[\"openai/gpt-4o\"]")]
     pub models: Option<Vec<String>>,
+    /// Si true, esta clave usa el nivel gratuito — se usa antes que las claves pagas.
+    #[serde(default)]
+    pub is_free_tier: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -51,6 +54,7 @@ pub struct RouterKeyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub is_active: bool,
+    pub is_free_tier: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_models: Option<Vec<String>>,
 }
@@ -144,6 +148,7 @@ async fn add_global_key(
         is_active: true,
         rate_limited_until: None,
         active_models: req.models,
+        is_free_tier: req.is_free_tier,
     };
 
     let router = state.router.read().await;
@@ -187,6 +192,7 @@ async fn list_global_keys(
             api_url: k.api_url,
             label: k.label,
             is_active: k.is_active,
+            is_free_tier: k.is_free_tier,
             active_models: k.active_models,
         })
         .collect();
@@ -254,6 +260,7 @@ async fn add_tenant_key(
         is_active: true,
         rate_limited_until: None,
         active_models: req.models,
+        is_free_tier: req.is_free_tier,
     };
 
     let router = state.router.read().await;
@@ -295,6 +302,7 @@ async fn list_tenant_keys(
             api_url: k.api_url,
             label: k.label,
             is_active: k.is_active,
+            is_free_tier: k.is_free_tier,
             active_models: k.active_models,
         })
         .collect();
@@ -423,6 +431,7 @@ async fn update_global_key(
         is_active: true,
         rate_limited_until: None,
         active_models: req.models,
+        is_free_tier: req.is_free_tier,
     };
 
     let router = state.router.read().await;
@@ -467,6 +476,7 @@ async fn update_tenant_key(
         is_active: true,
         rate_limited_until: None,
         active_models: req.models,
+        is_free_tier: req.is_free_tier,
     };
 
     let router = state.router.read().await;

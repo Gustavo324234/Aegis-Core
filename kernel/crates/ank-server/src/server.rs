@@ -423,6 +423,7 @@ impl KernelService for AnkRpcServer {
             is_active: true,
             rate_limited_until: None,
             active_models: None,
+            is_free_tier: false,
         };
         let router = self.state.router.read().await;
         router

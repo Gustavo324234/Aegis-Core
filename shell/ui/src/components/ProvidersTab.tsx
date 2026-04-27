@@ -9,8 +9,9 @@ interface ProviderEntry {
     provider: string;
     label?: string;
     is_active: boolean;
+    is_free_tier: boolean;
     rate_limited_until?: string;
-    active_models?: string[]; // modelos tildados por el usuario
+    active_models?: string[];
 }
 
 const ProviderCard: React.FC<{
@@ -52,6 +53,12 @@ const ProviderCard: React.FC<{
                 </div>
 
                 <div className="flex items-center gap-3">
+                    {/* Free tier badge */}
+                    {provider.is_free_tier && (
+                        <span className="px-2 py-0.5 rounded text-[9px] font-mono uppercase border text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
+                            FREE
+                        </span>
+                    )}
                     {/* Badge de estado */}
                     <span className={`px-2 py-0.5 rounded text-[9px] font-mono uppercase border ${statusColors[status]}`}>
                         {status === 'active' ? t('status_active') : status === 'limited' ? t('status_limited') : t('status_inactive')}
@@ -161,6 +168,7 @@ const ProviderModal: React.FC<{
     const [isSaving, setIsSaving] = useState(false);
     const [models, setModels] = useState<string[]>([]);
     const [selectedModels, setSelectedModels] = useState<string[]>(initialProvider?.active_models || []);
+    const [isFreeTier, setIsFreeTier] = useState<boolean>(initialProvider?.is_free_tier ?? false);
     const [verifyError, setVerifyError] = useState<string | null>(null);
     const [step, setStep] = useState<'config' | 'models'>(isEdit ? 'models' : 'config');
 
@@ -223,7 +231,8 @@ const ProviderModal: React.FC<{
                     provider: selectedProvider,
                     api_key: apiKey,
                     api_url: PROVIDER_PRESETS[selectedProvider].url,
-                    models: selectedModels
+                    models: selectedModels,
+                    is_free_tier: isFreeTier
                 })
             });
             if (res.ok) {
@@ -368,6 +377,25 @@ const ProviderModal: React.FC<{
                                 className="space-y-6"
                             >
                                 <ModelSelector models={models} selectedModels={selectedModels} onChange={setSelectedModels} />
+
+                                {/* Free tier toggle */}
+                                <button
+                                    type="button"
+                                    onClick={() => setIsFreeTier(v => !v)}
+                                    className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${isFreeTier ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-white/5 border-white/10 hover:border-white/20'}`}
+                                >
+                                    <div className="text-left">
+                                        <p className={`text-[10px] font-mono font-bold uppercase tracking-widest ${isFreeTier ? 'text-emerald-400' : 'text-white/40'}`}>
+                                            {isFreeTier ? 'Free tier key' : 'Paid tier key'}
+                                        </p>
+                                        <p className="text-[9px] font-mono text-white/20 mt-0.5">
+                                            {isFreeTier ? 'Used first — falls back to paid when rate-limited' : 'Used after all free tier keys are exhausted'}
+                                        </p>
+                                    </div>
+                                    <div className={`w-10 h-5 rounded-full transition-all relative ${isFreeTier ? 'bg-emerald-500/40' : 'bg-white/10'}`}>
+                                        <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${isFreeTier ? 'left-5 bg-emerald-400' : 'left-0.5 bg-white/30'}`} />
+                                    </div>
+                                </button>
 
                                 <div className="flex gap-4 pt-4 border-t border-white/10">
                                     <button 
