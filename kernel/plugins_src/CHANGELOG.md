@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/Gustavo324234/Aegis-Core/compare/plugins_src-v0.1.2...plugins_src-v0.1.3) (2026-04-27)
+
+
+### Features
+
+* **shell:** dashboard tree view ([#140](https://github.com/Gustavo324234/Aegis-Core/issues/140)) ([9788d1f](https://github.com/Gustavo324234/Aegis-Core/commit/9788d1fea31e695ac9cef9888c3e1e92171ef744))
+
 ## [0.1.2](https://github.com/Gustavo324234/Aegis-Core/compare/plugins_src-v0.1.1...plugins_src-v0.1.2) (2026-04-20)
 
 

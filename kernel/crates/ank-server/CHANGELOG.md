@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.30](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.29...ank-server-v0.1.30) (2026-04-27)
+
+
+### Features
+
+* **router:** free-tier rate limiting, Gemini 3.x catalog and JS sandbox fixes ([#138](https://github.com/Gustavo324234/Aegis-Core/issues/138)) ([392cc69](https://github.com/Gustavo324234/Aegis-Core/commit/392cc697d76c7b4de75f473a9b3ea9fc94a178cd))
+* **shell:** dashboard tree view ([#140](https://github.com/Gustavo324234/Aegis-Core/issues/140)) ([9788d1f](https://github.com/Gustavo324234/Aegis-Core/commit/9788d1fea31e695ac9cef9888c3e1e92171ef744))
+
 ## [0.1.29](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.28...ank-server-v0.1.29) (2026-04-27)
 
 ## [0.1.28](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.27...ank-server-v0.1.28) (2026-04-26)
