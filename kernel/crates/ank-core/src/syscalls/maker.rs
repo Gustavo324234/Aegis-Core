@@ -12,10 +12,22 @@ fn unescape_js_string(s: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '\\' {
             match chars.peek() {
-                Some('n') => { chars.next(); out.push('\n'); }
-                Some('t') => { chars.next(); out.push('\t'); }
-                Some('r') => { chars.next(); out.push('\r'); }
-                Some('\\') => { chars.next(); out.push('\\'); }
+                Some('n') => {
+                    chars.next();
+                    out.push('\n');
+                }
+                Some('t') => {
+                    chars.next();
+                    out.push('\t');
+                }
+                Some('r') => {
+                    chars.next();
+                    out.push('\r');
+                }
+                Some('\\') => {
+                    chars.next();
+                    out.push('\\');
+                }
                 _ => out.push('\\'),
             }
         } else {

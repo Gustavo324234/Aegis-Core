@@ -136,14 +136,29 @@ impl KeyPool {
         let tenant_keys = self.tenant_keys.read().await;
         let global_keys = self.global_keys.read().await;
 
-        let tenant = tenant_keys.get(tenant_id).map(|v| v.as_slice()).unwrap_or(&[]);
+        let tenant = tenant_keys
+            .get(tenant_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
 
         // Collect candidates in priority order: tenant-free, global-free, tenant-paid, global-paid
         let buckets: [Vec<&ApiKeyEntry>; 4] = [
-            tenant.iter().filter(|k| k.is_free_tier && model_matches(k)).collect(),
-            global_keys.iter().filter(|k| k.is_free_tier && model_matches(k)).collect(),
-            tenant.iter().filter(|k| !k.is_free_tier && model_matches(k)).collect(),
-            global_keys.iter().filter(|k| !k.is_free_tier && model_matches(k)).collect(),
+            tenant
+                .iter()
+                .filter(|k| k.is_free_tier && model_matches(k))
+                .collect(),
+            global_keys
+                .iter()
+                .filter(|k| k.is_free_tier && model_matches(k))
+                .collect(),
+            tenant
+                .iter()
+                .filter(|k| !k.is_free_tier && model_matches(k))
+                .collect(),
+            global_keys
+                .iter()
+                .filter(|k| !k.is_free_tier && model_matches(k))
+                .collect(),
         ];
 
         for bucket in &buckets {
@@ -271,7 +286,9 @@ impl KeyPool {
         }
         drop(global);
         let tenants = self.tenant_keys.read().await;
-        tenants.values().any(|keys| keys.iter().any(|k| model_ok(k)))
+        tenants
+            .values()
+            .any(|keys| keys.iter().any(|k| model_ok(k)))
     }
 
     /// Check if at least one key is available for a given provider and model
