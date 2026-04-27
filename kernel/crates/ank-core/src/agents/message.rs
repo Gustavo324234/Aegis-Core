@@ -1,35 +1,37 @@
 use crate::agents::node::AgentId;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-/// Contexto que el orquestador inyecta al despachar una tarea.
-/// Contiene solo lo que el agente necesita para su tarea específica (ADR-AGENTS-006).
+/// Correlaciona un Query con su QueryReply a través de los niveles del árbol.
+pub type QueryId = Uuid;
+
+/// Contexto inyectado al despachar una tarea.
+/// Solo contiene lo necesario para el scope del agente (ADR-CAA-009).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentContext {
     /// Archivos relevantes al scope del agente (rutas relativas al repo).
     pub relevant_files: Vec<String>,
     /// Fragmentos de memoria L3 relevantes recuperados del VCM.
     pub memory_snippets: Vec<String>,
-    /// Resultados de sub-agentes ya completados (para agregación por supervisores).
+    /// Reportes de sub-agentes ya completados (para agregación por supervisores).
     pub child_reports: Vec<AgentResult>,
-    /// Tokens disponibles para este agente (impuesto por VCM).
+    /// Tokens disponibles para este agente (controlado por ContextBudget).
     pub token_budget: usize,
 }
 
-/// Resultado que un agente produce al completar su tarea.
+/// Resultado producido por un agente al completar su tarea.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResult {
     pub agent_id: AgentId,
-    /// Descripción legible del rol, ej: "Kernel Engineer / Scheduler".
+    /// Descripción legible del rol, ej: "Supervisor/Kernel".
     pub role_description: String,
     /// Resumen ejecutivo para el supervisor inmediato.
     pub summary: String,
     /// Artefactos producidos (código, documentos, planes, etc.).
     pub artifacts: Vec<Artifact>,
-    /// Datos adicionales estructurados (métricas, timestamps, etc.).
     pub metadata: serde_json::Value,
 }
 
-/// Artefacto producido por un agente al completar su tarea.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artifact {
     pub kind: ArtifactKind,
@@ -44,7 +46,6 @@ pub enum ArtifactKind {
     Documentation,
     Plan,
     Report,
-    /// Comando a ejecutar (integración futura con Sandbox).
     Command,
 }
 
@@ -65,11 +66,17 @@ pub enum ReportStatus {
 }
 
 /// Mensajes que fluyen entre nodos del árbol de agentes.
-/// Comunicación lateral (entre agentes de distinto supervisor) está prohibida
-/// por ADR-AGENTS-002.
+///
+/// Reglas de comunicación (Epic 45):
+/// - Dispatch: solo hacia abajo (padre → hijo)
+/// - Report: solo hacia arriba (hijo → padre)
+/// - Query: hacia abajo, sin generar trabajo nuevo
+/// - QueryReply: hacia arriba, condensada por cada nivel
+/// - Lateral: solo entre nodos con el mismo parent_id
+/// - Nunca salta niveles
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AgentMessage {
-    /// Supervisor → Subordinado: asigna una tarea con contexto filtrado.
+    /// Padre → Hijo: asigna trabajo. Puede resultar en spawn de nuevos agentes.
     Dispatch {
         task_description: String,
         context: AgentContext,
@@ -77,14 +84,33 @@ pub enum AgentMessage {
         deadline_ms: Option<u64>,
     },
 
-    /// Subordinado → Supervisor: reporta resultado de tarea completada.
+    /// Hijo → Padre: resultado de tarea completada.
     Report {
         from: AgentId,
         result: AgentResult,
         status: ReportStatus,
     },
 
-    /// Sistema → Agente: señal de cancelación (ej: timeout, terminate).
+    /// Padre → Hijo: consulta de información sin crear trabajo nuevo (ADR-CAA-003).
+    /// Un nodo que recibe un Query NO puede hacer Dispatch como consecuencia.
+    Query {
+        question: String,
+        /// Hint para que el receptor sepa hacia qué sub-árbol bajar la query.
+        context_hint: Option<String>,
+        reply_to: AgentId,
+        query_id: QueryId,
+    },
+
+    /// Hijo → Padre: respuesta a un Query.
+    /// Cada nivel condensa la respuesta antes de reenviarla hacia arriba (ADR-CAA-011).
+    QueryReply {
+        /// Respuesta condensada para el nivel receptor.
+        answer: String,
+        query_id: QueryId,
+        from: AgentId,
+    },
+
+    /// Sistema → Agente: señal de cancelación.
     Cancel { reason: String },
 }
 
@@ -95,5 +121,62 @@ impl AgentMessage {
 
     pub fn is_report(&self) -> bool {
         matches!(self, Self::Report { .. })
+    }
+
+    pub fn is_query(&self) -> bool {
+        matches!(self, Self::Query { .. })
+    }
+
+    pub fn is_query_reply(&self) -> bool {
+        matches!(self, Self::QueryReply { .. })
+    }
+
+    pub fn query_id(&self) -> Option<QueryId> {
+        match self {
+            Self::Query { query_id, .. } => Some(*query_id),
+            Self::QueryReply { query_id, .. } => Some(*query_id),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_query_id_correlation() {
+        let qid = Uuid::new_v4();
+        let sender = Uuid::new_v4();
+        let receiver = Uuid::new_v4();
+
+        let query = AgentMessage::Query {
+            question: "¿qué hace authenticate_tenant?".to_string(),
+            context_hint: Some("enclave".to_string()),
+            reply_to: sender,
+            query_id: qid,
+        };
+
+        let reply = AgentMessage::QueryReply {
+            answer: "Autentica al tenant contra el enclave SQLCipher.".to_string(),
+            query_id: qid,
+            from: receiver,
+        };
+
+        assert_eq!(query.query_id(), reply.query_id());
+        assert!(query.is_query());
+        assert!(reply.is_query_reply());
+        assert!(!query.is_dispatch());
+    }
+
+    #[test]
+    fn test_report_status_variants() {
+        let s = ReportStatus::Success;
+        assert_eq!(s, ReportStatus::Success);
+
+        let f = ReportStatus::Failure {
+            reason: "timeout".to_string(),
+        };
+        assert_ne!(s, f);
     }
 }

@@ -1,111 +1,239 @@
-use crate::agents::message::{AgentContext, AgentMessage, AgentResult, ReportStatus};
+use crate::agents::context::ContextBudget;
+use crate::agents::instructions::{state_summary_template, InstructionLoader};
+use crate::agents::message::{AgentContext, AgentMessage, AgentResult, QueryId, ReportStatus};
 use crate::agents::node::{AgentId, AgentRole, AgentState, ProjectId};
+use crate::agents::persistence::AgentPersistence;
+
 use crate::agents::tree::AgentTree;
 use crate::pcb::TaskType;
 use crate::router::CognitiveRouter;
+use crate::scheduler::ModelPreference;
 use crate::vcm::VirtualContextManager;
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 
-/// Orquestador central del árbol de agentes cognitivos (Epic 43).
-/// Coordina el ciclo de vida: creación, dispatch, reporte y terminación.
-/// Vive como campo de `CognitiveScheduler`; no lo reemplaza.
+/// Snapshot de un nodo para la UI y el Chat Agent (sin datos de runtime).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentNodeSummary {
+    pub agent_id: AgentId,
+    pub role_label: String,
+    pub state: String,
+    pub project_id: ProjectId,
+    pub parent_id: Option<AgentId>,
+    pub model: String,
+    pub task_type: String,
+    pub is_restored: bool,
+    pub last_report: Option<String>,
+}
+
+/// Orquestador central del árbol de agentes cognitivos — Epic 45.
+///
+/// Responsabilidades:
+/// - Ciclo de vida de nodos: spawn, dispatch, terminate
+/// - Routing de mensajes entre nodos (Dispatch, Report, Query, QueryReply)
+/// - Persistencia en cierre de sesión: state summaries + árbol
+/// - Restauración al reactivar un proyecto
+/// - CMR per-agent: selección de modelo según task_type y model_preference por nodo
 pub struct AgentOrchestrator {
     pub tree: Arc<RwLock<AgentTree>>,
     pub router: Arc<RwLock<CognitiveRouter>>,
     pub vcm: Arc<VirtualContextManager>,
-    /// Canales de entrada por agente: AgentId → Sender del canal del agente.
+    /// Canales de entrada por agente.
     channels: Arc<RwLock<HashMap<AgentId, mpsc::Sender<AgentMessage>>>>,
+    persistence: Arc<AgentPersistence>,
+    instruction_loader: Arc<RwLock<InstructionLoader>>,
 }
 
 impl AgentOrchestrator {
-    pub fn new(router: Arc<RwLock<CognitiveRouter>>, vcm: Arc<VirtualContextManager>) -> Self {
+    pub fn new(
+        router: Arc<RwLock<CognitiveRouter>>,
+        vcm: Arc<VirtualContextManager>,
+        workspace_root: &std::path::Path,
+    ) -> Self {
+        let mut loader = InstructionLoader::default_from_workspace(workspace_root);
+        if let Err(e) = loader.preload() {
+            warn!(
+                "[AgentOrchestrator] InstructionLoader preload failed: {}. Using fallbacks.",
+                e
+            );
+        }
         Self {
             tree: Arc::new(RwLock::new(AgentTree::new())),
             router,
             vcm,
             channels: Arc::new(RwLock::new(HashMap::new())),
+            persistence: Arc::new(AgentPersistence::from_env()),
+            instruction_loader: Arc::new(RwLock::new(loader)),
         }
     }
 
-    /// Crea un ProjectSupervisor para el proyecto dado si no existe.
-    /// Idempotente: dos llamadas con el mismo project_id retornan el mismo AgentId.
-    pub async fn ensure_project_supervisor(
+    // --- Ciclo de vida ---
+
+    /// Activa un proyecto:
+    /// - Si tiene árbol guardado en disk: lo restaura y carga state summaries (CORE-193).
+    /// - Si no tiene árbol: crea un ProjectSupervisor nuevo.
+    pub async fn activate_project(
         &self,
+        tenant_id: &str,
         project_id: &ProjectId,
         project_description: &str,
     ) -> anyhow::Result<AgentId> {
+        // Verificar si ya está activo en memoria
         {
             let tree = self.tree.read().await;
             if let Some(root) = tree.project_root(project_id) {
                 info!(
-                    project_id = %project_id,
-                    agent_id = %root.agent_id,
-                    "[PROJECT][{}] Supervisor already active — reusing.",
-                    project_id
+                    project = %project_id,
+                    "[PROJECT] Already active — reusing agent {}.",
+                    root.agent_id
                 );
                 return Ok(root.agent_id);
             }
         }
 
-        let system_prompt = format!(
-            "Eres el ProjectSupervisor del proyecto «{}». \
-             Tu trabajo: entender el objetivo global, descomponerlo en tareas \
-             para tus DomainSupervisors, y agregar sus reportes en un resumen ejecutivo.",
-            project_description
-        );
+        // Intentar restaurar desde filesystem (ADR-CAA-005v2)
+        if self.persistence.has_saved_tree(tenant_id, project_id) {
+            return self.restore_project(tenant_id, project_id).await;
+        }
 
-        let node = crate::agents::node::AgentNode::new(
-            AgentRole::ProjectSupervisor,
+        // Primera activación — crear ProjectSupervisor nuevo
+        self.create_project_supervisor(tenant_id, project_id, project_description)
+            .await
+    }
+
+    async fn create_project_supervisor(
+        &self,
+        _tenant_id: &str,
+        project_id: &ProjectId,
+        description: &str,
+    ) -> anyhow::Result<AgentId> {
+        let role = AgentRole::ProjectSupervisor {
+            name: project_id.clone(),
+            description: description.to_string(),
+        };
+        let system_prompt = {
+            let mut loader = self.instruction_loader.write().await;
+            loader.build_system_prompt(&role, project_id, None)
+        };
+        let budget = ContextBudget::for_role(&role, TaskType::Planning);
+        let mut node = crate::agents::node::AgentNode::new(
+            role,
             project_id.clone(),
-            project_id.as_str(),
             None,
             system_prompt,
             TaskType::Planning,
         );
+        node.context_budget = budget.max_tokens;
 
         let agent_id = node.agent_id;
-        let (tx, rx) = mpsc::channel::<AgentMessage>(32);
+        let (tx, _rx) = mpsc::channel::<AgentMessage>(32);
 
         {
             let mut tree = self.tree.write().await;
             tree.insert(node)?;
         }
-
         {
-            let mut channels = self.channels.write().await;
-            channels.insert(agent_id, tx);
+            let mut ch = self.channels.write().await;
+            ch.insert(agent_id, tx);
         }
 
-        let tree_ref = Arc::clone(&self.tree);
-        let router_ref = Arc::clone(&self.router);
-        let channels_ref = Arc::clone(&self.channels);
-
-        tokio::spawn(async move {
-            Self::run_agent_loop(agent_id, tree_ref, router_ref, channels_ref, rx, None).await;
-        });
+        self.spawn_loop(agent_id, None);
 
         info!(
-            project_id = %project_id,
-            agent_id = %agent_id,
-            "[PROJECT][{}] ProjectSupervisor spawned.",
-            project_id
+            project = %project_id,
+            agent = %agent_id,
+            "[PROJECT] ProjectSupervisor created."
         );
-
         Ok(agent_id)
     }
 
-    /// Spawnea un nuevo agente como hijo del padre indicado.
-    /// Falla con `Err` si el padre no existe en el árbol.
+    /// Restaura un proyecto desde el filesystem (CORE-193).
+    /// Carga agent_tree.json + agent_contexts/*.md como contexto inicial de cada supervisor.
+    async fn restore_project(
+        &self,
+        tenant_id: &str,
+        project_id: &ProjectId,
+    ) -> anyhow::Result<AgentId> {
+        let restored_tree = self
+            .persistence
+            .load_tree(tenant_id, project_id)?
+            .ok_or_else(|| anyhow::anyhow!("No saved tree for project {}", project_id))?;
+
+        let summaries = self
+            .persistence
+            .load_all_summaries(tenant_id, &restored_tree)?;
+
+        let root_id = restored_tree
+            .project_root(project_id)
+            .map(|n| n.agent_id)
+            .ok_or_else(|| anyhow::anyhow!("No root found in restored tree for {}", project_id))?;
+
+        let node_count = restored_tree.len();
+
+        // Insertar nodos en el árbol activo y asignar state summaries como contexto
+        {
+            let mut tree = self.tree.write().await;
+            let mut loader = self.instruction_loader.write().await;
+
+            let snapshot = restored_tree.serialize()?;
+            for mut node in snapshot.nodes {
+                // Inyectar el state summary como contexto inicial si existe
+                if let Some(summary) = summaries.get(&node.agent_id) {
+                    let base_prompt =
+                        loader.build_system_prompt(&node.role, project_id, Some(summary.as_str()));
+                    node.system_prompt = base_prompt;
+                }
+                let agent_id = node.agent_id;
+                let _parent_tx = node.parent_id.and_then(|_pid| {
+                    // Se asignará al crear el canal — se pasa None por ahora
+                    None::<mpsc::Sender<AgentMessage>>
+                });
+                tree.nodes_mut_raw().insert(agent_id, node);
+                if matches!(
+                    tree.get(&agent_id).map(|n| &n.role),
+                    Some(AgentRole::ProjectSupervisor { .. })
+                ) {
+                    tree.register_root(project_id.clone(), agent_id);
+                }
+            }
+        }
+
+        // Crear canales y loops para todos los nodos restaurados
+        let agent_ids: Vec<AgentId> = {
+            let tree = self.tree.read().await;
+            tree.descendants(&root_id)
+                .iter()
+                .map(|n| n.agent_id)
+                .chain(std::iter::once(root_id))
+                .collect()
+        };
+
+        for agent_id in agent_ids {
+            let (tx, _rx) = mpsc::channel::<AgentMessage>(32);
+            let mut ch = self.channels.write().await;
+            ch.insert(agent_id, tx);
+            // Los loops se crean bajo demanda al recibir el primer Dispatch
+        }
+
+        info!(
+            project = %project_id,
+            nodes = node_count,
+            "[PROJECT] Restored from filesystem ({} nodes).",
+            node_count
+        );
+        Ok(root_id)
+    }
+
+    /// Spawea un nuevo agente como hijo del padre indicado.
     pub async fn spawn_agent(
         &self,
         role: AgentRole,
         project_id: ProjectId,
-        domain: String,
         parent_id: AgentId,
-        system_prompt: String,
+        system_prompt_hint: Option<String>,
         task_type: TaskType,
     ) -> anyhow::Result<AgentId> {
         {
@@ -115,17 +243,23 @@ impl AgentOrchestrator {
             }
         }
 
-        let node = crate::agents::node::AgentNode::new(
-            role.clone(),
+        let budget = ContextBudget::for_role(&role, task_type);
+        let system_prompt = {
+            let mut loader = self.instruction_loader.write().await;
+            loader.build_system_prompt(&role, &project_id, system_prompt_hint.as_deref())
+        };
+
+        let mut node = crate::agents::node::AgentNode::new(
+            role,
             project_id.clone(),
-            domain.clone(),
             Some(parent_id),
             system_prompt,
             task_type,
         );
+        node.context_budget = budget.max_tokens;
 
         let agent_id = node.agent_id;
-        let (tx, rx) = mpsc::channel::<AgentMessage>(32);
+        let (tx, _rx) = mpsc::channel::<AgentMessage>(32);
 
         {
             let mut tree = self.tree.write().await;
@@ -133,33 +267,24 @@ impl AgentOrchestrator {
         }
 
         let parent_tx = {
-            let channels = self.channels.read().await;
-            channels.get(&parent_id).cloned()
+            let ch = self.channels.read().await;
+            ch.get(&parent_id).cloned()
         };
 
         {
-            let mut channels = self.channels.write().await;
-            channels.insert(agent_id, tx);
+            let mut ch = self.channels.write().await;
+            ch.insert(agent_id, tx);
         }
 
-        let tree_ref = Arc::clone(&self.tree);
-        let router_ref = Arc::clone(&self.router);
-        let channels_ref = Arc::clone(&self.channels);
-
-        tokio::spawn(async move {
-            Self::run_agent_loop(agent_id, tree_ref, router_ref, channels_ref, rx, parent_tx).await;
-        });
+        self.spawn_loop(agent_id, parent_tx);
 
         info!(
             parent = %parent_id,
-            agent_id = %agent_id,
-            role = ?role,
-            domain = %domain,
+            agent = %agent_id,
+            task_type = ?task_type,
             project = %project_id,
-            "[DOMAIN][{}] Agent spawned under parent {}.",
-            domain, parent_id
+            "[SPAWN] Agent spawned."
         );
-
         Ok(agent_id)
     }
 
@@ -191,306 +316,121 @@ impl AgentOrchestrator {
             deadline_ms: None,
         };
 
-        let channels = self.channels.read().await;
-        let tx = channels
-            .get(&agent_id)
-            .ok_or_else(|| anyhow::anyhow!("No channel found for agent {}", agent_id))?;
-
-        tx.send(msg)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to dispatch to agent {}: {}", agent_id, e))?;
-
+        self.send_to(agent_id, msg).await?;
         {
             let mut tree = self.tree.write().await;
-            if let Some(node) = tree.get_mut(&agent_id) {
-                node.set_state(AgentState::Running);
+            if let Some(n) = tree.get_mut(&agent_id) {
+                n.set_state(AgentState::Running);
             }
         }
-
         Ok(())
     }
 
-    /// Loop interno de un agente. Se ejecuta en su propio `tokio::spawn`.
-    /// Espera mensajes Dispatch, ejecuta la tarea (via CMR — integrado en CORE-165),
-    /// y reporta al padre.
-    async fn run_agent_loop(
-        agent_id: AgentId,
-        tree: Arc<RwLock<AgentTree>>,
-        router: Arc<RwLock<CognitiveRouter>>,
-        channels: Arc<RwLock<HashMap<AgentId, mpsc::Sender<AgentMessage>>>>,
-        mut rx: mpsc::Receiver<AgentMessage>,
-        parent_tx: Option<mpsc::Sender<AgentMessage>>,
-    ) {
-        let (role_label, domain_label, task_type) = {
-            let t = tree.read().await;
-            if let Some(node) = t.get(&agent_id) {
-                let label = match node.role {
-                    AgentRole::ProjectSupervisor => "PROJECT",
-                    AgentRole::DomainSupervisor => "DOMAIN",
-                    AgentRole::Specialist => "SPECIALIST",
-                };
-                (label, node.domain.clone(), node.task_type)
-            } else {
-                ("UNKNOWN", String::new(), TaskType::Chat)
-            }
-        };
-
-        while let Some(msg) = rx.recv().await {
-            match msg {
-                AgentMessage::Dispatch {
-                    task_description,
-                    context,
-                    reply_to,
-                    ..
-                } => {
-                    info!(
-                        agent = %agent_id,
-                        "[{}][{}] Dispatch received: {}",
-                        role_label, domain_label, &task_description[..task_description.len().min(80)]
-                    );
-
-                    // CORE-165 integra el CMR aquí. Por ahora se delega routing
-                    // al CognitiveRouter existente construyendo un PCB mínimo.
-                    let routing_result = {
-                        let r = router.read().await;
-                        let mut mock_pcb = crate::pcb::PCB::new(
-                            format!("agent_{}", agent_id),
-                            5,
-                            task_description.clone(),
-                        );
-                        mock_pcb.task_type = task_type;
-                        r.decide(&mock_pcb).await
-                    };
-
-                    let model_id = match routing_result {
-                        Ok(decision) => {
-                            info!(
-                                "[{}][{}][CORE-165] → modelo seleccionado: {} (task: {:?})",
-                                role_label, domain_label, decision.model_id, task_type
-                            );
-                            decision.model_id
-                        }
-                        Err(e) => {
-                            warn!(
-                                "[{}][{}] CMR routing failed: {}. Marking agent as Failed.",
-                                role_label, domain_label, e
-                            );
-                            {
-                                let mut t = tree.write().await;
-                                if let Some(node) = t.get_mut(&agent_id) {
-                                    node.set_state(AgentState::Failed {
-                                        reason: e.to_string(),
-                                    });
-                                }
-                            }
-                            if let Some(ref ptx) = parent_tx {
-                                let report = AgentMessage::Report {
-                                    from: agent_id,
-                                    result: AgentResult {
-                                        agent_id,
-                                        role_description: format!(
-                                            "{}/{}",
-                                            role_label, domain_label
-                                        ),
-                                        summary: format!("Agent failed: {}", e),
-                                        artifacts: Vec::new(),
-                                        metadata: serde_json::Value::Null,
-                                    },
-                                    status: ReportStatus::Failure {
-                                        reason: e.to_string(),
-                                    },
-                                };
-                                let _ = ptx.send(report).await;
-                            }
-                            return;
-                        }
-                    };
-
-                    // Aggregar reportes de hijos si los hay
-                    let child_summary = if !context.child_reports.is_empty() {
-                        context
-                            .child_reports
-                            .iter()
-                            .map(|r| format!("• {}: {}", r.role_description, r.summary))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    } else {
-                        String::new()
-                    };
-
-                    let summary = if child_summary.is_empty() {
-                        format!(
-                            "[{}][{}] Task acknowledged via model {}. Awaiting execution.",
-                            role_label, domain_label, model_id
-                        )
-                    } else {
-                        format!(
-                            "[{}][{}] Aggregated from sub-agents:\n{}",
-                            role_label, domain_label, child_summary
-                        )
-                    };
-
-                    {
-                        let mut t = tree.write().await;
-                        if let Some(node) = t.get_mut(&agent_id) {
-                            node.set_state(AgentState::Complete);
-                        }
-                    }
-
-                    let result = AgentResult {
-                        agent_id,
-                        role_description: format!("{}/{}", role_label, domain_label),
-                        summary,
-                        artifacts: Vec::new(),
-                        metadata: serde_json::json!({
-                            "model_used": model_id,
-                            "reply_to": reply_to.to_string(),
-                        }),
-                    };
-
-                    if let Some(ref ptx) = parent_tx {
-                        let report = AgentMessage::Report {
-                            from: agent_id,
-                            result,
-                            status: ReportStatus::Success,
-                        };
-                        if let Err(e) = ptx.send(report).await {
-                            error!(
-                                "[{}][{}] Failed to send report to parent: {}",
-                                role_label, domain_label, e
-                            );
-                        }
-                    }
-                }
-                AgentMessage::Cancel { reason } => {
-                    warn!(
-                        agent = %agent_id,
-                        "[{}][{}] Cancellation received: {}",
-                        role_label, domain_label, reason
-                    );
-                    {
-                        let mut t = tree.write().await;
-                        if let Some(node) = t.get_mut(&agent_id) {
-                            node.set_state(AgentState::Failed { reason });
-                        }
-                    }
-                    // Limpiar canal propio
-                    let mut ch = channels.write().await;
-                    ch.remove(&agent_id);
-                    return;
-                }
-                AgentMessage::Report {
-                    from,
-                    result,
-                    status,
-                } => {
-                    info!(
-                        "[{}][{}] Received report from child {}: {:?}",
-                        role_label, domain_label, from, status
-                    );
-                    // Verificar si todos los hijos completaron para re-despachar síntesis
-                    let all_children_done = {
-                        let t = tree.read().await;
-                        if let Some(node) = t.get(&agent_id) {
-                            node.children.iter().all(|child_id| {
-                                t.get(child_id)
-                                    .map(|c| {
-                                        matches!(
-                                            c.state,
-                                            AgentState::Complete | AgentState::Failed { .. }
-                                        )
-                                    })
-                                    .unwrap_or(true)
-                            })
-                        } else {
-                            false
-                        }
-                    };
-
-                    if all_children_done {
-                        info!(
-                            "[{}][{}] All children reported. Synthesizing.",
-                            role_label, domain_label
-                        );
-                        // Collect child results and build aggregate dispatch
-                        let child_results = {
-                            let t = tree.read().await;
-                            if let Some(node) = t.get(&agent_id) {
-                                node.children
-                                    .iter()
-                                    .filter_map(|cid| t.get(cid))
-                                    .map(|c| AgentResult {
-                                        agent_id: c.agent_id,
-                                        role_description: c.domain.clone(),
-                                        summary: String::from("Child completed"),
-                                        artifacts: Vec::new(),
-                                        metadata: serde_json::Value::Null,
-                                    })
-                                    .collect::<Vec<_>>()
-                            } else {
-                                vec![result]
-                            }
-                        };
-
-                        let synth_msg = AgentMessage::Dispatch {
-                            task_description: "Synthesize all child reports into a final summary."
-                                .to_string(),
-                            context: AgentContext {
-                                child_reports: child_results,
-                                relevant_files: Vec::new(),
-                                memory_snippets: Vec::new(),
-                                token_budget: 4096,
-                            },
-                            reply_to: agent_id,
-                            deadline_ms: None,
-                        };
-
-                        let self_tx = {
-                            let ch = channels.read().await;
-                            ch.get(&agent_id).cloned()
-                        };
-
-                        if let Some(stx) = self_tx {
-                            let _ = stx.send(synth_msg).await;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Procesa el reporte de un agente subordinado.
-    pub async fn handle_report(
+    /// Envía una Query descendente (CORE-199).
+    /// No genera trabajo — solo consulta información.
+    pub async fn query(
         &self,
-        from: AgentId,
-        result: AgentResult,
-        status: ReportStatus,
+        target_id: AgentId,
+        question: String,
+        context_hint: Option<String>,
+        reply_to: AgentId,
+    ) -> anyhow::Result<QueryId> {
+        let query_id = uuid::Uuid::new_v4();
+        let msg = AgentMessage::Query {
+            question,
+            context_hint,
+            reply_to,
+            query_id,
+        };
+        self.send_to(target_id, msg).await?;
+        Ok(query_id)
+    }
+
+    // --- Persistencia al cerrar sesión (CORE-207) ---
+
+    /// Cierra un proyecto: genera state summaries, serializa el árbol, destruye nodos de memoria.
+    pub async fn close_project(
+        &self,
+        tenant_id: &str,
+        project_id: &ProjectId,
     ) -> anyhow::Result<()> {
-        let parent_id = {
+        let root_id = {
             let tree = self.tree.read().await;
-            tree.get(&from).and_then(|n| n.parent_id)
+            tree.project_root(project_id).map(|n| n.agent_id)
         };
 
-        if let Some(pid) = parent_id {
-            let channels = self.channels.read().await;
-            if let Some(ptx) = channels.get(&pid) {
-                ptx.send(AgentMessage::Report {
-                    from,
-                    result,
-                    status,
-                })
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to forward report: {}", e))?;
+        let Some(root_id) = root_id else {
+            return Ok(()); // Ya no está activo
+        };
+
+        // Notificar a todos los supervisores para que generen state summary
+        self.generate_state_summaries(tenant_id, project_id).await?;
+
+        // Serializar el árbol
+        {
+            let tree = self.tree.read().await;
+            self.persistence.save_tree(tenant_id, project_id, &tree)?;
+        }
+
+        // Destruir nodos de memoria
+        self.terminate(&root_id).await?;
+
+        info!(
+            project = %project_id,
+            "[PROJECT] Closed and persisted."
+        );
+        Ok(())
+    }
+
+    /// Genera el state summary de todos los supervisores del proyecto (CORE-207).
+    async fn generate_state_summaries(
+        &self,
+        tenant_id: &str,
+        project_id: &ProjectId,
+    ) -> anyhow::Result<()> {
+        let fecha = Utc::now().format("%Y-%m-%d").to_string();
+        let supervisor_ids: Vec<AgentId> = {
+            let tree = self.tree.read().await;
+            tree.all_supervisors()
+                .iter()
+                .filter(|n| n.project_id == *project_id)
+                .map(|n| n.agent_id)
+                .collect()
+        };
+
+        for agent_id in supervisor_ids {
+            let summary = {
+                let tree = self.tree.read().await;
+                if let Some(node) = tree.get(&agent_id) {
+                    // Usar el último reporte si existe; si no, el template vacío
+                    node.last_report
+                        .clone()
+                        .unwrap_or_else(|| state_summary_template(&fecha))
+                } else {
+                    continue;
+                }
+            };
+
+            let path = self
+                .persistence
+                .save_state_summary(tenant_id, project_id, &agent_id, &summary)?;
+
+            // Guardar el path en el nodo
+            {
+                let mut tree = self.tree.write().await;
+                if let Some(node) = tree.get_mut(&agent_id) {
+                    node.set_persisted_context_path(path);
+                }
             }
         }
         Ok(())
     }
 
-    /// Elimina un agente y su subárbol del árbol activo.
+    /// Termina un agente y toda su subárea.
     pub async fn terminate(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         {
-            let channels = self.channels.read().await;
-            if let Some(tx) = channels.get(agent_id) {
+            let ch = self.channels.read().await;
+            if let Some(tx) = ch.get(agent_id) {
                 let _ = tx
                     .send(AgentMessage::Cancel {
                         reason: "Terminated by orchestrator".to_string(),
@@ -508,10 +448,10 @@ impl AgentOrchestrator {
         };
 
         {
-            let mut channels = self.channels.write().await;
-            channels.remove(agent_id);
-            for desc_id in &descendants {
-                channels.remove(desc_id);
+            let mut ch = self.channels.write().await;
+            ch.remove(agent_id);
+            for d in &descendants {
+                ch.remove(d);
             }
         }
 
@@ -519,31 +459,410 @@ impl AgentOrchestrator {
             let mut tree = self.tree.write().await;
             tree.prune(agent_id)?;
         }
-
         Ok(())
     }
 
-    /// Retorna una copia del árbol actual (para la API HTTP — CORE-163).
-    pub async fn tree_snapshot(&self) -> AgentTree {
+    // --- UI / snapshot ---
+
+    pub async fn tree_snapshot(&self) -> Vec<AgentNodeSummary> {
         let tree = self.tree.read().await;
-        // Clone the tree by rebuilding it from the current state.
-        // AgentTree no implementa Clone directamente para evitar copiar los canales.
-        // Construimos un árbol nuevo sin canales para serialización.
-        let mut snapshot = AgentTree::new();
-        for node in tree.all_roots() {
-            let _ = Self::clone_subtree(&tree, &mut snapshot, node.agent_id);
-        }
-        snapshot
+        tree.all_nodes()
+            .iter()
+            .map(|n| {
+                let (role_label, task_type_str) = match &n.role {
+                    AgentRole::ChatAgent => ("Chat Agent".to_string(), "chat".to_string()),
+                    AgentRole::ProjectSupervisor { name, .. } => (
+                        format!("Project Supervisor — {}", name),
+                        "planning".to_string(),
+                    ),
+                    AgentRole::Supervisor { name, .. } => {
+                        (format!("Supervisor — {}", name), "analysis".to_string())
+                    }
+                    AgentRole::Specialist { scope } => {
+                        (format!("Specialist — {}", scope), "code".to_string())
+                    }
+                };
+                let model = match n.model_preference {
+                    ModelPreference::CloudOnly => "cloud",
+                    ModelPreference::HybridSmart => "hybrid",
+                    ModelPreference::LocalOnly => "local",
+                };
+                AgentNodeSummary {
+                    agent_id: n.agent_id,
+                    role_label,
+                    state: format!("{:?}", n.state),
+                    project_id: n.project_id.clone(),
+                    parent_id: n.parent_id,
+                    model: model.to_string(),
+                    task_type: task_type_str,
+                    is_restored: n.is_restored,
+                    last_report: n.last_report.clone(),
+                }
+            })
+            .collect()
     }
 
-    fn clone_subtree(src: &AgentTree, dst: &mut AgentTree, id: AgentId) -> anyhow::Result<()> {
-        if let Some(node) = src.get(&id) {
-            let cloned = node.clone();
-            dst.insert(cloned)?;
-            for child_id in src.get(&id).map(|n| n.children.clone()).unwrap_or_default() {
-                Self::clone_subtree(src, dst, child_id)?;
+    // --- Helpers internos ---
+
+    async fn send_to(&self, agent_id: AgentId, msg: AgentMessage) -> anyhow::Result<()> {
+        let ch = self.channels.read().await;
+        let tx = ch
+            .get(&agent_id)
+            .ok_or_else(|| anyhow::anyhow!("No channel for agent {}", agent_id))?;
+        tx.send(msg)
+            .await
+            .map_err(|e| anyhow::anyhow!("Send failed to agent {}: {}", agent_id, e))?;
+        Ok(())
+    }
+
+    fn spawn_loop(&self, agent_id: AgentId, parent_tx: Option<mpsc::Sender<AgentMessage>>) {
+        let tree_ref = Arc::clone(&self.tree);
+        let router_ref = Arc::clone(&self.router);
+        let channels_ref = Arc::clone(&self.channels);
+
+        let (tx, rx) = {
+            // Reemplazar el canal existente con uno que tenga rx
+            let tx_existing = {
+                let ch = channels_ref.try_read();
+                ch.ok().and_then(|c| c.get(&agent_id).cloned())
+            };
+            if tx_existing.is_some() {
+                // Ya hay canal — crear un nuevo par y actualizar
+                let (new_tx, new_rx) = mpsc::channel::<AgentMessage>(32);
+                (new_tx, new_rx)
+            } else {
+                mpsc::channel::<AgentMessage>(32)
+            }
+        };
+
+        {
+            // Actualizar el canal en el mapa
+            if let Ok(mut ch) = channels_ref.try_write() {
+                ch.insert(agent_id, tx);
             }
         }
-        Ok(())
+
+        tokio::spawn(async move {
+            Self::run_agent_loop(agent_id, tree_ref, router_ref, channels_ref, rx, parent_tx).await;
+        });
+    }
+
+    async fn run_agent_loop(
+        agent_id: AgentId,
+        tree: Arc<RwLock<AgentTree>>,
+        router: Arc<RwLock<CognitiveRouter>>,
+        channels: Arc<RwLock<HashMap<AgentId, mpsc::Sender<AgentMessage>>>>,
+        mut rx: mpsc::Receiver<AgentMessage>,
+        parent_tx: Option<mpsc::Sender<AgentMessage>>,
+    ) {
+        let (role_label, task_type, model_preference) = {
+            let t = tree.read().await;
+            if let Some(n) = t.get(&agent_id) {
+                let label = n.role.display_name().to_string();
+                (label, n.task_type, n.model_preference)
+            } else {
+                (
+                    "UNKNOWN".to_string(),
+                    TaskType::Chat,
+                    ModelPreference::HybridSmart,
+                )
+            }
+        };
+
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                AgentMessage::Dispatch {
+                    task_description,
+                    context,
+                    reply_to,
+                    ..
+                } => {
+                    info!(
+                        agent = %agent_id,
+                        "[{}] Dispatch: {}",
+                        role_label,
+                        &task_description[..task_description.len().min(80)]
+                    );
+
+                    // CORE-208: CMR per-agent — usa task_type + model_preference del nodo
+                    let routing_result = {
+                        let r = router.read().await;
+                        let mut mock_pcb = crate::pcb::PCB::new(
+                            format!("agent_{}", agent_id),
+                            5,
+                            task_description.clone(),
+                        );
+                        mock_pcb.task_type = task_type;
+                        mock_pcb.model_pref = model_preference;
+                        mock_pcb.agent_id = Some(agent_id);
+                        r.decide(&mock_pcb).await
+                    };
+
+                    let model_id = match routing_result {
+                        Ok(d) => {
+                            info!(
+                                "[{}][CORE-208] → modelo: {} (task: {:?}, pref: {:?})",
+                                role_label, d.model_id, task_type, model_preference
+                            );
+                            d.model_id
+                        }
+                        Err(e) => {
+                            warn!("[{}] CMR routing failed: {}", role_label, e);
+                            Self::fail_agent(agent_id, &e.to_string(), &tree, &parent_tx).await;
+                            return;
+                        }
+                    };
+
+                    let child_summary = context
+                        .child_reports
+                        .iter()
+                        .map(|r| format!("• {}: {}", r.role_description, r.summary))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let summary = if child_summary.is_empty() {
+                        format!(
+                            "[{}] Task via model {}. Awaiting execution.",
+                            role_label, model_id
+                        )
+                    } else {
+                        format!("[{}] Aggregated:\n{}", role_label, child_summary)
+                    };
+
+                    {
+                        let mut t = tree.write().await;
+                        if let Some(n) = t.get_mut(&agent_id) {
+                            n.set_state(AgentState::Complete);
+                            n.set_last_report(summary.clone());
+                        }
+                    }
+
+                    if let Some(ref ptx) = parent_tx {
+                        let report = AgentMessage::Report {
+                            from: agent_id,
+                            result: AgentResult {
+                                agent_id,
+                                role_description: role_label.clone(),
+                                summary,
+                                artifacts: Vec::new(),
+                                metadata: serde_json::json!({
+                                    "model_used": model_id,
+                                    "reply_to": reply_to.to_string(),
+                                }),
+                            },
+                            status: ReportStatus::Success,
+                        };
+                        if let Err(e) = ptx.send(report).await {
+                            error!("[{}] Failed to report to parent: {}", role_label, e);
+                        }
+                    }
+                }
+
+                AgentMessage::Report {
+                    from,
+                    result,
+                    status,
+                } => {
+                    info!("[{}] Report from child {}: {:?}", role_label, from, status);
+                    {
+                        let mut t = tree.write().await;
+                        if let Some(n) = t.get_mut(&agent_id) {
+                            n.set_last_report(result.summary.clone());
+                        }
+                    }
+
+                    // Verificar si todos los hijos completaron
+                    let all_done = {
+                        let t = tree.read().await;
+                        t.get(&agent_id)
+                            .map(|n| {
+                                n.children.iter().all(|cid| {
+                                    t.get(cid)
+                                        .map(|c| {
+                                            matches!(
+                                                c.state,
+                                                AgentState::Complete | AgentState::Failed { .. }
+                                            )
+                                        })
+                                        .unwrap_or(true)
+                                })
+                            })
+                            .unwrap_or(false)
+                    };
+
+                    if all_done {
+                        let child_results = {
+                            let t = tree.read().await;
+                            t.get(&agent_id)
+                                .map(|n| {
+                                    n.children
+                                        .iter()
+                                        .filter_map(|cid| t.get(cid))
+                                        .map(|c| AgentResult {
+                                            agent_id: c.agent_id,
+                                            role_description: c.role.display_name().to_string(),
+                                            summary: c.last_report.clone().unwrap_or_default(),
+                                            artifacts: Vec::new(),
+                                            metadata: serde_json::Value::Null,
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_else(|| vec![result])
+                        };
+
+                        let synth = AgentMessage::Dispatch {
+                            task_description: "Synthesize all child reports.".to_string(),
+                            context: AgentContext {
+                                child_reports: child_results,
+                                relevant_files: Vec::new(),
+                                memory_snippets: Vec::new(),
+                                token_budget: 4096,
+                            },
+                            reply_to: agent_id,
+                            deadline_ms: None,
+                        };
+                        let self_tx = { channels.read().await.get(&agent_id).cloned() };
+                        if let Some(stx) = self_tx {
+                            let _ = stx.send(synth).await;
+                        }
+                    }
+                }
+
+                // Query: responder con información sin generar trabajo (ADR-CAA-003)
+                AgentMessage::Query {
+                    question,
+                    context_hint,
+                    reply_to,
+                    query_id,
+                } => {
+                    info!(
+                        "[{}] Query received: {}",
+                        role_label,
+                        &question[..question.len().min(60)]
+                    );
+
+                    // Si tiene hijos, delegar al hijo más adecuado según context_hint
+                    let children = {
+                        let t = tree.read().await;
+                        t.children(&agent_id)
+                            .iter()
+                            .map(|n| (n.agent_id, n.role.display_name().to_string()))
+                            .collect::<Vec<_>>()
+                    };
+
+                    if children.is_empty() {
+                        // Nodo hoja: responder directamente con last_report o indicación
+                        let answer = {
+                            let t = tree.read().await;
+                            t.get(&agent_id)
+                                .and_then(|n| n.last_report.clone())
+                                .unwrap_or_else(|| {
+                                    format!("Sin información disponible sobre: {}", question)
+                                })
+                        };
+                        let reply = AgentMessage::QueryReply {
+                            answer,
+                            query_id,
+                            from: agent_id,
+                        };
+                        let reply_tx = { channels.read().await.get(&reply_to).cloned() };
+                        if let Some(tx) = reply_tx {
+                            let _ = tx.send(reply).await;
+                        }
+                    } else {
+                        // Delegar al primer hijo relevante (o al que coincide con context_hint)
+                        let target = context_hint
+                            .as_deref()
+                            .and_then(|hint| {
+                                children
+                                    .iter()
+                                    .find(|(_, name)| {
+                                        name.to_lowercase().contains(&hint.to_lowercase())
+                                    })
+                                    .map(|(id, _)| *id)
+                            })
+                            .unwrap_or(children[0].0);
+
+                        let fwd = AgentMessage::Query {
+                            question,
+                            context_hint,
+                            reply_to: agent_id, // las respuestas suben a este nodo
+                            query_id,
+                        };
+                        let target_tx = { channels.read().await.get(&target).cloned() };
+                        if let Some(tx) = target_tx {
+                            let _ = tx.send(fwd).await;
+                        }
+                    }
+                }
+
+                // QueryReply: condensar y reenviar hacia arriba (ADR-CAA-011)
+                AgentMessage::QueryReply {
+                    answer,
+                    query_id,
+                    from: _,
+                } => {
+                    info!(
+                        "[{}] QueryReply for query {}: condensing.",
+                        role_label, query_id
+                    );
+                    // Condensar — en producción el LLM resumen; aquí pasamos tal cual hacia arriba
+                    if let Some(ref ptx) = parent_tx {
+                        let condensed = AgentMessage::QueryReply {
+                            answer,
+                            query_id,
+                            from: agent_id,
+                        };
+                        let _ = ptx.send(condensed).await;
+                    }
+                }
+
+                AgentMessage::Cancel { reason } => {
+                    warn!("[{}] Cancelled: {}", role_label, reason);
+                    {
+                        let mut t = tree.write().await;
+                        if let Some(n) = t.get_mut(&agent_id) {
+                            n.set_state(AgentState::Failed { reason });
+                        }
+                    }
+                    let mut ch = channels.write().await;
+                    ch.remove(&agent_id);
+                    return;
+                }
+            }
+        }
+    }
+
+    async fn fail_agent(
+        agent_id: AgentId,
+        reason: &str,
+        tree: &Arc<RwLock<AgentTree>>,
+        parent_tx: &Option<mpsc::Sender<AgentMessage>>,
+    ) {
+        {
+            let mut t = tree.write().await;
+            if let Some(n) = t.get_mut(&agent_id) {
+                n.set_state(AgentState::Failed {
+                    reason: reason.to_string(),
+                });
+            }
+        }
+        if let Some(ptx) = parent_tx {
+            let _ = ptx
+                .send(AgentMessage::Report {
+                    from: agent_id,
+                    result: AgentResult {
+                        agent_id,
+                        role_description: "unknown".to_string(),
+                        summary: format!("Agent failed: {}", reason),
+                        artifacts: Vec::new(),
+                        metadata: serde_json::Value::Null,
+                    },
+                    status: ReportStatus::Failure {
+                        reason: reason.to_string(),
+                    },
+                })
+                .await;
+        }
     }
 }

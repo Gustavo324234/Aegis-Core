@@ -9,11 +9,12 @@ use uuid::Uuid;
 pub enum TaskType {
     #[default]
     Chat,
-    Coding,
+    Code,
     Planning,
     Analysis,
     Summarization,
     Extraction,
+    Creative,
     Local,
 }
 

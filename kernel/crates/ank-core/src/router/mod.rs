@@ -339,7 +339,7 @@ mod tests {
         let router = CognitiveRouter::new(catalog, key_pool);
 
         let mut pcb = PCB::new("test".to_string(), 5, "Hello".to_string());
-        pcb.task_type = TaskType::Coding;
+        pcb.task_type = TaskType::Code;
         pcb.model_pref = ModelPreference::CloudOnly;
 
         let result = router.decide(&pcb).await;

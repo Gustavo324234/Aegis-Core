@@ -1,11 +1,21 @@
+pub mod chat_context;
+pub mod context;
+pub mod event;
+pub mod instructions;
 pub mod message;
 pub mod node;
 pub mod orchestrator;
+pub mod persistence;
 pub mod project;
 pub mod tree;
 
-pub use message::{AgentContext, AgentMessage, AgentResult, ReportStatus};
+pub use chat_context::{ChatContextWindow, CompactionHints, ConversationTurn, TurnRole};
+pub use context::ContextBudget;
+pub use event::AgentEvent;
+pub use instructions::InstructionLoader;
+pub use message::{AgentContext, AgentMessage, AgentResult, QueryId, ReportStatus};
 pub use node::{AgentId, AgentNode, AgentRole, AgentState, ProjectId};
-pub use orchestrator::AgentOrchestrator;
-pub use project::ProjectRegistry;
-pub use tree::AgentTree;
+pub use orchestrator::{AgentNodeSummary, AgentOrchestrator};
+pub use persistence::AgentPersistence;
+pub use project::{ProjectMetadata, ProjectRegistry, ProjectStatus};
+pub use tree::{AgentTree, AgentTreeSnapshot};
