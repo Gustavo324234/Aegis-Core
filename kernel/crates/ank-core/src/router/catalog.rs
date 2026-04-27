@@ -38,6 +38,12 @@ pub struct ModelEntry {
     pub is_local: bool,
     #[serde(default)]
     pub avg_latency_ms: Option<u32>,
+    /// Free-tier requests-per-minute limit (None = no known limit / paid-only model).
+    #[serde(default)]
+    pub free_tier_rpm: Option<u32>,
+    /// Free-tier requests-per-day limit (None = no known limit / paid-only model).
+    #[serde(default)]
+    pub free_tier_rpd: Option<u32>,
 }
 
 impl ModelEntry {

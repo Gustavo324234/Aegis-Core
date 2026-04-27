@@ -161,6 +161,8 @@ impl CatalogSyncer {
                     task_scores: scores,
                     is_local: false,
                     avg_latency_ms: None,
+                    free_tier_rpm: None,
+                    free_tier_rpd: None,
                 });
             }
         }

@@ -3,6 +3,28 @@ use boa_engine::{Context, JsError, JsValue, Source};
 use serde_json::Value;
 use std::path::Path;
 
+/// Convierte secuencias de escape literales (dos caracteres) en los caracteres
+/// reales que representan. Los modelos de lenguaje emiten a veces `\n` como
+/// backslash + n en el texto, lo que Boa no puede parsear como JS válido.
+fn unescape_js_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some('n') => { chars.next(); out.push('\n'); }
+                Some('t') => { chars.next(); out.push('\t'); }
+                Some('r') => { chars.next(); out.push('\r'); }
+                Some('\\') => { chars.next(); out.push('\\'); }
+                _ => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[allow(
     clippy::get_first,
     clippy::to_string_in_format_args,
@@ -167,7 +189,8 @@ impl MakerExecutor {
             }),
         );
 
-        // CORE-181: stub require() — retorna error descriptivo en lugar de ReferenceError
+        // CORE-181: stub require() — lanza excepción JS para que el código del modelo
+        // reciba un error claro e inmediato en lugar de continuar con un string inútil.
         let _ = context.register_global_builtin_callable(
             boa_engine::js_string!("require"),
             1,
@@ -177,15 +200,21 @@ impl MakerExecutor {
                     .and_then(|v| v.as_string())
                     .map(|s| s.to_std_string().unwrap_or_default())
                     .unwrap_or_else(|| "unknown".to_string());
-                Ok(JsValue::from(boa_engine::js_string!(format!(
-                    "Error: require('{}') is not available in Aegis Maker sandbox. Use read_file() and write_file() instead.",
-                    module
+                Err(JsError::from_opaque(JsValue::from(boa_engine::js_string!(
+                    format!(
+                        "require('{}') is not available in Aegis Maker sandbox. Use read_file(path) and write_file(path, content) instead.",
+                        module
+                    )
                 ))))
             }),
         );
 
-        // CORE-181: wrap en IIFE para que top-level `return` sea JS válido
-        let wrapped = format!("(function() {{\n{}\n}})();", code);
+        // CORE-181: wrap en IIFE para que top-level `return` sea JS válido.
+        // Unescape secuencias de escape estándar que el modelo puede emitir como
+        // texto literal (e.g., `\n` como dos chars backslash+n) — Boa necesita
+        // los caracteres reales para parsear el JS correctamente.
+        let unescaped = unescape_js_string(code);
+        let wrapped = format!("(function() {{\n{}\n}})();", unescaped);
 
         // 3. Ejecutar
         match context.eval(Source::from_bytes(wrapped.as_bytes())) {

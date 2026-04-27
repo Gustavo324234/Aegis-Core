@@ -88,16 +88,20 @@
     summarization: 3
     extraction: 4
 
-- model_id: "google/gemini-2.5-pro"
-  provider: "google"
-  display_name: "Gemini 2.5 Pro"
+# --- Gemini 3.1 (preview) ---
+
+- model_id: "gemini-3.1-pro-preview"
+  provider: "gemini"
+  display_name: "Gemini 3.1 Pro (Preview)"
   context_window: 1048576
-  cost_input_per_mtok: 1.25
-  cost_output_per_mtok: 10.0
+  cost_input_per_mtok: 2.0
+  cost_output_per_mtok: 12.0
   supports_tools: true
   supports_json_mode: true
   is_local: false
-  avg_latency_ms: 2000
+  avg_latency_ms: 3000
+  free_tier_rpm: 2
+  free_tier_rpd: 50
   task_scores:
     chat: 5
     coding: 5
@@ -106,16 +110,82 @@
     summarization: 5
     extraction: 5
 
-- model_id: "google/gemini-2.5-flash"
-  provider: "google"
+- model_id: "gemini-3.1-flash-lite-preview"
+  provider: "gemini"
+  display_name: "Gemini 3.1 Flash Lite (Preview)"
+  context_window: 1048576
+  cost_input_per_mtok: 0.25
+  cost_output_per_mtok: 1.5
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 500
+  free_tier_rpm: 15
+  free_tier_rpd: 1500
+  task_scores:
+    chat: 4
+    coding: 3
+    planning: 3
+    analysis: 3
+    summarization: 4
+    extraction: 4
+
+# --- Gemini 3 (preview) ---
+
+- model_id: "gemini-3-flash-preview"
+  provider: "gemini"
+  display_name: "Gemini 3 Flash (Preview)"
+  context_window: 1048576
+  cost_input_per_mtok: 0.5
+  cost_output_per_mtok: 3.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 700
+  free_tier_rpm: 10
+  free_tier_rpd: 500
+  task_scores:
+    chat: 5
+    coding: 4
+    planning: 4
+    analysis: 5
+    summarization: 5
+    extraction: 4
+
+# --- Gemini 2.5 (estable) ---
+
+- model_id: "gemini-2.5-pro"
+  provider: "gemini"
+  display_name: "Gemini 2.5 Pro"
+  context_window: 1048576
+  cost_input_per_mtok: 1.25
+  cost_output_per_mtok: 10.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 2000
+  free_tier_rpm: 5
+  free_tier_rpd: 100
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 5
+    extraction: 5
+
+- model_id: "gemini-2.5-flash"
+  provider: "gemini"
   display_name: "Gemini 2.5 Flash"
   context_window: 1048576
-  cost_input_per_mtok: 0.15
-  cost_output_per_mtok: 0.6
+  cost_input_per_mtok: 0.3
+  cost_output_per_mtok: 2.5
   supports_tools: true
   supports_json_mode: true
   is_local: false
   avg_latency_ms: 600
+  free_tier_rpm: 10
+  free_tier_rpd: 250
   task_scores:
     chat: 5
     coding: 4
@@ -124,12 +194,90 @@
     summarization: 5
     extraction: 4
 
-- model_id: "google/gemini-2.0-flash"
-  provider: "google"
+- model_id: "gemini-2.5-flash-lite"
+  provider: "gemini"
+  display_name: "Gemini 2.5 Flash Lite"
+  context_window: 1048576
+  cost_input_per_mtok: 0.1
+  cost_output_per_mtok: 0.4
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 400
+  free_tier_rpm: 15
+  free_tier_rpd: 1000
+  task_scores:
+    chat: 4
+    coding: 3
+    planning: 3
+    analysis: 3
+    summarization: 4
+    extraction: 3
+
+# --- Gemini 2.0 (en claves activas) ---
+
+- model_id: "gemini-2.0-flash"
+  provider: "gemini"
   display_name: "Gemini 2.0 Flash"
   context_window: 1000000
   cost_input_per_mtok: 0.1
   cost_output_per_mtok: 0.4
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 600
+  task_scores:
+    chat: 4
+    coding: 3
+    planning: 3
+    analysis: 4
+    summarization: 4
+    extraction: 4
+
+- model_id: "gemini-2.0-flash-lite"
+  provider: "gemini"
+  display_name: "Gemini 2.0 Flash Lite"
+  context_window: 1000000
+  cost_input_per_mtok: 0.075
+  cost_output_per_mtok: 0.3
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 400
+  task_scores:
+    chat: 3
+    coding: 2
+    planning: 2
+    analysis: 3
+    summarization: 3
+    extraction: 3
+
+# --- Gemini 1.5 (en claves activas) ---
+
+- model_id: "gemini-1.5-pro"
+  provider: "gemini"
+  display_name: "Gemini 1.5 Pro"
+  context_window: 2097152
+  cost_input_per_mtok: 1.25
+  cost_output_per_mtok: 5.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1500
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+
+- model_id: "gemini-1.5-flash"
+  provider: "gemini"
+  display_name: "Gemini 1.5 Flash"
+  context_window: 1048576
+  cost_input_per_mtok: 0.075
+  cost_output_per_mtok: 0.3
   supports_tools: true
   supports_json_mode: true
   is_local: false
