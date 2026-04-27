@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod key_pool;
+pub mod rate_tracker;
 pub mod siren;
 pub mod syncer;
 
@@ -10,6 +11,7 @@ use crate::pcb::{TaskType, PCB};
 use crate::scheduler::ModelPreference;
 pub use catalog::{ModelCatalog, ModelEntry};
 pub use key_pool::KeyPool;
+pub use rate_tracker::ModelUsageTracker;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -33,11 +35,16 @@ pub struct FallbackDecision {
 pub struct CognitiveRouter {
     catalog: Arc<ModelCatalog>,
     key_pool: Arc<KeyPool>,
+    tracker: Arc<ModelUsageTracker>,
 }
 
 impl CognitiveRouter {
     pub fn new(catalog: Arc<ModelCatalog>, key_pool: Arc<KeyPool>) -> Self {
-        Self { catalog, key_pool }
+        Self {
+            catalog,
+            key_pool,
+            tracker: Arc::new(ModelUsageTracker::new()),
+        }
     }
 
     /// Delegate key management to the underlying KeyPool
@@ -94,34 +101,77 @@ impl CognitiveRouter {
             )));
         }
 
-        // Step 3: Filter by key availability and compute scores
-        let mut scored: Vec<(f64, ModelEntry)> = Vec::new();
-
+        // Step 3: Filter by key availability
+        let mut available: Vec<ModelEntry> = Vec::new();
         for entry in filtered {
             let has_key = self
                 .key_pool
                 .has_key_for_model(&entry.provider, &entry.model_id)
                 .await
-                || entry.is_local; // local models don't need a key
-
-            if !has_key {
-                continue;
+                || entry.is_local;
+            if has_key {
+                available.push(entry);
             }
-
-            let score = self.compute_score(&entry, task_type, &scored);
-            scored.push((score, entry));
         }
 
-        if scored.is_empty() {
+        if available.is_empty() {
             return Err(SystemError::HardwareFailure(
                 "No available keys for any candidate model".to_string(),
             ));
         }
 
-        // Sort by score descending
+        // Step 4: Compute global max cost and latency for fair normalization,
+        // then compute per-candidate rate-limit capacity factors for free-tier models.
+        // Two passes to avoid the order-dependent bias of incremental normalization.
+        let max_cost = available
+            .iter()
+            .map(|e| e.cost_input_per_mtok + e.cost_output_per_mtok)
+            .fold(0.0_f64, f64::max);
+        let max_latency = available
+            .iter()
+            .map(|e| e.avg_latency_ms.unwrap_or(1500) as f64)
+            .fold(0.0_f64, f64::max);
+
+        // For each candidate: if no paid key exists, apply free-tier capacity factor.
+        // Models at capacity (factor == 0.0) are hard-excluded; approaching limit
+        // get a proportional score penalty so the router prefers models with headroom.
+        let mut scored: Vec<(f64, ModelEntry)> = Vec::with_capacity(available.len());
+        for entry in available {
+            let has_paid = self
+                .key_pool
+                .has_paid_key(&entry.provider, &entry.model_id)
+                .await
+                || entry.is_local;
+
+            let capacity = if has_paid {
+                1.0_f64 // Paid key → no meaningful rate limit
+            } else {
+                self.tracker
+                    .capacity_factor(&entry.model_id, entry.free_tier_rpm, entry.free_tier_rpd)
+                    .await
+            };
+
+            if capacity == 0.0 {
+                // Hard-exclude: free-tier exhausted for this model
+                continue;
+            }
+
+            let base = self.compute_score(&entry, task_type, max_cost, max_latency);
+            // Soft penalty: multiply by sqrt(capacity) so a model at 50% headroom
+            // scores ~70% of its base, still competitive but deprioritised.
+            scored.push((base * capacity.sqrt(), entry));
+        }
+
+        if scored.is_empty() {
+            return Err(SystemError::HardwareFailure(
+                "All candidate models are rate-limited or have no available keys".to_string(),
+            ));
+        }
+
+        // Sort by adjusted score descending
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Build routing decision from top candidate
+        // Step 5: Resolve key for the primary candidate and record the request.
         let (_, primary) = &scored[0];
         let primary_key = self.resolve_key(primary, tenant_id).await.ok_or_else(|| {
             SystemError::HardwareFailure(format!(
@@ -130,18 +180,20 @@ impl CognitiveRouter {
             ))
         })?;
 
+        // Record this request only if the resolved key is free-tier.
+        if primary_key.is_free_tier {
+            self.tracker.record_request(&primary.model_id).await;
+        }
+
         let fallback_chain: Vec<FallbackDecision> = scored
             .iter()
             .skip(1)
             .take(2)
-            .map(|(_, entry)| {
-                // Best-effort fallback resolution — reuse primary key if same provider
-                FallbackDecision {
-                    model_id: entry.model_id.clone(),
-                    provider: entry.provider.clone(),
-                    api_url: entry_api_url(entry),
-                    api_key: primary_key.api_key.clone(),
-                }
+            .map(|(_, entry)| FallbackDecision {
+                model_id: entry.model_id.clone(),
+                provider: entry.provider.clone(),
+                api_url: entry_api_url(entry),
+                api_key: primary_key.api_key.clone(),
             })
             .collect();
 
@@ -161,38 +213,26 @@ impl CognitiveRouter {
         &self,
         entry: &ModelEntry,
         task_type: TaskType,
-        already_scored: &[(f64, ModelEntry)],
+        max_cost: f64,
+        max_latency: f64,
     ) -> f64 {
         let quality = entry.score_for(task_type) as f64 / 5.0;
-        let avail = 1.0_f64; // Available (we already filtered unavailable)
 
-        // cost_inv: lower cost = higher score. Normalize within candidates seen so far.
         let total_cost = entry.cost_input_per_mtok + entry.cost_output_per_mtok;
-        let max_cost = already_scored
-            .iter()
-            .map(|(_, e)| e.cost_input_per_mtok + e.cost_output_per_mtok)
-            .fold(total_cost, f64::max);
-
         let cost_inv = if max_cost > 0.0 {
             1.0 - (total_cost / max_cost)
         } else {
             1.0
         };
 
-        // speed_inv: lower latency = higher score. Normalize within candidates seen so far.
         let latency = entry.avg_latency_ms.unwrap_or(1500) as f64;
-        let max_latency = already_scored
-            .iter()
-            .map(|(_, e)| e.avg_latency_ms.unwrap_or(1500) as f64)
-            .fold(latency, f64::max);
-
         let speed_inv = if max_latency > 0.0 {
             1.0 - (latency / max_latency)
         } else {
             1.0
         };
 
-        quality * 0.40 + avail * 0.30 + cost_inv * 0.20 + speed_inv * 0.10
+        quality * 0.40 + 1.0_f64 * 0.30 + cost_inv * 0.20 + speed_inv * 0.10
     }
 
     async fn resolve_key(
@@ -211,6 +251,7 @@ impl CognitiveRouter {
                 is_active: true,
                 rate_limited_until: None,
                 active_models: None,
+                is_free_tier: false,
             });
         }
         self.key_pool
@@ -230,8 +271,8 @@ fn entry_api_url(entry: &ModelEntry) -> String {
         "anthropic" | "deepseek" | "mistral" | "qwen" => {
             "https://openrouter.ai/api/v1/chat/completions".to_string()
         }
-        // Google: compatible OpenAI via endpoint beta
-        "google" => {
+        // Google Gemini: compatible OpenAI via endpoint beta
+        "google" | "gemini" => {
             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".to_string()
         }
         // OpenRouter: hub universal
@@ -294,6 +335,7 @@ mod tests {
                 is_active: true,
                 rate_limited_until: None,
                 active_models: None,
+                is_free_tier: false,
             })
             .await?;
 
