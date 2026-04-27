@@ -168,9 +168,9 @@ jobs:
           vcpkg install openssl:x64-windows-static
           vcpkg integrate install
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
+        uses: taiki-e/install-action@v2
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          tool: protoc
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
