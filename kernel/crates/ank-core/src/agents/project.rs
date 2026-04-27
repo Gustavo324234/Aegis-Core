@@ -1,30 +1,73 @@
 use crate::agents::node::ProjectId;
+use crate::agents::persistence::AgentPersistence;
+use crate::agents::tree::AgentTree;
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
 
-/// Metadatos persistentes de un proyecto en el enclave del tenant.
+/// Estado del proyecto — permite archivar sin borrar datos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectStatus {
+    Active,
+    Archived,
+}
+
+impl std::fmt::Display for ProjectStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProjectStatus::Active => write!(f, "active"),
+            ProjectStatus::Archived => write!(f, "archived"),
+        }
+    }
+}
+
+/// Metadatos de un proyecto persistidos en SQLite (tabla `projects`).
+/// El árbol y los contextos viven en el filesystem (ADR-CAA-013).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMetadata {
     pub project_id: ProjectId,
-    pub display_name: String,
-    pub description: String,
-    /// Última vez que tuvo un ProjectSupervisor activo.
-    pub last_active: DateTime<Utc>,
-    /// System prompt base para el ProjectSupervisor de este proyecto.
-    pub supervisor_prompt: String,
-    /// Dominios conocidos de este proyecto (se agregan dinámicamente).
-    pub known_domains: Vec<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: ProjectStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
-/// Registro de proyectos del tenant — persistidos en SQLCipher, cargados en memoria.
+impl ProjectMetadata {
+    pub fn new(project_id: impl Into<String>, name: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            project_id: project_id.into(),
+            name: name.into(),
+            description: None,
+            status: ProjectStatus::Active,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.status == ProjectStatus::Active
+    }
+}
+
+/// Registro de proyectos del tenant.
+/// Los metadatos van en SQLite (tabla `projects`).
+/// El árbol y los state summaries van en el filesystem via AgentPersistence.
 pub struct ProjectRegistry {
     known_projects: HashMap<ProjectId, ProjectMetadata>,
-    /// Ruta a la base de datos del tenant (./users/{tenant_id}/memory.db).
     db_path: String,
-    /// Session key para descifrar el enclave SQLCipher del tenant.
     session_key: String,
+    persistence: AgentPersistence,
+    tenant_id: String,
 }
 
 impl ProjectRegistry {
@@ -34,73 +77,76 @@ impl ProjectRegistry {
             known_projects: HashMap::new(),
             db_path: format!("{}/users/{}/memory.db", base_dir, tenant_id),
             session_key: session_key.to_string(),
+            persistence: AgentPersistence::from_env(),
+            tenant_id: tenant_id.to_string(),
         }
     }
 
-    /// Carga proyectos desde el enclave al iniciar sesión.
-    /// Crea la tabla `agent_projects` si no existe (migración additive).
-    pub async fn load_from_enclave(&mut self, tenant_id: &str) -> anyhow::Result<()> {
-        use anyhow::Context;
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
 
+    /// Carga proyectos desde SQLite al iniciar sesión.
+    /// Migración additive: crea la tabla `projects` si no existe.
+    /// La tabla `agent_projects` de Epic 43 se mantiene para no romper datos existentes.
+    pub async fn load_from_db(&mut self) -> anyhow::Result<()> {
         let db_path = self.db_path.clone();
         let session_key = self.session_key.clone();
-        let tenant_id = tenant_id.to_string();
+        let tenant_id = self.tenant_id.clone();
 
         let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<ProjectMetadata>> {
             let conn = rusqlite::Connection::open(&db_path)
-                .with_context(|| format!("Failed to open enclave for tenant {}", tenant_id))?;
+                .with_context(|| format!("Failed to open db for tenant {}", tenant_id))?;
 
-            // Aplicar la key SQLCipher
-            conn.execute_batch(&format!("PRAGMA key = '{}';", session_key))
-                .ok(); // No falla si SQLCipher no está disponible (dev mode)
+            conn.execute_batch(&format!("PRAGMA key = '{}';", session_key)).ok();
 
-            // Migración additive: crear tabla si no existe
+            // Tabla `projects` — schema canónico de Epic 45
             conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS agent_projects (
-                    project_id       TEXT PRIMARY KEY,
-                    display_name     TEXT NOT NULL,
-                    description      TEXT NOT NULL DEFAULT '',
-                    last_active      TEXT NOT NULL,
-                    supervisor_prompt TEXT NOT NULL DEFAULT '',
-                    known_domains    TEXT NOT NULL DEFAULT '[]'
+                "CREATE TABLE IF NOT EXISTS projects (
+                    project_id   TEXT PRIMARY KEY,
+                    name         TEXT NOT NULL,
+                    description  TEXT,
+                    status       TEXT NOT NULL DEFAULT 'active',
+                    created_at   TEXT NOT NULL,
+                    updated_at   TEXT NOT NULL
                 );",
             )
-            .with_context(|| "Failed to create agent_projects table")?;
+            .context("Failed to create projects table")?;
 
             let mut stmt = conn
                 .prepare(
-                    "SELECT project_id, display_name, description, last_active,
-                            supervisor_prompt, known_domains
-                     FROM agent_projects ORDER BY last_active DESC",
+                    "SELECT project_id, name, description, status, created_at, updated_at
+                     FROM projects ORDER BY updated_at DESC",
                 )
-                .with_context(|| "Failed to prepare agent_projects query")?;
+                .context("Failed to prepare projects query")?;
 
-            let rows: Vec<ProjectMetadata> = stmt
+            let rows = stmt
                 .query_map([], |row| {
-                    let last_active_str: String = row.get(3)?;
-                    let domains_json: String = row.get(5)?;
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        last_active_str,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
-                        domains_json,
+                        row.get::<_, String>(5)?,
                     ))
                 })
-                .with_context(|| "Failed to query agent_projects")?
+                .context("Failed to query projects")?
                 .filter_map(|r| r.ok())
-                .filter_map(|(pid, name, desc, last_active_str, prompt, domains_json)| {
-                    let last_active = last_active_str.parse::<DateTime<Utc>>().ok()?;
-                    let known_domains: Vec<String> =
-                        serde_json::from_str(&domains_json).unwrap_or_default();
+                .filter_map(|(id, name, desc, status, created, updated)| {
+                    let created_at = created.parse::<DateTime<Utc>>().ok()?;
+                    let updated_at = updated.parse::<DateTime<Utc>>().ok()?;
+                    let status = match status.as_str() {
+                        "archived" => ProjectStatus::Archived,
+                        _ => ProjectStatus::Active,
+                    };
                     Some(ProjectMetadata {
-                        project_id: pid,
-                        display_name: name,
+                        project_id: id,
+                        name,
                         description: desc,
-                        last_active,
-                        supervisor_prompt: prompt,
-                        known_domains,
+                        status,
+                        created_at,
+                        updated_at,
                     })
                 })
                 .collect();
@@ -108,13 +154,12 @@ impl ProjectRegistry {
             Ok(rows)
         })
         .await
-        .with_context(|| "spawn_blocking failed in load_from_enclave")??;
+        .context("spawn_blocking failed in load_from_db")??;
 
         for meta in rows {
-            info!(project_id = %meta.project_id, "Loaded project from enclave.");
+            info!(project_id = %meta.project_id, "[ProjectRegistry] Loaded project '{}'.", meta.name);
             self.known_projects.insert(meta.project_id.clone(), meta);
         }
-
         Ok(())
     }
 
@@ -122,100 +167,134 @@ impl ProjectRegistry {
         self.known_projects.get(project_id)
     }
 
-    /// Registra un proyecto nuevo o actualiza uno existente en memoria y en SQLCipher.
-    pub async fn upsert(
-        &mut self,
-        metadata: ProjectMetadata,
-        _tenant_id: &str,
-    ) -> anyhow::Result<()> {
-        use anyhow::Context;
-
+    /// Crea o actualiza un proyecto en memoria y en SQLite.
+    pub async fn upsert(&mut self, metadata: ProjectMetadata) -> anyhow::Result<()> {
         let db_path = self.db_path.clone();
         let session_key = self.session_key.clone();
         let meta = metadata.clone();
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let conn = rusqlite::Connection::open(&db_path)
-                .with_context(|| "Failed to open enclave for upsert")?;
-
-            conn.execute_batch(&format!("PRAGMA key = '{}';", session_key))
-                .ok();
-
-            let domains_json = serde_json::to_string(&meta.known_domains)
-                .unwrap_or_else(|_| "[]".to_string());
+            let conn = rusqlite::Connection::open(&db_path).context("Failed to open db")?;
+            conn.execute_batch(&format!("PRAGMA key = '{}';", session_key)).ok();
 
             conn.execute(
-                "INSERT INTO agent_projects
-                    (project_id, display_name, description, last_active, supervisor_prompt, known_domains)
+                "INSERT INTO projects (project_id, name, description, status, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(project_id) DO UPDATE SET
-                    display_name     = excluded.display_name,
-                    description      = excluded.description,
-                    last_active      = excluded.last_active,
-                    supervisor_prompt = excluded.supervisor_prompt,
-                    known_domains    = excluded.known_domains;",
+                    name        = excluded.name,
+                    description = excluded.description,
+                    status      = excluded.status,
+                    updated_at  = excluded.updated_at;",
                 rusqlite::params![
                     meta.project_id,
-                    meta.display_name,
+                    meta.name,
                     meta.description,
-                    meta.last_active.to_rfc3339(),
-                    meta.supervisor_prompt,
-                    domains_json,
+                    meta.status.to_string(),
+                    meta.created_at.to_rfc3339(),
+                    meta.updated_at.to_rfc3339(),
                 ],
             )
-            .with_context(|| "Failed to upsert project metadata")?;
-
+            .context("Failed to upsert project")?;
             Ok(())
         })
         .await
-        .with_context(|| "spawn_blocking failed in upsert")??;
+        .context("spawn_blocking failed in upsert")??;
 
         self.known_projects
             .insert(metadata.project_id.clone(), metadata);
-
         Ok(())
     }
 
-    /// Busca proyectos cuyo nombre contenga el query (case-insensitive).
-    /// Usado para resolución nombre → ProjectId desde el input del usuario.
+    /// Archiva un proyecto (cambia status a Archived).
+    pub async fn archive(&mut self, project_id: &ProjectId) -> anyhow::Result<()> {
+        let meta = self
+            .known_projects
+            .get_mut(project_id)
+            .ok_or_else(|| anyhow::anyhow!("Project {} not found", project_id))?;
+        meta.status = ProjectStatus::Archived;
+        meta.updated_at = Utc::now();
+        let meta_clone = meta.clone();
+        self.upsert(meta_clone).await?;
+        Ok(())
+    }
+
+    pub fn list_active(&self) -> Vec<&ProjectMetadata> {
+        let mut list: Vec<&ProjectMetadata> = self
+            .known_projects
+            .values()
+            .filter(|m| m.is_active())
+            .collect();
+        list.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
+        list
+    }
+
     pub fn search_by_name(&self, query: &str) -> Vec<&ProjectMetadata> {
         let q = query.to_lowercase();
         self.known_projects
             .values()
-            .filter(|m| m.display_name.to_lowercase().contains(&q))
+            .filter(|m| m.name.to_lowercase().contains(&q))
             .collect()
     }
 
-    /// Actualiza last_active y opcionalmente añade un nuevo dominio conocido.
-    pub async fn touch(
-        &mut self,
-        project_id: &ProjectId,
-        new_domain: Option<String>,
-        tenant_id: &str,
-    ) -> anyhow::Result<()> {
-        let meta = self
-            .known_projects
-            .get_mut(project_id)
-            .ok_or_else(|| anyhow::anyhow!("Project {} not found in registry", project_id))?;
-
-        meta.last_active = Utc::now();
-
-        if let Some(domain) = new_domain {
-            if !meta.known_domains.contains(&domain) {
-                meta.known_domains.push(domain);
-            }
+    pub fn touch(&mut self, project_id: &ProjectId) {
+        if let Some(meta) = self.known_projects.get_mut(project_id) {
+            meta.updated_at = Utc::now();
         }
-
-        let meta_clone = meta.clone();
-        self.upsert(meta_clone, tenant_id).await?;
-
-        Ok(())
     }
 
-    /// Lista todos los proyectos conocidos, ordenados por last_active descendente.
-    pub fn list_recent(&self) -> Vec<&ProjectMetadata> {
-        let mut list: Vec<&ProjectMetadata> = self.known_projects.values().collect();
-        list.sort_by_key(|b| std::cmp::Reverse(b.last_active));
-        list
+    // --- Persistencia del árbol (delegada a AgentPersistence) ---
+
+    /// Guarda el árbol de un proyecto en el filesystem.
+    pub fn save_tree(&self, project_id: &ProjectId, tree: &AgentTree) -> anyhow::Result<()> {
+        self.persistence.save_tree(&self.tenant_id, project_id, tree)
+    }
+
+    /// Carga el árbol de un proyecto desde el filesystem. Retorna `None` si no existe.
+    pub fn load_tree(&self, project_id: &ProjectId) -> anyhow::Result<Option<AgentTree>> {
+        self.persistence.load_tree(&self.tenant_id, project_id)
+    }
+
+    pub fn has_saved_tree(&self, project_id: &ProjectId) -> bool {
+        self.persistence.has_saved_tree(&self.tenant_id, project_id)
+    }
+
+    pub fn persistence(&self) -> &AgentPersistence {
+        &self.persistence
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_project_metadata_new() {
+        let meta = ProjectMetadata::new("aegis", "Aegis OS")
+            .with_description("Sistema operativo cognitivo");
+        assert_eq!(meta.project_id, "aegis");
+        assert_eq!(meta.name, "Aegis OS");
+        assert_eq!(meta.status, ProjectStatus::Active);
+        assert!(meta.description.is_some());
+        assert!(meta.is_active());
+    }
+
+    #[test]
+    fn test_search_by_name() {
+        let mut registry = ProjectRegistry::new("test_tenant", "test_key");
+        registry.known_projects.insert(
+            "aegis".to_string(),
+            ProjectMetadata::new("aegis", "Aegis OS"),
+        );
+        registry.known_projects.insert(
+            "shopping".to_string(),
+            ProjectMetadata::new("shopping", "Lista de compras"),
+        );
+
+        let results = registry.search_by_name("aegis");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].project_id, "aegis");
+
+        let all = registry.search_by_name("");
+        assert_eq!(all.len(), 2);
     }
 }

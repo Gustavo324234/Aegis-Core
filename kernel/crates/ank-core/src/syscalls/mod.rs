@@ -66,19 +66,34 @@ pub enum Syscall {
         role: String,
     },
 
-    /// --- HIERARCHICAL AGENTS (CORE-162 / Epic 43) ---
-    /// Un agente en ejecución solicita crear un subordinado dinámicamente.
-    /// Parámetros validados por el SyscallExecutor antes de llamar al AgentOrchestrator.
+    /// --- EPIC 45: CORE-198 --- Spawn dinámico de agente subordinado.
+    /// Sintaxis emitida por el LLM:
+    ///   [SYS_AGENT_SPAWN(role="supervisor", name="Kernel", scope="módulos del kernel", task_type="code")]
+    ///   [SYS_AGENT_SPAWN(role="specialist", scope="leer scheduler/mod.rs", task_type="code")]
     AgentSpawn {
-        /// "PROJECT_SUPERVISOR" | "DOMAIN_SUPERVISOR" | "SPECIALIST"
+        /// "supervisor" | "specialist"
         role: String,
-        /// Nombre del dominio del nuevo agente (ej: "devops", "testing")
-        domain: String,
-        /// Tipo cognitivo del nuevo agente (ej: "CODE", "PLANNING")
-        task_type: String,
-        /// Descripción del rol para generar el system prompt base
-        system_prompt_hint: String,
-        /// AgentId del agente solicitante (quien llama a la syscall)
+        /// Nombre del supervisor (solo para role="supervisor")
+        name: Option<String>,
+        /// Scope o descripción de la tarea
+        scope: String,
+        /// Tipo cognitivo: "code" | "analysis" | "planning" | "creative" (opcional)
+        task_type: Option<String>,
+        /// AgentId del agente que emite la syscall
+        requesting_agent_id: String,
+    },
+
+    /// --- EPIC 45: CORE-199 --- Query descendente sin generar trabajo.
+    /// Sintaxis emitida por el LLM:
+    ///   [SYS_AGENT_QUERY(project="aegis", question="¿qué hace authenticate_tenant?")]
+    AgentQuery {
+        /// ProjectId del proyecto a consultar
+        project_id: String,
+        /// Pregunta en lenguaje natural
+        question: String,
+        /// Hint para guiar la query al sub-árbol correcto (opcional)
+        context_hint: Option<String>,
+        /// AgentId del agente que emite la syscall
         requesting_agent_id: String,
     },
 
@@ -458,12 +473,14 @@ impl SyscallExecutor {
                 branch_name
             )),
 
-            // CORE-162 (Epic 43): SYS_AGENT_SPAWN — spawn dinámico de agente subordinado
+            // CORE-198 (Epic 45): SYS_AGENT_SPAWN
+            // [SYS_AGENT_SPAWN(role="supervisor", name="Kernel", scope="módulos del kernel", task_type="code")]
+            // [SYS_AGENT_SPAWN(role="specialist", scope="leer scheduler/mod.rs")]
             Syscall::AgentSpawn {
                 role,
-                domain,
+                name,
+                scope,
                 task_type,
-                system_prompt_hint,
                 requesting_agent_id,
             } => {
                 let orchestrator = self.agent_orchestrator.as_ref().ok_or_else(|| {
@@ -480,21 +497,7 @@ impl SyscallExecutor {
                     ))
                 })?;
 
-                // Parse role and validate hierarchy constraint
-                let agent_role = match role.to_uppercase().as_str() {
-                    "PROJECT_SUPERVISOR" => crate::agents::node::AgentRole::ProjectSupervisor,
-                    "DOMAIN_SUPERVISOR" => crate::agents::node::AgentRole::DomainSupervisor,
-                    "SPECIALIST" => crate::agents::node::AgentRole::Specialist,
-                    other => {
-                        return Err(SyscallError::InternalError(format!(
-                            "Invalid agent role: {}",
-                            other
-                        )))
-                    }
-                };
-
-                // Validate hierarchy: a Specialist cannot spawn any agent;
-                // a DomainSupervisor cannot spawn a ProjectSupervisor.
+                // Validar que el solicitante existe y puede spawear
                 let requesting_role = {
                     let tree = orchestrator.tree.read().await;
                     tree.get(&requesting_id).map(|n| n.role.clone())
@@ -507,28 +510,32 @@ impl SyscallExecutor {
                             requesting_id
                         )))
                     }
-                    Some(crate::agents::node::AgentRole::Specialist) => {
+                    Some(crate::agents::node::AgentRole::Specialist { .. }) => {
                         return Err(SyscallError::AccessDenied(
-                            "Specialist agents cannot spawn subordinates".to_string(),
+                            "Specialist agents cannot spawn subordinates (ADR-CAA-007)".to_string(),
                         ))
                     }
-                    Some(crate::agents::node::AgentRole::DomainSupervisor) => {
-                        if agent_role == crate::agents::node::AgentRole::ProjectSupervisor {
-                            return Err(SyscallError::AccessDenied(
-                                "DomainSupervisor cannot spawn ProjectSupervisors".to_string(),
-                            ));
-                        }
-                    }
-                    Some(crate::agents::node::AgentRole::ProjectSupervisor) => {}
+                    _ => {}
                 }
 
-                let task_type_parsed = match task_type.to_uppercase().as_str() {
-                    "CODE" | "CODING" => crate::pcb::TaskType::Coding,
-                    "PLANNING" => crate::pcb::TaskType::Planning,
-                    "ANALYSIS" => crate::pcb::TaskType::Analysis,
-                    "SUMMARIZATION" => crate::pcb::TaskType::Summarization,
-                    _ => crate::pcb::TaskType::Chat,
+                // Construir el AgentRole según el tipo
+                let agent_role = match role.to_lowercase().as_str() {
+                    "supervisor" => crate::agents::node::AgentRole::Supervisor {
+                        name: name.clone().unwrap_or_else(|| scope.clone()),
+                        scope: scope.clone(),
+                    },
+                    "specialist" => crate::agents::node::AgentRole::Specialist {
+                        scope: scope.clone(),
+                    },
+                    other => {
+                        return Err(SyscallError::InternalError(format!(
+                            "Invalid role '{}'. Use 'supervisor' or 'specialist'.",
+                            other
+                        )))
+                    }
                 };
+
+                let task_type_parsed = parse_task_type(task_type.as_deref().unwrap_or("code"));
 
                 let project_id = {
                     let tree = orchestrator.tree.read().await;
@@ -537,26 +544,63 @@ impl SyscallExecutor {
                         .unwrap_or_else(|| "default".to_string())
                 };
 
-                let system_prompt = format!(
-                    "Eres un agente {} en el dominio «{}». {}",
-                    role, domain, system_prompt_hint
-                );
-
                 let new_agent_id = orchestrator
                     .spawn_agent(
                         agent_role,
                         project_id,
-                        domain.clone(),
                         requesting_id,
-                        system_prompt,
+                        None, // InstructionLoader carga el prompt desde .md
                         task_type_parsed,
                     )
                     .await
                     .map_err(|e| SyscallError::InternalError(e.to_string()))?;
 
                 Ok(format!(
-                    "[SYSTEM_RESULT: SYS_AGENT_SPAWN OK. New agent spawned. agent_id={}, domain={}, role={}]",
-                    new_agent_id, domain, role
+                    "[SYSTEM_RESULT: SYS_AGENT_SPAWN OK. agent_id={}, role={}, scope={}]",
+                    new_agent_id, role, scope
+                ))
+            }
+
+            // CORE-199 (Epic 45): SYS_AGENT_QUERY — consulta sin generar trabajo
+            // [SYS_AGENT_QUERY(project="aegis", question="¿qué hace authenticate_tenant?")]
+            Syscall::AgentQuery {
+                project_id,
+                question,
+                context_hint,
+                requesting_agent_id,
+            } => {
+                let orchestrator = self.agent_orchestrator.as_ref().ok_or_else(|| {
+                    SyscallError::InternalError(
+                        "AgentOrchestrator not configured — SYS_AGENT_QUERY unavailable"
+                            .to_string(),
+                    )
+                })?;
+
+                let requesting_id = requesting_agent_id.parse::<uuid::Uuid>().map_err(|_| {
+                    SyscallError::InternalError(format!(
+                        "Invalid requesting_agent_id UUID: {}",
+                        requesting_agent_id
+                    ))
+                })?;
+
+                // El target es el ProjectSupervisor del proyecto
+                let target_id = {
+                    let tree = orchestrator.tree.read().await;
+                    tree.project_root(&project_id)
+                        .map(|n| n.agent_id)
+                        .ok_or_else(|| SyscallError::InternalError(format!(
+                            "Project '{}' not active", project_id
+                        )))?
+                };
+
+                let query_id = orchestrator
+                    .query(target_id, question.clone(), context_hint, requesting_id)
+                    .await
+                    .map_err(|e| SyscallError::InternalError(e.to_string()))?;
+
+                Ok(format!(
+                    "[SYSTEM_RESULT: SYS_AGENT_QUERY sent. query_id={}, project={}, question={}]",
+                    query_id, project_id, &question[..question.len().min(60)]
                 ))
             }
         }
@@ -1073,12 +1117,21 @@ static SPAWN_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap_or_else(|_| panic!("FATAL: hardcoded spawn syscall regex is invalid"))
 });
 
-/// CORE-162: SYS_AGENT_SPAWN — el LLM emite un bloque JSON con esta estructura:
-/// {"syscall":"SYS_AGENT_SPAWN","params":{"role":"...","domain":"...","task_type":"...","system_prompt_hint":"..."}}
+/// CORE-198 (Epic 45): SYS_AGENT_SPAWN — formato canónico con parámetros con nombre.
+/// [SYS_AGENT_SPAWN(role="supervisor", name="Kernel", scope="módulos del kernel", task_type="code")]
+/// [SYS_AGENT_SPAWN(role="specialist", scope="leer scheduler/mod.rs")]
 #[allow(clippy::expect_used)]
 static AGENT_SPAWN_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\{"syscall"\s*:\s*"SYS_AGENT_SPAWN"\s*,\s*"params"\s*:\s*(\{[^}]+\})\}"#)
-        .unwrap_or_else(|_| panic!("FATAL: hardcoded agent_spawn regex is invalid"))
+    Regex::new(r#"\[SYS_AGENT_SPAWN\(([^)]+)\)\]"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded SYS_AGENT_SPAWN regex is invalid"))
+});
+
+/// CORE-199 (Epic 45): SYS_AGENT_QUERY — consulta sin generar trabajo.
+/// [SYS_AGENT_QUERY(project="aegis", question="¿qué hace authenticate_tenant?")]
+#[allow(clippy::expect_used)]
+static AGENT_QUERY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[SYS_AGENT_QUERY\(([^)]+)\)\]"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded SYS_AGENT_QUERY regex is invalid"))
 });
 
 /// CORE-169: SYS_EXEC
@@ -1111,6 +1164,33 @@ static GIT_PUSH_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
 pub fn init_syscall_regexes() {}
+
+/// Parsea parámetros con nombre del formato `key="value", key2="value2"`.
+/// Usado para parsear las nuevas syscalls de Epic 45.
+fn parse_kv_params(s: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    // Regex simple: key="value" — value no puede contener comillas dobles
+    let re = regex::Regex::new(r#"(\w+)\s*=\s*"([^"]*)""#).unwrap_or_else(|_| {
+        panic!("FATAL: parse_kv_params regex is invalid")
+    });
+    for caps in re.captures_iter(s) {
+        map.insert(caps[1].to_string(), caps[2].to_string());
+    }
+    map
+}
+
+/// Convierte un string de task_type a la variante del enum.
+pub fn parse_task_type(s: &str) -> crate::pcb::TaskType {
+    match s.to_lowercase().as_str() {
+        "code" | "coding" => crate::pcb::TaskType::Code,
+        "planning" => crate::pcb::TaskType::Planning,
+        "analysis" => crate::pcb::TaskType::Analysis,
+        "summarization" => crate::pcb::TaskType::Summarization,
+        "creative" => crate::pcb::TaskType::Creative,
+        "local" => crate::pcb::TaskType::Local,
+        _ => crate::pcb::TaskType::Chat,
+    }
+}
 
 /// Parser de Syscalls Cognitivas.
 /// Detecta llamadas estructuradas dentro del stream de texto de la IA.
@@ -1230,25 +1310,39 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
         });
     }
 
-    // 11. CORE-162: Check for SYS_AGENT_SPAWN (JSON block from LLM output)
+    // 11. CORE-198 (Epic 45): SYS_AGENT_SPAWN — formato [SYS_AGENT_SPAWN(key="val", ...)]
     if let Some(caps) = AGENT_SPAWN_RE.captures(text) {
-        if let Ok(params) = serde_json::from_str::<serde_json::Value>(&caps[1]) {
-            let role = params["role"].as_str().unwrap_or("SPECIALIST").to_string();
-            let domain = params["domain"].as_str().unwrap_or("").to_string();
-            let task_type = params["task_type"].as_str().unwrap_or("CODE").to_string();
-            let system_prompt_hint = params["system_prompt_hint"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-            let requesting_agent_id = params["requesting_agent_id"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+        let params_str = &caps[1];
+        let params = parse_kv_params(params_str);
+        let role = params.get("role").cloned().unwrap_or_else(|| "specialist".to_string());
+        let scope = params.get("scope").cloned().unwrap_or_default();
+        let name = params.get("name").cloned();
+        let task_type = params.get("task_type").cloned();
+        let requesting_agent_id = params.get("requesting_agent_id").cloned().unwrap_or_default();
+        if !scope.is_empty() {
             return Some(Syscall::AgentSpawn {
                 role,
-                domain,
+                name,
+                scope,
                 task_type,
-                system_prompt_hint,
+                requesting_agent_id,
+            });
+        }
+    }
+
+    // 11b. CORE-199 (Epic 45): SYS_AGENT_QUERY — [SYS_AGENT_QUERY(project="...", question="...")]
+    if let Some(caps) = AGENT_QUERY_RE.captures(text) {
+        let params_str = &caps[1];
+        let params = parse_kv_params(params_str);
+        let project_id = params.get("project").cloned().unwrap_or_default();
+        let question = params.get("question").cloned().unwrap_or_default();
+        let context_hint = params.get("context_hint").cloned();
+        let requesting_agent_id = params.get("requesting_agent_id").cloned().unwrap_or_default();
+        if !project_id.is_empty() && !question.is_empty() {
+            return Some(Syscall::AgentQuery {
+                project_id,
+                question,
+                context_hint,
                 requesting_agent_id,
             });
         }
