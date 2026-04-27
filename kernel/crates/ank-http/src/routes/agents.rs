@@ -64,7 +64,10 @@ async fn get_agent_tree(
     let snapshot = state.agent_orchestrator.tree_snapshot().await;
     let total = snapshot.len();
     let nodes = snapshot.into_iter().map(summary_to_dto).collect();
-    Json(AgentTreeDto { nodes, total_agents: total })
+    Json(AgentTreeDto {
+        nodes,
+        total_agents: total,
+    })
 }
 
 /// GET /api/agents/{agent_id} — retorna el estado de un agente específico.
@@ -121,7 +124,13 @@ async fn spawn_agent(
 
     let new_id = state
         .agent_orchestrator
-        .spawn_agent(role, body.project_id, parent_id, body.system_prompt, task_type)
+        .spawn_agent(
+            role,
+            body.project_id,
+            parent_id,
+            body.system_prompt,
+            task_type,
+        )
         .await
         .map_err(|_| axum::http::StatusCode::UNPROCESSABLE_ENTITY)?;
 

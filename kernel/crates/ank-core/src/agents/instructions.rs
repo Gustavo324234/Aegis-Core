@@ -44,7 +44,11 @@ impl InstructionLoader {
             let path = self.config_dir.join(format!("{}.md", name));
             match std::fs::read_to_string(&path) {
                 Ok(content) => {
-                    info!("[InstructionLoader] Loaded {}.md ({} chars)", name, content.len());
+                    info!(
+                        "[InstructionLoader] Loaded {}.md ({} chars)",
+                        name,
+                        content.len()
+                    );
                     self.cache.insert(name.to_string(), content);
                 }
                 Err(e) => {
@@ -91,10 +95,7 @@ impl InstructionLoader {
         extra_context: Option<&str>,
     ) -> String {
         let instructions = self.instructions_for(role);
-        let mut prompt = format!(
-            "# Proyecto: {}\n\n{}\n",
-            project_id, instructions
-        );
+        let mut prompt = format!("# Proyecto: {}\n\n{}\n", project_id, instructions);
         if let Some(ctx) = extra_context {
             prompt.push_str("\n---\n\n## Contexto previo\n\n");
             prompt.push_str(ctx);
@@ -173,9 +174,7 @@ mod tests {
                 name: "s".into(),
                 scope: "sc".into(),
             },
-            AgentRole::Specialist {
-                scope: "sp".into(),
-            },
+            AgentRole::Specialist { scope: "sp".into() },
         ];
         let mut loader = InstructionLoader::new("/nonexistent/path");
         for role in &roles {

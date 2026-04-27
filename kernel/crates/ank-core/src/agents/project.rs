@@ -98,7 +98,8 @@ impl ProjectRegistry {
             let conn = rusqlite::Connection::open(&db_path)
                 .with_context(|| format!("Failed to open db for tenant {}", tenant_id))?;
 
-            conn.execute_batch(&format!("PRAGMA key = '{}';", session_key)).ok();
+            conn.execute_batch(&format!("PRAGMA key = '{}';", session_key))
+                .ok();
 
             // Tabla `projects` — schema canónico de Epic 45
             conn.execute_batch(
@@ -246,7 +247,8 @@ impl ProjectRegistry {
 
     /// Guarda el árbol de un proyecto en el filesystem.
     pub fn save_tree(&self, project_id: &ProjectId, tree: &AgentTree) -> anyhow::Result<()> {
-        self.persistence.save_tree(&self.tenant_id, project_id, tree)
+        self.persistence
+            .save_tree(&self.tenant_id, project_id, tree)
     }
 
     /// Carga el árbol de un proyecto desde el filesystem. Retorna `None` si no existe.

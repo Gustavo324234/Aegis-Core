@@ -85,12 +85,8 @@ mod tests {
     #[test]
     fn test_budget_for_role_ordering() {
         let chat = ContextBudget::for_role(&AgentRole::ChatAgent, TaskType::Chat);
-        let spec = ContextBudget::for_role(
-            &AgentRole::Specialist {
-                scope: "x".into(),
-            },
-            TaskType::Code,
-        );
+        let spec =
+            ContextBudget::for_role(&AgentRole::Specialist { scope: "x".into() }, TaskType::Code);
         // Specialist de código tiene más presupuesto que el Chat Agent
         assert!(spec.max_tokens > chat.max_tokens);
     }

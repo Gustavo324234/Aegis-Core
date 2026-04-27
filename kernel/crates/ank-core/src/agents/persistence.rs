@@ -48,10 +48,16 @@ impl AgentPersistence {
     }
 
     pub fn contexts_dir(&self, tenant_id: &str, project_id: &ProjectId) -> PathBuf {
-        self.project_dir(tenant_id, project_id).join("agent_contexts")
+        self.project_dir(tenant_id, project_id)
+            .join("agent_contexts")
     }
 
-    pub fn context_path(&self, tenant_id: &str, project_id: &ProjectId, agent_id: &AgentId) -> PathBuf {
+    pub fn context_path(
+        &self,
+        tenant_id: &str,
+        project_id: &ProjectId,
+        agent_id: &AgentId,
+    ) -> PathBuf {
         self.contexts_dir(tenant_id, project_id)
             .join(format!("{}.md", agent_id))
     }
@@ -181,11 +187,7 @@ impl AgentPersistence {
     }
 
     /// Elimina todos los archivos de persistencia de un proyecto (archivado).
-    pub fn delete_project(
-        &self,
-        tenant_id: &str,
-        project_id: &ProjectId,
-    ) -> anyhow::Result<()> {
+    pub fn delete_project(&self, tenant_id: &str, project_id: &ProjectId) -> anyhow::Result<()> {
         let dir = self.project_dir(tenant_id, project_id);
         if dir.exists() {
             std::fs::remove_dir_all(&dir)
@@ -248,10 +250,14 @@ mod tests {
         let persistence = AgentPersistence::new(dir.path());
         let tree = make_tree();
 
-        persistence.save_tree("tenant1", &"aegis".to_string(), &tree).unwrap();
+        persistence
+            .save_tree("tenant1", &"aegis".to_string(), &tree)
+            .unwrap();
         assert!(persistence.has_saved_tree("tenant1", &"aegis".to_string()));
 
-        let loaded = persistence.load_tree("tenant1", &"aegis".to_string()).unwrap();
+        let loaded = persistence
+            .load_tree("tenant1", &"aegis".to_string())
+            .unwrap();
         assert!(loaded.is_some());
         let loaded_tree = loaded.unwrap();
         assert_eq!(loaded_tree.len(), tree.len());
@@ -278,7 +284,9 @@ mod tests {
     fn test_load_tree_returns_none_if_not_exists() {
         let dir = tempdir().unwrap();
         let persistence = AgentPersistence::new(dir.path());
-        let result = persistence.load_tree("tenant1", &"nonexistent".to_string()).unwrap();
+        let result = persistence
+            .load_tree("tenant1", &"nonexistent".to_string())
+            .unwrap();
         assert!(result.is_none());
     }
 }

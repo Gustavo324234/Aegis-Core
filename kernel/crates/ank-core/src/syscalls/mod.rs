@@ -588,9 +588,12 @@ impl SyscallExecutor {
                     let tree = orchestrator.tree.read().await;
                     tree.project_root(&project_id)
                         .map(|n| n.agent_id)
-                        .ok_or_else(|| SyscallError::InternalError(format!(
-                            "Project '{}' not active", project_id
-                        )))?
+                        .ok_or_else(|| {
+                            SyscallError::InternalError(format!(
+                                "Project '{}' not active",
+                                project_id
+                            ))
+                        })?
                 };
 
                 let query_id = orchestrator
@@ -600,7 +603,9 @@ impl SyscallExecutor {
 
                 Ok(format!(
                     "[SYSTEM_RESULT: SYS_AGENT_QUERY sent. query_id={}, project={}, question={}]",
-                    query_id, project_id, &question[..question.len().min(60)]
+                    query_id,
+                    project_id,
+                    &question[..question.len().min(60)]
                 ))
             }
         }
@@ -1170,9 +1175,8 @@ pub fn init_syscall_regexes() {}
 fn parse_kv_params(s: &str) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     // Regex simple: key="value" — value no puede contener comillas dobles
-    let re = regex::Regex::new(r#"(\w+)\s*=\s*"([^"]*)""#).unwrap_or_else(|_| {
-        panic!("FATAL: parse_kv_params regex is invalid")
-    });
+    let re = regex::Regex::new(r#"(\w+)\s*=\s*"([^"]*)""#)
+        .unwrap_or_else(|_| panic!("FATAL: parse_kv_params regex is invalid"));
     for caps in re.captures_iter(s) {
         map.insert(caps[1].to_string(), caps[2].to_string());
     }
@@ -1314,11 +1318,17 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
     if let Some(caps) = AGENT_SPAWN_RE.captures(text) {
         let params_str = &caps[1];
         let params = parse_kv_params(params_str);
-        let role = params.get("role").cloned().unwrap_or_else(|| "specialist".to_string());
+        let role = params
+            .get("role")
+            .cloned()
+            .unwrap_or_else(|| "specialist".to_string());
         let scope = params.get("scope").cloned().unwrap_or_default();
         let name = params.get("name").cloned();
         let task_type = params.get("task_type").cloned();
-        let requesting_agent_id = params.get("requesting_agent_id").cloned().unwrap_or_default();
+        let requesting_agent_id = params
+            .get("requesting_agent_id")
+            .cloned()
+            .unwrap_or_default();
         if !scope.is_empty() {
             return Some(Syscall::AgentSpawn {
                 role,
@@ -1337,7 +1347,10 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
         let project_id = params.get("project").cloned().unwrap_or_default();
         let question = params.get("question").cloned().unwrap_or_default();
         let context_hint = params.get("context_hint").cloned();
-        let requesting_agent_id = params.get("requesting_agent_id").cloned().unwrap_or_default();
+        let requesting_agent_id = params
+            .get("requesting_agent_id")
+            .cloned()
+            .unwrap_or_default();
         if !project_id.is_empty() && !question.is_empty() {
             return Some(Syscall::AgentQuery {
                 project_id,

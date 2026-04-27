@@ -53,10 +53,16 @@ pub enum ArtifactKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReportStatus {
     Success,
-    PartialSuccess { warnings: Vec<String> },
-    Failure { reason: String },
+    PartialSuccess {
+        warnings: Vec<String>,
+    },
+    Failure {
+        reason: String,
+    },
     /// El agente necesita aclaración antes de continuar.
-    NeedsInput { question: String },
+    NeedsInput {
+        question: String,
+    },
 }
 
 /// Mensajes que fluyen entre nodos del árbol de agentes.

@@ -17,10 +17,7 @@ pub enum AgentEvent {
     },
 
     /// El estado de un agente cambió.
-    StateChanged {
-        agent_id: AgentId,
-        state: String,
-    },
+    StateChanged { agent_id: AgentId, state: String },
 
     /// Actividad observable de un agente (descripción en lenguaje natural).
     Activity {
@@ -29,15 +26,10 @@ pub enum AgentEvent {
     },
 
     /// Un agente generó un reporte (hacia arriba o síntesis final).
-    Reported {
-        agent_id: AgentId,
-        summary: String,
-    },
+    Reported { agent_id: AgentId, summary: String },
 
     /// Un agente fue eliminado del árbol.
-    Pruned {
-        agent_id: AgentId,
-    },
+    Pruned { agent_id: AgentId },
 
     /// Un proyecto fue restaurado desde el filesystem (CORE-207).
     Restored {

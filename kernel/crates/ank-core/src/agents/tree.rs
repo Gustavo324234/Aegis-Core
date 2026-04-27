@@ -29,9 +29,10 @@ impl AgentTree {
         let agent_id = node.agent_id;
 
         if let Some(parent_id) = node.parent_id {
-            let parent = self.nodes.get_mut(&parent_id).ok_or_else(|| {
-                anyhow::anyhow!("Parent agent {} not found in tree", parent_id)
-            })?;
+            let parent = self
+                .nodes
+                .get_mut(&parent_id)
+                .ok_or_else(|| anyhow::anyhow!("Parent agent {} not found in tree", parent_id))?;
             parent.add_child(agent_id);
         }
 

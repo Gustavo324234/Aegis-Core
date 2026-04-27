@@ -17,21 +17,13 @@ pub enum AgentRole {
     ChatAgent,
 
     /// Nivel 1 — 1 por proyecto activo. Coordinador raíz del proyecto.
-    ProjectSupervisor {
-        name: String,
-        description: String,
-    },
+    ProjectSupervisor { name: String, description: String },
 
     /// Nivel 2..N — supervisores de dominio, profundidad ilimitada.
-    Supervisor {
-        name: String,
-        scope: String,
-    },
+    Supervisor { name: String, scope: String },
 
     /// Nivel hoja — ejecutor atómico. Efímero, no persiste.
-    Specialist {
-        scope: String,
-    },
+    Specialist { scope: String },
 }
 
 impl AgentRole {
@@ -85,7 +77,9 @@ pub enum AgentState {
     /// Esperando que sus subordinados terminen.
     WaitingReport,
     Complete,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 /// Nodo del árbol de agentes cognitivos — extendido con campos de persistencia (CORE-190).
@@ -121,7 +115,6 @@ pub struct AgentNode {
     pub created_at: DateTime<Utc>,
 
     // --- Persistencia (ADR-CAA-005v2) ---
-
     /// Path al archivo .md de state summary en agent_contexts/{agent_id}.md
     /// None para Specialists (efímeros) y ChatAgent.
     pub persisted_context_path: Option<PathBuf>,
@@ -229,10 +222,7 @@ mod tests {
             TaskType::Analysis
         );
         assert_eq!(
-            AgentRole::Specialist {
-                scope: "sp".into()
-            }
-            .default_task_type(),
+            AgentRole::Specialist { scope: "sp".into() }.default_task_type(),
             TaskType::Code
         );
     }
@@ -244,10 +234,7 @@ mod tests {
             ModelPreference::CloudOnly
         );
         assert_eq!(
-            AgentRole::Specialist {
-                scope: "x".into()
-            }
-            .default_model_preference(),
+            AgentRole::Specialist { scope: "x".into() }.default_model_preference(),
             ModelPreference::HybridSmart
         );
     }

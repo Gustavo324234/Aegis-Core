@@ -71,7 +71,11 @@ impl ChatContextWindow {
 
     /// Total de tokens estimados en la ventana actual.
     pub fn total_tokens(&self) -> usize {
-        let summary_tokens = self.compacted_summary.as_deref().map(|s| s.len() / 4).unwrap_or(0);
+        let summary_tokens = self
+            .compacted_summary
+            .as_deref()
+            .map(|s| s.len() / 4)
+            .unwrap_or(0);
         let turns_tokens: usize = self.turns.iter().map(|t| t.estimated_tokens).sum();
         summary_tokens + turns_tokens
     }
@@ -153,16 +157,28 @@ impl CompactionHints {
     pub fn to_prompt_instruction(&self) -> String {
         let mut parts = Vec::new();
         if !self.active_projects.is_empty() {
-            parts.push(format!("Proyectos activos: {}", self.active_projects.join(", ")));
+            parts.push(format!(
+                "Proyectos activos: {}",
+                self.active_projects.join(", ")
+            ));
         }
         if !self.tasks_in_progress.is_empty() {
-            parts.push(format!("Tareas en curso: {}", self.tasks_in_progress.join(", ")));
+            parts.push(format!(
+                "Tareas en curso: {}",
+                self.tasks_in_progress.join(", ")
+            ));
         }
         if !self.user_preferences.is_empty() {
-            parts.push(format!("Preferencias del usuario: {}", self.user_preferences.join("; ")));
+            parts.push(format!(
+                "Preferencias del usuario: {}",
+                self.user_preferences.join("; ")
+            ));
         }
         if !self.user_context.is_empty() {
-            parts.push(format!("Contexto del usuario: {}", self.user_context.join("; ")));
+            parts.push(format!(
+                "Contexto del usuario: {}",
+                self.user_context.join("; ")
+            ));
         }
         format!(
             "Resume la conversación anterior preservando obligatoriamente: {}",
@@ -208,7 +224,10 @@ mod tests {
         let mut window = ChatContextWindow::new(1000);
         window.push(ConversationTurn::new(TurnRole::User, "hola".to_string()));
         window.compact_with_summary("Resumen anterior.".to_string(), 1);
-        window.push(ConversationTurn::new(TurnRole::Assistant, "respuesta".to_string()));
+        window.push(ConversationTurn::new(
+            TurnRole::Assistant,
+            "respuesta".to_string(),
+        ));
 
         let ctx = window.build_context();
         assert_eq!(ctx[0].role, TurnRole::System);

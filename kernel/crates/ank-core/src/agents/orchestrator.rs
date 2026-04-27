@@ -55,7 +55,10 @@ impl AgentOrchestrator {
     ) -> Self {
         let mut loader = InstructionLoader::default_from_workspace(workspace_root);
         if let Err(e) = loader.preload() {
-            warn!("[AgentOrchestrator] InstructionLoader preload failed: {}. Using fallbacks.", e);
+            warn!(
+                "[AgentOrchestrator] InstructionLoader preload failed: {}. Using fallbacks.",
+                e
+            );
         }
         Self {
             tree: Arc::new(RwLock::new(AgentTree::new())),
@@ -97,7 +100,8 @@ impl AgentOrchestrator {
         }
 
         // Primera activación — crear ProjectSupervisor nuevo
-        self.create_project_supervisor(tenant_id, project_id, project_description).await
+        self.create_project_supervisor(tenant_id, project_id, project_description)
+            .await
     }
 
     async fn create_project_supervisor(
@@ -158,7 +162,9 @@ impl AgentOrchestrator {
             .load_tree(tenant_id, project_id)?
             .ok_or_else(|| anyhow::anyhow!("No saved tree for project {}", project_id))?;
 
-        let summaries = self.persistence.load_all_summaries(tenant_id, &restored_tree)?;
+        let summaries = self
+            .persistence
+            .load_all_summaries(tenant_id, &restored_tree)?;
 
         let root_id = restored_tree
             .project_root(project_id)
@@ -176,11 +182,8 @@ impl AgentOrchestrator {
             for mut node in snapshot.nodes {
                 // Inyectar el state summary como contexto inicial si existe
                 if let Some(summary) = summaries.get(&node.agent_id) {
-                    let base_prompt = loader.build_system_prompt(
-                        &node.role,
-                        project_id,
-                        Some(summary.as_str()),
-                    );
+                    let base_prompt =
+                        loader.build_system_prompt(&node.role, project_id, Some(summary.as_str()));
                     node.system_prompt = base_prompt;
                 }
                 let agent_id = node.agent_id;
@@ -189,7 +192,10 @@ impl AgentOrchestrator {
                     None::<mpsc::Sender<AgentMessage>>
                 });
                 tree.nodes_mut_raw().insert(agent_id, node);
-                if matches!(tree.get(&agent_id).map(|n| &n.role), Some(AgentRole::ProjectSupervisor { .. })) {
+                if matches!(
+                    tree.get(&agent_id).map(|n| &n.role),
+                    Some(AgentRole::ProjectSupervisor { .. })
+                ) {
                     tree.register_root(project_id.clone(), agent_id);
                 }
             }
@@ -397,20 +403,17 @@ impl AgentOrchestrator {
                 let tree = self.tree.read().await;
                 if let Some(node) = tree.get(&agent_id) {
                     // Usar el último reporte si existe; si no, el template vacío
-                    node.last_report.clone().unwrap_or_else(|| {
-                        state_summary_template(&fecha)
-                    })
+                    node.last_report
+                        .clone()
+                        .unwrap_or_else(|| state_summary_template(&fecha))
                 } else {
                     continue;
                 }
             };
 
-            let path = self.persistence.save_state_summary(
-                tenant_id,
-                project_id,
-                &agent_id,
-                &summary,
-            )?;
+            let path = self
+                .persistence
+                .save_state_summary(tenant_id, project_id, &agent_id, &summary)?;
 
             // Guardar el path en el nodo
             {
@@ -428,15 +431,20 @@ impl AgentOrchestrator {
         {
             let ch = self.channels.read().await;
             if let Some(tx) = ch.get(agent_id) {
-                let _ = tx.send(AgentMessage::Cancel {
-                    reason: "Terminated by orchestrator".to_string(),
-                }).await;
+                let _ = tx
+                    .send(AgentMessage::Cancel {
+                        reason: "Terminated by orchestrator".to_string(),
+                    })
+                    .await;
             }
         }
 
         let descendants: Vec<AgentId> = {
             let tree = self.tree.read().await;
-            tree.descendants(agent_id).iter().map(|n| n.agent_id).collect()
+            tree.descendants(agent_id)
+                .iter()
+                .map(|n| n.agent_id)
+                .collect()
         };
 
         {
@@ -463,9 +471,10 @@ impl AgentOrchestrator {
             .map(|n| {
                 let (role_label, task_type_str) = match &n.role {
                     AgentRole::ChatAgent => ("Chat Agent".to_string(), "chat".to_string()),
-                    AgentRole::ProjectSupervisor { name, .. } => {
-                        (format!("Project Supervisor — {}", name), "planning".to_string())
-                    }
+                    AgentRole::ProjectSupervisor { name, .. } => (
+                        format!("Project Supervisor — {}", name),
+                        "planning".to_string(),
+                    ),
                     AgentRole::Supervisor { name, .. } => {
                         (format!("Supervisor — {}", name), "analysis".to_string())
                     }
@@ -497,12 +506,12 @@ impl AgentOrchestrator {
 
     async fn send_to(&self, agent_id: AgentId, msg: AgentMessage) -> anyhow::Result<()> {
         let ch = self.channels.read().await;
-        let tx = ch.get(&agent_id).ok_or_else(|| {
-            anyhow::anyhow!("No channel for agent {}", agent_id)
-        })?;
-        tx.send(msg).await.map_err(|e| {
-            anyhow::anyhow!("Send failed to agent {}: {}", agent_id, e)
-        })?;
+        let tx = ch
+            .get(&agent_id)
+            .ok_or_else(|| anyhow::anyhow!("No channel for agent {}", agent_id))?;
+        tx.send(msg)
+            .await
+            .map_err(|e| anyhow::anyhow!("Send failed to agent {}: {}", agent_id, e))?;
         Ok(())
     }
 
@@ -515,8 +524,7 @@ impl AgentOrchestrator {
             // Reemplazar el canal existente con uno que tenga rx
             let tx_existing = {
                 let ch = channels_ref.try_read();
-                ch.ok()
-                    .and_then(|c| c.get(&agent_id).cloned())
+                ch.ok().and_then(|c| c.get(&agent_id).cloned())
             };
             if tx_existing.is_some() {
                 // Ya hay canal — crear un nuevo par y actualizar
@@ -553,13 +561,22 @@ impl AgentOrchestrator {
                 let label = n.role.display_name().to_string();
                 (label, n.task_type, n.model_preference)
             } else {
-                ("UNKNOWN".to_string(), TaskType::Chat, ModelPreference::HybridSmart)
+                (
+                    "UNKNOWN".to_string(),
+                    TaskType::Chat,
+                    ModelPreference::HybridSmart,
+                )
             }
         };
 
         while let Some(msg) = rx.recv().await {
             match msg {
-                AgentMessage::Dispatch { task_description, context, reply_to, .. } => {
+                AgentMessage::Dispatch {
+                    task_description,
+                    context,
+                    reply_to,
+                    ..
+                } => {
                     info!(
                         agent = %agent_id,
                         "[{}] Dispatch: {}",
@@ -583,7 +600,10 @@ impl AgentOrchestrator {
 
                     let model_id = match routing_result {
                         Ok(d) => {
-                            info!("[{}][CORE-208] → modelo: {} (task: {:?}, pref: {:?})", role_label, d.model_id, task_type, model_preference);
+                            info!(
+                                "[{}][CORE-208] → modelo: {} (task: {:?}, pref: {:?})",
+                                role_label, d.model_id, task_type, model_preference
+                            );
                             d.model_id
                         }
                         Err(e) => {
@@ -593,13 +613,18 @@ impl AgentOrchestrator {
                         }
                     };
 
-                    let child_summary = context.child_reports.iter()
+                    let child_summary = context
+                        .child_reports
+                        .iter()
                         .map(|r| format!("• {}: {}", r.role_description, r.summary))
                         .collect::<Vec<_>>()
                         .join("\n");
 
                     let summary = if child_summary.is_empty() {
-                        format!("[{}] Task via model {}. Awaiting execution.", role_label, model_id)
+                        format!(
+                            "[{}] Task via model {}. Awaiting execution.",
+                            role_label, model_id
+                        )
                     } else {
                         format!("[{}] Aggregated:\n{}", role_label, child_summary)
                     };
@@ -633,7 +658,11 @@ impl AgentOrchestrator {
                     }
                 }
 
-                AgentMessage::Report { from, result, status } => {
+                AgentMessage::Report {
+                    from,
+                    result,
+                    status,
+                } => {
                     info!("[{}] Report from child {}: {:?}", role_label, from, status);
                     {
                         let mut t = tree.write().await;
@@ -645,28 +674,40 @@ impl AgentOrchestrator {
                     // Verificar si todos los hijos completaron
                     let all_done = {
                         let t = tree.read().await;
-                        t.get(&agent_id).map(|n| {
-                            n.children.iter().all(|cid| {
-                                t.get(cid).map(|c| matches!(c.state, AgentState::Complete | AgentState::Failed { .. })).unwrap_or(true)
+                        t.get(&agent_id)
+                            .map(|n| {
+                                n.children.iter().all(|cid| {
+                                    t.get(cid)
+                                        .map(|c| {
+                                            matches!(
+                                                c.state,
+                                                AgentState::Complete | AgentState::Failed { .. }
+                                            )
+                                        })
+                                        .unwrap_or(true)
+                                })
                             })
-                        }).unwrap_or(false)
+                            .unwrap_or(false)
                     };
 
                     if all_done {
                         let child_results = {
                             let t = tree.read().await;
-                            t.get(&agent_id).map(|n| {
-                                n.children.iter()
-                                    .filter_map(|cid| t.get(cid))
-                                    .map(|c| AgentResult {
-                                        agent_id: c.agent_id,
-                                        role_description: c.role.display_name().to_string(),
-                                        summary: c.last_report.clone().unwrap_or_default(),
-                                        artifacts: Vec::new(),
-                                        metadata: serde_json::Value::Null,
-                                    })
-                                    .collect::<Vec<_>>()
-                            }).unwrap_or_else(|| vec![result])
+                            t.get(&agent_id)
+                                .map(|n| {
+                                    n.children
+                                        .iter()
+                                        .filter_map(|cid| t.get(cid))
+                                        .map(|c| AgentResult {
+                                            agent_id: c.agent_id,
+                                            role_description: c.role.display_name().to_string(),
+                                            summary: c.last_report.clone().unwrap_or_default(),
+                                            artifacts: Vec::new(),
+                                            metadata: serde_json::Value::Null,
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_else(|| vec![result])
                         };
 
                         let synth = AgentMessage::Dispatch {
@@ -688,13 +729,25 @@ impl AgentOrchestrator {
                 }
 
                 // Query: responder con información sin generar trabajo (ADR-CAA-003)
-                AgentMessage::Query { question, context_hint, reply_to, query_id } => {
-                    info!("[{}] Query received: {}", role_label, &question[..question.len().min(60)]);
+                AgentMessage::Query {
+                    question,
+                    context_hint,
+                    reply_to,
+                    query_id,
+                } => {
+                    info!(
+                        "[{}] Query received: {}",
+                        role_label,
+                        &question[..question.len().min(60)]
+                    );
 
                     // Si tiene hijos, delegar al hijo más adecuado según context_hint
                     let children = {
                         let t = tree.read().await;
-                        t.children(&agent_id).iter().map(|n| (n.agent_id, n.role.display_name().to_string())).collect::<Vec<_>>()
+                        t.children(&agent_id)
+                            .iter()
+                            .map(|n| (n.agent_id, n.role.display_name().to_string()))
+                            .collect::<Vec<_>>()
                     };
 
                     if children.is_empty() {
@@ -703,9 +756,15 @@ impl AgentOrchestrator {
                             let t = tree.read().await;
                             t.get(&agent_id)
                                 .and_then(|n| n.last_report.clone())
-                                .unwrap_or_else(|| format!("Sin información disponible sobre: {}", question))
+                                .unwrap_or_else(|| {
+                                    format!("Sin información disponible sobre: {}", question)
+                                })
                         };
-                        let reply = AgentMessage::QueryReply { answer, query_id, from: agent_id };
+                        let reply = AgentMessage::QueryReply {
+                            answer,
+                            query_id,
+                            from: agent_id,
+                        };
                         let reply_tx = { channels.read().await.get(&reply_to).cloned() };
                         if let Some(tx) = reply_tx {
                             let _ = tx.send(reply).await;
@@ -715,7 +774,12 @@ impl AgentOrchestrator {
                         let target = context_hint
                             .as_deref()
                             .and_then(|hint| {
-                                children.iter().find(|(_, name)| name.to_lowercase().contains(&hint.to_lowercase())).map(|(id, _)| *id)
+                                children
+                                    .iter()
+                                    .find(|(_, name)| {
+                                        name.to_lowercase().contains(&hint.to_lowercase())
+                                    })
+                                    .map(|(id, _)| *id)
                             })
                             .unwrap_or(children[0].0);
 
@@ -733,8 +797,15 @@ impl AgentOrchestrator {
                 }
 
                 // QueryReply: condensar y reenviar hacia arriba (ADR-CAA-011)
-                AgentMessage::QueryReply { answer, query_id, from: _ } => {
-                    info!("[{}] QueryReply for query {}: condensing.", role_label, query_id);
+                AgentMessage::QueryReply {
+                    answer,
+                    query_id,
+                    from: _,
+                } => {
+                    info!(
+                        "[{}] QueryReply for query {}: condensing.",
+                        role_label, query_id
+                    );
                     // Condensar — en producción el LLM resumen; aquí pasamos tal cual hacia arriba
                     if let Some(ref ptx) = parent_tx {
                         let condensed = AgentMessage::QueryReply {
@@ -771,21 +842,27 @@ impl AgentOrchestrator {
         {
             let mut t = tree.write().await;
             if let Some(n) = t.get_mut(&agent_id) {
-                n.set_state(AgentState::Failed { reason: reason.to_string() });
+                n.set_state(AgentState::Failed {
+                    reason: reason.to_string(),
+                });
             }
         }
         if let Some(ptx) = parent_tx {
-            let _ = ptx.send(AgentMessage::Report {
-                from: agent_id,
-                result: AgentResult {
-                    agent_id,
-                    role_description: "unknown".to_string(),
-                    summary: format!("Agent failed: {}", reason),
-                    artifacts: Vec::new(),
-                    metadata: serde_json::Value::Null,
-                },
-                status: ReportStatus::Failure { reason: reason.to_string() },
-            }).await;
+            let _ = ptx
+                .send(AgentMessage::Report {
+                    from: agent_id,
+                    result: AgentResult {
+                        agent_id,
+                        role_description: "unknown".to_string(),
+                        summary: format!("Agent failed: {}", reason),
+                        artifacts: Vec::new(),
+                        metadata: serde_json::Value::Null,
+                    },
+                    status: ReportStatus::Failure {
+                        reason: reason.to_string(),
+                    },
+                })
+                .await;
         }
     }
 }
