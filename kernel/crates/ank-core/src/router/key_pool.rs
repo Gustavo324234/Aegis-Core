@@ -386,6 +386,7 @@ mod tests {
                 is_active: true,
                 rate_limited_until: None,
                 active_models: None,
+                is_free_tier: false,
             };
             pool.add_global_key(entry).await?;
         }
@@ -419,6 +420,7 @@ mod tests {
             is_active: true,
             rate_limited_until: None,
             active_models: None,
+            is_free_tier: false,
         })
         .await?;
 
@@ -434,6 +436,7 @@ mod tests {
                 is_active: true,
                 rate_limited_until: None,
                 active_models: None,
+                is_free_tier: false,
             },
         )
         .await?;
