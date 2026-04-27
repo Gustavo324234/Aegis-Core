@@ -5,6 +5,49 @@ import { useMusicStore } from './musicStore';
 import { useTerminalStore } from './terminalStore';
 import { usePrStore } from './prStore';
 
+// CORE-204 — CAA agent types
+export type AgentRole =
+    | { type: 'ChatAgent' }
+    | { type: 'ProjectSupervisor'; project_id: string }
+    | { type: 'Supervisor'; name: string; depth: number }
+    | { type: 'Specialist'; scope: string };
+
+export type AgentNodeState =
+    | 'Idle'
+    | 'Running'
+    | 'WaitingReport'
+    | 'WaitingQuery'
+    | 'Complete'
+    | { Failed: { reason: string } };
+
+export interface AgentNodeSummary {
+    id: string;
+    role: AgentRole;
+    state: AgentNodeState;
+    parent_id: string | null;
+    children: string[];
+    model: string | null;
+    activity: string | null;
+    last_report: string | null;
+}
+
+export interface ProjectSummary {
+    project_id: string;
+    name: string;
+    description: string | null;
+    status: 'active' | 'archived';
+    root_agent_id: string | null;
+}
+
+export type AgentEventPayload =
+    | { type: 'Spawned'; agent_id: string; role: AgentRole; parent_id: string | null; model: string }
+    | { type: 'StateChanged'; agent_id: string; state: AgentNodeState }
+    | { type: 'Activity'; agent_id: string; description: string }
+    | { type: 'Reported'; agent_id: string; summary: string }
+    | { type: 'Pruned'; agent_id: string }
+    | { type: 'Restored'; project_id: string; node_count: number }
+    | { type: 'TreeSnapshot'; tree: AgentNodeSummary[] };
+
 export type MessageType = 'text' | 'thought' | 'system' | 'error';
 export type SystemStatus = 'disconnected' | 'connecting' | 'idle' | 'thinking' | 'executing_syscall' | 'error' | 'listening' | 'transcribing';
 export type TaskTypeValue = 'chat' | 'coding' | 'planning' | 'analysis' | 'summarization';
@@ -61,6 +104,16 @@ interface AegisState {
     sttApiKey: string;
     currentView: 'chat' | 'dashboard';
     inputMode: 'text' | 'audio' | 'conversation';
+
+    // CORE-204 — agent stream state
+    agentTree: AgentNodeSummary[];
+    activeProjects: ProjectSummary[];
+    agentSocket: WebSocket | null;
+    isAgentStreamConnected: boolean;
+
+    connectAgentStream: () => void;
+    disconnectAgentStream: () => void;
+    fetchActiveProjects: () => Promise<void>;
 
     setHydrated: (val: boolean) => void;
     setInputMode: (mode: 'text' | 'audio' | 'conversation') => void;
@@ -146,6 +199,12 @@ export const useAegisStore = create<AegisState>()(
             sttApiKey: '',
             currentView: 'chat',
             inputMode: 'text',
+
+            // CORE-204 — initial agent stream values
+            agentTree: [],
+            activeProjects: [],
+            agentSocket: null,
+            isAgentStreamConnected: false,
 
             setHydrated: (val) => set({ _hydrated: val }),
             setCurrentView: (view) => set({ currentView: view }),
@@ -347,7 +406,12 @@ export const useAegisStore = create<AegisState>()(
                 if (currentSocket) currentSocket.close();
                 set({ status: 'connecting' });
                 const socket = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
-                socket.onopen = () => { set({ socket, status: 'idle' }); get().startTelemetryPolling(tenantId); };
+                socket.onopen = () => {
+                    set({ socket, status: 'idle' });
+                    get().startTelemetryPolling(tenantId);
+                    get().connectAgentStream();
+                    void get().fetchActiveProjects();
+                };
                 socket.onmessage = (event) => {
                     const msg = JSON.parse(event.data as string);
                     const { event: type, data, pid } = msg as { event: string; data: unknown; pid?: string };
@@ -568,6 +632,7 @@ export const useAegisStore = create<AegisState>()(
                 const { socket, sirenSocket } = get();
                 if (socket) socket.close();
                 if (sirenSocket) sirenSocket.close();
+                get().disconnectAgentStream();
                 set({
                     isAuthenticated: false,
                     isAdmin: false,
@@ -860,6 +925,137 @@ export const useAegisStore = create<AegisState>()(
                 } catch (error) {
                     console.error('🎤 Mic restart error:', error);
                     set({ isRecording: false });
+                }
+            },
+
+            // CORE-204 — agent stream methods
+            connectAgentStream: () => {
+                const { tenantId, sessionKey, agentSocket } = get();
+                if (!tenantId || !sessionKey) return;
+                if (agentSocket?.readyState === WebSocket.OPEN) return;
+
+                const wsUrl = buildWsUrl(`/ws/agents/${encodeURIComponent(tenantId)}`);
+                const ws = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
+
+                ws.onopen = () => {
+                    set({ agentSocket: ws, isAgentStreamConnected: true });
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const payload = JSON.parse(event.data as string) as AgentEventPayload;
+                        set((state) => {
+                            switch (payload.type) {
+                                case 'TreeSnapshot':
+                                    return { agentTree: payload.tree };
+
+                                case 'Spawned': {
+                                    const newNode: AgentNodeSummary = {
+                                        id: payload.agent_id,
+                                        role: payload.role,
+                                        state: 'Idle',
+                                        parent_id: payload.parent_id,
+                                        children: [],
+                                        model: payload.model,
+                                        activity: null,
+                                        last_report: null,
+                                    };
+                                    const updatedTree = [
+                                        ...state.agentTree.map(n =>
+                                            n.id === payload.parent_id
+                                                ? { ...n, children: [...n.children, payload.agent_id] }
+                                                : n
+                                        ),
+                                        newNode,
+                                    ];
+                                    return { agentTree: updatedTree };
+                                }
+
+                                case 'StateChanged':
+                                    return {
+                                        agentTree: state.agentTree.map(n =>
+                                            n.id === payload.agent_id
+                                                ? { ...n, state: payload.state }
+                                                : n
+                                        ),
+                                    };
+
+                                case 'Activity':
+                                    return {
+                                        agentTree: state.agentTree.map(n =>
+                                            n.id === payload.agent_id
+                                                ? { ...n, activity: payload.description }
+                                                : n
+                                        ),
+                                    };
+
+                                case 'Reported':
+                                    return {
+                                        agentTree: state.agentTree.map(n =>
+                                            n.id === payload.agent_id
+                                                ? { ...n, last_report: payload.summary, state: 'Complete' }
+                                                : n
+                                        ),
+                                    };
+
+                                case 'Pruned':
+                                    return {
+                                        agentTree: state.agentTree
+                                            .filter(n => n.id !== payload.agent_id)
+                                            .map(n => ({
+                                                ...n,
+                                                children: n.children.filter(c => c !== payload.agent_id),
+                                            })),
+                                    };
+
+                                case 'Restored':
+                                    console.info(`[AgentStream] Project restored: ${payload.project_id} (${payload.node_count} nodes)`);
+                                    return {};
+
+                                default:
+                                    return {};
+                            }
+                        });
+                    } catch (e) {
+                        console.error('[AgentStream] Failed to parse event:', e);
+                    }
+                };
+
+                ws.onclose = () => {
+                    set({ agentSocket: null, isAgentStreamConnected: false });
+                };
+
+                ws.onerror = () => {
+                    set({ isAgentStreamConnected: false });
+                };
+
+                set({ agentSocket: ws });
+            },
+
+            disconnectAgentStream: () => {
+                const { agentSocket } = get();
+                if (agentSocket) {
+                    agentSocket.close();
+                    set({ agentSocket: null, isAgentStreamConnected: false, agentTree: [] });
+                }
+            },
+
+            fetchActiveProjects: async () => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return;
+                try {
+                    const res = await fetch('/api/agents/projects', {
+                        headers: {
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        },
+                    });
+                    if (res.ok) {
+                        const data = await res.json() as { projects: ProjectSummary[] };
+                        set({ activeProjects: data.projects ?? [] });
+                    }
+                } catch (e) {
+                    console.error('[Projects] Fetch failed:', e);
                 }
             },
 

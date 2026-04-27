@@ -14,6 +14,7 @@ import SettingsPanel from './SettingsPanel';
 import MusicPlayer from './MusicPlayer';
 import { QrCode } from 'lucide-react';
 import { ConnectionQR } from './ConnectionQR';
+import { AgentActivityPanel } from './AgentActivityPanel';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
@@ -232,6 +233,9 @@ const ChatTerminal: React.FC = () => {
                     )}
                     <div className="h-12" />
                 </main>
+
+                {/* Agent Activity — CORE-202 */}
+                <AgentActivityPanel />
 
                 {/* Input */}
                 <div className="shrink-0 p-6 bg-gradient-to-t from-black via-black/90 to-transparent border-t border-white/5">
