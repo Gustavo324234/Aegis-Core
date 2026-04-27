@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.21](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.20...ank-core-v0.1.21) (2026-04-27)
+
+
+### Features
+
+* **ank-core:** EPIC-45 Cognitive Agent Architecture — n-ary agent tree, orchestrator, persistence, CMR per-agent [#133](https://github.com/Gustavo324234/Aegis-Core/issues/133) ([#134](https://github.com/Gustavo324234/Aegis-Core/issues/134)) ([8968405](https://github.com/Gustavo324234/Aegis-Core/commit/8968405576eefa9fabb71fc286bf40f9f04eb5cc))
+
 ## [0.1.20](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.19...ank-core-v0.1.20) (2026-04-26)
 
 
