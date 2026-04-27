@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
     LayoutDashboard,
@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import AgentTreeWidget from './AgentTreeWidget';
+import { ProjectList } from './ProjectList';
+import { AgentTreeView } from './AgentTreeView';
 import TerminalPanel from './workspace/TerminalPanel';
 import CodeViewer from './workspace/CodeViewer';
 import GitTimeline from './workspace/GitTimeline';
@@ -171,6 +173,7 @@ const FinancialWidget = () => {
 
 const Dashboard: React.FC = () => {
     const { setCurrentView, system_metrics, tenantId, sessionKey } = useAegisStore();
+    const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
     return (
         <div className="h-full w-full flex flex-col bg-black text-white overflow-hidden">
@@ -299,6 +302,32 @@ const Dashboard: React.FC = () => {
                             <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest ml-2">— Hierarchical Orchestration</span>
                         </div>
                         <AgentTreeWidget tenantId={tenantId} sessionKey={sessionKey} />
+                    </div>
+
+                    {/* Projects & Agents — CORE-203 */}
+                    <div className="col-span-12 space-y-6">
+                        <div className="flex items-center gap-3">
+                            <Bot className="w-5 h-5 text-aegis-purple" />
+                            <h2 className="text-xl font-bold uppercase tracking-widest">Projects</h2>
+                            <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest ml-2">— Cognitive Agent Architecture</span>
+                        </div>
+                        <div className="glass rounded-2xl border border-white/10 p-6">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <p className="text-[9px] font-mono text-white/30 uppercase tracking-widest mb-2">Projects</p>
+                                    <ProjectList
+                                        onSelectProject={setSelectedProjectId}
+                                        selectedProjectId={selectedProjectId}
+                                    />
+                                </div>
+                                <div>
+                                    {selectedProjectId
+                                        ? <AgentTreeView projectId={selectedProjectId} />
+                                        : <p className="text-[10px] font-mono text-white/20 pt-8 text-center">Select a project</p>
+                                    }
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     {/* Developer Workspace — Epic 44 */}
