@@ -201,6 +201,7 @@ impl AgentPersistence {
         Ok(())
     }
 
+    /// Asegura que el directorio especificado exista, creándolo recursivamente si es necesario.
     fn ensure_dir(&self, path: &Path) -> anyhow::Result<()> {
         if !path.exists() {
             std::fs::create_dir_all(path)
