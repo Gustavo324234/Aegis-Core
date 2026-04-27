@@ -44,11 +44,12 @@ impl ModelEntry {
     pub fn score_for(&self, task: TaskType) -> u8 {
         match task {
             TaskType::Chat => self.task_scores.chat,
-            TaskType::Coding => self.task_scores.coding,
+            TaskType::Code => self.task_scores.coding,
             TaskType::Planning => self.task_scores.planning,
             TaskType::Analysis => self.task_scores.analysis,
             TaskType::Summarization => self.task_scores.summarization,
             TaskType::Extraction => self.task_scores.extraction,
+            TaskType::Creative => self.task_scores.analysis, // Creative usa el score de analysis como fallback
             TaskType::Local => 5, // Local type always scores max for local models
         }
     }
@@ -183,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_candidates_coding() -> anyhow::Result<()> {
         let catalog = ModelCatalog::load_bundled_with_profile(ModelProfile::Hybrid)?;
-        let candidates = catalog.get_candidates(TaskType::Coding).await;
+        let candidates = catalog.get_candidates(TaskType::Code).await;
         assert!(!candidates.is_empty());
         for c in &candidates {
             assert!(c.task_scores.coding >= 3);

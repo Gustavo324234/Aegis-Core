@@ -171,10 +171,11 @@ async fn main() -> Result<()> {
         Arc::clone(&persistence) as Arc<dyn StatePersistor>
     ));
 
-    // CORE-158 (Epic 43): AgentOrchestrator — inicializado con router y VCM
+    // CORE-158 (Epic 43): AgentOrchestrator — inicializado con router, VCM y workspace_root (CORE-206)
     let agent_orchestrator = Arc::new(AgentOrchestrator::new(
         Arc::clone(&router),
         Arc::new(VirtualContextManager::new()),
+        &resolve_data_dir(),
     ));
 
     // 11. AppState
@@ -387,6 +388,11 @@ async fn main() -> Result<()> {
         tokio::sync::broadcast::channel::<ank_core::pr_manager::WorkspaceWsEvent>(256);
     let workspace_events = Arc::new(workspace_events_tx);
 
+    // CORE-200 (Epic 45): AgentEvent broadcast channel para ws/agents/{tenant_id}
+    let (agent_event_tx, _agent_event_rx) =
+        tokio::sync::broadcast::channel::<ank_core::agents::event::AgentEvent>(512);
+    let agent_event_tx = Arc::new(agent_event_tx);
+
     let state = AppState {
         scheduler_tx: scheduler_tx.clone(),
         event_broker: Arc::clone(&event_broker),
@@ -403,6 +409,7 @@ async fn main() -> Result<()> {
         tunnel_url: Arc::new(RwLock::new(None)),
         agent_orchestrator: Arc::clone(&agent_orchestrator),
         workspace_events: Arc::clone(&workspace_events),
+        agent_event_tx: Arc::clone(&agent_event_tx),
     };
 
     // 12. Tonic Server

@@ -1,3 +1,4 @@
+pub mod agents;
 pub mod chat;
 pub mod siren;
 
@@ -8,5 +9,6 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .nest("/ws/chat", chat::router())
         .nest("/ws/siren", siren::router())
+        .nest("/ws/agents", agents::router())
         .with_state(state)
 }
