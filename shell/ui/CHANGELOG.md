@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.8.1...shell-ui-v1.9.0) (2026-04-27)
+
+
+### Features
+
+* **shell:** CORE-202/203/204 agent activity panel + dashboard tree view ([#136](https://github.com/Gustavo324234/Aegis-Core/issues/136)) ([8ffc69f](https://github.com/Gustavo324234/Aegis-Core/commit/8ffc69f5abdd7b7fefc03ef2d81d8418087d8c21))
+
 ## [1.8.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.8.0...shell-ui-v1.8.1) (2026-04-26)
 
 
