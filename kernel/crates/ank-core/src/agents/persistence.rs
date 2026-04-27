@@ -72,7 +72,7 @@ impl AgentPersistence {
         tree: &AgentTree,
     ) -> anyhow::Result<()> {
         let path = self.tree_path(tenant_id, project_id);
-        self.ensure_dir(path.parent().expect("tree path has parent"))?;
+        self.ensure_dir(path.parent().context("tree path has no parent")?)?;
 
         let json = tree.to_json().context("Failed to serialize agent tree")?;
         std::fs::write(&path, json.as_bytes())
@@ -131,7 +131,7 @@ impl AgentPersistence {
         summary: &str,
     ) -> anyhow::Result<PathBuf> {
         let path = self.context_path(tenant_id, project_id, agent_id);
-        self.ensure_dir(path.parent().expect("context path has parent"))?;
+        self.ensure_dir(path.parent().context("context path has no parent")?)?;
 
         std::fs::write(&path, summary.as_bytes())
             .with_context(|| format!("Failed to write state summary at {:?}", path))?;
@@ -211,6 +211,7 @@ impl AgentPersistence {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::agents::node::{AgentNode, AgentRole};
