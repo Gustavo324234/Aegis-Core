@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.0...shell-ui-v1.10.1) (2026-04-28)
+
+
+### Bug Fixes
+
+* **shell:** CORE-211 manejo graceful de errores en fetchActiveProjects y connectAgentStream ([#146](https://github.com/Gustavo324234/Aegis-Core/issues/146)) ([40df4f8](https://github.com/Gustavo324234/Aegis-Core/commit/40df4f86f7ca8fae17be04fd4558ded7add2c6f7))
+
 ## [1.10.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.9.0...shell-ui-v1.10.0) (2026-04-27)
 
 
