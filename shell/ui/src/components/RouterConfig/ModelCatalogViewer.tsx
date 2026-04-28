@@ -44,6 +44,7 @@ const ModelCatalogViewer: React.FC<{
     const [search, setSearch] = useState('');
     const [providerFilter, setProviderFilter] = useState('');
     const [hasKeys, setHasKeys] = useState(false);
+    const [keyProviders, setKeyProviders] = useState<Set<string>>(new Set());
 
     const fetchModels = useCallback(async () => {
         setIsLoading(true);
@@ -53,16 +54,17 @@ const ModelCatalogViewer: React.FC<{
                 fetch(`/api/router/keys/tenant?tenant_id=${encodeURIComponent(tenantId)}`, { headers: { 'x-citadel-key': sessionKey } })
             ]);
             
-            let keyCount = 0;
+            const providersWithKeys = new Set<string>();
             if (globalRes.ok) {
                 const globalData = await globalRes.json();
-                keyCount += (globalData.keys || []).length;
+                (globalData.keys || []).forEach((k: { provider: string }) => providersWithKeys.add(k.provider));
             }
             if (tenantRes.ok) {
                 const tenantData = await tenantRes.json();
-                keyCount += (tenantData.keys || []).length;
+                (tenantData.keys || []).forEach((k: { provider: string }) => providersWithKeys.add(k.provider));
             }
-            setHasKeys(keyCount > 0);
+            setKeyProviders(providersWithKeys);
+            setHasKeys(providersWithKeys.size > 0);
 
             const res = await fetch(
                 `/api/router/models?tenant_id=${encodeURIComponent(tenantId)}`,
@@ -170,11 +172,9 @@ const ModelCatalogViewer: React.FC<{
             ) : filtered.length === 0 ? (
                 <div className="text-center py-12 flex flex-col items-center">
                     <div className="text-white/30 text-xs font-mono mb-6">
-                        {!hasKeys 
-                            ? t('no_models_in_catalog')
-                            : models.length === 0 
-                                ? t('catalog_pending_sync')
-                                : t('no_models_match')}
+                        {models.length === 0
+                            ? t('catalog_pending_sync')
+                            : t('no_models_match')}
                     </div>
                     {hasKeys && models.length === 0 && (
                         <button 
@@ -199,6 +199,7 @@ const ModelCatalogViewer: React.FC<{
                                 <th className="text-right py-2 pr-4">{t('technical_info').split(' ')[1]}</th>
                                 <th className="text-right py-2 pr-4">{t('technical_info').split(' ')[0]}</th>
                                 <th className="text-center py-2">{t('status')}</th>
+                                <th className="text-center py-2 pl-2">Key</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -224,6 +225,12 @@ const ModelCatalogViewer: React.FC<{
                                         }`}>
                                             {m.is_local ? 'Local' : 'Cloud'}
                                         </span>
+                                    </td>
+                                    <td className="py-3 pl-2 text-center">
+                                        {keyProviders.has(m.provider)
+                                            ? <span className="text-[9px] font-mono text-green-400">✓</span>
+                                            : <span className="text-[9px] font-mono text-white/20">—</span>
+                                        }
                                     </td>
                                 </tr>
                             ))}
