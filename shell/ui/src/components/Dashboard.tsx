@@ -172,7 +172,7 @@ const FinancialWidget = () => {
 };
 
 const Dashboard: React.FC = () => {
-    const { setCurrentView, system_metrics, tenantId, sessionKey } = useAegisStore();
+    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected } = useAegisStore();
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
     return (
@@ -309,7 +309,13 @@ const Dashboard: React.FC = () => {
                         <div className="flex items-center gap-3">
                             <Bot className="w-5 h-5 text-aegis-purple" />
                             <h2 className="text-xl font-bold uppercase tracking-widest">Projects</h2>
-                            <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest ml-2">— Cognitive Agent Architecture</span>
+                            <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest ml-2">
+                                — Cognitive Agent Architecture
+                            </span>
+                            {isAgentStreamConnected
+                                ? <span className="text-[9px] font-mono text-green-400/50 uppercase tracking-widest">● live</span>
+                                : <span className="text-[9px] font-mono text-white/20 uppercase tracking-widest">○ connecting</span>
+                            }
                         </div>
                         <div className="glass rounded-2xl border border-white/10 p-6">
                             <div className="grid grid-cols-2 gap-4">

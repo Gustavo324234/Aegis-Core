@@ -110,6 +110,7 @@ interface AegisState {
     activeProjects: ProjectSummary[];
     agentSocket: WebSocket | null;
     isAgentStreamConnected: boolean;
+    agentStreamError: string | null;
 
     connectAgentStream: () => void;
     disconnectAgentStream: () => void;
@@ -205,6 +206,7 @@ export const useAegisStore = create<AegisState>()(
             activeProjects: [],
             agentSocket: null,
             isAgentStreamConnected: false,
+            agentStreamError: null,
 
             setHydrated: (val) => set({ _hydrated: val }),
             setCurrentView: (view) => set({ currentView: view }),
@@ -1023,9 +1025,17 @@ export const useAegisStore = create<AegisState>()(
 
                 ws.onclose = () => {
                     set({ agentSocket: null, isAgentStreamConnected: false });
+                    // Retry automático en 5s si el tenant sigue autenticado
+                    setTimeout(() => {
+                        const { isAuthenticated, tenantId, sessionKey, isAgentStreamConnected } = get();
+                        if (isAuthenticated && tenantId && sessionKey && !isAgentStreamConnected) {
+                            get().connectAgentStream();
+                        }
+                    }, 5000);
                 };
 
                 ws.onerror = () => {
+                    // El onclose se dispara después del onerror — el retry vive ahí
                     set({ isAgentStreamConnected: false });
                 };
 
@@ -1052,10 +1062,16 @@ export const useAegisStore = create<AegisState>()(
                     });
                     if (res.ok) {
                         const data = await res.json() as { projects: ProjectSummary[] };
-                        set({ activeProjects: data.projects ?? [] });
+                        set({ activeProjects: data.projects ?? [], agentStreamError: null });
+                    } else {
+                        // 404 = endpoint no desplegado aún — silencioso
+                        // Otros errores — registrar pero no crashear
+                        const errMsg = res.status !== 404 ? `HTTP ${res.status}` : null;
+                        set({ activeProjects: [], agentStreamError: errMsg });
                     }
                 } catch (e) {
                     console.error('[Projects] Fetch failed:', e);
+                    set({ activeProjects: [], agentStreamError: null });
                 }
             },
 
