@@ -13,7 +13,7 @@ interface KeyInfo {
     rate_limited_until?: string;
 }
 
-const PROVIDERS = ['anthropic', 'openai', 'groq', 'deepseek', 'mistral', 'google', 'openrouter', 'qwen', 'ollama'];
+const PROVIDERS = ['anthropic', 'openai', 'gemini', 'groq', 'deepseek', 'mistral', 'openrouter', 'qwen', 'ollama'];
 
 const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
