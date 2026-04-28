@@ -1,16 +1,26 @@
-# Aegis Core
+# Aegis OS
 
-**Cognitive Operating System — Unified Codebase**
+> **A cognitive operating system.** One binary. Zero runtime dependencies. LLMs as ALUs under a deterministic execution engine.
 
-Aegis Core is the unified implementation of the Aegis OS ecosystem. A single repository
-containing the cognitive kernel, web interface, mobile app, and deployment tooling —
-built around a single Rust binary that serves everything.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Build](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/ci.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/Gustavo324234)
 
-**Legacy repositories (read-only reference):**
-- `Aegis-ANK` — original Rust kernel (reference for kernel logic)
-- `Aegis-Shell` — original Python BFF + React UI (reference for UI and endpoints)
-- `Aegis-Installer` — original installer scripts (reference for deployment logic)
-- `Aegis-App` — original React Native app (reference for mobile)
+---
+
+## What is Aegis?
+
+Aegis is a self-hosted cognitive operating system — a platform where AI agents run as first-class processes, with memory, scheduling, multi-tenancy, and tool execution built into the kernel.
+
+It is not a chatbot wrapper. It is not a LangChain pipeline. It is a kernel-level runtime for autonomous cognitive workloads.
+
+**Core ideas:**
+
+- **LLMs as ALUs** — language models are probabilistic compute units under a deterministic scheduler, not oracles
+- **Zero-Panic kernel** — written in Rust with `clippy::unwrap_used` denied at CI level
+- **Citadel Protocol** — Zero-Trust multi-tenant authentication at every layer
+- **One binary** — `ank-server` serves the HTTP API, WebSocket streams, and the React UI with no external runtime
+- **Distro-ready** — designed to run as a system service, eventually embedded in a minimal Linux distribution
 
 ---
 
@@ -21,95 +31,181 @@ Browser / Mobile App
         │  HTTP + WebSocket
         ▼
  ank-server  (single Rust binary)
-        ├── HTTP :8000   ← REST API + WebSocket + serves React UI
-        └── gRPC :50051  ← external clients, CLI, multi-node federation
+        │
+        ├── ank-http    HTTP :8000  — REST API, WebSocket, embedded React UI
+        ├── ank-core    Cognitive engine — scheduler, VCM, agents, DAG, plugins
+        └── gRPC :50051 — external CLI, multi-node federation
 ```
 
-No Python runtime. No translation layer. One process.
+The system is multi-tenant: each tenant gets an isolated cognitive environment with its own memory layers (L1/L2/L3), agent tree, and encrypted data store (SQLCipher).
 
-## Repository structure
+See [ARCHITECTURE.md](ARCHITECTURE.md) for full detail.
+
+---
+
+## Quick Install
+
+**Requirements:** Linux (Ubuntu 22.04+ / Debian 12+), `sudo`, `curl`
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh | sudo bash
+```
+
+The installer will guide you through:
+1. **Installation mode** — Native (recommended) or Docker
+2. **Inference profile** — Cloud (API keys), Local (Ollama), or Hybrid
+3. **Hardware tier** — Laptop/VPS, Workstation, or SRE-grade server
+
+After install, Aegis starts automatically and prints your setup URL:
+
+```
+################################################################
+#          AEGIS OS — INSTALLATION COMPLETE                    #
+################################################################
+
+  Remote Access (HTTPS): https://your-tunnel.trycloudflare.com
+  Local Setup URL:        http://192.168.1.x:8000?setup_token=...
+
+  Token expires in 30 minutes.
+  To regenerate: sudo aegis token
+################################################################
+```
+
+Open the URL in your browser to complete onboarding.
+
+---
+
+## Aegis CLI
+
+After installation, the `aegis` command is available system-wide.
+
+### Status & Info
+
+```bash
+aegis status          # Service health and API connectivity
+aegis version         # Installed version
+aegis logs            # Follow live logs (last 50 lines)
+aegis logs 100        # Follow last 100 lines
+aegis diag            # Deep SRE diagnostic report
+```
+
+### Service Control
+
+```bash
+aegis start           # Start the service
+aegis stop            # Stop the service
+aegis restart         # Restart the service
+aegis token           # Print setup URL with fresh token
+```
+
+### Updates
+
+```bash
+aegis update          # Update to latest stable release
+aegis update --beta   # Update to latest nightly build (from main)
+aegis update --stable # Explicitly target stable channel
+```
+
+---
+
+## Build from Source
+
+**Requirements:** Rust 1.80+, Node.js 20+
+
+```bash
+git clone https://github.com/Gustavo324234/Aegis-Core.git
+cd Aegis-Core
+
+# Full build: UI + embedded binary
+make build-embed
+
+# Run
+./target/release/ank-server
+```
+
+Build options:
+
+| Command | Output | Notes |
+|---|---|---|
+| `make build` | Binary + separate UI assets | Set `UI_DIST_PATH=shell/ui/dist` at runtime |
+| `make build-embed` | Single self-contained binary | No external files needed |
+| `./build.sh` | Same as `make build` | Shell script alternative |
+
+---
+
+## Repository Structure
 
 ```
 aegis-core/
-├── kernel/      Aegis Neural Kernel — Rust/Tokio (ank-server + ank-core + ank-http)
-├── shell/       Web UI — React/Vite/TypeScript
-├── app/         Mobile client — React Native/Expo
-├── installer/   Deployment — Bash/systemd/Docker
-├── governance/  Tickets, architecture docs, codex
-└── distro/      (future) Linux distribution
+├── kernel/          Rust kernel — ank-server, ank-core, ank-http, ank-cli
+├── shell/ui/        Web interface — React 18 / Vite / TypeScript / Tailwind
+├── app/             Mobile client — React Native / Expo
+├── installer/       Deployment — install.sh, aegis CLI, systemd service
+├── governance/      Tickets, architecture docs, codex
+└── distro/          (future) Linux distribution
 ```
 
-## Status
+---
 
-| Component | Status |
-|---|---|
-| Kernel (ANK unified) | ✅ Operational — single Rust binary |
-| Web UI | ✅ Operational — React 18 / Vite, embedded in binary |
-| Mobile App | In progress — migrating from Aegis-App |
-| Installer | ✅ Operational — unified install.sh + systemd |
-| Linux distro | Planned — post-Epic 32 |
+## Completed Milestones
 
-## Completed Epics
+| Epic | Title | Status |
+|---|---|---|
+| Epic 32 | Unification — single Rust binary | ✅ Done |
+| Epic 42 | Realignment — auth, OAuth, model router | ✅ Done |
+| Epic 43 | Hierarchical Multi-Agent Orchestration | ✅ Done |
+| Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) | ✅ Done |
+| Epic 45 | Cognitive Agent Architecture | ✅ Done |
 
-| Epic | Title |
-|---|---|
-| Epic 32 | Unification — single Rust binary (ank-server) |
-| Epic 42 | Realignment — technical debt, auth, OAuth, Router |
-| Epic 43 | Hierarchical Multi-Agent Orchestration |
-| Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) |
+---
 
-## Build
+## Roadmap
 
-To build the entire project (UI + Kernel) in sequence:
+- [ ] Epic 46 — Public Launch (docs, community, open source health)
+- [ ] Sandbox scripting (Maker Capability) — CORE-150
+- [ ] Project context integration (Git/VCM) — CORE-151
+- [ ] Mobile app completion
+- [ ] `distro/` — minimal Linux distribution
 
-```bash
-./build.sh
-```
+---
 
-Or using `make`:
+## Contributing
 
-```bash
-make build
-```
+Aegis is open source and welcomes contributions.
 
-### Build Options
+Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started. All contributions — code, docs, translations, bug reports — are valued.
 
-*   **Standard Build**: Compiles the UI to `shell/ui/dist` and the Kernel. When running, you must provide `UI_DIST_PATH` unless the UI is at the default location.
-    ```bash
-    make build
-    # Run with:
-    UI_DIST_PATH=shell/ui/dist ./target/release/ank-server
-    ```
-*   **Embedded Build**: Compiles the UI and embeds it directly into the `ank-server` binary. No external files are needed at runtime.
-    ```bash
-    make build-embed
-    # Run with:
-    ./target/release/ank-server
-    ```
+The project uses a ticket-driven workflow. Check [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md) for open work.
 
-## Operation
+---
 
-Once Aegis is installed (via `installer/install.sh`), use the unified CLI for all management tasks:
+## Supporting the Project
 
-```bash
-# Check version and status
-aegis version
-aegis status
+Aegis is built and maintained by a solo developer. If it's useful to you, consider supporting its development:
 
-# Update to latest nightly/beta
-aegis update --beta
-```
+- ⭐ **Star the repo** — helps with visibility
+- 🐛 **Report bugs** — open an issue
+- 💬 **Spread the word** — share with people building AI systems
+- ❤️ **Sponsor** — [github.com/sponsors/Gustavo324234](https://github.com/sponsors/Gustavo324234)
 
-See [installer/README.md](installer/README.md) for a full command reference.
+Sponsorships go directly toward development infrastructure: compute, API costs, and tooling.
+
+---
 
 ## Philosophy
 
-- **LLMs as ALUs** — not oracles. Deterministic execution engine over probabilistic compute.
-- **Zero-Panic** — Rust kernel with `clippy::unwrap_used` denied at CI level.
-- **Citadel Protocol** — Zero-Trust multi-tenant auth at every layer.
-- **One binary** — single executable, no runtime dependencies.
-- **Distro-ready** — designed to embed into a minimal Linux distribution.
+Aegis is built on a few firm beliefs:
+
+**LLMs are ALUs, not oracles.** A language model is a probabilistic compute unit that transforms tokens. The system's intelligence comes from the deterministic layer that orchestrates those transforms — the scheduler, the memory hierarchy, the agent tree. The model is a tool, not the mind.
+
+**Kernel-level cognition.** AI workloads should be managed the same way an OS manages processes: scheduling, isolation, resource limits, inter-process communication. Not as a library call, as a kernel service.
+
+**One binary.** Operational complexity is a form of technical debt. A system that runs as a single executable, with no Python runtime, no Node daemon, no Docker required, is a system that can actually be maintained.
+
+---
 
 ## License
 
-Apache 2.0
+MIT — see [LICENSE](LICENSE)
+
+Copyright (c) 2026 Gustavo Aversente

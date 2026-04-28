@@ -7,10 +7,10 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | ID | Título | Estado | Progreso |
 |---|---|---|---|
 | EPIC 41 | UX & Onboarding | En Curso | 80% |
-| EPIC 42 | Vision Realignment & Autonomy | En Curso | 40% |
+| EPIC 42 | Vision Realignment & Autonomy | En Curso | 45% |
 | EPIC 43 | Hierarchical Multi-Agent Orchestration | ✅ Completa | 100% |
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
-| EPIC 45 | Cognitive Agent Architecture (CAA) | En Curso | 85% |
+| EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 
 ---
 
@@ -37,13 +37,11 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-152 | feat | Plugins de Dominios (Ledger & Chronos) | ✅ Done | Media |
 | CORE-153 | feat | Dashboard Dinámico & Kanban UI | ✅ Done | Alta |
 | CORE-154 | feat | Orquestación de Sub-Agentes especializados | ✅ Done | Baja |
-| CORE-212 | fix | Shell: provider gemini en KeyManager y visibilidad de modelos en CatalogViewer | 📥 Todo | Crítica |
+| CORE-212 | fix | Shell: provider gemini en KeyManager + visibilidad de modelos en CatalogViewer | ✅ Done | Crítica |
 
 ---
 
 ### EPIC 43 — Hierarchical Multi-Agent Orchestration ✅
-
-**Documento de diseño:** `governance/EPIC_43_HIERARCHICAL_AGENTS.md`
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
@@ -59,13 +57,9 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-165 | feat | Model-per-Agent — CMR integration con TaskType por AgentNode | ✅ Done | Alta | Kernel Engineer |
 | CORE-166 | feat | AgentTreeWidget — Árbol de Agentes en Dashboard del Tenant | ✅ Done | Alta | Shell Engineer |
 
-> **Nota:** CORE-164 descartado — era para AdminDashboard (incorrecto). Reemplazado por CORE-166.
-
 ---
 
 ### EPIC 44 — Developer Workspace ✅
-
-**Documento de diseño:** `governance/EPIC_44_DEVELOPER_WORKSPACE.md`
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
@@ -86,11 +80,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ---
 
-### EPIC 45 — Cognitive Agent Architecture (CAA)
-
-**Documento de diseño:** `governance/EPIC_45_COGNITIVE_AGENT_ARCHITECTURE.md`
-
-#### Fase 1-6 ✅ (ver commits)
+### EPIC 45 — Cognitive Agent Architecture ✅
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
@@ -113,14 +103,9 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-206 | feat | AgentPersistence — agent_tree.json + agent_contexts/*.md | ✅ Done | Alta | Kernel Engineer |
 | CORE-207 | feat | State Summary Generator — trigger al cerrar sesión | ✅ Done | Alta | Kernel Engineer |
 | CORE-208 | feat | CMR per-agent — task_type al CMR por AgentNode | ✅ Done | Alta | Kernel Engineer |
-
-#### Bugs detectados post-integración (2026-04-28)
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-209 | fix | Montar /ws/agents en build_router y agregar GET /api/agents/projects | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-210 | fix | Chat Agent: fallback cuando no hay proyecto activo | 📥 Todo | Alta | Kernel Engineer |
-| CORE-211 | fix | Shell: graceful errors en fetchActiveProjects y connectAgentStream | 📥 Todo | Alta | Shell Engineer |
+| CORE-209 | fix | Montar /ws/agents en build_router y agregar GET /api/agents/projects | ✅ Done | Crítica | Kernel Engineer |
+| CORE-210 | fix | Chat Agent: fallback cuando no hay proyecto activo | ✅ Done | Alta | Kernel Engineer |
+| CORE-211 | fix | Shell: graceful errors en fetchActiveProjects y connectAgentStream | ✅ Done | Alta | Shell Engineer |
 
 ---
 
@@ -129,6 +114,14 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | ID | Tipo | Título | Estado | Prioridad | Responsable |
 |---|---|---|---|---|---|
 | OPS-001 | ops | Re-registrar API keys Gemini/OpenRouter en DB via UI tras reinicio | 📥 Todo | Crítica | Tavo (manual) |
+
+---
+
+### Deuda técnica pendiente
+
+| ID | Tipo | Título | Estado | Prioridad |
+|---|---|---|---|---|
+| CORE-213 | fix | Kernel: loguear error en key_pool.load() al arranque | 📥 Todo | Media |
 
 ---
 
