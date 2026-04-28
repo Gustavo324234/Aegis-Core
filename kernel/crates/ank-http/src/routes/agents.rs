@@ -12,12 +12,27 @@ use serde::{Deserialize, Serialize};
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/projects", get(list_projects))
         .route("/tree", get(get_agent_tree))
         .route("/:agent_id", get(get_agent))
         .route("/spawn", post(spawn_agent))
 }
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ProjectSummaryDto {
+    pub project_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub root_agent_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ProjectListDto {
+    pub projects: Vec<ProjectSummaryDto>,
+}
 
 #[derive(Serialize)]
 pub struct AgentNodeDto {
@@ -55,6 +70,46 @@ pub struct SpawnAgentResponse {
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
+
+/// GET /api/agents/projects — retorna los proyectos activos derivados del árbol de agentes.
+async fn list_projects(
+    State(state): State<AppState>,
+    _creds: CitadelCredentials,
+) -> Json<ProjectListDto> {
+    let snapshot = state.agent_orchestrator.tree_snapshot().await;
+
+    let mut projects_map: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+
+    for node in &snapshot {
+        let root_id = if node.parent_id.is_none() {
+            Some(node.agent_id.to_string())
+        } else {
+            None
+        };
+        projects_map
+            .entry(node.project_id.clone())
+            .and_modify(|r| {
+                if root_id.is_some() {
+                    *r = root_id.clone();
+                }
+            })
+            .or_insert(root_id);
+    }
+
+    let projects = projects_map
+        .into_iter()
+        .map(|(project_id, root_agent_id)| ProjectSummaryDto {
+            name: project_id.clone(),
+            project_id,
+            description: None,
+            status: "active".to_string(),
+            root_agent_id,
+        })
+        .collect();
+
+    Json(ProjectListDto { projects })
+}
 
 /// GET /api/agents/tree — retorna el árbol completo de agentes activos.
 async fn get_agent_tree(

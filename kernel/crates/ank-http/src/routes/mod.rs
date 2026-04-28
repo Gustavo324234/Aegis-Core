@@ -52,6 +52,7 @@ pub fn build_router(state: AppState) -> Router {
         // WebSocket Routes
         .nest("/ws/chat", ws::chat::router())
         .nest("/ws/siren", ws::siren::router())
+        .nest("/ws/agents", ws::agents::router())
         // Static Files (Catch-all)
         .fallback(static_files::spa_handler)
         .with_state(state)

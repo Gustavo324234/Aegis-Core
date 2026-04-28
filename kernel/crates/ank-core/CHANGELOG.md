@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.23](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.22...ank-core-v0.1.23) (2026-04-28)
+
+
+### Bug Fixes
+
+* **ank-http:** CORE-209 CORE-210 montar ws/agents, agregar /api/agents/projects y fix chat_agent fallback ([#145](https://github.com/Gustavo324234/Aegis-Core/issues/145)) ([581b543](https://github.com/Gustavo324234/Aegis-Core/commit/581b543348496c781d070a6bdaf4a4b6c0f2b848))
+
 ## [0.1.22](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.21...ank-core-v0.1.22) (2026-04-27)
 
 
