@@ -11,6 +11,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 43 | Hierarchical Multi-Agent Orchestration | ✅ Completa | 100% |
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
+| EPIC 46 | Public Launch | En Curso | 55% |
 
 ---
 
@@ -109,7 +110,26 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ---
 
-### Bugs de infraestructura (2026-04-28)
+### EPIC 46 — Public Launch
+
+| ID | Tipo | Título | Estado | Prioridad | Responsable |
+|---|---|---|---|---|---|
+| CORE-214 | docs | CODE_OF_CONDUCT.md | ✅ Done | Alta | Arquitecto IA |
+| CORE-215 | docs | SECURITY.md — política de reporte de vulnerabilidades | ✅ Done | Alta | Arquitecto IA |
+| CORE-216 | docs | CHANGELOG.md — historial de versiones público | ✅ Done | Media | Arquitecto IA |
+| CORE-217 | docs | Issue template: Bug Report | ✅ Done | Alta | Arquitecto IA |
+| CORE-218 | docs | Issue template: Feature Request | ✅ Done | Media | Arquitecto IA |
+| CORE-219 | ops | Habilitar GitHub Sponsors + redactar sponsor page | ✅ Done (draft) | Alta | Tavo |
+| CORE-220 | ops | Crear release v1.0.0 en GitHub con release notes | 📥 Todo | Crítica | Tavo |
+| CORE-221 | ops | Agregar topics al repo de GitHub | 📥 Todo | Media | Tavo |
+| CORE-222 | ops | Social preview image (og:image del repo) | 📥 Todo | Media | Tavo |
+| CORE-223 | docs | .github/CODEOWNERS — definir owner por área | ✅ Done | Media | Arquitecto IA |
+| CORE-224 | chore | Limpiar directorios temporales (scratch/, target_verify_fix/) | 📥 Todo | Baja | Tavo |
+| CORE-225 | chore | Sincronizar licencia: license field en todos los Cargo.toml → MIT | 📥 Todo | Alta | Kernel Engineer |
+
+---
+
+### Bugs de infraestructura
 
 | ID | Tipo | Título | Estado | Prioridad | Responsable |
 |---|---|---|---|---|---|

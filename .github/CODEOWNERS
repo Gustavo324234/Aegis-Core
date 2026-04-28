@@ -1,0 +1,33 @@
+# CODEOWNERS
+#
+# Each line defines who is responsible for reviewing changes to a path.
+# When a PR modifies a file matching a pattern, the listed owner is
+# automatically requested for review.
+#
+# Aegis-Core is currently a solo project. This file establishes ownership
+# structure for when the team grows.
+#
+# Format: <path pattern>  <GitHub username>
+
+# Global fallback — maintainer reviews everything
+*                           @Gustavo324234
+
+# Kernel (Rust)
+/kernel/                    @Gustavo324234
+
+# Web UI
+/shell/                     @Gustavo324234
+
+# Mobile app
+/app/                       @Gustavo324234
+
+# Installer & CLI
+/installer/                 @Gustavo324234
+
+# Governance & docs
+/governance/                @Gustavo324234
+/docs/                      @Gustavo324234
+*.md                        @Gustavo324234
+
+# CI/CD
+/.github/                   @Gustavo324234
