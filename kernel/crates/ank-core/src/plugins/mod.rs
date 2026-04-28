@@ -709,7 +709,12 @@ mod tests {
     #[tokio::test]
     async fn test_domain_plugin_execution() -> anyhow::Result<()> {
         let manager = PluginManager::new()?;
-        let tenant_id = "test_domain_user_clean";
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let tenant_id = format!("test_domain_user_{}", ts);
+        let tenant_id = tenant_id.as_str();
         let session_key = "test_key_123";
 
         // Test Ledger
@@ -739,8 +744,7 @@ mod tests {
         assert!(res.contains("Test reminder"));
 
         // Limpiar
-        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let _ = std::fs::remove_dir_all(format!("{}/users/{}", base_dir, tenant_id));
+        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
 
         Ok(())
     }
