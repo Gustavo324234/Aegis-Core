@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.1...shell-ui-v1.10.2) (2026-04-28)
+
+
+### Bug Fixes
+
+* **shell:** CORE-212 provider gemini en KeyManager y visibilidad de modelos en CatalogViewer ([#148](https://github.com/Gustavo324234/Aegis-Core/issues/148)) ([08deb8a](https://github.com/Gustavo324234/Aegis-Core/commit/08deb8a35f9a2d4cf42c2c97d1b91d0696d2bdab))
+
 ## [1.10.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.0...shell-ui-v1.10.1) (2026-04-28)
 
 
