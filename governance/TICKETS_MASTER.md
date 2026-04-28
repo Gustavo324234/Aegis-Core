@@ -37,6 +37,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-152 | feat | Plugins de Dominios (Ledger & Chronos) | ✅ Done | Media |
 | CORE-153 | feat | Dashboard Dinámico & Kanban UI | ✅ Done | Alta |
 | CORE-154 | feat | Orquestación de Sub-Agentes especializados | ✅ Done | Baja |
+| CORE-212 | fix | Shell: provider gemini en KeyManager y visibilidad de modelos en CatalogViewer | 📥 Todo | Crítica |
 
 ---
 
@@ -89,62 +90,45 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 **Documento de diseño:** `governance/EPIC_45_COGNITIVE_AGENT_ARCHITECTURE.md`
 
-#### Fase 1 — Tipos base (Kernel Engineer) ✅
+#### Fase 1-6 ✅ (ver commits)
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-190 | feat | AgentRole, AgentNode, AgentState, AgentId — tipos base con task_type y model_preference | ✅ Done | Crítica | Kernel Engineer |
+| CORE-190 | feat | AgentRole, AgentNode, AgentState, AgentId — tipos base | ✅ Done | Crítica | Kernel Engineer |
 | CORE-191 | feat | AgentTree — estructura n-ary con serialize/restore | ✅ Done | Crítica | Kernel Engineer |
 | CORE-192 | feat | AgentMessage — Dispatch, Report, Query, QueryReply | ✅ Done | Crítica | Kernel Engineer |
-| CORE-195 | feat | PCB Extension — campo agent_id + task_type override | ✅ Done | Alta | Kernel Engineer |
+| CORE-193 | feat | AgentOrchestrator — ciclo de vida, routing, persist, restore | ✅ Done | Crítica | Kernel Engineer |
+| CORE-194 | feat | ProjectRegistry — CRUD + SQLite + serialize/restore árbol | ✅ Done | Crítica | Kernel Engineer |
+| CORE-195 | feat | PCB Extension — agent_id + task_type override | ✅ Done | Alta | Kernel Engineer |
 | CORE-196 | feat | ContextBudget — presupuesto de tokens por AgentNode | ✅ Done | Alta | Kernel Engineer |
-
-#### Fase 2 — Orchestration + Persistencia (Kernel Engineer) ✅
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-193 | feat | AgentOrchestrator — ciclo de vida, routing, persist on close, restore on activation | ✅ Done | Crítica | Kernel Engineer |
-| CORE-194 | feat | ProjectRegistry — CRUD de proyectos + tabla SQLite + serialize/restore árbol | ✅ Done | Crítica | Kernel Engineer |
-| CORE-197 | feat | InstructionLoader — carga de agent/*.md en runtime + state summary template | ✅ Done | Alta | Kernel Engineer |
+| CORE-197 | feat | InstructionLoader — agent/*.md en runtime + state summary | ✅ Done | Alta | Kernel Engineer |
 | CORE-198 | feat | SYS_AGENT_SPAWN — syscall con task_type opcional | ✅ Done | Alta | Kernel Engineer |
 | CORE-199 | feat | SYS_AGENT_QUERY — syscall de query descendente | ✅ Done | Alta | Kernel Engineer |
-| CORE-206 | feat | AgentPersistence — lectura/escritura agent_tree.json + agent_contexts/*.md | ✅ Done | Alta | Kernel Engineer |
-| CORE-207 | feat | State Summary Generator — trigger al cerrar sesión, genera .md por supervisor | ✅ Done | Alta | Kernel Engineer |
-
-#### Fase 3 — CMR Integration (Kernel Engineer) ✅
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-208 | feat | CMR per-agent — AgentOrchestrator pasa task_type al CMR al crear PCB por agente | ✅ Done | Alta | Kernel Engineer |
-
-#### Fase 4 — Visibilidad (Kernel Engineer + Shell Engineer) ✅
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-200 | feat | AgentEvent stream — WebSocket ws/agents/{tenant_id} con evento Restored | ✅ Done | Alta | Kernel Engineer |
-| CORE-202 | feat | AgentActivityPanel — indicador colapsable en ChatTerminal con modelo visible | ✅ Done | Alta | Shell Engineer |
-| CORE-203 | feat | AgentTreeView + ProjectList — panel en Dashboard con árbol en tiempo real | ✅ Done | Media | Shell Engineer |
+| CORE-200 | feat | AgentEvent stream — WebSocket ws/agents/{tenant_id} | ✅ Done | Alta | Kernel Engineer |
+| CORE-201 | feat | Chat Agent context limiter — ventana deslizante + resumen | ✅ Done | Alta | Kernel Engineer |
+| CORE-202 | feat | AgentActivityPanel — indicador colapsable en ChatTerminal | ✅ Done | Alta | Shell Engineer |
+| CORE-203 | feat | AgentTreeView + ProjectList — panel en Dashboard | ✅ Done | Media | Shell Engineer |
 | CORE-204 | feat | useAegisStore — agentTree + activeProjects + connectAgentStream | ✅ Done | Alta | Shell Engineer |
-
-#### Fase 5 — Chat Agent Integration (Kernel Engineer) ✅
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-201 | feat | Chat Agent context limiter — ventana deslizante + resumen automático | ✅ Done | Alta | Kernel Engineer |
-
-#### Fase 6 — Instrucciones (Arquitecto IA) ✅
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-205 | feat | Archivos agent/*.md — chat_agent, supervisor, specialist + state summary template | ✅ Done | Alta | Arquitecto IA |
+| CORE-205 | feat | Archivos agent/*.md — instrucciones por rol | ✅ Done | Alta | Arquitecto IA |
+| CORE-206 | feat | AgentPersistence — agent_tree.json + agent_contexts/*.md | ✅ Done | Alta | Kernel Engineer |
+| CORE-207 | feat | State Summary Generator — trigger al cerrar sesión | ✅ Done | Alta | Kernel Engineer |
+| CORE-208 | feat | CMR per-agent — task_type al CMR por AgentNode | ✅ Done | Alta | Kernel Engineer |
 
 #### Bugs detectados post-integración (2026-04-28)
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
 | CORE-209 | fix | Montar /ws/agents en build_router y agregar GET /api/agents/projects | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-210 | fix | Chat Agent: declarar ausencia de contexto cuando no hay proyecto activo | 📥 Todo | Alta | Kernel Engineer |
-| CORE-211 | fix | Shell: manejo graceful de errores en fetchActiveProjects y connectAgentStream | 📥 Todo | Alta | Shell Engineer |
+| CORE-210 | fix | Chat Agent: fallback cuando no hay proyecto activo | 📥 Todo | Alta | Kernel Engineer |
+| CORE-211 | fix | Shell: graceful errors en fetchActiveProjects y connectAgentStream | 📥 Todo | Alta | Shell Engineer |
+
+---
+
+### Bugs de infraestructura (2026-04-28)
+
+| ID | Tipo | Título | Estado | Prioridad | Responsable |
+|---|---|---|---|---|---|
+| OPS-001 | ops | Re-registrar API keys Gemini/OpenRouter en DB via UI tras reinicio | 📥 Todo | Crítica | Tavo (manual) |
 
 ---
 
