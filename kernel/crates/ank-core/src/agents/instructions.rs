@@ -38,7 +38,33 @@ impl InstructionLoader {
     }
 
     /// Precarga todos los archivos de instrucciones al inicializar.
+    ///
+    /// Semántica de logging:
+    /// - Si el directorio de config no existe → DEBUG (operación normal en producción;
+    ///   los fallbacks embebidos via include_str! son suficientes).
+    /// - Si el directorio existe pero falta un archivo → WARN (instalación incompleta).
+    /// - Si un archivo carga correctamente → INFO.
     pub fn preload(&mut self) -> anyhow::Result<()> {
+        // Si el directorio de config no existe en absoluto, no hay nada que cargar.
+        // Esto es normal en deployments donde solo se usa el fallback embebido.
+        if !self.config_dir.exists() {
+            tracing::debug!(
+                "[InstructionLoader] Config dir not found at {:?} — using compiled-in fallbacks.",
+                self.config_dir
+            );
+            let files = [
+                CHAT_AGENT_FILE,
+                PROJECT_SUPERVISOR_FILE,
+                SUPERVISOR_FILE,
+                SPECIALIST_FILE,
+            ];
+            for name in &files {
+                self.cache
+                    .insert(name.to_string(), Self::fallback(name).to_string());
+            }
+            return Ok(());
+        }
+
         let files = [
             CHAT_AGENT_FILE,
             PROJECT_SUPERVISOR_FILE,
@@ -57,6 +83,7 @@ impl InstructionLoader {
                     self.cache.insert(name.to_string(), content);
                 }
                 Err(e) => {
+                    // Directory exists but a specific file is missing — that IS unexpected.
                     warn!(
                         "[InstructionLoader] Could not load {}.md: {}. Using fallback.",
                         name, e
