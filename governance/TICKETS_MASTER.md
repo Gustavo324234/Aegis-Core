@@ -11,6 +11,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 43 | Hierarchical Multi-Agent Orchestration | ✅ Completa | 100% |
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
+| EPIC 46 | Public Launch | ✅ Completa | 100% |
 
 ---
 
@@ -109,7 +110,48 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ---
 
-### Bugs de infraestructura (2026-04-28)
+### EPIC 46 — Public Launch ✅
+
+| ID | Tipo | Título | Estado | Prioridad | Responsable |
+|---|---|---|---|---|---|
+| CORE-214 | docs | CODE_OF_CONDUCT.md | ✅ Done | Alta | Arquitecto IA |
+| CORE-215 | docs | SECURITY.md — política de reporte de vulnerabilidades | ✅ Done | Alta | Arquitecto IA |
+| CORE-216 | docs | CHANGELOG.md — historial de versiones público | ✅ Done | Media | Arquitecto IA |
+| CORE-217 | docs | Issue template: Bug Report | ✅ Done | Alta | Arquitecto IA |
+| CORE-218 | docs | Issue template: Feature Request | ✅ Done | Media | Arquitecto IA |
+| CORE-219 | ops | GitHub Sponsors + FUNDING.yml + sponsor page | ✅ Done | Alta | Tavo |
+| CORE-220 | ops | Release — gestionado por release-please | ✅ Done | Crítica | Automático |
+| CORE-221 | ops | Topics del repo | ✅ Done | Media | Tavo |
+| CORE-222 | ops | Social preview image | ✅ Done | Media | Tavo |
+| CORE-223 | docs | .github/CODEOWNERS | ✅ Done | Media | Arquitecto IA |
+| CORE-224 | chore | Limpiar directorios temporales | 📥 Todo | Baja | Tavo |
+| CORE-225 | chore | License field en Cargo.toml → MIT | 📥 Todo | Alta | Kernel Engineer |
+
+---
+
+### Bugs pre-lanzamiento — Multi-Agent Pipeline (Kernel)
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-226 | fix | Kernel: Chat Agent usa SYSTEM_PROMPT_MASTER genérico en lugar de chat_agent.md | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-227 | fix | Kernel: SPAWN_INSTRUCTIONS usa sintaxis obsoleta — divergencia con parser | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-228 | fix | Kernel: SyscallExecutor se crea sin AgentOrchestrator — SYS_AGENT_SPAWN siempre falla | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-229 | fix | Installer: agents config no se despliega en producción | 📥 Todo | Alta | DevOps Engineer |
+
+---
+
+### Bugs pre-lanzamiento — Shell / UX
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-230 | fix | Shell: Dashboard crashea al montar y dispara AegisErrorBoundary ("Session Error") | 📥 Todo | Crítica | Shell Engineer |
+| CORE-231 | fix | Shell: Micrófono falla silenciosamente en HTTP — falta feedback al usuario | 📥 Todo | Crítica | Shell Engineer |
+| CORE-232 | fix | Shell: IP vs Cloudflare producen chats separados — falta aviso y pre-fill de login | 📥 Todo | Alta | Shell Engineer |
+| CORE-233 | feat | Shell: Settings del tenant — simplificar y unificar configuración en 4 tabs | 📥 Todo | Alta | Shell Engineer |
+
+---
+
+### Bugs de infraestructura
 
 | ID | Tipo | Título | Estado | Prioridad | Responsable |
 |---|---|---|---|---|---|

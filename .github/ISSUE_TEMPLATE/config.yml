@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/Gustavo324234/Aegis-Core/tree/main/docs
+    about: Installation guides, CLI reference, architecture docs
+  - name: Security vulnerability
+    url: https://github.com/Gustavo324234/Aegis-Core/security/advisories/new
+    about: Please report security issues privately, not as public issues
