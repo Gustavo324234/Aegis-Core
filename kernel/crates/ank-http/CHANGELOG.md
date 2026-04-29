@@ -2,6 +2,13 @@
 
 
 
+## [0.1.32](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.31...ank-http-v0.1.32) (2026-04-29)
+
+
+### Bug Fixes
+
+* allow Ollama/Custom providers without API key in admin panel ([#163](https://github.com/Gustavo324234/Aegis-Core/issues/163)) ([c5a37fd](https://github.com/Gustavo324234/Aegis-Core/commit/c5a37fdb88868610b722d7fd957051e76367139f))
+
 ## [0.1.31](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.30...ank-http-v0.1.31) (2026-04-29)
 
 

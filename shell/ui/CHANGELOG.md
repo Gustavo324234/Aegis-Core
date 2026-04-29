@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.5](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.4...shell-ui-v1.10.5) (2026-04-29)
+
+
+### Bug Fixes
+
+* allow Ollama/Custom providers without API key in admin panel ([#163](https://github.com/Gustavo324234/Aegis-Core/issues/163)) ([c5a37fd](https://github.com/Gustavo324234/Aegis-Core/commit/c5a37fdb88868610b722d7fd957051e76367139f))
+
 ## [1.10.4](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.3...shell-ui-v1.10.4) (2026-04-29)
 
 
