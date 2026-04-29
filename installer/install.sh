@@ -263,6 +263,18 @@ install_native() {
     chown -R aegis:aegis "$UI_DIST_PATH"
     success "UI assets → ${UI_DIST_PATH}"
 
+    log "Downloading agent instruction files..."
+    mkdir -p "$CONFIG_DIR/agents"
+    if curl -L --fail --progress-bar \
+        "${release_url}/agents-config.tar.gz" -o "/tmp/agents-config.tar.gz" 2>/dev/null; then
+        tar -xzf "/tmp/agents-config.tar.gz" -C "$CONFIG_DIR/agents"
+        rm -f "/tmp/agents-config.tar.gz"
+        chown -R aegis:aegis "$CONFIG_DIR/agents"
+        success "Agent instruction files → ${CONFIG_DIR}/agents"
+    else
+        warn "agents-config.tar.gz not in release — using compiled-in fallbacks"
+    fi
+
     # Install aegis CLI
     log "Installing aegis CLI..."
     local script_dir
@@ -286,6 +298,7 @@ install_native() {
         cat > "$ENV_FILE" <<EOF
 AEGIS_ROOT_KEY=${root_key}
 AEGIS_DATA_DIR=${DATA_DIR}
+AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
@@ -298,9 +311,10 @@ EOF
     else
         warn "Existing ${ENV_FILE} preserved."
         # Asegurar que las vars requeridas están presentes
-        grep -q "UI_DIST_PATH"          "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}"               >> "$ENV_FILE"
-        grep -q "AEGIS_DATA_DIR"        "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                 >> "$ENV_FILE"
-        grep -q "AEGIS_MODEL_PROFILE"   "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"   >> "$ENV_FILE"
+        grep -q "UI_DIST_PATH"              "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}"                   >> "$ENV_FILE"
+        grep -q "AEGIS_DATA_DIR"            "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                     >> "$ENV_FILE"
+        grep -q "AEGIS_MODEL_PROFILE"       "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"       >> "$ENV_FILE"
+        grep -q "AEGIS_AGENTS_CONFIG_DIR"   "$ENV_FILE" || echo "AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents"   >> "$ENV_FILE"
     fi
 
     # Write mode file
