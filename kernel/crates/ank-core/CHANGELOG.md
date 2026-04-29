@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.26](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.25...ank-core-v0.1.26) (2026-04-29)
+
+
+### Bug Fixes
+
+* **shell:** preserve stored API key when edit form submits empty api_key ([#161](https://github.com/Gustavo324234/Aegis-Core/issues/161)) ([1ad2110](https://github.com/Gustavo324234/Aegis-Core/commit/1ad2110c143374c6eca044626f9e3a510e03bd1a))
+
 ## [0.1.25](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.24...ank-core-v0.1.25) (2026-04-29)
 
 

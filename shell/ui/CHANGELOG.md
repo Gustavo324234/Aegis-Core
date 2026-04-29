@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.4](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.3...shell-ui-v1.10.4) (2026-04-29)
+
+
+### Bug Fixes
+
+* **shell:** preserve stored API key when edit form submits empty api_key ([#161](https://github.com/Gustavo324234/Aegis-Core/issues/161)) ([1ad2110](https://github.com/Gustavo324234/Aegis-Core/commit/1ad2110c143374c6eca044626f9e3a510e03bd1a))
+
 ## [1.10.3](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.2...shell-ui-v1.10.3) (2026-04-29)
 
 
