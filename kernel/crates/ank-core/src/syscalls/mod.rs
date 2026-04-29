@@ -177,6 +177,7 @@ impl SyscallExecutor {
         orchestrator: std::sync::Arc<crate::agents::orchestrator::AgentOrchestrator>,
     ) -> Self {
         self.agent_orchestrator = Some(orchestrator);
+        tracing::info!("SyscallExecutor: AgentOrchestrator connected. SYS_AGENT_SPAWN ready.");
         self
     }
 
