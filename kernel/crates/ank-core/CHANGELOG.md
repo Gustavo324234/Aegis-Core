@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.28](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.27...ank-core-v0.1.28) (2026-04-29)
+
+
+### Bug Fixes
+
+* **instructions:** silence WARN when agents config dir is absent in p… ([#168](https://github.com/Gustavo324234/Aegis-Core/issues/168)) ([854e3ee](https://github.com/Gustavo324234/Aegis-Core/commit/854e3ee322d585242d1b67ab4272526b297c52ae))
+
 ## [0.1.27](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.26...ank-core-v0.1.27) (2026-04-29)
 
 
