@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.6](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.5...shell-ui-v1.10.6) (2026-04-29)
+
+
+### Bug Fixes
+
+* **install:** agents config deploy ([#165](https://github.com/Gustavo324234/Aegis-Core/issues/165)) ([#166](https://github.com/Gustavo324234/Aegis-Core/issues/166)) ([905ca1b](https://github.com/Gustavo324234/Aegis-Core/commit/905ca1bb787f59a141114b538bda5daa014874dd))
+
 ## [1.10.5](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.4...shell-ui-v1.10.5) (2026-04-29)
 
 
