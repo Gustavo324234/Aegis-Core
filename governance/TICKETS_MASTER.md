@@ -129,6 +129,28 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ---
 
+### Bugs pre-lanzamiento — Multi-Agent Pipeline (Kernel)
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-226 | fix | Kernel: Chat Agent usa SYSTEM_PROMPT_MASTER genérico en lugar de chat_agent.md | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-227 | fix | Kernel: SPAWN_INSTRUCTIONS usa sintaxis obsoleta — divergencia con parser | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-228 | fix | Kernel: SyscallExecutor se crea sin AgentOrchestrator — SYS_AGENT_SPAWN siempre falla | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-229 | fix | Installer: agents config no se despliega en producción | 📥 Todo | Alta | DevOps Engineer |
+
+---
+
+### Bugs pre-lanzamiento — Shell / UX
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-230 | fix | Shell: Dashboard crashea al montar y dispara AegisErrorBoundary ("Session Error") | 📥 Todo | Crítica | Shell Engineer |
+| CORE-231 | fix | Shell: Micrófono falla silenciosamente en HTTP — falta feedback al usuario | 📥 Todo | Crítica | Shell Engineer |
+| CORE-232 | fix | Shell: IP vs Cloudflare producen chats separados — falta aviso y pre-fill de login | 📥 Todo | Alta | Shell Engineer |
+| CORE-233 | feat | Shell: Settings del tenant — simplificar y unificar configuración en 4 tabs | 📥 Todo | Alta | Shell Engineer |
+
+---
+
 ### Bugs de infraestructura
 
 | ID | Tipo | Título | Estado | Prioridad | Responsable |
