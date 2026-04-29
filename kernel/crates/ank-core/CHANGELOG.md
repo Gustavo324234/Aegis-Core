@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.25](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.24...ank-core-v0.1.25) (2026-04-29)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-227 unificar sintaxis de spawn al formato SYS_AGE… ([#155](https://github.com/Gustavo324234/Aegis-Core/issues/155)) ([670759d](https://github.com/Gustavo324234/Aegis-Core/commit/670759d9ed58b74dde0604b155fe7e4fe117638b))
+* **ank-server:** CORE-228 conectar AgentOrchestrator al SyscallExecutor ([#158](https://github.com/Gustavo324234/Aegis-Core/issues/158)) ([6376e7e](https://github.com/Gustavo324234/Aegis-Core/commit/6376e7e98fe948e286ac87100594c2d18348be2b))
+
 ## [0.1.24](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.23...ank-core-v0.1.24) (2026-04-29)
 
 
