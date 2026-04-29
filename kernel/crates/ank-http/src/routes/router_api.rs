@@ -146,7 +146,9 @@ async fn add_global_key(
     let api_key = req
         .api_key
         .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| AegisHttpError::BadRequest("api_key is required when adding a new key".into()))?;
+        .ok_or_else(|| {
+            AegisHttpError::BadRequest("api_key is required when adding a new key".into())
+        })?;
 
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
@@ -264,7 +266,9 @@ async fn add_tenant_key(
     let api_key = req
         .api_key
         .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| AegisHttpError::BadRequest("api_key is required when adding a new key".into()))?;
+        .ok_or_else(|| {
+            AegisHttpError::BadRequest("api_key is required when adding a new key".into())
+        })?;
 
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
