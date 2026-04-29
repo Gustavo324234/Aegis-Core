@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.3](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.2...shell-ui-v1.10.3) (2026-04-29)
+
+
+### Bug Fixes
+
+* **shell:** Core 230 233 shell bugs ([#159](https://github.com/Gustavo324234/Aegis-Core/issues/159)) ([687f03e](https://github.com/Gustavo324234/Aegis-Core/commit/687f03e861abdcfc74f36a35f75befbf1887c3c9))
+
 ## [1.10.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.1...shell-ui-v1.10.2) (2026-04-28)
 
 
