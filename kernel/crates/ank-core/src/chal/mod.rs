@@ -1,3 +1,5 @@
+use crate::agents::instructions::InstructionLoader;
+use crate::agents::node::AgentRole;
 use crate::pcb::PCB;
 use crate::plugins::PluginManager;
 use crate::router::{CognitiveRouter, RoutingDecision};
@@ -159,6 +161,8 @@ pub struct CognitiveHAL {
     pub vcm: VirtualContextManager,
     pub swap_manager: Arc<LanceSwapManager>,
     pub embedding_driver: Option<Arc<dyn EmbeddingDriver>>,
+    /// CORE-226: InstructionLoader para inyectar chat_agent.md al Chat Agent principal.
+    pub instruction_loader: Arc<RwLock<InstructionLoader>>,
 }
 
 #[cfg(test)]
@@ -190,6 +194,11 @@ impl CognitiveHAL {
         let data_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
         let swap_manager = Arc::new(LanceSwapManager::new(&data_dir));
 
+        let mut loader =
+            InstructionLoader::default_from_workspace(std::path::Path::new(&data_dir));
+        let _ = loader.preload();
+        let instruction_loader = Arc::new(RwLock::new(loader));
+
         let embedding_driver: Option<Arc<dyn EmbeddingDriver>> = if let Some(cloud_driver) =
             crate::chal::drivers::CloudProxyDriver::from_env(Arc::clone(&http_client))
         {
@@ -217,6 +226,7 @@ impl CognitiveHAL {
             vcm: VirtualContextManager::new(),
             swap_manager,
             embedding_driver,
+            instruction_loader,
         })
     }
 
@@ -458,15 +468,35 @@ impl CognitiveHAL {
             ""
         };
 
+        // CORE-226: Si el PCB es del Chat Agent (sin agent_id asignado), cargar chat_agent.md.
+        // Si tiene agent_id, es un agente del árbol — el AgentOrchestrator ya maneja sus instrucciones.
+        let (role_instructions, instruction_source) = if pcb.agent_id.is_none() {
+            let instructions = self
+                .instruction_loader
+                .write()
+                .await
+                .instructions_for(&AgentRole::ChatAgent);
+            (instructions, "chat_agent.md")
+        } else {
+            (SYSTEM_PROMPT_MASTER.to_string(), "SYSTEM_PROMPT_MASTER")
+        };
+
+        info!(
+            pid = %pcb.pid,
+            source = instruction_source,
+            chars = role_instructions.len(),
+            "build_prompt: role instructions loaded"
+        );
+
         let final_prompt = if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
                 "{}{}{}\n\n{}",
-                SYSTEM_PROMPT_MASTER, persona_section, music_section, assembled_context
+                role_instructions, persona_section, music_section, assembled_context
             )
         } else {
             format!(
                 "{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nCONTENIDO ENSAMBLADO (CONTEXTO):\n{}",
-                SYSTEM_PROMPT_MASTER,
+                role_instructions,
                 persona_section,
                 music_section,
                 tool_prompt,
