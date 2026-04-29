@@ -11,10 +11,10 @@ function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
 }
 
-const LoginScreen: React.FC<{ onNeedsPasswordReset?: () => void }> = ({ onNeedsPasswordReset }) => {
+const LoginScreen: React.FC<{ onNeedsPasswordReset?: () => void; prefillTenantId?: string | null }> = ({ onNeedsPasswordReset, prefillTenantId }) => {
     const { t } = useTranslation();
     const { authenticate } = useAegisStore();
-    const [tenantId, setTenantId] = useState('');
+    const [tenantId, setTenantId] = useState(prefillTenantId || '');
     const [passphrase, setPassphrase] = useState('');
     const [isInitializing, setIsInitializing] = useState(false);
     const [error, setError] = useState<string | null>(null);

@@ -79,6 +79,8 @@ function App() {
     } = useAegisStore();
     
     const [setupToken, setSetupToken] = useState<string | null>(null);
+    // CORE-232: pre-rellenar el campo tenant en LoginScreen tras logout forzado por sessionKey null
+    const [prefillTenantId, setPrefillTenantId] = useState<string | null>(null);
 
     useEffect(() => {
         if (_hydrated) {
@@ -96,11 +98,13 @@ function App() {
     }, []);
 
     // Security: si el store dice autenticado pero sessionKey es null (tras F5), forzar logout
+    // CORE-232: guardar tenantId antes del logout para pre-rellenar el campo en LoginScreen
     useEffect(() => {
         if (_hydrated && isAuthenticated && !sessionKey) {
+            if (tenantId) setPrefillTenantId(tenantId);
             logout();
         }
-    }, [_hydrated, isAuthenticated, sessionKey, logout]);
+    }, [_hydrated, isAuthenticated, sessionKey, tenantId, logout]);
 
     useEffect(() => {
         if (!_hydrated || !isAuthenticated || isAdmin || needsPasswordReset || isEngineConfigured) return;
@@ -164,7 +168,7 @@ function App() {
                         </motion.div>
                     ) : !isAuthenticated ? (
                         <motion.div key="login" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, scale: 0.95, filter: 'blur(10px)' }} transition={{ duration: 0.5 }} className="w-full">
-                            <LoginScreen onNeedsPasswordReset={() => setNeedsPasswordReset(true)} />
+                            <LoginScreen onNeedsPasswordReset={() => setNeedsPasswordReset(true)} prefillTenantId={prefillTenantId} />
                         </motion.div>
                     ) : needsPasswordReset ? (
                         <motion.div key="force_reset">
