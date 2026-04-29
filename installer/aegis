@@ -185,6 +185,23 @@ cmd_update() {
         printf '%b%s%b\n' "$YELLOW" "  Aviso: UI no disponible en este release, manteniendo actual." "$NC"
     fi
 
+    printf "  → Actualizando archivos de instrucciones de agentes...\n"
+    if curl -L --fail --progress-bar \
+        "${RELEASE_URL}/agents-config.tar.gz" \
+        -o /tmp/agents-update.tar.gz 2>/dev/null; then
+        sudo mkdir -p /etc/aegis/agents
+        sudo tar -xzf /tmp/agents-update.tar.gz -C /etc/aegis/agents
+        rm -f /tmp/agents-update.tar.gz
+        # Ensure AEGIS_AGENTS_CONFIG_DIR is in the env file
+        if [[ -f /etc/aegis/aegis.env ]]; then
+            grep -q "AEGIS_AGENTS_CONFIG_DIR" /etc/aegis/aegis.env \
+                || echo "AEGIS_AGENTS_CONFIG_DIR=/etc/aegis/agents" | sudo tee -a /etc/aegis/aegis.env > /dev/null
+        fi
+        printf '%b  → Instruction files updated → /etc/aegis/agents%b\n' "$GREEN" "$NC"
+    else
+        printf '%b  → Aviso: agents-config no disponible en este release — se usan los fallbacks del binario%b\n' "$YELLOW" "$NC"
+    fi
+
     # CORE-147: Ensure cloudflared is installed
     if ! command -v cloudflared &>/dev/null; then
         printf "  → Instalando cloudflared...\n"
