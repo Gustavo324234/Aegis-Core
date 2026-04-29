@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.33](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.32...ank-server-v0.1.33) (2026-04-29)
+
+
+### Bug Fixes
+
+* **ank-server:** CORE-228 conectar AgentOrchestrator al SyscallExecutor ([#158](https://github.com/Gustavo324234/Aegis-Core/issues/158)) ([6376e7e](https://github.com/Gustavo324234/Aegis-Core/commit/6376e7e98fe948e286ac87100594c2d18348be2b))
+
 ## [0.1.32](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.31...ank-server-v0.1.32) (2026-04-29)
 
 ## [0.1.31](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.30...ank-server-v0.1.31) (2026-04-28)
