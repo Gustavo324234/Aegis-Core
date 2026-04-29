@@ -2,6 +2,13 @@
 
 
 
+## [0.1.31](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.30...ank-http-v0.1.31) (2026-04-29)
+
+
+### Bug Fixes
+
+* **shell:** preserve stored API key when edit form submits empty api_key ([#161](https://github.com/Gustavo324234/Aegis-Core/issues/161)) ([1ad2110](https://github.com/Gustavo324234/Aegis-Core/commit/1ad2110c143374c6eca044626f9e3a510e03bd1a))
+
 ## [0.1.30](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.29...ank-http-v0.1.30) (2026-04-29)
 
 ## [0.1.29](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.28...ank-http-v0.1.29) (2026-04-29)
