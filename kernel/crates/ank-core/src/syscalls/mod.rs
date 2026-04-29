@@ -491,11 +491,38 @@ impl SyscallExecutor {
                     )
                 })?;
 
-                let requesting_id = requesting_agent_id.parse::<uuid::Uuid>().map_err(|_| {
-                    SyscallError::InternalError(format!(
-                        "Invalid requesting_agent_id UUID: {}",
-                        requesting_agent_id
-                    ))
+                // Resolve requesting_agent_id: explicit param → pcb.agent_id → activate_project (supervisor from chat).
+                let resolved_requesting_id: Option<uuid::Uuid> = if !requesting_agent_id.is_empty() {
+                    Some(requesting_agent_id.parse::<uuid::Uuid>().map_err(|_| {
+                        SyscallError::InternalError(format!(
+                            "Invalid requesting_agent_id UUID: {}",
+                            requesting_agent_id
+                        ))
+                    })?)
+                } else {
+                    pcb.agent_id
+                };
+
+                // If role="supervisor" and called from a chat process (no agent_id), delegate to
+                // activate_project() which creates or retrieves the ProjectSupervisor for this project.
+                if role.to_lowercase() == "supervisor" && resolved_requesting_id.is_none() {
+                    let project_name = name.clone().unwrap_or_else(|| scope.clone());
+                    let new_agent_id = orchestrator
+                        .activate_project(tenant_id, &project_name, &scope)
+                        .await
+                        .map_err(|e| SyscallError::InternalError(e.to_string()))?;
+                    return Ok(format!(
+                        "[SYSTEM_RESULT: SYS_AGENT_SPAWN OK. agent_id={}, role=supervisor, scope={}]",
+                        new_agent_id, scope
+                    ));
+                }
+
+                let requesting_id = resolved_requesting_id.ok_or_else(|| {
+                    SyscallError::InternalError(
+                        "SYS_AGENT_SPAWN(role=specialist) requires an active project supervisor. \
+                         Activate a project first with SYS_AGENT_SPAWN(role=\"supervisor\", ...)."
+                            .to_string(),
+                    )
                 })?;
 
                 // Validar que el solicitante existe y puede spawear
@@ -577,12 +604,17 @@ impl SyscallExecutor {
                     )
                 })?;
 
-                let requesting_id = requesting_agent_id.parse::<uuid::Uuid>().map_err(|_| {
-                    SyscallError::InternalError(format!(
-                        "Invalid requesting_agent_id UUID: {}",
-                        requesting_agent_id
-                    ))
-                })?;
+                // Resolve requesting_agent_id: explicit param → pcb.agent_id → nil sentinel for chat processes.
+                let requesting_id = if !requesting_agent_id.is_empty() {
+                    requesting_agent_id.parse::<uuid::Uuid>().map_err(|_| {
+                        SyscallError::InternalError(format!(
+                            "Invalid requesting_agent_id UUID: {}",
+                            requesting_agent_id
+                        ))
+                    })?
+                } else {
+                    pcb.agent_id.unwrap_or_else(uuid::Uuid::nil)
+                };
 
                 // El target es el ProjectSupervisor del proyecto
                 let target_id = {
