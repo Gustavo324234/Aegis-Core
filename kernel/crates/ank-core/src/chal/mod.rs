@@ -194,8 +194,7 @@ impl CognitiveHAL {
         let data_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
         let swap_manager = Arc::new(LanceSwapManager::new(&data_dir));
 
-        let mut loader =
-            InstructionLoader::default_from_workspace(std::path::Path::new(&data_dir));
+        let mut loader = InstructionLoader::default_from_workspace(std::path::Path::new(&data_dir));
         let _ = loader.preload();
         let instruction_loader = Arc::new(RwLock::new(loader));
 
