@@ -1117,6 +1117,7 @@ static MAKER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_MAKER\("([^"]+)",\s*"([\s\S]*?)",\s*(\{.*?\})\)\]"#)
         .unwrap_or_else(|_| panic!("FATAL: hardcoded maker regex is invalid"))
 });
+// DEPRECATED (Epic 42) — eliminar en post-launch. Reemplazado por SYS_AGENT_SPAWN (Epic 45).
 #[allow(clippy::expect_used)]
 static SPAWN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\[SYS_CALL_SPAWN\("([^"]+)",\s*"([^"]+)"\)\]"#)

@@ -23,5 +23,3 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: .github/release-please-config.json
           manifest-file: .github/release-please-manifest.json
-          release-search-depth: 100
-          commit-search-depth: 100

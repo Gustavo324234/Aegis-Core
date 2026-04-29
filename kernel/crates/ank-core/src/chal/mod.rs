@@ -1,3 +1,5 @@
+use crate::agents::instructions::InstructionLoader;
+use crate::agents::node::AgentRole;
 use crate::pcb::PCB;
 use crate::plugins::PluginManager;
 use crate::router::{CognitiveRouter, RoutingDecision};
@@ -67,14 +69,26 @@ MAKER — ENTORNO DE EJECUCIÓN JS:\n\
 - El resultado del script es el valor retornado (o el último valor evaluado).\n\
 - Usá solo JavaScript puro ES2020 sin módulos externos.\n";
 
-/// CORE-154: Instrucciones para la capacidad Multi-Agente (Orquestación).
+/// CORE-154/CORE-227: Instrucciones para la capacidad Multi-Agente (Orquestación).
+/// Actualizado en CORE-227: documenta únicamente SYS_AGENT_SPAWN (Epic 45).
+/// SYS_CALL_SPAWN es DEPRECATED (Epic 42) — ver SPAWN_RE en syscalls/mod.rs.
 pub const SPAWN_INSTRUCTIONS: &str = "\
 \n\n[CAPACIDAD: MULTI-AGENTE]\n\
-Podés despachar sub-agentes especializados para tareas paralelas o complejas. \
-Cada sub-agente corre con un contexto enfocado.\n\
-Sintaxis: [SYS_CALL_SPAWN(\"descripción de la tarea\", \"rol del agente\")]\n\
-Ejemplo: [SYS_CALL_SPAWN(\"analizar logs de errores en /workspace\", \"SRE Specialist\")]\n\
-Los sub-agentes te devolverán un reporte cuando terminen.\n";
+Podés delegar trabajo a sub-agentes especializados.\n\
+\n\
+Para crear un supervisor de proyecto (primera activación):\n\
+  [SYS_AGENT_SPAWN(role=\"supervisor\", name=\"<nombre del proyecto>\", scope=\"<descripción de la tarea>\", task_type=\"planning\")]\n\
+\n\
+Para delegar a un specialist (proyecto ya activo):\n\
+  [SYS_AGENT_SPAWN(role=\"specialist\", scope=\"<descripción de la tarea>\")]\n\
+\n\
+Parámetros:\n\
+  - role: \"supervisor\" | \"specialist\"\n\
+  - name: nombre del proyecto (solo para supervisor)\n\
+  - scope: descripción detallada de la tarea\n\
+  - task_type: \"planning\" | \"code\" | \"analysis\" | \"creative\" (opcional)\n\
+\n\
+Los sub-agentes reportarán el resultado cuando terminen.\n";
 
 /// Template para inyectar la Persona del tenant cuando está configurada (CORE-129).
 /// `{persona}` se reemplaza con el texto libre del operador.
@@ -159,6 +173,8 @@ pub struct CognitiveHAL {
     pub vcm: VirtualContextManager,
     pub swap_manager: Arc<LanceSwapManager>,
     pub embedding_driver: Option<Arc<dyn EmbeddingDriver>>,
+    /// CORE-226: InstructionLoader para inyectar chat_agent.md al Chat Agent principal.
+    pub instruction_loader: Arc<RwLock<InstructionLoader>>,
 }
 
 #[cfg(test)]
@@ -190,6 +206,10 @@ impl CognitiveHAL {
         let data_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
         let swap_manager = Arc::new(LanceSwapManager::new(&data_dir));
 
+        let mut loader = InstructionLoader::default_from_workspace(std::path::Path::new(&data_dir));
+        let _ = loader.preload();
+        let instruction_loader = Arc::new(RwLock::new(loader));
+
         let embedding_driver: Option<Arc<dyn EmbeddingDriver>> = if let Some(cloud_driver) =
             crate::chal::drivers::CloudProxyDriver::from_env(Arc::clone(&http_client))
         {
@@ -217,6 +237,7 @@ impl CognitiveHAL {
             vcm: VirtualContextManager::new(),
             swap_manager,
             embedding_driver,
+            instruction_loader,
         })
     }
 
@@ -458,15 +479,35 @@ impl CognitiveHAL {
             ""
         };
 
+        // CORE-226: Si el PCB es del Chat Agent (sin agent_id asignado), cargar chat_agent.md.
+        // Si tiene agent_id, es un agente del árbol — el AgentOrchestrator ya maneja sus instrucciones.
+        let (role_instructions, instruction_source) = if pcb.agent_id.is_none() {
+            let instructions = self
+                .instruction_loader
+                .write()
+                .await
+                .instructions_for(&AgentRole::ChatAgent);
+            (instructions, "chat_agent.md")
+        } else {
+            (SYSTEM_PROMPT_MASTER.to_string(), "SYSTEM_PROMPT_MASTER")
+        };
+
+        info!(
+            pid = %pcb.pid,
+            source = instruction_source,
+            chars = role_instructions.len(),
+            "build_prompt: role instructions loaded"
+        );
+
         let final_prompt = if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
                 "{}{}{}\n\n{}",
-                SYSTEM_PROMPT_MASTER, persona_section, music_section, assembled_context
+                role_instructions, persona_section, music_section, assembled_context
             )
         } else {
             format!(
                 "{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nCONTENIDO ENSAMBLADO (CONTEXTO):\n{}",
-                SYSTEM_PROMPT_MASTER,
+                role_instructions,
                 persona_section,
                 music_section,
                 tool_prompt,
