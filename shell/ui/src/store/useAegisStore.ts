@@ -653,6 +653,14 @@ export const useAegisStore = create<AegisState>()(
                 const { tenantId, sessionKey, isRecording, sttProvider } = get();
                 if (isRecording || !tenantId || !sessionKey) return;
 
+                // CORE-231: contexto inseguro (HTTP sobre IP no-localhost) bloquea getUserMedia
+                const isInsecureContext =
+                    window.location.protocol === 'http:' &&
+                    !['localhost', '127.0.0.1'].includes(window.location.hostname);
+                if (isInsecureContext) {
+                    throw new Error('INSECURE_CONTEXT: Microphone requires HTTPS');
+                }
+
                 // ── Opción A: Browser WebSpeech API ──────────────────────────────
                 if (sttProvider === 'browser') {
                     const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1116,6 +1124,7 @@ export const useAegisStore = create<AegisState>()(
                 lastTenantsUpdate: state.lastTenantsUpdate,
                 currentView: state.currentView,
                 inputMode: state.inputMode,
+                sttProvider: state.sttProvider,  // CORE-231: persistir para que sobreviva recarga
             }),
         }
     )

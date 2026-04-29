@@ -28,6 +28,10 @@ class AegisErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
         console.error('[Aegis Error Boundary]', error);
     }
 
+    handleReload() {
+        this.setState({ hasError: false });
+    }
+
     handleReset() {
         try { localStorage.removeItem('aegis-storage'); } catch { /* ignore */ }
         window.location.reload();
@@ -39,16 +43,24 @@ class AegisErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
                 <div className="min-h-screen bg-black flex items-center justify-center p-4">
                     <div className="glass p-8 rounded-2xl border border-red-500/30 text-center space-y-4 max-w-sm">
                         <Shield className="w-10 h-10 text-red-500 mx-auto" />
-                        <h1 className="text-lg font-bold tracking-widest text-red-500 uppercase">Session Error</h1>
+                        <h1 className="text-lg font-bold tracking-widest text-red-400 uppercase">View Error</h1>
                         <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest leading-relaxed">
-                            State corruption detected. Session will be reset.
+                            An error occurred loading this view. Your session is intact.
                         </p>
-                        <button
-                            onClick={() => this.handleReset()}
-                            className="px-6 py-2 bg-aegis-cyan text-black font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-aegis-cyan/80 transition-colors"
-                        >
-                            Reset Session
-                        </button>
+                        <div className="flex gap-3 justify-center pt-2">
+                            <button
+                                onClick={() => this.handleReload()}
+                                className="px-4 py-2 border border-white/20 text-white/60 font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-white/5 transition-colors"
+                            >
+                                Reload View
+                            </button>
+                            <button
+                                onClick={() => this.handleReset()}
+                                className="px-4 py-2 bg-red-500/20 border border-red-500/30 text-red-400 font-bold text-[10px] uppercase tracking-widest rounded-lg hover:bg-red-500/30 transition-colors"
+                            >
+                                Reset Session
+                            </button>
+                        </div>
                     </div>
                 </div>
             );
@@ -58,15 +70,17 @@ class AegisErrorBoundary extends Component<{ children: ReactNode }, { hasError: 
 }
 
 function App() {
-    const { 
-        _hydrated, status, isAuthenticated, isAdmin, systemState, 
-        tenantId, sessionKey, connect, logout, fetchSystemState, 
-        isEngineConfigured, setEngineConfigured, 
+    const {
+        _hydrated, status, isAuthenticated, isAdmin, systemState,
+        tenantId, sessionKey, connect, logout, fetchSystemState,
+        isEngineConfigured, setEngineConfigured,
         needsPasswordReset, setNeedsPasswordReset,
-        currentView
+        currentView, setCurrentView
     } = useAegisStore();
     
     const [setupToken, setSetupToken] = useState<string | null>(null);
+    // CORE-232: pre-rellenar el campo tenant en LoginScreen tras logout forzado por sessionKey null
+    const [prefillTenantId, setPrefillTenantId] = useState<string | null>(null);
 
     useEffect(() => {
         if (_hydrated) {
@@ -84,11 +98,13 @@ function App() {
     }, []);
 
     // Security: si el store dice autenticado pero sessionKey es null (tras F5), forzar logout
+    // CORE-232: guardar tenantId antes del logout para pre-rellenar el campo en LoginScreen
     useEffect(() => {
         if (_hydrated && isAuthenticated && !sessionKey) {
+            if (tenantId) setPrefillTenantId(tenantId);
             logout();
         }
-    }, [_hydrated, isAuthenticated, sessionKey, logout]);
+    }, [_hydrated, isAuthenticated, sessionKey, tenantId, logout]);
 
     useEffect(() => {
         if (!_hydrated || !isAuthenticated || isAdmin || needsPasswordReset || isEngineConfigured) return;
@@ -111,6 +127,14 @@ function App() {
             connect(tenantId, sessionKey);
         }
     }, [_hydrated, isAuthenticated, isAdmin, needsPasswordReset, isEngineConfigured, tenantId, sessionKey, status, connect]);
+
+    // CORE-230: si sessionKey es null pero la vista es dashboard, redirigir a chat antes de montar Dashboard
+    useEffect(() => {
+        if (_hydrated && currentView === 'dashboard' && !sessionKey) {
+            console.warn('[App] sessionKey null with dashboard view — redirecting to chat');
+            setCurrentView('chat');
+        }
+    }, [_hydrated, currentView, sessionKey, setCurrentView]);
 
     return (
         <div className="bg-black min-h-screen text-white overflow-hidden">
@@ -144,7 +168,7 @@ function App() {
                         </motion.div>
                     ) : !isAuthenticated ? (
                         <motion.div key="login" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, scale: 0.95, filter: 'blur(10px)' }} transition={{ duration: 0.5 }} className="w-full">
-                            <LoginScreen onNeedsPasswordReset={() => setNeedsPasswordReset(true)} />
+                            <LoginScreen onNeedsPasswordReset={() => setNeedsPasswordReset(true)} prefillTenantId={prefillTenantId} />
                         </motion.div>
                     ) : needsPasswordReset ? (
                         <motion.div key="force_reset">

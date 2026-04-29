@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Component, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import {
     LayoutDashboard,
@@ -30,6 +30,39 @@ import { twMerge } from 'tailwind-merge';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
+}
+
+class WidgetErrorBoundary extends Component<
+    { name: string; children: ReactNode },
+    { hasError: boolean }
+> {
+    constructor(props: { name: string; children: ReactNode }) {
+        super(props);
+        this.state = { hasError: false };
+    }
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+    componentDidCatch(error: Error) {
+        console.error(`[Widget: ${this.props.name}]`, error);
+    }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="glass p-6 rounded-2xl border border-red-500/20 flex flex-col items-center justify-center gap-3 min-h-[120px]">
+                    <AlertCircle className="w-5 h-5 text-red-500/50" />
+                    <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest">{this.props.name} unavailable</p>
+                    <button
+                        onClick={() => this.setState({ hasError: false })}
+                        className="text-[9px] font-mono text-white/20 hover:text-white/50 uppercase tracking-widest underline"
+                    >
+                        retry
+                    </button>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
 }
 
 interface Ticket {
@@ -301,7 +334,9 @@ const Dashboard: React.FC = () => {
                             <h2 className="text-xl font-bold uppercase tracking-widest">Active Agents</h2>
                             <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest ml-2">— Hierarchical Orchestration</span>
                         </div>
-                        <AgentTreeWidget tenantId={tenantId} sessionKey={sessionKey} />
+                        <WidgetErrorBoundary name="AgentTreeWidget">
+                            <AgentTreeWidget tenantId={tenantId} sessionKey={sessionKey} />
+                        </WidgetErrorBoundary>
                     </div>
 
                     {/* Projects & Agents — CORE-203 */}
@@ -347,23 +382,33 @@ const Dashboard: React.FC = () => {
                         {/* Row 1: Terminal + Git Timeline */}
                         <div className="grid grid-cols-12 gap-6">
                             <div className="col-span-12 lg:col-span-6">
-                                <TerminalPanel />
+                                <WidgetErrorBoundary name="TerminalPanel">
+                                    <TerminalPanel />
+                                </WidgetErrorBoundary>
                             </div>
                             <div className="col-span-12 lg:col-span-6">
-                                <GitTimeline />
+                                <WidgetErrorBoundary name="GitTimeline">
+                                    <GitTimeline />
+                                </WidgetErrorBoundary>
                             </div>
                         </div>
 
                         {/* Row 2: Code Viewer (full width) */}
-                        <CodeViewer />
+                        <WidgetErrorBoundary name="CodeViewer">
+                            <CodeViewer />
+                        </WidgetErrorBoundary>
 
                         {/* Row 3: PR Manager + Workspace Settings */}
                         <div className="grid grid-cols-12 gap-6">
                             <div className="col-span-12 lg:col-span-7">
-                                <PRManagerPanel />
+                                <WidgetErrorBoundary name="PRManagerPanel">
+                                    <PRManagerPanel />
+                                </WidgetErrorBoundary>
                             </div>
                             <div className="col-span-12 lg:col-span-5">
-                                <WorkspaceSettings />
+                                <WidgetErrorBoundary name="WorkspaceSettings">
+                                    <WorkspaceSettings />
+                                </WidgetErrorBoundary>
                             </div>
                         </div>
                     </div>
