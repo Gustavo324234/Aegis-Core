@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Save, Cpu, Volume2, Shield, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Link2, Sparkles } from 'lucide-react';
+import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -14,14 +14,13 @@ interface SettingsPanelProps {
     sessionKey: string;
 }
 
-type TabId = 'persona' | 'motor' | 'voz' | 'seguridad' | 'accounts';
+type TabId = 'perfil' | 'motor' | 'voz' | 'cuenta';
 
 const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: React.ReactNode }[] => [
-    { id: 'persona', label: t('tab_persona'), icon: <Sparkles className="w-4 h-4" /> },
+    { id: 'perfil', label: t('tab_persona'), icon: <Sparkles className="w-4 h-4" /> },
     { id: 'motor', label: t('tab_motor'), icon: <Cpu className="w-4 h-4" /> },
     { id: 'voz', label: t('tab_voz'), icon: <Volume2 className="w-4 h-4" /> },
-    { id: 'seguridad', label: t('tab_seguridad'), icon: <Shield className="w-4 h-4" /> },
-    { id: 'accounts', label: 'Cuentas', icon: <Link2 className="w-4 h-4" /> },
+    { id: 'cuenta', label: 'Cuenta', icon: <Globe className="w-4 h-4" /> },
 ];
 
 interface EngineStatus {
@@ -212,6 +211,7 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
 
 const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
+    const { lastRoutingInfo, lastError } = useAegisStore();
     const [provider, setProvider] = useState<ProviderType>('custom');
     const [apiUrl, setApiUrl] = useState('');
     const [modelName, setModelName] = useState('');
@@ -296,6 +296,16 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
         );
     }
 
+    const engineStatusBadge = (() => {
+        if (lastError?.includes('401') || lastError?.includes('AUTH')) {
+            return { icon: '❌', text: 'Error de autenticación', color: 'text-red-400' };
+        }
+        if (lastRoutingInfo) {
+            return { icon: '✅', text: `Operativo — ${lastRoutingInfo.provider} / ${lastRoutingInfo.model_id}`, color: 'text-green-400' };
+        }
+        return { icon: '⚠️', text: 'Configurado, sin verificar', color: 'text-amber-400' };
+    })();
+
     return (
         <div className="space-y-6">
             {engineStatus && (
@@ -306,8 +316,17 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
                     <p className="text-sm font-mono text-aegis-cyan">
                         {engineStatus.provider} / {engineStatus.model_name}
                     </p>
+                    <p className={`text-[10px] font-mono mt-2 ${engineStatusBadge.color}`}>
+                        {engineStatusBadge.icon} {engineStatusBadge.text}
+                    </p>
                 </div>
             )}
+
+            <div className="p-3 bg-white/5 border border-white/10 rounded-xl">
+                <p className="text-[10px] font-mono text-white/30 leading-relaxed">
+                    Si el administrador configuró un motor global, tu configuración personal lo sobreescribe solo para tu cuenta.
+                </p>
+            </div>
 
             <div>
                 <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-3">
@@ -404,6 +423,13 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
                 {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 {t('save_engine_config')}
             </button>
+
+            <div className="pt-4 border-t border-white/10 space-y-3">
+                <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
+                    {t('personal_keys_notice')}
+                </p>
+                <TenantKeyManager tenantId={tenantId} sessionKey={sessionKey} />
+            </div>
         </div>
     );
 };
@@ -461,7 +487,8 @@ const VozTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, 
     useEffect(() => {
         fetchConfig();
         fetchVoices();
-    }, [fetchConfig, fetchVoices]);
+        fetchSirenConfig(); // CORE-233: refrescar sttAvailable desde el servidor al abrir la tab
+    }, [fetchConfig, fetchVoices, fetchSirenConfig]);
 
     const handleSave = async () => {
         setIsSaving(true);
@@ -620,7 +647,7 @@ const VozTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, 
     );
 };
 
-const SeguridadTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
+const CuentaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
     const currentLang = localStorage.getItem('aegis_language') || 'es';
 
@@ -648,18 +675,15 @@ const SeguridadTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tena
                 </div>
             </div>
 
-            <div className="space-y-4">
-                <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
-                    {t('personal_keys_notice')}
-                </p>
-                <TenantKeyManager tenantId={tenantId} sessionKey={sessionKey} />
-            </div>
-
             <div className="pt-4 border-t border-white/10">
                 <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest mb-4">
                     {t('change_password')}
                 </p>
                 <UserPasswordChange />
+            </div>
+
+            <div className="pt-4 border-t border-white/10">
+                <ConnectedAccountsTab tenantId={tenantId} sessionKey={sessionKey} />
             </div>
         </div>
     );
@@ -667,7 +691,7 @@ const SeguridadTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tena
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, tenantId, sessionKey }) => {
     const { t } = useTranslation();
-    const [activeTab, setActiveTab] = useState<TabId>('persona');
+    const [activeTab, setActiveTab] = useState<TabId>('perfil');
     const tabs = TABS(t);
 
     return (
@@ -724,11 +748,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, tenantId, sessio
                             exit={{ opacity: 0, y: -10 }}
                             transition={{ duration: 0.15 }}
                         >
-                            {activeTab === 'persona' && <PersonaTab tenantId={tenantId} sessionKey={sessionKey} />}
+                            {activeTab === 'perfil' && <PersonaTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'motor' && <MotorTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'voz' && <VozTab tenantId={tenantId} sessionKey={sessionKey} />}
-                            {activeTab === 'seguridad' && <SeguridadTab tenantId={tenantId} sessionKey={sessionKey} />}
-                            {activeTab === 'accounts' && <ConnectedAccountsTab tenantId={tenantId} sessionKey={sessionKey} />}
+                            {activeTab === 'cuenta' && <CuentaTab tenantId={tenantId} sessionKey={sessionKey} />}
                         </motion.div>
                     </AnimatePresence>
                 </div>
