@@ -142,13 +142,17 @@ async fn add_global_key(
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
 
-    // Al crear (POST), la api_key es obligatoria
-    let api_key = req
-        .api_key
-        .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| {
-            AegisHttpError::BadRequest("api_key is required when adding a new key".into())
-        })?;
+    // Al crear (POST), la api_key es obligatoria — salvo para providers locales
+    // (ollama, custom) que no necesitan autenticación.
+    let api_key = if is_keyless_provider(&req.provider) {
+        req.api_key.unwrap_or_default()
+    } else {
+        req.api_key
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                AegisHttpError::BadRequest("api_key is required when adding a new key".into())
+            })?
+    };
 
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
@@ -262,13 +266,16 @@ async fn add_tenant_key(
     auth: CitadelAuthenticated,
     Json(req): Json<KeyAddRequest>,
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
-    // Al crear (POST), la api_key es obligatoria
-    let api_key = req
-        .api_key
-        .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| {
-            AegisHttpError::BadRequest("api_key is required when adding a new key".into())
-        })?;
+    // Al crear (POST), la api_key es obligatoria — salvo para providers locales.
+    let api_key = if is_keyless_provider(&req.provider) {
+        req.api_key.unwrap_or_default()
+    } else {
+        req.api_key
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                AegisHttpError::BadRequest("api_key is required when adding a new key".into())
+            })?
+    };
 
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
@@ -549,4 +556,12 @@ async fn router_status() -> Json<RouterStatusResponse> {
         status: "operational".to_string(),
         catalog_syncer: "active".to_string(),
     })
+}
+
+/// Providers that don't require an API key (local / unauthenticated endpoints).
+/// Ollama runs on localhost with no auth by default; "custom" may or may not
+/// need one but we don't enforce it — if the endpoint needs a key the caller
+/// can still supply it.
+fn is_keyless_provider(provider: &str) -> bool {
+    matches!(provider.to_lowercase().as_str(), "ollama" | "custom")
 }
