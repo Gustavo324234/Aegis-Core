@@ -316,6 +316,27 @@ impl KeyPool {
         })
     }
 
+    /// Returns the full (unredacted) entry for a given key_id.
+    /// If tenant_id is Some, searches tenant keys first, then global.
+    /// Used by update handlers to preserve the existing api_key when the caller omits it.
+    pub async fn get_raw_key_by_id(
+        &self,
+        key_id: &str,
+        tenant_id: Option<&str>,
+    ) -> Option<ApiKeyEntry> {
+        if let Some(tid) = tenant_id {
+            let tenants = self.tenant_keys.read().await;
+            if let Some(entry) = tenants
+                .get(tid)
+                .and_then(|keys| keys.iter().find(|k| k.key_id == key_id).cloned())
+            {
+                return Some(entry);
+            }
+        }
+        let global = self.global_keys.read().await;
+        global.iter().find(|k| k.key_id == key_id).cloned()
+    }
+
     /// Check if there's an OpenRouter key available (used by CatalogSyncer)
     pub async fn has_openrouter_key(&self) -> bool {
         let global = self.global_keys.read().await;

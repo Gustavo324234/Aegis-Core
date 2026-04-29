@@ -229,7 +229,10 @@ const ProviderModal: React.FC<{
                 },
                 body: JSON.stringify({
                     provider: selectedProvider,
-                    api_key: apiKey,
+                    // CORE-FIX: omit api_key when blank in edit mode so the backend
+                    // preserves the stored key instead of overwriting it with an
+                    // empty string (Option<String> + #[serde(default)] on the server).
+                    ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
                     api_url: PROVIDER_PRESETS[selectedProvider].url,
                     models: selectedModels,
                     is_free_tier: isFreeTier
