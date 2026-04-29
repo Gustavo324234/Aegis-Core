@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.24](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.23...ank-core-v0.1.24) (2026-04-29)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-226 Chat Agent carga chat_agent.md via Instructio… ([#154](https://github.com/Gustavo324234/Aegis-Core/issues/154)) ([3726986](https://github.com/Gustavo324234/Aegis-Core/commit/37269866183bfd48aab6b83fd8af84662c21883c))
+
 ## [0.1.23](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.22...ank-core-v0.1.23) (2026-04-28)
 
 
