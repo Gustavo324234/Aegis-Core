@@ -2,6 +2,13 @@
 
 
 
+## [0.1.33](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.32...ank-http-v0.1.33) (2026-04-29)
+
+
+### Bug Fixes
+
+* **install:** agents config deploy ([#165](https://github.com/Gustavo324234/Aegis-Core/issues/165)) ([#166](https://github.com/Gustavo324234/Aegis-Core/issues/166)) ([905ca1b](https://github.com/Gustavo324234/Aegis-Core/commit/905ca1bb787f59a141114b538bda5daa014874dd))
+
 ## [0.1.32](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.31...ank-http-v0.1.32) (2026-04-29)
 
 

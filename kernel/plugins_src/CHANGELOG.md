@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/Gustavo324234/Aegis-Core/compare/plugins_src-v0.1.3...plugins_src-v0.1.4) (2026-04-29)
+
+
+### Bug Fixes
+
+* **install:** agents config deploy ([#165](https://github.com/Gustavo324234/Aegis-Core/issues/165)) ([#166](https://github.com/Gustavo324234/Aegis-Core/issues/166)) ([905ca1b](https://github.com/Gustavo324234/Aegis-Core/commit/905ca1bb787f59a141114b538bda5daa014874dd))
+
 ## [0.1.3](https://github.com/Gustavo324234/Aegis-Core/compare/plugins_src-v0.1.2...plugins_src-v0.1.3) (2026-04-27)
 
 

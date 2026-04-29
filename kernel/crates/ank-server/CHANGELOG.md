@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.36](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.35...ank-server-v0.1.36) (2026-04-29)
+
+
+### Bug Fixes
+
+* **install:** agents config deploy ([#165](https://github.com/Gustavo324234/Aegis-Core/issues/165)) ([#166](https://github.com/Gustavo324234/Aegis-Core/issues/166)) ([905ca1b](https://github.com/Gustavo324234/Aegis-Core/commit/905ca1bb787f59a141114b538bda5daa014874dd))
+
 ## [0.1.35](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.34...ank-server-v0.1.35) (2026-04-29)
 
 ## [0.1.34](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.33...ank-server-v0.1.34) (2026-04-29)
