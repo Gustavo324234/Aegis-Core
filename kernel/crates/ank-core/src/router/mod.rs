@@ -72,6 +72,16 @@ impl CognitiveRouter {
         self.key_pool.delete_key(key_id, tenant_id).await
     }
 
+    /// Returns the full (unredacted) entry for a key_id. Used by update handlers
+    /// to preserve the existing api_key when the request omits it.
+    pub async fn get_raw_key_by_id(
+        &self,
+        key_id: &str,
+        tenant_id: Option<&str>,
+    ) -> Option<key_pool::ApiKeyEntry> {
+        self.key_pool.get_raw_key_by_id(key_id, tenant_id).await
+    }
+
     pub async fn list_models_for_catalog(&self) -> Vec<ModelEntry> {
         self.catalog.all_entries().await
     }

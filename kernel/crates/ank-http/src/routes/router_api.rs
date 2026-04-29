@@ -32,8 +32,11 @@ pub fn router() -> Router<AppState> {
 pub struct KeyAddRequest {
     #[schema(example = "openrouter")]
     pub provider: String,
+    /// La api_key es requerida al crear (POST). En edición (PUT), si se omite o
+    /// viene vacía se preserva la key almacenada — evita sobrescribirla accidentalmente.
+    #[serde(default)]
     #[schema(format = "password")]
-    pub api_key: String,
+    pub api_key: Option<String>,
     #[schema(example = "https://openrouter.ai/api/v1")]
     pub api_url: Option<String>,
     #[schema(example = "production-key-1")]
@@ -139,10 +142,16 @@ async fn add_global_key(
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
 
+    // Al crear (POST), la api_key es obligatoria
+    let api_key = req
+        .api_key
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| AegisHttpError::BadRequest("api_key is required when adding a new key".into()))?;
+
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
         provider: req.provider,
-        api_key: req.api_key,
+        api_key,
         api_url: req.api_url,
         label: req.label,
         is_active: true,
@@ -251,10 +260,16 @@ async fn add_tenant_key(
     auth: CitadelAuthenticated,
     Json(req): Json<KeyAddRequest>,
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
+    // Al crear (POST), la api_key es obligatoria
+    let api_key = req
+        .api_key
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| AegisHttpError::BadRequest("api_key is required when adding a new key".into()))?;
+
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
         provider: req.provider,
-        api_key: req.api_key,
+        api_key,
         api_url: req.api_url,
         label: req.label,
         is_active: true,
@@ -422,10 +437,24 @@ async fn update_global_key(
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
 
+    let router = state.router.read().await;
+
+    // Si api_key viene vacía, preservar la key almacenada para no sobrescribirla
+    let api_key = match req.api_key.filter(|k| !k.trim().is_empty()) {
+        Some(k) => k,
+        None => {
+            router
+                .get_raw_key_by_id(&id, None)
+                .await
+                .ok_or_else(|| AegisHttpError::BadRequest(format!("Key '{}' not found", id)))?
+                .api_key
+        }
+    };
+
     let entry = ApiKeyEntry {
         key_id: id,
         provider: req.provider,
-        api_key: req.api_key,
+        api_key,
         api_url: req.api_url,
         label: req.label,
         is_active: true,
@@ -434,7 +463,6 @@ async fn update_global_key(
         is_free_tier: req.is_free_tier,
     };
 
-    let router = state.router.read().await;
     router
         .add_global_key(entry)
         .await
@@ -467,10 +495,24 @@ async fn update_tenant_key(
     Path(id): Path<String>,
     Json(req): Json<KeyAddRequest>,
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
+    let router = state.router.read().await;
+
+    // Si api_key viene vacía, preservar la key almacenada para no sobrescribirla
+    let api_key = match req.api_key.filter(|k| !k.trim().is_empty()) {
+        Some(k) => k,
+        None => {
+            router
+                .get_raw_key_by_id(&id, Some(&auth.tenant_id))
+                .await
+                .ok_or_else(|| AegisHttpError::BadRequest(format!("Key '{}' not found", id)))?
+                .api_key
+        }
+    };
+
     let entry = ApiKeyEntry {
         key_id: id,
         provider: req.provider,
-        api_key: req.api_key,
+        api_key,
         api_url: req.api_url,
         label: req.label,
         is_active: true,
@@ -479,7 +521,6 @@ async fn update_tenant_key(
         is_free_tier: req.is_free_tier,
     };
 
-    let router = state.router.read().await;
     router
         .add_tenant_key(&auth.tenant_id, entry)
         .await
