@@ -30,6 +30,10 @@ impl TenantDB {
         let conn = Connection::open(&db_path)
             .with_context(|| format!("Failed to open database at {}", db_path))?;
 
+        // Add busy_timeout to prevent "database is locked" during concurrent test access
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .context("Failed to set busy timeout")?;
+
         // 1. Configurar la llave de encriptación (SQLCipher)
         // PRAGMA key requiere ser la primera sentencia y no debe retornar resultados.
         conn.pragma_update(None, "key", session_key)
