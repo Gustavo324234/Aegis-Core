@@ -531,7 +531,8 @@ mod tests {
 
         // Catalog uses "groq/llama-3.3-70b-versatile" — must still find a key
         assert!(
-            pool.has_key_for_model("groq", "groq/llama-3.3-70b-versatile").await,
+            pool.has_key_for_model("groq", "groq/llama-3.3-70b-versatile")
+                .await,
             "Prefixed catalog model_id should match bare stored active_model"
         );
         assert!(
