@@ -159,6 +159,8 @@ const ProviderModal: React.FC<{
 }> = ({ onClose, onSaved, tenantId, sessionKey, initialProvider }) => {
     const isEdit = !!initialProvider;
     const { t } = useTranslation();
+    // Providers that don't require an API key (local/unauthenticated)
+    const isKeylessProvider = (p: ProviderType) => p === 'ollama' || p === 'custom';
     const [selectedProvider, setSelectedProvider] = useState<ProviderType>(
         (initialProvider?.provider as ProviderType) || 'openai'
     );
@@ -186,7 +188,10 @@ const ProviderModal: React.FC<{
                 },
                 body: JSON.stringify({
                     provider: selectedProvider,
-                    api_key: apiKey || 'redacted', // Use placeholder if editing and key not changed
+                    // Keyless providers (ollama, custom) don't need a real api_key.
+                    // For cloud providers in edit mode with no new key, send empty string
+                    // so the backend fetches the stored one (not the literal 'redacted').
+                    ...(isKeylessProvider(selectedProvider) ? {} : { api_key: apiKey || '' }),
                     api_url: PROVIDER_PRESETS[selectedProvider].url
                 })
             });
@@ -322,33 +327,44 @@ const ProviderModal: React.FC<{
                                 </div>
 
                                 <div className="space-y-6">
-                                    <div className="space-y-2">
-                                        <div className="flex justify-between items-center ml-1">
-                                            <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest">{t('api_key_of', { name: PROVIDER_PRESETS[selectedProvider].label })}</label>
-                                            {PROVIDER_PRESETS[selectedProvider].keyLink && (
-                                                <a href={PROVIDER_PRESETS[selectedProvider].keyLink!} target="_blank" rel="noopener noreferrer" className="text-[9px] font-mono text-aegis-cyan/60 hover:text-aegis-cyan flex items-center gap-1 transition-colors uppercase">
-                                                    {t('get')} <Plus className="w-2.5 h-2.5" />
-                                                </a>
-                                            )}
+                                    {/* API key field — hidden for keyless providers (ollama, custom) */}
+                                    {!isKeylessProvider(selectedProvider) ? (
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between items-center ml-1">
+                                                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest">{t('api_key_of', { name: PROVIDER_PRESETS[selectedProvider].label })}</label>
+                                                {PROVIDER_PRESETS[selectedProvider].keyLink && (
+                                                    <a href={PROVIDER_PRESETS[selectedProvider].keyLink!} target="_blank" rel="noopener noreferrer" className="text-[9px] font-mono text-aegis-cyan/60 hover:text-aegis-cyan flex items-center gap-1 transition-colors uppercase">
+                                                        {t('get')} <Plus className="w-2.5 h-2.5" />
+                                                    </a>
+                                                )}
+                                            </div>
+                                            <div className="relative">
+                                                <input
+                                                    type={showKey ? 'text' : 'password'}
+                                                    value={apiKey}
+                                                    onChange={(e) => setApiKey(e.target.value)}
+                                                    placeholder={isEdit ? "••••••••••••••••" : "sk-..."}
+                                                    className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 pr-10 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10 tracking-widest"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowKey(!showKey)}
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors"
+                                                >
+                                                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                                </button>
+                                            </div>
+                                            {isEdit && <p className="text-[9px] font-mono text-white/20 uppercase ml-1 italic">{t('leave_empty_to_keep')}</p>}
                                         </div>
-                                        <div className="relative">
-                                            <input 
-                                                type={showKey ? 'text' : 'password'} 
-                                                value={apiKey} 
-                                                onChange={(e) => setApiKey(e.target.value)} 
-                                                placeholder={isEdit ? "••••••••••••••••" : "sk-..."} 
-                                                className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 pr-10 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10 tracking-widest" 
-                                            />
-                                            <button 
-                                                type="button" 
-                                                onClick={() => setShowKey(!showKey)} 
-                                                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors"
-                                            >
-                                                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                            </button>
+                                    ) : (
+                                        /* Ollama / Custom: no key needed — show informational note */
+                                        <div className="flex items-center gap-3 px-4 py-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl">
+                                            <Server className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                                            <p className="text-[10px] font-mono text-emerald-300/70 uppercase tracking-wider">
+                                                {t('no_api_key_required')}
+                                            </p>
                                         </div>
-                                        {isEdit && <p className="text-[9px] font-mono text-white/20 uppercase ml-1 italic">{t('leave_empty_to_keep')}</p>}
-                                    </div>
+                                    )}
 
                                     {verifyError && (
                                         <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center gap-3">
@@ -357,9 +373,9 @@ const ProviderModal: React.FC<{
                                         </div>
                                     )}
 
-                                    <button 
+                                    <button
                                         onClick={handleVerify}
-                                        disabled={isVerifying || (!apiKey && !isEdit)}
+                                        disabled={isVerifying || (!apiKey && !isEdit && !isKeylessProvider(selectedProvider))}
                                         className={`w-full group relative overflow-hidden rounded-xl py-4 transition-all duration-500 ${isVerifying ? "bg-aegis-cyan/20 cursor-wait" : "bg-aegis-cyan/10 hover:bg-aegis-cyan/20 border border-aegis-cyan/30"}`}
                                     >
                                         <div className="relative z-10 flex items-center justify-center gap-3">
