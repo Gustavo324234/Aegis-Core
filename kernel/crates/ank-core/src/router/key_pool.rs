@@ -70,6 +70,36 @@ pub struct KeyPool {
     rr_index: Arc<RwLock<HashMap<String, Arc<AtomicUsize>>>>,
 }
 
+/// Check whether a stored model-ID (from active_models, as returned by the
+/// provider's /v1/models endpoint) matches a catalog model-ID.
+///
+/// The catalog prefixes model IDs with the provider name:
+///   catalog → "groq/llama-3.3-70b-versatile"
+///   Groq API → "llama-3.3-70b-versatile"   (no prefix)
+///   OpenRouter → "meta-llama/llama-3.3-70b-instruct"  (already has a slash)
+///
+/// Matching rules (in order):
+///   1. Exact match.
+///   2. The stored ID equals the part after the first "/" in the catalog ID.
+///      e.g. "llama-3.3-70b-versatile" matches "groq/llama-3.3-70b-versatile".
+///   3. The catalog ID ends with the stored ID (handles nested prefixes).
+fn model_id_matches(catalog_id: &str, stored_id: &str) -> bool {
+    if catalog_id == stored_id {
+        return true;
+    }
+    // Strip the leading "provider/" prefix from the catalog ID and compare.
+    if let Some(bare) = catalog_id.split_once('/').map(|(_, s)| s) {
+        if bare == stored_id {
+            return true;
+        }
+    }
+    // Also accept if the catalog ID ends with "/" + stored_id (nested prefixes).
+    if catalog_id.ends_with(&format!("/{}", stored_id)) {
+        return true;
+    }
+    false
+}
+
 impl KeyPool {
     pub fn new(persistence: Arc<dyn StatePersistor>) -> Self {
         Self {
@@ -129,7 +159,7 @@ impl KeyPool {
                 && k.is_available()
                 && k.active_models
                     .as_ref()
-                    .map(|m| m.contains(&model_id.to_string()))
+                    .map(|m| m.iter().any(|s| model_id_matches(model_id, s)))
                     .unwrap_or(true)
         };
 
@@ -276,7 +306,7 @@ impl KeyPool {
                 && k.is_available()
                 && k.active_models
                     .as_ref()
-                    .map(|m| m.contains(&model_id.to_string()))
+                    .map(|m| m.iter().any(|s| model_id_matches(model_id, s)))
                     .unwrap_or(true)
         };
 
@@ -297,7 +327,7 @@ impl KeyPool {
                 && k.is_available()
                 && k.active_models
                     .as_ref()
-                    .map(|m| m.contains(&model_id.to_string()))
+                    .map(|m| m.iter().any(|s| model_id_matches(model_id, s)))
                     .unwrap_or(true)
         }) {
             return true;
@@ -310,7 +340,7 @@ impl KeyPool {
                     && k.is_available()
                     && k.active_models
                         .as_ref()
-                        .map(|m| m.contains(&model_id.to_string()))
+                        .map(|m| m.iter().any(|s| model_id_matches(model_id, s)))
                         .unwrap_or(true)
             })
         })
@@ -470,6 +500,50 @@ mod tests {
             key.map(|k| k.key_id),
             Some("tenant-a-1".to_string()),
             "Tenant key should take priority"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_groq_prefix_mismatch_resolved() -> anyhow::Result<()> {
+        // Reproduces the production bug: catalog model_id = "groq/llama-3.3-70b-versatile"
+        // but Groq's /v1/models returns "llama-3.3-70b-versatile" (no prefix).
+        // The stored active_models should still match via model_id_matches().
+        let pool = KeyPool::new(Arc::new(NoopPersistor));
+
+        pool.add_global_key(ApiKeyEntry {
+            key_id: "groq-key".to_string(),
+            provider: "groq".to_string(),
+            api_key: "gsk_test".to_string(),
+            api_url: None,
+            label: None,
+            is_active: true,
+            rate_limited_until: None,
+            // Groq API returns bare IDs without the "groq/" prefix
+            active_models: Some(vec![
+                "llama-3.3-70b-versatile".to_string(),
+                "mixtral-8x7b-32768".to_string(),
+            ]),
+            is_free_tier: false,
+        })
+        .await?;
+
+        // Catalog uses "groq/llama-3.3-70b-versatile" — must still find a key
+        assert!(
+            pool.has_key_for_model("groq", "groq/llama-3.3-70b-versatile").await,
+            "Prefixed catalog model_id should match bare stored active_model"
+        );
+        assert!(
+            pool.get_available_key("groq", "groq/llama-3.3-70b-versatile", "default")
+                .await
+                .is_some(),
+            "get_available_key should resolve the key despite prefix mismatch"
+        );
+        // A model NOT in the list should still be rejected
+        assert!(
+            !pool.has_key_for_model("groq", "groq/unknown-model").await,
+            "Model not in active_models should be rejected"
         );
 
         Ok(())
