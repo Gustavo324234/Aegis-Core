@@ -192,6 +192,7 @@ async fn main() -> Result<()> {
         let telemetry_runner = telemetry.clone();
         let scribe_runner = Arc::clone(&scribe);
         let scheduler_tx_watchdog = scheduler_tx.clone();
+        let agent_orchestrator_for_hal = Arc::clone(&agent_orchestrator);
 
         tokio::spawn(async move {
             while let Some(pcb) = execution_rx.recv().await {
@@ -200,6 +201,7 @@ async fn main() -> Result<()> {
                 let scheduler_tx_runner = scheduler_tx_runner.clone();
                 let telemetry_runner = telemetry_runner.clone();
                 let scribe_runner = Arc::clone(&scribe_runner);
+                let orchestrator_clone = Arc::clone(&agent_orchestrator_for_hal);
 
                 tokio::spawn(async move {
                     let pid = pcb.pid.clone();
@@ -247,7 +249,8 @@ async fn main() -> Result<()> {
                         mcp_registry,
                         http_client,
                         scheduler_tx_runner.clone(),
-                    );
+                    )
+                    .with_orchestrator(orchestrator_clone);
 
                     match hal_runner
                         .route_and_execute(Arc::clone(&shared_pcb), persona)
