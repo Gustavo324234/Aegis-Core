@@ -492,7 +492,8 @@ impl SyscallExecutor {
                 })?;
 
                 // Resolve requesting_agent_id: explicit param → pcb.agent_id → activate_project (supervisor from chat).
-                let resolved_requesting_id: Option<uuid::Uuid> = if !requesting_agent_id.is_empty() {
+                let resolved_requesting_id: Option<uuid::Uuid> = if !requesting_agent_id.is_empty()
+                {
                     Some(requesting_agent_id.parse::<uuid::Uuid>().map_err(|_| {
                         SyscallError::InternalError(format!(
                             "Invalid requesting_agent_id UUID: {}",
