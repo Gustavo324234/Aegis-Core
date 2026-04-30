@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.29](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.28...ank-core-v0.1.29) (2026-04-30)
+
+
+### Bug Fixes
+
+* **ank-core:** key model id prefix mismatch ([#170](https://github.com/Gustavo324234/Aegis-Core/issues/170)) ([c39f98c](https://github.com/Gustavo324234/Aegis-Core/commit/c39f98c476577cf9a5bf39aa603ec6fd33f7f2d8))
+* **syscalls:** resolver UUID vacío en SYS_AGENT_SPAWN y anti-alucinac… ([#171](https://github.com/Gustavo324234/Aegis-Core/issues/171)) ([b01dc63](https://github.com/Gustavo324234/Aegis-Core/commit/b01dc635078bb4832d693e4709cce914f0635f8a))
+
 ## [0.1.28](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.27...ank-core-v0.1.28) (2026-04-29)
 
 
