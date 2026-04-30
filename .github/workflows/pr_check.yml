@@ -42,8 +42,6 @@ jobs:
 
       - name: deny
         uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          arguments: "--workspace"
 
   ui:
     name: UI — build + lint
