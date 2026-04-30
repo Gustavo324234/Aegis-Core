@@ -12,6 +12,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 | EPIC 46 | Public Launch | ✅ Completa | 100% |
+| EPIC 47 | Agent Protocol v2: Tool Use | 📥 Planned | 0% |
 
 ---
 
@@ -126,6 +127,18 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-223 | docs | .github/CODEOWNERS | ✅ Done | Media | Arquitecto IA |
 | CORE-224 | chore | Limpiar directorios temporales | 📥 Todo | Baja | Tavo |
 | CORE-225 | chore | License field en Cargo.toml → MIT | 📥 Todo | Alta | Kernel Engineer |
+
+---
+
+### EPIC 47 — Agent Protocol v2: Tool Use
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-236 | feat | ToolRegistry — definición de herramientas + schema por proveedor | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-234 | feat | AgentOrchestrator — migrar de token parsing a tool use dispatch | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-235 | feat | SyscallExecutor — mapear tool call results a AgentMessage internos | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-237 | feat | Ollama fallback — detección de tool use support + modo degradado | 📥 Todo | Alta | Kernel Engineer |
+| CORE-238 | docs | Agent files + PROTOCOL.md — reescritura post tool use | 📥 Todo | Alta | Arquitecto IA |
 
 ---
 
