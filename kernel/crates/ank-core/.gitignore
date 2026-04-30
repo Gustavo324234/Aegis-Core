@@ -1,0 +1,7 @@
+# Datos de usuarios generados en runtime — nunca deben subirse al repo
+users/
+
+# Bases de datos SQLite/SQLCipher generadas en tests o runtime
+*.db
+*.db-shm
+*.db-wal
