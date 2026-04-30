@@ -13,6 +13,7 @@ pub use catalog::{ModelCatalog, ModelEntry};
 pub use key_pool::KeyPool;
 pub use rate_tracker::ModelUsageTracker;
 use std::sync::Arc;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct RoutingDecision {
@@ -200,15 +201,23 @@ impl CognitiveRouter {
             .skip(1)
             .take(2)
             .map(|(_, entry)| FallbackDecision {
-                model_id: entry.model_id.clone(),
+                model_id: bare_model_id(&entry.model_id, &entry.provider),
                 provider: entry.provider.clone(),
                 api_url: entry_api_url(entry),
                 api_key: primary_key.api_key.clone(),
             })
             .collect();
 
+        let api_model_id = bare_model_id(&primary.model_id, &primary.provider);
+        info!(
+            catalog_id = %primary.model_id,
+            api_model_id = %api_model_id,
+            provider = %primary.provider,
+            "CognitiveRouter: resolved model for API request"
+        );
+
         Ok(RoutingDecision {
-            model_id: primary.model_id.clone(),
+            model_id: api_model_id,
             provider: primary.provider.clone(),
             api_url: primary_key
                 .api_url
@@ -267,6 +276,21 @@ impl CognitiveRouter {
         self.key_pool
             .get_available_key(&entry.provider, &entry.model_id, tenant_id)
             .await
+    }
+}
+
+/// Returns the model ID as expected by the provider's native API.
+/// Strips the leading "provider/" prefix for APIs that don't use it.
+/// OpenRouter is the exception — it expects the full "org/model" format.
+fn bare_model_id(model_id: &str, provider: &str) -> String {
+    match provider {
+        // OpenRouter expects the full "org/model" format natively
+        "openrouter" => model_id.to_string(),
+        // All other providers: strip the leading "provider/" prefix if present
+        _ => model_id
+            .split_once('/')
+            .map(|(_, bare)| bare.to_string())
+            .unwrap_or_else(|| model_id.to_string()),
     }
 }
 
