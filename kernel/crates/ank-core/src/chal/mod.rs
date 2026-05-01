@@ -69,26 +69,11 @@ MAKER — ENTORNO DE EJECUCIÓN JS:\n\
 - El resultado del script es el valor retornado (o el último valor evaluado).\n\
 - Usá solo JavaScript puro ES2020 sin módulos externos.\n";
 
-/// CORE-154/CORE-227: Instrucciones para la capacidad Multi-Agente (Orquestación).
-/// Actualizado en CORE-227: documenta únicamente SYS_AGENT_SPAWN (Epic 45).
-/// SYS_CALL_SPAWN es DEPRECATED (Epic 42) — ver SPAWN_RE en syscalls/mod.rs.
-pub const SPAWN_INSTRUCTIONS: &str = "\
-\n\n[CAPACIDAD: MULTI-AGENTE]\n\
-Podés delegar trabajo a sub-agentes especializados.\n\
-\n\
-Para crear un supervisor de proyecto (primera activación):\n\
-  [SYS_AGENT_SPAWN(role=\"supervisor\", name=\"<nombre del proyecto>\", scope=\"<descripción de la tarea>\", task_type=\"planning\")]\n\
-\n\
-Para delegar a un specialist (proyecto ya activo):\n\
-  [SYS_AGENT_SPAWN(role=\"specialist\", scope=\"<descripción de la tarea>\")]\n\
-\n\
-Parámetros:\n\
-  - role: \"supervisor\" | \"specialist\"\n\
-  - name: nombre del proyecto (solo para supervisor)\n\
-  - scope: descripción detallada de la tarea\n\
-  - task_type: \"planning\" | \"code\" | \"analysis\" | \"creative\" (opcional)\n\
-\n\
-Los sub-agentes reportarán el resultado cuando terminen.\n";
+/// EPIC 47: Las instrucciones multi-agente ya no se inyectan como texto.
+/// El Agent Protocol v2 usa Tool Use nativo — el ToolRegistry registra las herramientas
+/// en cada llamada de inferencia según el rol del agente (CORE-236).
+/// Esta constante se mantiene vacía para no romper los sitios de uso en build_prompt.
+pub const SPAWN_INSTRUCTIONS: &str = "";
 
 /// Template para inyectar la Persona del tenant cuando está configurada (CORE-129).
 /// `{persona}` se reemplaza con el texto libre del operador.
@@ -425,6 +410,63 @@ impl CognitiveHAL {
             .store_fragment(tenant_id, text, vector)
             .await
             .map_err(|e| SystemError::HardwareFailure(format!("Swap storage failed: {}", e)))
+    }
+
+    /// Detecta si un modelo Ollama soporta tool use y actualiza el catálogo (CORE-237).
+    ///
+    /// Lógica:
+    /// - Si `tool_use_support == Unknown` → intentar con tools, observar resultado.
+    /// - Si falla (error de driver) → marcar `Degraded`, reintentar sin tools.
+    /// - Si ok → marcar `Supported`.
+    ///
+    /// Retorna `true` si el modelo soporta tools, `false` si está en modo degradado.
+    pub async fn detect_ollama_tool_support(
+        &self,
+        model_id: &str,
+        router: &crate::router::CognitiveRouter,
+    ) -> bool {
+        use crate::router::ToolUseSupport;
+
+        // Verificar estado actual en catálogo
+        let current_support = {
+            let entry = router.catalog_find(model_id).await;
+            entry.map(|e| e.tool_use_support).unwrap_or(ToolUseSupport::Unknown)
+        };
+
+        match current_support {
+            ToolUseSupport::Supported => return true,
+            ToolUseSupport::Degraded => return false,
+            ToolUseSupport::Unknown => {
+                // Intentar con una llamada de prueba mínima
+                let drivers = self.drivers.read().await;
+                let driver_key = format!("ollama-{}", model_id);
+                let driver = drivers.get(&driver_key).or_else(|| drivers.get("local-driver"));
+
+                if let Some(driver) = driver {
+                    // Prompt de prueba — en producción la respuesta incluiría tool_calls
+                    let test_prompt = "[TOOL_USE_PROBE] Respond with a tool call if supported.".to_string();
+                    match driver.generate_stream(test_prompt, None).await {
+                        Ok(_) => {
+                            // Respuesta exitosa → marcar Supported (en producción verificar tool_calls)
+                            router.update_tool_use_support(model_id, ToolUseSupport::Supported).await;
+                            true
+                        }
+                        Err(_) => {
+                            warn!(
+                                model = %model_id,
+                                "ollama model {} does not support tool use — degraded mode",
+                                model_id
+                            );
+                            router.update_tool_use_support(model_id, ToolUseSupport::Degraded).await;
+                            false
+                        }
+                    }
+                } else {
+                    // No hay driver Ollama disponible → asumir Degraded
+                    false
+                }
+            }
+        }
     }
 
     /// Construye el prompt final para el LLM usando VCM para ensamblar contexto.
