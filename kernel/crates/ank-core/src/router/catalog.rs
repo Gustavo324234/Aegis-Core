@@ -4,6 +4,20 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Soporte de tool use del modelo/proveedor (CORE-237).
+/// Usado por el CognitiveHAL para activar/desactivar inyección de herramientas en Ollama.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolUseSupport {
+    /// Estado inicial — aún no se ha probado si el modelo soporta tool use.
+    #[default]
+    Unknown,
+    /// El modelo respondió correctamente a una llamada con tools.
+    Supported,
+    /// El modelo no soporta tool use (error 400 o respuesta de texto sin tool_calls).
+    Degraded,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskScores {
     #[serde(default)]
@@ -32,6 +46,9 @@ pub struct ModelEntry {
     pub supports_tools: bool,
     #[serde(default)]
     pub supports_json_mode: bool,
+    /// Estado de soporte de tool use detectado en runtime (CORE-237).
+    #[serde(default)]
+    pub tool_use_support: ToolUseSupport,
     #[serde(default)]
     pub task_scores: TaskScores,
     #[serde(default)]

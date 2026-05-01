@@ -9,7 +9,7 @@ pub use siren::{SirenEngine, SirenRouter};
 use crate::chal::SystemError;
 use crate::pcb::{TaskType, PCB};
 use crate::scheduler::ModelPreference;
-pub use catalog::{ModelCatalog, ModelEntry};
+pub use catalog::{ModelCatalog, ModelEntry, ToolUseSupport};
 pub use key_pool::KeyPool;
 pub use rate_tracker::ModelUsageTracker;
 use std::sync::Arc;
@@ -252,6 +252,27 @@ impl CognitiveRouter {
         };
 
         quality * 0.40 + 1.0_f64 * 0.30 + cost_inv * 0.20 + speed_inv * 0.10
+    }
+
+    /// Busca una entrada en el catálogo por model_id (CORE-237).
+    pub async fn catalog_find(&self, model_id: &str) -> Option<ModelEntry> {
+        self.catalog.find(model_id).await
+    }
+
+    /// Actualiza el estado de tool_use_support de un modelo en el catálogo (CORE-237).
+    pub async fn update_tool_use_support(
+        &self,
+        model_id: &str,
+        support: crate::router::catalog::ToolUseSupport,
+    ) {
+        let mut entries = self.catalog.all_entries().await;
+        for entry in &mut entries {
+            if entry.model_id == model_id {
+                entry.tool_use_support = support;
+                break;
+            }
+        }
+        self.catalog.replace_all(entries).await;
     }
 
     async fn resolve_key(

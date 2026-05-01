@@ -163,6 +163,7 @@ impl CatalogSyncer {
                     avg_latency_ms: None,
                     free_tier_rpm: None,
                     free_tier_rpd: None,
+                    tool_use_support: crate::router::catalog::ToolUseSupport::Unknown,
                 });
             }
         }

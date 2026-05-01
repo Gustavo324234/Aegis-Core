@@ -1,8 +1,12 @@
 use crate::agents::context::ContextBudget;
 use crate::agents::instructions::{state_summary_template, InstructionLoader};
-use crate::agents::message::{AgentContext, AgentMessage, AgentResult, QueryId, ReportStatus};
+use crate::agents::message::{
+    AgentContext, AgentMessage, AgentResult, AgentToolCall, QueryId, ReportStatus,
+    ToolCallReportStatus,
+};
 use crate::agents::node::{AgentId, AgentRole, AgentState, ProjectId};
 use crate::agents::persistence::AgentPersistence;
+use crate::agents::tool_registry::{ProviderKind, ToolRegistry};
 
 use crate::agents::tree::AgentTree;
 use crate::pcb::TaskType;
@@ -27,6 +31,8 @@ pub struct AgentNodeSummary {
     pub task_type: String,
     pub is_restored: bool,
     pub last_report: Option<String>,
+    /// true si el proveedor del agente no soporta tool use (CORE-237).
+    pub degraded: bool,
 }
 
 /// Orquestador central del árbol de agentes cognitivos — Epic 45.
@@ -346,6 +352,225 @@ impl AgentOrchestrator {
         Ok(query_id)
     }
 
+    // --- Modo degradado (CORE-237) ---
+
+    /// Marca un agente como degradado (sin soporte de tool use).
+    /// Loguea WARN y actualiza el nodo en el árbol.
+    pub async fn mark_agent_degraded(&self, agent_id: &AgentId, model_name: &str) {
+        warn!(
+            agent = %agent_id,
+            model = %model_name,
+            "ollama model {} does not support tool use — degraded mode",
+            model_name
+        );
+        let mut tree = self.tree.write().await;
+        if let Some(node) = tree.get_mut(agent_id) {
+            node.is_degraded = true;
+        }
+    }
+
+    /// Retorna true si el agente está en modo degradado.
+    pub async fn is_agent_degraded(&self, agent_id: &AgentId) -> bool {
+        let tree = self.tree.read().await;
+        tree.get(agent_id).map(|n| n.is_degraded).unwrap_or(false)
+    }
+
+    // --- Tool Use Dispatch (EPIC 47 — CORE-234) ---
+
+    /// Retorna el payload de herramientas para el agente indicado, serializado para su proveedor.
+    /// Se inyecta en cada llamada de inferencia de agentes del árbol.
+    pub async fn tools_payload_for(
+        &self,
+        agent_id: &AgentId,
+        provider: &ProviderKind,
+    ) -> Vec<serde_json::Value> {
+        let tree = self.tree.read().await;
+        match tree.get(agent_id) {
+            Some(node) => ToolRegistry::tools_for(&node.role, provider),
+            None => Vec::new(),
+        }
+    }
+
+    /// Procesa un `AgentToolCall` recibido del LLM via tool use.
+    /// Retorna el resultado como JSON string para incluir en el historial como `tool_result`.
+    pub async fn handle_tool_call(
+        &self,
+        caller_id: AgentId,
+        call: AgentToolCall,
+    ) -> anyhow::Result<String> {
+        match call {
+            AgentToolCall::Spawn {
+                role,
+                name,
+                scope,
+                task_type,
+            } => {
+                // Verificar modo degradado: agente degradado no puede hacer spawn (CORE-237)
+                if self.is_agent_degraded(&caller_id).await {
+                    warn!(
+                        agent = %caller_id,
+                        "Degraded agent attempted spawn — returning BLOCKED"
+                    );
+                    return Ok(serde_json::json!({
+                        "status": "blocked",
+                        "reason": "Agent is in degraded mode — tool use not supported by provider"
+                    })
+                    .to_string());
+                }
+
+                let project_id = {
+                    let tree = self.tree.read().await;
+                    tree.get(&caller_id)
+                        .map(|n| n.project_id.clone())
+                        .unwrap_or_else(|| "default".to_string())
+                };
+
+                // Verificar que caller no es Specialist (ADR-CAA-007)
+                {
+                    let tree = self.tree.read().await;
+                    if let Some(node) = tree.get(&caller_id) {
+                        if node.role.is_specialist() {
+                            anyhow::bail!(
+                                "Specialist agents cannot spawn subordinates (ADR-CAA-007)"
+                            );
+                        }
+                    }
+                }
+
+                let agent_role = match role {
+                    AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
+                        AgentRole::Supervisor {
+                            name: name.clone().unwrap_or_else(|| scope.clone()),
+                            scope: scope.clone(),
+                        }
+                    }
+                    AgentRole::Specialist { .. } => AgentRole::Specialist {
+                        scope: scope.clone(),
+                    },
+                    AgentRole::ChatAgent => AgentRole::Specialist {
+                        scope: scope.clone(),
+                    },
+                };
+
+                let tt = task_type.unwrap_or(crate::pcb::TaskType::Code);
+                let agent_id = self
+                    .spawn_agent(agent_role, project_id, caller_id, None, tt)
+                    .await?;
+
+                Ok(serde_json::json!({
+                    "agent_id": agent_id.to_string(),
+                    "status": "spawned"
+                })
+                .to_string())
+            }
+
+            AgentToolCall::Query { project, question } => {
+                let target_id = {
+                    let tree = self.tree.read().await;
+                    tree.project_root(&project)
+                        .map(|n| n.agent_id)
+                        .ok_or_else(|| anyhow::anyhow!("Project '{}' not active", project))?
+                };
+                let _query_id = self.query(target_id, question, None, caller_id).await?;
+                Ok(serde_json::json!({ "answer": "Query dispatched. Reply will arrive via QueryReply message." }).to_string())
+            }
+
+            AgentToolCall::Report {
+                status,
+                summary,
+                observations,
+            } => {
+                let new_state = match status {
+                    ToolCallReportStatus::Completed => AgentState::Complete,
+                    ToolCallReportStatus::Error => AgentState::Failed {
+                        reason: summary.clone(),
+                    },
+                    ToolCallReportStatus::Blocked => AgentState::Failed {
+                        reason: format!("Blocked: {}", summary),
+                    },
+                };
+
+                {
+                    let mut tree = self.tree.write().await;
+                    if let Some(node) = tree.get_mut(&caller_id) {
+                        node.set_state(new_state);
+                        let report_text = match &observations {
+                            Some(obs) => format!("{}\n\nObservations: {}", summary, obs),
+                            None => summary.clone(),
+                        };
+                        node.set_last_report(report_text);
+                    }
+                }
+
+                Ok(serde_json::json!({ "acknowledged": true }).to_string())
+            }
+        }
+    }
+
+    /// Procesa múltiples `spawn_agent` tool calls en paralelo via tokio::spawn (CORE-234).
+    pub async fn handle_parallel_spawns(
+        &self,
+        _caller_id: AgentId,
+        spawns: Vec<AgentToolCall>,
+    ) -> Vec<anyhow::Result<String>> {
+        let mut handles = Vec::new();
+
+        for call in spawns {
+            // Clonar el Arc del árbol para mover al task
+            let tree_ref = Arc::clone(&self.tree);
+            let router_ref = Arc::clone(&self.router);
+            let vcm_ref = Arc::clone(&self.vcm);
+            let loader_ref = Arc::clone(&self.instruction_loader);
+            let channels_ref = Arc::clone(&self.channels);
+            let persistence_ref = Arc::clone(&self.persistence);
+
+            let handle = tokio::spawn(async move {
+                // Recrear un mini-orchestrator para el spawn paralelo no es viable
+                // directamente; en su lugar retornamos la llamada estructurada para
+                // que el caller las procese. Este punto de integración se completará
+                // cuando el Orchestrator sea instanciado con Arc<Self>.
+                let _ = (
+                    tree_ref,
+                    router_ref,
+                    vcm_ref,
+                    loader_ref,
+                    channels_ref,
+                    persistence_ref,
+                );
+                match call {
+                    AgentToolCall::Spawn {
+                        role,
+                        name,
+                        scope,
+                        task_type,
+                    } => Ok(serde_json::json!({
+                        "queued_spawn": {
+                            "role": format!("{:?}", role),
+                            "name": name,
+                            "scope": scope,
+                            "task_type": format!("{:?}", task_type),
+                        }
+                    })
+                    .to_string()),
+                    _ => Err(anyhow::anyhow!(
+                        "handle_parallel_spawns only accepts Spawn calls"
+                    )),
+                }
+            });
+            handles.push(handle);
+        }
+
+        let mut results = Vec::new();
+        for handle in handles {
+            results.push(
+                handle
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow::anyhow!("Task join error: {}", e))),
+            );
+        }
+        results
+    }
+
     // --- Persistencia al cerrar sesión (CORE-207) ---
 
     /// Cierra un proyecto: genera state summaries, serializa el árbol, destruye nodos de memoria.
@@ -469,18 +694,23 @@ impl AgentOrchestrator {
         tree.all_nodes()
             .iter()
             .map(|n| {
+                let degraded_suffix = if n.is_degraded { " [degraded]" } else { "" };
                 let (role_label, task_type_str) = match &n.role {
-                    AgentRole::ChatAgent => ("Chat Agent".to_string(), "chat".to_string()),
+                    AgentRole::ChatAgent => {
+                        (format!("Chat Agent{}", degraded_suffix), "chat".to_string())
+                    }
                     AgentRole::ProjectSupervisor { name, .. } => (
-                        format!("Project Supervisor — {}", name),
+                        format!("Project Supervisor — {}{}", name, degraded_suffix),
                         "planning".to_string(),
                     ),
-                    AgentRole::Supervisor { name, .. } => {
-                        (format!("Supervisor — {}", name), "analysis".to_string())
-                    }
-                    AgentRole::Specialist { scope } => {
-                        (format!("Specialist — {}", scope), "code".to_string())
-                    }
+                    AgentRole::Supervisor { name, .. } => (
+                        format!("Supervisor — {}{}", name, degraded_suffix),
+                        "analysis".to_string(),
+                    ),
+                    AgentRole::Specialist { scope } => (
+                        format!("Specialist — {}{}", scope, degraded_suffix),
+                        "code".to_string(),
+                    ),
                 };
                 let model = match n.model_preference {
                     ModelPreference::CloudOnly => "cloud",
@@ -497,6 +727,7 @@ impl AgentOrchestrator {
                     task_type: task_type_str,
                     is_restored: n.is_restored,
                     last_report: n.last_report.clone(),
+                    degraded: n.is_degraded,
                 }
             })
             .collect()

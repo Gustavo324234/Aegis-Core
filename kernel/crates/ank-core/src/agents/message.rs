@@ -1,4 +1,5 @@
-use crate::agents::node::AgentId;
+use crate::agents::node::{AgentId, AgentRole};
+use crate::pcb::TaskType;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -112,6 +113,37 @@ pub enum AgentMessage {
 
     /// Sistema → Agente: señal de cancelación.
     Cancel { reason: String },
+}
+
+/// Estado del report enviado por un agente via tool call (Agent Protocol v2, EPIC 47).
+/// Corresponde a los valores del parámetro `status` de la tool `report`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolCallReportStatus {
+    Completed,
+    Error,
+    Blocked,
+}
+
+/// Acción estructurada recibida del LLM via tool use (EPIC 47 — CORE-235).
+/// Reemplaza el parsing de tokens de texto (SYS_AGENT_SPAWN, SYS_AGENT_QUERY).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AgentToolCall {
+    Spawn {
+        role: AgentRole,
+        name: Option<String>,
+        scope: String,
+        task_type: Option<TaskType>,
+    },
+    Query {
+        project: String,
+        question: String,
+    },
+    Report {
+        status: ToolCallReportStatus,
+        summary: String,
+        observations: Option<String>,
+    },
 }
 
 impl AgentMessage {

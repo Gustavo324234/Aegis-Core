@@ -121,6 +121,10 @@ pub struct AgentNode {
 
     /// true si este nodo fue cargado desde disk al restaurar un proyecto.
     pub is_restored: bool,
+
+    /// true si el proveedor del agente no soporta tool use (CORE-237).
+    /// En modo degradado el Orchestrator no inyecta herramientas y solo asigna tareas atómicas.
+    pub is_degraded: bool,
 }
 
 impl AgentNode {
@@ -151,6 +155,7 @@ impl AgentNode {
             // Specialists son efímeros — no persisten
             persisted_context_path: None, // se asigna por AgentPersistence
             is_restored: false,
+            is_degraded: false,
         }
     }
 
