@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.32](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.31...ank-core-v0.1.32) (2026-05-01)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-240 wire ToolRegistry into CloudProxyDriver request ([#178](https://github.com/Gustavo324234/Aegis-Core/issues/178)) ([14924de](https://github.com/Gustavo324234/Aegis-Core/commit/14924de0ecda9d0bc939059cc2927d7fadeed82a))
+
 ## [0.1.31](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.30...ank-core-v0.1.31) (2026-05-01)
 
 
