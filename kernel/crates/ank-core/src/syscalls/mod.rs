@@ -146,7 +146,9 @@ impl SyscallExecutor {
         orchestrator: std::sync::Arc<crate::agents::orchestrator::AgentOrchestrator>,
     ) -> Self {
         self.agent_orchestrator = Some(orchestrator);
-        tracing::info!("SyscallExecutor: AgentOrchestrator connected. AgentToolCall dispatch ready.");
+        tracing::info!(
+            "SyscallExecutor: AgentOrchestrator connected. AgentToolCall dispatch ready."
+        );
         self
     }
 
@@ -442,7 +444,6 @@ impl SyscallExecutor {
                  GitHubBridge requires runtime context — integrate via AgentOrchestrator.]",
                 branch_name
             )),
-
         }
     }
 
@@ -1013,7 +1014,6 @@ static GIT_PUSH_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
 pub fn init_syscall_regexes() {}
-
 
 /// Convierte un string de task_type a la variante del enum.
 pub fn parse_task_type(s: &str) -> crate::pcb::TaskType {

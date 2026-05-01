@@ -1,9 +1,12 @@
 use crate::agents::context::ContextBudget;
 use crate::agents::instructions::{state_summary_template, InstructionLoader};
-use crate::agents::message::{AgentContext, AgentMessage, AgentResult, AgentToolCall, QueryId, ReportStatus, ToolCallReportStatus};
+use crate::agents::message::{
+    AgentContext, AgentMessage, AgentResult, AgentToolCall, QueryId, ReportStatus,
+    ToolCallReportStatus,
+};
 use crate::agents::node::{AgentId, AgentRole, AgentState, ProjectId};
-use crate::agents::tool_registry::{ProviderKind, ToolRegistry};
 use crate::agents::persistence::AgentPersistence;
+use crate::agents::tool_registry::{ProviderKind, ToolRegistry};
 
 use crate::agents::tree::AgentTree;
 use crate::pcb::TaskType;
@@ -396,7 +399,12 @@ impl AgentOrchestrator {
         call: AgentToolCall,
     ) -> anyhow::Result<String> {
         match call {
-            AgentToolCall::Spawn { role, name, scope, task_type } => {
+            AgentToolCall::Spawn {
+                role,
+                name,
+                scope,
+                task_type,
+            } => {
                 // Verificar modo degradado: agente degradado no puede hacer spawn (CORE-237)
                 if self.is_agent_degraded(&caller_id).await {
                     warn!(
@@ -406,7 +414,8 @@ impl AgentOrchestrator {
                     return Ok(serde_json::json!({
                         "status": "blocked",
                         "reason": "Agent is in degraded mode — tool use not supported by provider"
-                    }).to_string());
+                    })
+                    .to_string());
                 }
 
                 let project_id = {
@@ -421,7 +430,9 @@ impl AgentOrchestrator {
                     let tree = self.tree.read().await;
                     if let Some(node) = tree.get(&caller_id) {
                         if node.role.is_specialist() {
-                            anyhow::bail!("Specialist agents cannot spawn subordinates (ADR-CAA-007)");
+                            anyhow::bail!(
+                                "Specialist agents cannot spawn subordinates (ADR-CAA-007)"
+                            );
                         }
                     }
                 }
@@ -433,8 +444,12 @@ impl AgentOrchestrator {
                             scope: scope.clone(),
                         }
                     }
-                    AgentRole::Specialist { .. } => AgentRole::Specialist { scope: scope.clone() },
-                    AgentRole::ChatAgent => AgentRole::Specialist { scope: scope.clone() },
+                    AgentRole::Specialist { .. } => AgentRole::Specialist {
+                        scope: scope.clone(),
+                    },
+                    AgentRole::ChatAgent => AgentRole::Specialist {
+                        scope: scope.clone(),
+                    },
                 };
 
                 let tt = task_type.unwrap_or(crate::pcb::TaskType::Code);
@@ -460,7 +475,11 @@ impl AgentOrchestrator {
                 Ok(serde_json::json!({ "answer": "Query dispatched. Reply will arrive via QueryReply message." }).to_string())
             }
 
-            AgentToolCall::Report { status, summary, observations } => {
+            AgentToolCall::Report {
+                status,
+                summary,
+                observations,
+            } => {
                 let new_state = match status {
                     ToolCallReportStatus::Completed => AgentState::Complete,
                     ToolCallReportStatus::Error => AgentState::Failed {
@@ -510,19 +529,32 @@ impl AgentOrchestrator {
                 // directamente; en su lugar retornamos la llamada estructurada para
                 // que el caller las procese. Este punto de integración se completará
                 // cuando el Orchestrator sea instanciado con Arc<Self>.
-                let _ = (tree_ref, router_ref, vcm_ref, loader_ref, channels_ref, persistence_ref);
+                let _ = (
+                    tree_ref,
+                    router_ref,
+                    vcm_ref,
+                    loader_ref,
+                    channels_ref,
+                    persistence_ref,
+                );
                 match call {
-                    AgentToolCall::Spawn { role, name, scope, task_type } => {
-                        Ok(serde_json::json!({
-                            "queued_spawn": {
-                                "role": format!("{:?}", role),
-                                "name": name,
-                                "scope": scope,
-                                "task_type": format!("{:?}", task_type),
-                            }
-                        }).to_string())
-                    }
-                    _ => Err(anyhow::anyhow!("handle_parallel_spawns only accepts Spawn calls")),
+                    AgentToolCall::Spawn {
+                        role,
+                        name,
+                        scope,
+                        task_type,
+                    } => Ok(serde_json::json!({
+                        "queued_spawn": {
+                            "role": format!("{:?}", role),
+                            "name": name,
+                            "scope": scope,
+                            "task_type": format!("{:?}", task_type),
+                        }
+                    })
+                    .to_string()),
+                    _ => Err(anyhow::anyhow!(
+                        "handle_parallel_spawns only accepts Spawn calls"
+                    )),
                 }
             });
             handles.push(handle);
@@ -530,7 +562,11 @@ impl AgentOrchestrator {
 
         let mut results = Vec::new();
         for handle in handles {
-            results.push(handle.await.unwrap_or_else(|e| Err(anyhow::anyhow!("Task join error: {}", e))));
+            results.push(
+                handle
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow::anyhow!("Task join error: {}", e))),
+            );
         }
         results
     }
@@ -660,10 +696,9 @@ impl AgentOrchestrator {
             .map(|n| {
                 let degraded_suffix = if n.is_degraded { " [degraded]" } else { "" };
                 let (role_label, task_type_str) = match &n.role {
-                    AgentRole::ChatAgent => (
-                        format!("Chat Agent{}", degraded_suffix),
-                        "chat".to_string(),
-                    ),
+                    AgentRole::ChatAgent => {
+                        (format!("Chat Agent{}", degraded_suffix), "chat".to_string())
+                    }
                     AgentRole::ProjectSupervisor { name, .. } => (
                         format!("Project Supervisor — {}{}", name, degraded_suffix),
                         "planning".to_string(),

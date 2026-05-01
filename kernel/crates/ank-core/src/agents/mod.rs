@@ -14,7 +14,10 @@ pub use chat_context::{ChatContextWindow, CompactionHints, ConversationTurn, Tur
 pub use context::ContextBudget;
 pub use event::AgentEvent;
 pub use instructions::InstructionLoader;
-pub use message::{AgentContext, AgentMessage, AgentResult, AgentToolCall, QueryId, ReportStatus, ToolCallReportStatus};
+pub use message::{
+    AgentContext, AgentMessage, AgentResult, AgentToolCall, QueryId, ReportStatus,
+    ToolCallReportStatus,
+};
 pub use node::{AgentId, AgentNode, AgentRole, AgentState, ProjectId};
 pub use orchestrator::{AgentNodeSummary, AgentOrchestrator};
 pub use persistence::AgentPersistence;

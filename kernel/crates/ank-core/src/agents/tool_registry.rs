@@ -62,18 +62,11 @@ impl ToolRegistry {
 
     fn definitions_for(role: &AgentRole) -> Vec<ToolDefinition> {
         match role {
-            AgentRole::ChatAgent => vec![
-                Self::spawn_agent(),
-                Self::query_agent(),
-            ],
-            AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => vec![
-                Self::spawn_agent(),
-                Self::query_agent(),
-                Self::report(),
-            ],
-            AgentRole::Specialist { .. } => vec![
-                Self::report(),
-            ],
+            AgentRole::ChatAgent => vec![Self::spawn_agent(), Self::query_agent()],
+            AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
+                vec![Self::spawn_agent(), Self::query_agent(), Self::report()]
+            }
+            AgentRole::Specialist { .. } => vec![Self::report()],
         }
     }
 
@@ -191,7 +184,9 @@ mod tests {
 
     #[test]
     fn test_specialist_only_gets_report() {
-        let role = AgentRole::Specialist { scope: "leer archivo".into() };
+        let role = AgentRole::Specialist {
+            scope: "leer archivo".into(),
+        };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Anthropic);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "report");
@@ -199,10 +194,14 @@ mod tests {
 
     #[test]
     fn test_supervisor_gets_all_three() {
-        let role = AgentRole::Supervisor { name: "Kernel".into(), scope: "kernel modules".into() };
+        let role = AgentRole::Supervisor {
+            name: "Kernel".into(),
+            scope: "kernel modules".into(),
+        };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::OpenAI);
         assert_eq!(tools.len(), 3);
-        let names: Vec<&str> = tools.iter()
+        let names: Vec<&str> = tools
+            .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"spawn_agent"));
@@ -215,7 +214,8 @@ mod tests {
         let role = AgentRole::ChatAgent;
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Groq);
         assert_eq!(tools.len(), 2);
-        let names: Vec<&str> = tools.iter()
+        let names: Vec<&str> = tools
+            .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"spawn_agent"));
@@ -224,17 +224,30 @@ mod tests {
 
     #[test]
     fn test_anthropic_format() {
-        let role = AgentRole::Specialist { scope: "test".into() };
+        let role = AgentRole::Specialist {
+            scope: "test".into(),
+        };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Anthropic);
-        assert!(tools[0].get("input_schema").is_some(), "Anthropic format must use input_schema");
-        assert!(tools[0].get("function").is_none(), "Anthropic format must not use function wrapper");
+        assert!(
+            tools[0].get("input_schema").is_some(),
+            "Anthropic format must use input_schema"
+        );
+        assert!(
+            tools[0].get("function").is_none(),
+            "Anthropic format must not use function wrapper"
+        );
     }
 
     #[test]
     fn test_gemini_format() {
-        let role = AgentRole::Specialist { scope: "test".into() };
+        let role = AgentRole::Specialist {
+            scope: "test".into(),
+        };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Gemini);
-        assert!(tools[0].get("functionDeclarations").is_some(), "Gemini format must use functionDeclarations");
+        assert!(
+            tools[0].get("functionDeclarations").is_some(),
+            "Gemini format must use functionDeclarations"
+        );
     }
 
     #[test]
@@ -242,6 +255,9 @@ mod tests {
         assert_eq!(ProviderKind::from_str("anthropic"), ProviderKind::Anthropic);
         assert_eq!(ProviderKind::from_str("ollama"), ProviderKind::Ollama);
         assert_eq!(ProviderKind::from_str("GROQ"), ProviderKind::Groq);
-        assert_eq!(ProviderKind::from_str("unknown_provider"), ProviderKind::OpenAI);
+        assert_eq!(
+            ProviderKind::from_str("unknown_provider"),
+            ProviderKind::OpenAI
+        );
     }
 }

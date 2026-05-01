@@ -430,7 +430,9 @@ impl CognitiveHAL {
         // Verificar estado actual en catálogo
         let current_support = {
             let entry = router.catalog_find(model_id).await;
-            entry.map(|e| e.tool_use_support).unwrap_or(ToolUseSupport::Unknown)
+            entry
+                .map(|e| e.tool_use_support)
+                .unwrap_or(ToolUseSupport::Unknown)
         };
 
         match current_support {
@@ -440,15 +442,20 @@ impl CognitiveHAL {
                 // Intentar con una llamada de prueba mínima
                 let drivers = self.drivers.read().await;
                 let driver_key = format!("ollama-{}", model_id);
-                let driver = drivers.get(&driver_key).or_else(|| drivers.get("local-driver"));
+                let driver = drivers
+                    .get(&driver_key)
+                    .or_else(|| drivers.get("local-driver"));
 
                 if let Some(driver) = driver {
                     // Prompt de prueba — en producción la respuesta incluiría tool_calls
-                    let test_prompt = "[TOOL_USE_PROBE] Respond with a tool call if supported.".to_string();
+                    let test_prompt =
+                        "[TOOL_USE_PROBE] Respond with a tool call if supported.".to_string();
                     match driver.generate_stream(test_prompt, None).await {
                         Ok(_) => {
                             // Respuesta exitosa → marcar Supported (en producción verificar tool_calls)
-                            router.update_tool_use_support(model_id, ToolUseSupport::Supported).await;
+                            router
+                                .update_tool_use_support(model_id, ToolUseSupport::Supported)
+                                .await;
                             true
                         }
                         Err(_) => {
@@ -457,7 +464,9 @@ impl CognitiveHAL {
                                 "ollama model {} does not support tool use — degraded mode",
                                 model_id
                             );
-                            router.update_tool_use_support(model_id, ToolUseSupport::Degraded).await;
+                            router
+                                .update_tool_use_support(model_id, ToolUseSupport::Degraded)
+                                .await;
                             false
                         }
                     }
