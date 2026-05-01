@@ -220,12 +220,18 @@ impl InferenceDriver for CloudProxyDriver {
         // Tool call accumulator: maps index -> (id, name, arguments_buffer)
         let tool_calls_acc: std::collections::HashMap<u32, (String, String, String)> =
             std::collections::HashMap::new();
-        let state = (stream, String::new(), tool_calls_acc);
+        let pending_tokens = std::collections::VecDeque::<String>::new();
+        let state = (stream, String::new(), tool_calls_acc, pending_tokens);
 
         let parsed_stream = futures_util::stream::unfold(
             state,
-            |(mut stream, mut buffer, mut tool_calls_acc)| async move {
+            |(mut stream, mut buffer, mut tool_calls_acc, mut pending_tokens)| async move {
                 loop {
+                    // 1. Prioritize any pending tokens in the queue
+                    if let Some(token) = pending_tokens.pop_front() {
+                        return Some((Ok(token), (stream, buffer, tool_calls_acc, pending_tokens)));
+                    }
+
                     // Yield any complete lines we already have in buffer
                     while let Some(idx) = buffer.find('\n') {
                         let line = buffer[..idx].trim().to_string();
@@ -245,9 +251,8 @@ impl InferenceDriver for CloudProxyDriver {
                                             "arguments": serde_json::from_str::<serde_json::Value>(&arguments)
                                                 .unwrap_or(serde_json::Value::String(arguments.clone())),
                                         });
-                                        let token =
-                                            format!("__TOOL_CALL__{}", tool_call_json.to_string());
-                                        return Some((Ok(token), (stream, buffer, tool_calls_acc)));
+                                        let token = format!("__TOOL_CALL__{}", tool_call_json);
+                                        pending_tokens.push_back(token);
                                     }
                                 }
                                 continue;
@@ -277,27 +282,21 @@ impl InferenceDriver for CloudProxyDriver {
                                     }
 
                                     // Emit finish_reason == "tool_calls" accumulated results
-                                    if choice.finish_reason.as_deref() == Some("tool_calls") {
-                                        if !tool_calls_acc.is_empty() {
-                                            let mut calls: Vec<(u32, (String, String, String))> =
-                                                tool_calls_acc.drain().collect();
-                                            calls.sort_by_key(|(idx, _)| *idx);
-                                            for (_, (id, name, arguments)) in calls {
-                                                let tool_call_json = serde_json::json!({
-                                                    "id": id,
-                                                    "name": name,
-                                                    "arguments": serde_json::from_str::<serde_json::Value>(&arguments)
-                                                        .unwrap_or(serde_json::Value::String(arguments.clone())),
-                                                });
-                                                let token = format!(
-                                                    "__TOOL_CALL__{}",
-                                                    tool_call_json.to_string()
-                                                );
-                                                return Some((
-                                                    Ok(token),
-                                                    (stream, buffer, tool_calls_acc),
-                                                ));
-                                            }
+                                    if choice.finish_reason.as_deref() == Some("tool_calls")
+                                        && !tool_calls_acc.is_empty()
+                                    {
+                                        let mut calls: Vec<(u32, (String, String, String))> =
+                                            tool_calls_acc.drain().collect();
+                                        calls.sort_by_key(|(idx, _)| *idx);
+                                        for (_, (id, name, arguments)) in calls {
+                                            let tool_call_json = serde_json::json!({
+                                                "id": id,
+                                                "name": name,
+                                                "arguments": serde_json::from_str::<serde_json::Value>(&arguments)
+                                                    .unwrap_or(serde_json::Value::String(arguments.clone())),
+                                            });
+                                            let token = format!("__TOOL_CALL__{}", tool_call_json);
+                                            pending_tokens.push_back(token);
                                         }
                                     }
 
@@ -306,7 +305,7 @@ impl InferenceDriver for CloudProxyDriver {
                                         if !content.is_empty() {
                                             return Some((
                                                 Ok(content.clone()),
-                                                (stream, buffer, tool_calls_acc),
+                                                (stream, buffer, tool_calls_acc, pending_tokens),
                                             ));
                                         }
                                     }
@@ -323,14 +322,14 @@ impl InferenceDriver for CloudProxyDriver {
                             } else {
                                 return Some((
                                     Err(ExecutionError::Interrupted("Invalid UTF-8 chunk".into())),
-                                    (stream, buffer, tool_calls_acc),
+                                    (stream, buffer, tool_calls_acc, pending_tokens),
                                 ));
                             }
                         }
                         Some(Err(e)) => {
                             return Some((
                                 Err(ExecutionError::Interrupted(e.to_string())),
-                                (stream, buffer, tool_calls_acc),
+                                (stream, buffer, tool_calls_acc, pending_tokens),
                             ));
                         }
                         None => {
@@ -346,10 +345,13 @@ impl InferenceDriver for CloudProxyDriver {
                                         "arguments": serde_json::from_str::<serde_json::Value>(&arguments)
                                             .unwrap_or(serde_json::Value::String(arguments.clone())),
                                     });
-                                    let token =
-                                        format!("__TOOL_CALL__{}", tool_call_json.to_string());
-                                    return Some((Ok(token), (stream, buffer, tool_calls_acc)));
+                                    let token = format!("__TOOL_CALL__{}", tool_call_json);
+                                    pending_tokens.push_back(token);
                                 }
+                            }
+                            // If we just pushed tokens, we need another iteration to yield them
+                            if !pending_tokens.is_empty() {
+                                continue;
                             }
                             return None; // Stream ended
                         }

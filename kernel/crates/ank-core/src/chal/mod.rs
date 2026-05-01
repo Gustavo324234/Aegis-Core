@@ -417,11 +417,7 @@ impl CognitiveHAL {
                     // Re-compute tools for fallback provider
                     let fallback_tools = {
                         let provider = ProviderKind::from_string(&fallback.provider);
-                        let role = if pcb.agent_id.is_some() {
-                            AgentRole::ChatAgent
-                        } else {
-                            AgentRole::ChatAgent
-                        };
+                        let role = AgentRole::ChatAgent;
                         let defs = ToolRegistry::tools_for(&role, &provider);
                         if defs.is_empty() {
                             None
