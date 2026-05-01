@@ -31,6 +31,7 @@ impl InferenceDriver for LlamaNativeDriver {
         &self,
         _prompt: String,
         _grammar: Option<Grammar>,
+        _tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult {
         Err(SystemError::ModelNotFound(
             "Native driver disabled for tests".into(),

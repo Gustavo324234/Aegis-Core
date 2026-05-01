@@ -127,6 +127,8 @@ struct ChatCompletionRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Serialize)]
@@ -151,11 +153,29 @@ struct ChatCompletionChunk {
 #[derive(Deserialize)]
 struct Choice {
     delta: Delta,
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct Delta {
     content: Option<String>,
+    tool_calls: Option<Vec<ToolCallChunk>>,
+}
+
+#[derive(Deserialize)]
+struct ToolCallChunk {
+    index: u32,
+    id: Option<String>,
+    #[allow(dead_code)]
+    #[serde(rename = "type")]
+    call_type: Option<String>,
+    function: Option<FunctionCallDelta>,
+}
+
+#[derive(Deserialize)]
+struct FunctionCallDelta {
+    name: Option<String>,
+    arguments: Option<String>,
 }
 
 #[async_trait]
@@ -164,6 +184,7 @@ impl InferenceDriver for CloudProxyDriver {
         &self,
         prompt: String,
         grammar: Option<Grammar>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult {
         let mut request_body = ChatCompletionRequest {
             model: self.model_id.clone(),
@@ -173,6 +194,7 @@ impl InferenceDriver for CloudProxyDriver {
             }],
             stream: true,
             response_format: None,
+            tools,
         };
 
         if let Some(Grammar::JsonSchema(schema)) = grammar {
@@ -195,11 +217,21 @@ impl InferenceDriver for CloudProxyDriver {
         }
 
         let stream = response.bytes_stream();
-        let state = (stream, String::new());
+        // Tool call accumulator: maps index -> (id, name, arguments_buffer)
+        let tool_calls_acc: std::collections::HashMap<u32, (String, String, String)> =
+            std::collections::HashMap::new();
+        let pending_tokens = std::collections::VecDeque::<String>::new();
+        let state = (stream, String::new(), tool_calls_acc, pending_tokens);
 
-        let parsed_stream =
-            futures_util::stream::unfold(state, |(mut stream, mut buffer)| async move {
+        let parsed_stream = futures_util::stream::unfold(
+            state,
+            |(mut stream, mut buffer, mut tool_calls_acc, mut pending_tokens)| async move {
                 loop {
+                    // 1. Prioritize any pending tokens in the queue
+                    if let Some(token) = pending_tokens.pop_front() {
+                        return Some((Ok(token), (stream, buffer, tool_calls_acc, pending_tokens)));
+                    }
+
                     // Yield any complete lines we already have in buffer
                     while let Some(idx) = buffer.find('\n') {
                         let line = buffer[..idx].trim().to_string();
@@ -207,13 +239,74 @@ impl InferenceDriver for CloudProxyDriver {
 
                         if let Some(data) = line.strip_prefix("data: ") {
                             if data == "[DONE]" {
+                                // Stream ended — emit any accumulated tool calls
+                                if !tool_calls_acc.is_empty() {
+                                    let mut calls: Vec<(u32, (String, String, String))> =
+                                        tool_calls_acc.drain().collect();
+                                    calls.sort_by_key(|(idx, _)| *idx);
+                                    for (_, (id, name, arguments)) in calls {
+                                        let tool_call_json = serde_json::json!({
+                                            "id": id,
+                                            "name": name,
+                                            "arguments": serde_json::from_str::<serde_json::Value>(&arguments)
+                                                .unwrap_or(serde_json::Value::String(arguments.clone())),
+                                        });
+                                        let token = format!("__TOOL_CALL__{}", tool_call_json);
+                                        pending_tokens.push_back(token);
+                                    }
+                                }
                                 continue;
                             }
                             if let Ok(parsed) = serde_json::from_str::<ChatCompletionChunk>(data) {
                                 if let Some(choice) = parsed.choices.first() {
+                                    // Accumulate tool_calls chunks
+                                    if let Some(tc_chunks) = &choice.delta.tool_calls {
+                                        for tc in tc_chunks {
+                                            let entry = tool_calls_acc
+                                                .entry(tc.index)
+                                                .or_insert_with(|| {
+                                                    (String::new(), String::new(), String::new())
+                                                });
+                                            if let Some(id) = &tc.id {
+                                                entry.0 = id.clone();
+                                            }
+                                            if let Some(func) = &tc.function {
+                                                if let Some(name) = &func.name {
+                                                    entry.1 = name.clone();
+                                                }
+                                                if let Some(args) = &func.arguments {
+                                                    entry.2.push_str(args);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Emit finish_reason == "tool_calls" accumulated results
+                                    if choice.finish_reason.as_deref() == Some("tool_calls")
+                                        && !tool_calls_acc.is_empty()
+                                    {
+                                        let mut calls: Vec<(u32, (String, String, String))> =
+                                            tool_calls_acc.drain().collect();
+                                        calls.sort_by_key(|(idx, _)| *idx);
+                                        for (_, (id, name, arguments)) in calls {
+                                            let tool_call_json = serde_json::json!({
+                                                "id": id,
+                                                "name": name,
+                                                "arguments": serde_json::from_str::<serde_json::Value>(&arguments)
+                                                    .unwrap_or(serde_json::Value::String(arguments.clone())),
+                                            });
+                                            let token = format!("__TOOL_CALL__{}", tool_call_json);
+                                            pending_tokens.push_back(token);
+                                        }
+                                    }
+
+                                    // Emit regular content tokens
                                     if let Some(content) = &choice.delta.content {
                                         if !content.is_empty() {
-                                            return Some((Ok(content.clone()), (stream, buffer)));
+                                            return Some((
+                                                Ok(content.clone()),
+                                                (stream, buffer, tool_calls_acc, pending_tokens),
+                                            ));
                                         }
                                     }
                                 }
@@ -229,22 +322,43 @@ impl InferenceDriver for CloudProxyDriver {
                             } else {
                                 return Some((
                                     Err(ExecutionError::Interrupted("Invalid UTF-8 chunk".into())),
-                                    (stream, buffer),
+                                    (stream, buffer, tool_calls_acc, pending_tokens),
                                 ));
                             }
                         }
                         Some(Err(e)) => {
                             return Some((
                                 Err(ExecutionError::Interrupted(e.to_string())),
-                                (stream, buffer),
+                                (stream, buffer, tool_calls_acc, pending_tokens),
                             ));
                         }
                         None => {
+                            // Stream ended — emit any remaining tool calls
+                            if !tool_calls_acc.is_empty() {
+                                let mut calls: Vec<(u32, (String, String, String))> =
+                                    tool_calls_acc.drain().collect();
+                                calls.sort_by_key(|(idx, _)| *idx);
+                                for (_, (id, name, arguments)) in calls {
+                                    let tool_call_json = serde_json::json!({
+                                        "id": id,
+                                        "name": name,
+                                        "arguments": serde_json::from_str::<serde_json::Value>(&arguments)
+                                            .unwrap_or(serde_json::Value::String(arguments.clone())),
+                                    });
+                                    let token = format!("__TOOL_CALL__{}", tool_call_json);
+                                    pending_tokens.push_back(token);
+                                }
+                            }
+                            // If we just pushed tokens, we need another iteration to yield them
+                            if !pending_tokens.is_empty() {
+                                continue;
+                            }
                             return None; // Stream ended
                         }
                     }
                 }
-            });
+            },
+        );
 
         Ok(Box::pin(crate::chal::SyncStream(parsed_stream)))
     }

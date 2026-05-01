@@ -1,5 +1,6 @@
 use crate::agents::instructions::InstructionLoader;
 use crate::agents::node::AgentRole;
+use crate::agents::tool_registry::{ProviderKind, ToolRegistry};
 use crate::pcb::PCB;
 use crate::plugins::PluginManager;
 use crate::router::{CognitiveRouter, RoutingDecision};
@@ -140,6 +141,7 @@ pub trait InferenceDriver: Send + Sync {
         &self,
         prompt: String,
         grammar: Option<Grammar>,
+        tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult;
 
     async fn get_health_status(&self) -> DriverStatus;
@@ -344,7 +346,7 @@ impl CognitiveHAL {
         })?;
 
         let final_prompt = self.build_prompt(&pcb_snapshot, persona.as_deref()).await;
-        driver.generate_stream(final_prompt, None).await
+        driver.generate_stream(final_prompt, None, None).await
     }
 
     async fn execute_with_decision(
@@ -372,7 +374,32 @@ impl CognitiveHAL {
 
         let final_prompt = self.build_prompt(pcb, persona).await;
 
-        match driver.generate_stream(final_prompt.clone(), None).await {
+        // CORE-240: Obtener tools del ToolRegistry si el PCB es un agente del árbol
+        let tools = if pcb.agent_id.is_some() {
+            // Determinar el rol del agente — por defecto ChatAgent
+            let role = AgentRole::ChatAgent;
+            let provider = ProviderKind::from_string(&decision.provider);
+            let tool_defs = ToolRegistry::tools_for(&role, &provider);
+            if tool_defs.is_empty() {
+                None
+            } else {
+                Some(tool_defs)
+            }
+        } else {
+            // El ChatAgent principal (sin agent_id) también recibe tools
+            let provider = ProviderKind::from_string(&decision.provider);
+            let tool_defs = ToolRegistry::tools_for(&AgentRole::ChatAgent, &provider);
+            if tool_defs.is_empty() {
+                None
+            } else {
+                Some(tool_defs)
+            }
+        };
+
+        match driver
+            .generate_stream(final_prompt.clone(), None, tools.clone())
+            .await
+        {
             Ok(stream) => Ok(stream),
             Err(e) => {
                 for fallback in &decision.fallback_chain {
@@ -387,8 +414,19 @@ impl CognitiveHAL {
                         fallback.api_key.clone(),
                         fallback.model_id.clone(),
                     );
+                    // Re-compute tools for fallback provider
+                    let fallback_tools = {
+                        let provider = ProviderKind::from_string(&fallback.provider);
+                        let role = AgentRole::ChatAgent;
+                        let defs = ToolRegistry::tools_for(&role, &provider);
+                        if defs.is_empty() {
+                            None
+                        } else {
+                            Some(defs)
+                        }
+                    };
                     if let Ok(stream) = fallback_driver
-                        .generate_stream(final_prompt.clone(), None)
+                        .generate_stream(final_prompt.clone(), None, fallback_tools)
                         .await
                     {
                         return Ok(stream);
@@ -450,7 +488,7 @@ impl CognitiveHAL {
                     // Prompt de prueba — en producción la respuesta incluiría tool_calls
                     let test_prompt =
                         "[TOOL_USE_PROBE] Respond with a tool call if supported.".to_string();
-                    match driver.generate_stream(test_prompt, None).await {
+                    match driver.generate_stream(test_prompt, None, None).await {
                         Ok(_) => {
                             // Respuesta exitosa → marcar Supported (en producción verificar tool_calls)
                             router
@@ -587,6 +625,7 @@ impl InferenceDriver for DummyDriver {
         &self,
         _prompt: String,
         _grammar: Option<Grammar>,
+        _tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult {
         let response = format!("[{}] OK", self.name);
         let stream = tokio_stream::iter(vec![Ok(response)]);
