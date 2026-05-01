@@ -17,7 +17,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_string(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "anthropic" => Self::Anthropic,
             "openai" => Self::OpenAI,
@@ -251,12 +251,12 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_kind_from_str() {
-        assert_eq!(ProviderKind::from_str("anthropic"), ProviderKind::Anthropic);
-        assert_eq!(ProviderKind::from_str("ollama"), ProviderKind::Ollama);
-        assert_eq!(ProviderKind::from_str("GROQ"), ProviderKind::Groq);
+    fn test_provider_kind_from_string() {
+        assert_eq!(ProviderKind::from_string("anthropic"), ProviderKind::Anthropic);
+        assert_eq!(ProviderKind::from_string("ollama"), ProviderKind::Ollama);
+        assert_eq!(ProviderKind::from_string("GROQ"), ProviderKind::Groq);
         assert_eq!(
-            ProviderKind::from_str("unknown_provider"),
+            ProviderKind::from_string("unknown_provider"),
             ProviderKind::OpenAI
         );
     }

@@ -436,8 +436,8 @@ impl CognitiveHAL {
         };
 
         match current_support {
-            ToolUseSupport::Supported => return true,
-            ToolUseSupport::Degraded => return false,
+            ToolUseSupport::Supported => true,
+            ToolUseSupport::Degraded => false,
             ToolUseSupport::Unknown => {
                 // Intentar con una llamada de prueba mínima
                 let drivers = self.drivers.read().await;
