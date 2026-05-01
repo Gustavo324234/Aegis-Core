@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.30](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.29...ank-core-v0.1.30) (2026-04-30)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-239 bare model_id strips provider prefix in CognitiveRouter ([#174](https://github.com/Gustavo324234/Aegis-Core/issues/174)) ([3852b04](https://github.com/Gustavo324234/Aegis-Core/commit/3852b0451c280f85a9df204ac673dac12b7f6c65))
+
 ## [0.1.29](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.28...ank-core-v0.1.29) (2026-04-30)
 
 
