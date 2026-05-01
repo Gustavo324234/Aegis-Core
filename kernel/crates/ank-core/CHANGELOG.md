@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.31](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.30...ank-core-v0.1.31) (2026-05-01)
+
+
+### Features
+
+* **ank-core:** EPIC-47 agent protocol v2 — tool use dispatch ([#176](https://github.com/Gustavo324234/Aegis-Core/issues/176)) ([94b4909](https://github.com/Gustavo324234/Aegis-Core/commit/94b4909e0aa1afdd8c6c90554cd05271a2bbc6f9))
+
 ## [0.1.30](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.29...ank-core-v0.1.30) (2026-04-30)
 
 
