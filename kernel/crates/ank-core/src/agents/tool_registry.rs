@@ -252,7 +252,10 @@ mod tests {
 
     #[test]
     fn test_provider_kind_from_string() {
-        assert_eq!(ProviderKind::from_string("anthropic"), ProviderKind::Anthropic);
+        assert_eq!(
+            ProviderKind::from_string("anthropic"),
+            ProviderKind::Anthropic
+        );
         assert_eq!(ProviderKind::from_string("ollama"), ProviderKind::Ollama);
         assert_eq!(ProviderKind::from_string("GROQ"), ProviderKind::Groq);
         assert_eq!(
