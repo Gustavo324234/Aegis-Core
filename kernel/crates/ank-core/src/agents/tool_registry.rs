@@ -45,7 +45,7 @@ pub struct ToolDefinition {
 /// Registra y serializa las herramientas del Agent Protocol v2 (EPIC 47).
 ///
 /// Cada agente recibe un set de herramientas según su rol:
-/// - ChatAgent            → [spawn_agent, query_agent]
+/// - ChatAgent            → [spawn_agent]  (query_agent requiere agent_id — ver CORE-243)
 /// - ProjectSupervisor    → [spawn_agent, query_agent, report]
 /// - Supervisor           → [spawn_agent, query_agent, report]
 /// - Specialist           → [report]
@@ -62,7 +62,9 @@ impl ToolRegistry {
 
     fn definitions_for(role: &AgentRole) -> Vec<ToolDefinition> {
         match role {
-            AgentRole::ChatAgent => vec![Self::spawn_agent(), Self::query_agent()],
+            // CORE-243: ChatAgent no tiene agent_id — query_agent y report requieren uno.
+            // Solo puede hacer spawn_agent (para crear un ProjectSupervisor).
+            AgentRole::ChatAgent => vec![Self::spawn_agent()],
             AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
                 vec![Self::spawn_agent(), Self::query_agent(), Self::report()]
             }
@@ -210,16 +212,21 @@ mod tests {
     }
 
     #[test]
-    fn test_chat_agent_gets_spawn_and_query() {
+    fn test_chat_agent_gets_only_spawn() {
+        // CORE-243: ChatAgent no tiene agent_id, por lo que query_agent y report
+        // fallarían en SyscallExecutor. Solo recibe spawn_agent.
         let role = AgentRole::ChatAgent;
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Groq);
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 1);
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"spawn_agent"));
-        assert!(names.contains(&"query_agent"));
+        assert!(
+            !names.contains(&"query_agent"),
+            "ChatAgent no debe recibir query_agent"
+        );
     }
 
     #[test]
