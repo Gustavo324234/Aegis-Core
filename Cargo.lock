@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "ank-core"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "ank-mcp",
  "ank-proto",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "ank-http"
-version = "0.1.38"
+version = "0.1.39"
 dependencies = [
  "ank-core",
  "ank-proto",
@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "ank-server"
-version = "0.1.41"
+version = "0.1.42"
 dependencies = [
  "ank-core",
  "ank-http",

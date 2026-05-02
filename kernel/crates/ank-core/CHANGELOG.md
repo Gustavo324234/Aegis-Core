@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.33](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.32...ank-core-v0.1.33) (2026-05-02)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-241 filter __TOOL_CALL__ output before frontend delivery fix(ank-core): CORE-242 exclude MAKER_INSTRUCTIONS from Chat Agent prompt ([#180](https://github.com/Gustavo324234/Aegis-Core/issues/180)) ([0ca5df3](https://github.com/Gustavo324234/Aegis-Core/commit/0ca5df3417cb69c49d009a79607d59daa47699d0))
+
 ## [0.1.32](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.31...ank-core-v0.1.32) (2026-05-01)
 
 
