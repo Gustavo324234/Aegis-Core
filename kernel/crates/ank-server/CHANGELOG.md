@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.44](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.43...ank-server-v0.1.44) (2026-05-02)
+
+
+### Bug Fixes
+
+* **ank-server:** CORE-241 send user-facing response after AgentToolCall execution ([#185](https://github.com/Gustavo324234/Aegis-Core/issues/185)) ([e6e4c5e](https://github.com/Gustavo324234/Aegis-Core/commit/e6e4c5efa27fcf7b681105eae583a6205120cf09))
+
 ## [0.1.43](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.42...ank-server-v0.1.43) (2026-05-02)
 
 ## [0.1.42](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.41...ank-server-v0.1.42) (2026-05-02)
