@@ -233,6 +233,8 @@ dependencies = [
  "dirs",
  "openssl",
  "rustls",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "tonic",
