@@ -110,6 +110,19 @@ impl AgentOrchestrator {
             .await
     }
 
+    /// CORE-243: Alias simplificado para el Chat Agent.
+    /// Permite crear un proyecto desde el contexto del Chat (sin agent_id).
+    pub async fn create_project(
+        &self,
+        name: String,
+        scope: String,
+        _task_type: Option<crate::pcb::TaskType>,
+        tenant_id: Option<String>,
+    ) -> anyhow::Result<crate::agents::node::AgentId> {
+        self.activate_project(tenant_id.as_deref().unwrap_or("default"), &scope, &name)
+            .await
+    }
+
     async fn create_project_supervisor(
         &self,
         _tenant_id: &str,
