@@ -472,7 +472,7 @@ impl SyscallExecutor {
             } => {
                 match (pcb.agent_id.as_ref(), role) {
                     // Chat Agent (sin agent_id) crea ProjectSupervisor — caso raíz válido
-                    (None, AgentRole::ProjectSupervisor) => {
+                    (None, AgentRole::ProjectSupervisor { .. }) => {
                         let project_name = name
                             .clone()
                             .unwrap_or_else(|| scope.chars().take(40).collect());
@@ -494,7 +494,7 @@ impl SyscallExecutor {
                     }
 
                     // Agente del árbol crea hijo — caso normal válido
-                    (Some(caller_id), AgentRole::Supervisor | AgentRole::Specialist) => {
+                    (Some(caller_id), AgentRole::Supervisor { .. } | AgentRole::Specialist { .. }) => {
                         orchestrator
                             .handle_tool_call(*caller_id, call)
                             .await
@@ -507,7 +507,7 @@ impl SyscallExecutor {
                     )),
 
                     // Agente del árbol intentando crear ProjectSupervisor — inválido
-                    (Some(_), AgentRole::ProjectSupervisor) => Err(SyscallError::InternalError(
+                    (Some(_), AgentRole::ProjectSupervisor { .. } | AgentRole::ChatAgent) => Err(SyscallError::InternalError(
                         "Only the Chat Agent can create ProjectSupervisors".to_string(),
                     )),
                 }
