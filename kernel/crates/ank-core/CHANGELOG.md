@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.36](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.35...ank-core-v0.1.36) (2026-05-02)
+
+
+### Bug Fixes
+
+* **agents:** remove query_agent from ChatAgent tool set to prevent ke… ([#187](https://github.com/Gustavo324234/Aegis-Core/issues/187)) ([548b7a5](https://github.com/Gustavo324234/Aegis-Core/commit/548b7a5b43598c40ba131f77f9df887848cf9144))
+
 ## [0.1.35](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.34...ank-core-v0.1.35) (2026-05-02)
 
 
