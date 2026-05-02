@@ -265,8 +265,7 @@ async fn main() -> Result<()> {
                             while let Some(item) = interceptor.next_item().await {
                                 match item {
                                     ank_core::syscalls::StreamItem::Token(token) => {
-                                        if token.starts_with("__TOOL_CALL__") {
-                                            let json_str = &token["__TOOL_CALL__".len()..];
+                                        if let Some(json_str) = token.strip_prefix("__TOOL_CALL__") {
 
                                             #[derive(serde::Deserialize)]
                                             struct AgentToolCallPayload {
