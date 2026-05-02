@@ -265,6 +265,50 @@ async fn main() -> Result<()> {
                             while let Some(item) = interceptor.next_item().await {
                                 match item {
                                     ank_core::syscalls::StreamItem::Token(token) => {
+                                        if let Some(json_str) = token.strip_prefix("__TOOL_CALL__")
+                                        {
+                                            #[derive(serde::Deserialize)]
+                                            struct AgentToolCallPayload {
+                                                name: String,
+                                                arguments: serde_json::Value,
+                                            }
+
+                                            if let Ok(payload) =
+                                                serde_json::from_str::<AgentToolCallPayload>(
+                                                    json_str,
+                                                )
+                                            {
+                                                let tool_call_opt = match payload.name.as_str() {
+                                                    "spawn_agent" => serde_json::from_value::<ank_core::agents::message::AgentToolCall>(serde_json::json!({ "Spawn": payload.arguments })).ok(),
+                                                    "query_agent" => serde_json::from_value::<ank_core::agents::message::AgentToolCall>(serde_json::json!({ "Query": payload.arguments })).ok(),
+                                                    "report" => serde_json::from_value::<ank_core::agents::message::AgentToolCall>(serde_json::json!({ "Report": payload.arguments })).ok(),
+                                                    _ => None,
+                                                };
+
+                                                if let Some(tool_call) = tool_call_opt {
+                                                    let pcb_snapshot =
+                                                        shared_pcb.read().await.clone();
+                                                    match executor
+                                                        .execute_agent_tool_call(
+                                                            &pcb_snapshot,
+                                                            tool_call,
+                                                        )
+                                                        .await
+                                                    {
+                                                        Ok(_) => {
+                                                            tracing::info!(pid = %pid, "AgentToolCall ejecutado con éxito");
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::error!(pid = %pid, "Error en AgentToolCall: {}", e);
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            // CORE-241: No propagar el token de tool call al frontend
+                                            continue;
+                                        }
+
                                         tokens_emitted += 1;
                                         full_output.push_str(&token);
                                         let _ = event_tx.send(ank_proto::v1::TaskEvent {
