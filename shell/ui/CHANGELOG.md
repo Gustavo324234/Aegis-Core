@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.7](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.6...shell-ui-v1.10.7) (2026-05-02)
+
+
+### Bug Fixes
+
+* **ank-server:** CORE-241 send user-facing response after AgentToolCall execution ([#185](https://github.com/Gustavo324234/Aegis-Core/issues/185)) ([e6e4c5e](https://github.com/Gustavo324234/Aegis-Core/commit/e6e4c5efa27fcf7b681105eae583a6205120cf09))
+
 ## [1.10.6](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.5...shell-ui-v1.10.6) (2026-04-29)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/Gustavo324234/Aegis-Core/compare/aegis-supervisor-v0.1.3...aegis-supervisor-v0.1.4) (2026-05-02)
+
+
+### Bug Fixes
+
+* **ank-server:** CORE-241 send user-facing response after AgentToolCall execution ([#185](https://github.com/Gustavo324234/Aegis-Core/issues/185)) ([e6e4c5e](https://github.com/Gustavo324234/Aegis-Core/commit/e6e4c5efa27fcf7b681105eae583a6205120cf09))
+
 ## [0.1.3](https://github.com/Gustavo324234/Aegis-Core/compare/aegis-supervisor-v0.1.2...aegis-supervisor-v0.1.3) (2026-04-29)
 
 
