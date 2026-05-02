@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.34](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.33...ank-core-v0.1.34) (2026-05-02)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-243 allow Chat Agent to spawn ProjectSupervisor without agent_id ([#182](https://github.com/Gustavo324234/Aegis-Core/issues/182)) ([cf6aa10](https://github.com/Gustavo324234/Aegis-Core/commit/cf6aa10a35019b39bf483933ec3d924edde388b1))
+
 ## [0.1.33](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.32...ank-core-v0.1.33) (2026-05-02)
 
 
