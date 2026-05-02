@@ -223,7 +223,10 @@ mod tests {
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"spawn_agent"));
-        assert!(!names.contains(&"query_agent"), "ChatAgent no debe recibir query_agent");
+        assert!(
+            !names.contains(&"query_agent"),
+            "ChatAgent no debe recibir query_agent"
+        );
     }
 
     #[test]
