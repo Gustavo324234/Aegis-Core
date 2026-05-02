@@ -464,7 +464,12 @@ impl SyscallExecutor {
         })?;
 
         match &call {
-            AgentToolCall::Spawn { role, name, scope, task_type } => {
+            AgentToolCall::Spawn {
+                role,
+                name,
+                scope,
+                task_type,
+            } => {
                 match (pcb.agent_id.as_ref(), role) {
                     // Chat Agent (sin agent_id) crea ProjectSupervisor — caso raíz válido
                     (None, AgentRole::ProjectSupervisor) => {
