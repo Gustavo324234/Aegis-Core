@@ -301,21 +301,36 @@ async fn main() -> Result<()> {
                                                             // CORE-241 FIX: Enviar confirmación al usuario
                                                             // El result_json contiene {"status":"spawned","project":"Aegis"}
                                                             // o {"acknowledged":true} — lo usamos para generar un mensaje natural.
-                                                            let user_msg = if result_json.contains("spawned") {
+                                                            let user_msg = if result_json
+                                                                .contains("spawned")
+                                                            {
                                                                 // Extraer nombre del proyecto del JSON
                                                                 serde_json::from_str::<serde_json::Value>(&result_json)
                                                                     .ok()
                                                                     .and_then(|v| v["project"].as_str().map(String::from))
                                                                     .map(|name| format!("Listo, activé el equipo para el proyecto **{}**.", name))
                                                                     .unwrap_or_else(|| "Listo, activé el equipo.".to_string())
-                                                            } else if result_json.contains("acknowledged") {
+                                                            } else if result_json
+                                                                .contains("acknowledged")
+                                                            {
                                                                 "Reporte recibido.".to_string()
-                                                            } else if result_json.contains("answer") {
+                                                            } else if result_json.contains("answer")
+                                                            {
                                                                 // Query reply — extraer la respuesta
-                                                                serde_json::from_str::<serde_json::Value>(&result_json)
-                                                                    .ok()
-                                                                    .and_then(|v| v["answer"].as_str().map(String::from))
-                                                                    .unwrap_or_else(|| result_json.clone())
+                                                                serde_json::from_str::<
+                                                                    serde_json::Value,
+                                                                >(
+                                                                    &result_json
+                                                                )
+                                                                .ok()
+                                                                .and_then(|v| {
+                                                                    v["answer"]
+                                                                        .as_str()
+                                                                        .map(String::from)
+                                                                })
+                                                                .unwrap_or_else(|| {
+                                                                    result_json.clone()
+                                                                })
                                                             } else {
                                                                 result_json.clone()
                                                             };
@@ -334,7 +349,10 @@ async fn main() -> Result<()> {
                                                             tracing::error!(pid = %pid, "Error en AgentToolCall: {}", e);
 
                                                             // Informar al usuario del error
-                                                            let err_msg = format!("No pude completar la acción: {}", e);
+                                                            let err_msg = format!(
+                                                                "No pude completar la acción: {}",
+                                                                e
+                                                            );
                                                             full_output.push_str(&err_msg);
                                                             tokens_emitted += 1;
                                                             let _ = event_tx.send(ank_proto::v1::TaskEvent {
