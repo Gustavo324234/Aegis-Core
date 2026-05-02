@@ -481,16 +481,16 @@ impl SyscallExecutor {
                             .create_project(
                                 project_name.clone(),
                                 scope.clone(),
-                                task_type.clone(),
+                                *task_type,
                                 pcb.tenant_id.clone(),
                             )
                             .await
                             .map_err(|e| SyscallError::InternalError(e.to_string()))?;
 
-                        return Ok(format!(
+                        Ok(format!(
                             "{{\"status\":\"spawned\",\"project\":\"{}\"}}",
                             project_name
-                        ));
+                        ))
                     }
 
                     // Agente del árbol crea hijo — caso normal válido
