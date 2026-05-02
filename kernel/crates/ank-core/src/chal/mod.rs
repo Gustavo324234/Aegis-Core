@@ -605,11 +605,7 @@ impl CognitiveHAL {
             )
         };
 
-        let has_maker_plugin = self
-            .plugin_manager
-            .read()
-            .await
-            .is_plugin_active("maker");
+        let has_maker_plugin = self.plugin_manager.read().await.is_plugin_active("maker");
 
         let maker_section = if has_maker_plugin && pcb.agent_id.is_none() {
             MAKER_INSTRUCTIONS
@@ -619,10 +615,7 @@ impl CognitiveHAL {
 
         // CORE-150: Maker Instructions
         // CORE-154: Multi-Agent Instructions
-        format!(
-            "{}{}{}",
-            maker_section, SPAWN_INSTRUCTIONS, final_prompt
-        )
+        format!("{}{}{}", maker_section, SPAWN_INSTRUCTIONS, final_prompt)
     }
 }
 
