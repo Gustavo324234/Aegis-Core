@@ -2,6 +2,13 @@
 
 
 
+## [0.1.44](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.43...ank-http-v0.1.44) (2026-05-03)
+
+
+### Features
+
+* **kernel:** CORE-247 endpoint GET /api/chat/history ([#199](https://github.com/Gustavo324234/Aegis-Core/issues/199)) ([97142d0](https://github.com/Gustavo324234/Aegis-Core/commit/97142d0a35e308c016efad3c62314aa957d5bd62))
+
 ## [0.1.43](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.42...ank-http-v0.1.43) (2026-05-03)
 
 ## [0.1.42](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.41...ank-http-v0.1.42) (2026-05-02)
