@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod agents;
 pub mod auth;
+pub mod chat_history;
 pub mod engine;
 pub mod fs;
 pub mod music_api;
@@ -37,6 +38,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/engine", engine::router())
         .nest("/api/oauth", oauth_api::router())
         .nest("/api/router", router_api::router())
+        .nest("/api/chat", chat_history::router())
         .nest("/api/workspace", workspace::router())
         .nest("/api/fs", fs::router())
         .nest("/api/prs", prs::router())
