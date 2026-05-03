@@ -205,8 +205,31 @@ const FinancialWidget = () => {
 };
 
 const Dashboard: React.FC = () => {
-    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected } = useAegisStore();
+    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected, systemState } = useAegisStore();
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+    const [tenantName, setTenantName] = useState<string | null>(null);
+
+    React.useEffect(() => {
+        if (!tenantId || !sessionKey) return;
+        fetch('/api/persona', {
+            headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey }
+        })
+            .then(r => r.ok ? r.json() : null)
+            .then((data: { name?: string } | null) => setTenantName(data?.name ?? tenantId))
+            .catch(() => setTenantName(tenantId));
+    }, [tenantId, sessionKey]);
+
+    const systemStatusText = ({
+        'STATE_OPERATIONAL': 'Kernel Operational // All systems nominal',
+        'STATE_INITIALIZING': 'Kernel Initializing // Please wait',
+        'UNKNOWN': 'System Status Unknown',
+    } as Record<string, string>)[systemState] ?? 'Checking system status...';
+
+    const systemStatusColor = systemState === 'STATE_OPERATIONAL' ? 'text-white/40'
+        : systemState === 'STATE_INITIALIZING' ? 'text-yellow-500/60'
+        : 'text-red-500/60';
+
+    const isOperational = systemState === 'STATE_OPERATIONAL';
 
     return (
         <div className="h-full w-full flex flex-col bg-black text-white overflow-hidden">
@@ -229,9 +252,12 @@ const Dashboard: React.FC = () => {
 
                 <div className="flex items-center gap-6">
                     <div className="flex flex-col items-end">
-                        <span className="text-[8px] font-mono text-white/20 uppercase tracking-widest">CPU LOAD</span>
+                        <div className="flex items-center justify-between gap-2 w-24">
+                            <span className="text-[8px] font-mono text-white/20 uppercase tracking-widest">CPU</span>
+                            <span className="text-[9px] font-mono text-white/40">{system_metrics.cpu_load.toFixed(0)}%</span>
+                        </div>
                         <div className="w-24 h-1 bg-white/5 rounded-full overflow-hidden mt-1">
-                            <motion.div 
+                            <motion.div
                                 initial={{ width: 0 }}
                                 animate={{ width: `${system_metrics.cpu_load}%` }}
                                 className="h-full bg-aegis-cyan"
@@ -240,8 +266,15 @@ const Dashboard: React.FC = () => {
                     </div>
                     <div className="h-8 w-px bg-white/10" />
                     <div className="flex items-center gap-3">
-                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                        <span className="text-[10px] font-mono text-white/40 uppercase">Kernel Operational</span>
+                        <div className={cn(
+                            "w-2 h-2 rounded-full",
+                            isOperational ? "bg-green-500 animate-pulse"
+                            : systemState === 'STATE_INITIALIZING' ? "bg-yellow-500"
+                            : "bg-red-500"
+                        )} />
+                        <span className="text-[10px] font-mono text-white/40 uppercase">
+                            {isOperational ? 'Kernel Operational' : systemState === 'STATE_INITIALIZING' ? 'Kernel Initializing' : 'System Unknown'}
+                        </span>
                     </div>
                 </div>
             </header>
@@ -251,8 +284,8 @@ const Dashboard: React.FC = () => {
                 <div className="grid grid-cols-12 gap-8">
                     {/* Welcome / Stats */}
                     <div className="col-span-12 flex flex-col gap-2">
-                        <h2 className="text-3xl font-bold tracking-tight">Welcome back, <span className="text-aegis-cyan">Operator</span></h2>
-                        <p className="text-white/40 font-mono text-xs uppercase tracking-widest">System status: Optimal // All enclaves secured</p>
+                        <h2 className="text-3xl font-bold tracking-tight">Welcome back, <span className="text-aegis-cyan">{tenantName ?? tenantId ?? 'Operator'}</span></h2>
+                        <p className={cn("font-mono text-xs uppercase tracking-widest", systemStatusColor)}>{systemStatusText}</p>
                     </div>
 
                     {/* Financial Widget */}
