@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.47](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.46...ank-server-v0.1.47) (2026-05-03)
+
+
+### Bug Fixes
+
+* **ank-server:** CORE-244 HAL Runner — StatusUpdate en path de error ([#191](https://github.com/Gustavo324234/Aegis-Core/issues/191)) ([f59b152](https://github.com/Gustavo324234/Aegis-Core/commit/f59b152bf0fa737b86128dd39d40834f4b46cd98))
+
 ## [0.1.46](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.45...ank-server-v0.1.46) (2026-05-03)
 
 ## [0.1.45](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.44...ank-server-v0.1.45) (2026-05-02)
