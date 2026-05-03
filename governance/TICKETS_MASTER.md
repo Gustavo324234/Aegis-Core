@@ -13,6 +13,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 | EPIC 46 | Public Launch | ✅ Completa | 100% |
 | EPIC 47 | Agent Protocol v2: Tool Use | 📥 Planned | 0% |
+| EPIC 48 | Shell Observability: Chat feedback + Dashboard real | 📥 Planned | 0% |
 
 ---
 
@@ -142,6 +143,19 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ---
 
+### EPIC 48 — Shell Observability: Chat feedback + Dashboard real
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-244 | fix | HAL Runner: StatusUpdate en path de error | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-248 | feat | Chat: indicador de estado enriquecido (modelo, provider, error amigable, timeout) | 📥 Todo | Crítica | Shell Engineer |
+| CORE-252 | feat | Dashboard: header con nombre real del tenant y estado del sistema real | 📥 Todo | Alta | Shell Engineer |
+| CORE-249 | feat | Dashboard: reemplazar MOCK_TICKETS con Kanban real del tenant | 📥 Todo | Alta | Shell Engineer |
+| CORE-250 | feat | Dashboard: FinancialWidget con datos reales (API Cost) | 📥 Todo | Media | Shell Engineer |
+| CORE-251 | feat | Dashboard: Chronos widget honesto (sin eventos ficticios) | 📥 Todo | Media | Shell Engineer |
+
+---
+
 ### Bugs pre-lanzamiento — Multi-Agent Pipeline (Kernel)
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
@@ -161,6 +175,16 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-231 | fix | Shell: Micrófono falla silenciosamente en HTTP — falta feedback al usuario | ✅ Done | Crítica | Shell Engineer |
 | CORE-232 | fix | Shell: IP vs Cloudflare producen chats separados — falta aviso y pre-fill de login | ✅ Done | Alta | Shell Engineer |
 | CORE-233 | feat | Shell: Settings del tenant — simplificar y unificar configuración en 4 tabs | ✅ Done | Alta | Shell Engineer |
+
+---
+
+### Mejoras UX — Panel de providers y chat
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-245 | feat | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | 📥 Todo | Alta | Shell Engineer |
+| CORE-246 | feat | Tenant: visualización de modelos disponibles por provider en tab Motor | 📥 Todo | Alta | Shell Engineer |
+| CORE-247 | feat | Historial de chat persistente: cargar al conectar, unificar IP y Cloudflare | 📥 Todo | Crítica | Kernel Engineer + Shell Engineer |
 
 ---
 
