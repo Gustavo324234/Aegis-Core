@@ -17,6 +17,7 @@ import {
     Code2,
 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
+import type { ProjectSummary, AgentNodeSummary, AgentNodeState } from '../store/useAegisStore';
 import AgentTreeWidget from './AgentTreeWidget';
 import { ProjectList } from './ProjectList';
 import { AgentTreeView } from './AgentTreeView';
@@ -65,32 +66,90 @@ class WidgetErrorBoundary extends Component<
     }
 }
 
-interface Ticket {
+interface ProjectCard {
     id: string;
     title: string;
-    type: 'feat' | 'fix' | 'task';
-    priority: 'Crítica' | 'Alta' | 'Media' | 'Baja';
-    status: 'Todo' | 'In Progress' | 'Done';
+    description: string | null;
+    status: 'active' | 'archived';
+    agentState: AgentNodeState | null;
+    model: string | null;
 }
 
-const MOCK_TICKETS: Ticket[] = [
-    { id: 'CORE-150', title: 'Sandbox de Scripts (Maker Capability)', type: 'feat', priority: 'Crítica', status: 'Todo' },
-    { id: 'CORE-151', title: 'Integración de Contexto de Proyecto (Git/VCM)', type: 'feat', priority: 'Alta', status: 'In Progress' },
-    { id: 'CORE-153', title: 'Dashboard Dinámico & Kanban UI', type: 'feat', priority: 'Alta', status: 'In Progress' },
-    { id: 'CORE-148', title: 'Natural Conversational Tone (Prompt)', type: 'fix', priority: 'Alta', status: 'In Progress' },
-    { id: 'CORE-145', title: 'Conversational Onboarding (Name/Persona)', type: 'feat', priority: 'Crítica', status: 'Done' },
-    { id: 'CORE-149', title: 'Neuronal Memory (L3) & Semantic Retrieval', type: 'feat', priority: 'Crítica', status: 'Done' },
-];
+function mapProjectsToCards(
+    projects: ProjectSummary[],
+    agentTree: AgentNodeSummary[]
+): { backlog: ProjectCard[]; active: ProjectCard[]; verified: ProjectCard[] } {
+    const backlog: ProjectCard[] = [];
+    const active: ProjectCard[] = [];
+    const verified: ProjectCard[] = [];
 
-const KanbanColumn: React.FC<{ 
-    title: string; 
-    status: Ticket['status']; 
-    tickets: Ticket[];
+    for (const project of projects) {
+        const rootAgent = project.root_agent_id
+            ? agentTree.find(n => n.id === project.root_agent_id) ?? null
+            : null;
+
+        const card: ProjectCard = {
+            id: project.project_id,
+            title: project.name,
+            description: project.description,
+            status: project.status,
+            agentState: rootAgent?.state ?? null,
+            model: rootAgent?.model ?? null,
+        };
+
+        if (project.status === 'archived') {
+            verified.push(card);
+        } else if (rootAgent?.state === 'Running') {
+            active.push(card);
+        } else {
+            backlog.push(card);
+        }
+    }
+
+    return { backlog, active, verified };
+}
+
+const AgentStateBadge: React.FC<{ state: AgentNodeState | null }> = ({ state }) => {
+    if (!state) return null;
+
+    if (state === 'Running') {
+        return (
+            <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-aegis-cyan animate-pulse shadow-[0_0_6px_rgba(0,255,255,0.6)]" />
+                <span className="text-[9px] font-mono text-aegis-cyan uppercase">Running</span>
+            </span>
+        );
+    }
+    if (state === 'Complete') {
+        return (
+            <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                <span className="text-[9px] font-mono text-green-500 uppercase">Complete</span>
+            </span>
+        );
+    }
+    if (state === 'Idle' || state === 'WaitingReport') {
+        return (
+            <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-white/30" />
+                <span className="text-[9px] font-mono text-white/30 uppercase">{state === 'WaitingReport' ? 'Waiting' : 'Idle'}</span>
+            </span>
+        );
+    }
+    return (
+        <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+            <span className="text-[9px] font-mono text-red-400 uppercase">Failed</span>
+        </span>
+    );
+};
+
+const KanbanColumn: React.FC<{
+    title: string;
+    projects: ProjectCard[];
     icon: React.ReactNode;
     color: string;
-}> = ({ title, status, tickets, icon, color }) => {
-    const columnTickets = tickets.filter(t => t.status === status);
-
+}> = ({ title, projects, icon, color }) => {
     return (
         <div className="flex flex-col gap-4 w-full min-w-[300px]">
             <div className="flex items-center justify-between px-2">
@@ -99,7 +158,7 @@ const KanbanColumn: React.FC<{
                         {icon}
                     </div>
                     <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-white/70">{title}</h3>
-                    <span className="text-[10px] font-mono bg-white/5 px-2 py-0.5 rounded-full text-white/40">{columnTickets.length}</span>
+                    <span className="text-[10px] font-mono bg-white/5 px-2 py-0.5 rounded-full text-white/40">{projects.length}</span>
                 </div>
                 <button className="text-white/20 hover:text-white transition-colors">
                     <Plus className="w-4 h-4" />
@@ -107,42 +166,38 @@ const KanbanColumn: React.FC<{
             </div>
 
             <div className="flex flex-col gap-3 min-h-[500px] rounded-2xl bg-white/[0.02] border border-white/[0.05] p-3">
-                {columnTickets.map((ticket, idx) => (
-                    <motion.div
-                        key={ticket.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: idx * 0.05 }}
-                        className="glass p-4 rounded-xl border border-white/10 hover:border-aegis-cyan/30 transition-all cursor-pointer group"
-                    >
-                        <div className="flex justify-between items-start mb-2">
-                            <span className={cn(
-                                "text-[9px] font-mono px-2 py-0.5 rounded uppercase tracking-tighter",
-                                ticket.type === 'feat' ? "bg-aegis-cyan/10 text-aegis-cyan" : "bg-aegis-purple/10 text-aegis-purple"
-                            )}>
-                                {ticket.id}
-                            </span>
-                            <button className="text-white/10 group-hover:text-white/40">
-                                <MoreVertical className="w-3.5 h-3.5" />
-                            </button>
-                        </div>
-                        <h4 className="text-xs font-medium text-white/90 leading-relaxed mb-3">{ticket.title}</h4>
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <div className={cn(
-                                    "w-1.5 h-1.5 rounded-full",
-                                    ticket.priority === 'Crítica' ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" :
-                                    ticket.priority === 'Alta' ? "bg-orange-500" :
-                                    ticket.priority === 'Media' ? "bg-yellow-500" : "bg-green-500"
-                                )} />
-                                <span className="text-[9px] font-mono text-white/30 uppercase">{ticket.priority}</span>
+                {projects.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 gap-3 text-center">
+                        <p className="text-[10px] font-mono text-white/20 uppercase tracking-widest">Sin proyectos</p>
+                        <p className="text-[11px] font-mono text-white/30 max-w-[200px] leading-relaxed">
+                            Iniciá un proyecto diciéndole a tu agente qué querés construir.
+                        </p>
+                    </div>
+                ) : (
+                    projects.map((project, idx) => (
+                        <motion.div
+                            key={project.id}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: idx * 0.05 }}
+                            className="glass p-4 rounded-xl border border-white/10 hover:border-aegis-cyan/30 transition-all cursor-pointer group"
+                        >
+                            <div className="flex justify-between items-start mb-2">
+                                <AgentStateBadge state={project.agentState} />
+                                <button className="text-white/10 group-hover:text-white/40">
+                                    <MoreVertical className="w-3.5 h-3.5" />
+                                </button>
                             </div>
-                            <div className="flex -space-x-2">
-                                <div className="w-5 h-5 rounded-full bg-aegis-cyan/20 border border-black flex items-center justify-center text-[8px] font-bold text-aegis-cyan">A</div>
-                            </div>
-                        </div>
-                    </motion.div>
-                ))}
+                            <h4 className="text-xs font-medium text-white/90 leading-relaxed mb-2">{project.title}</h4>
+                            {project.description && (
+                                <p className="text-[10px] text-white/40 leading-relaxed line-clamp-2 mb-2">{project.description}</p>
+                            )}
+                            {project.model && (
+                                <p className="text-[9px] font-mono text-white/20">{project.model}</p>
+                            )}
+                        </motion.div>
+                    ))
+                )}
             </div>
         </div>
     );
@@ -205,7 +260,9 @@ const FinancialWidget = () => {
 };
 
 const Dashboard: React.FC = () => {
-    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected, systemState } = useAegisStore();
+    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected, systemState, activeProjects, agentTree } = useAegisStore();
+    const { backlog, active, verified } = mapProjectsToCards(activeProjects, agentTree);
+
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
     const [tenantName, setTenantName] = useState<string | null>(null);
 
@@ -336,24 +393,21 @@ const Dashboard: React.FC = () => {
                         </div>
                         
                         <div className="flex gap-8 overflow-x-auto pb-4 scrollbar-hide">
-                            <KanbanColumn 
-                                title="Backlog" 
-                                status="Todo" 
-                                tickets={MOCK_TICKETS} 
+                            <KanbanColumn
+                                title="Backlog"
+                                projects={backlog}
                                 icon={<Clock className="w-4 h-4" />}
                                 color="bg-white/20 text-white"
                             />
-                            <KanbanColumn 
-                                title="Active Tasks" 
-                                status="In Progress" 
-                                tickets={MOCK_TICKETS} 
+                            <KanbanColumn
+                                title="Active Tasks"
+                                projects={active}
                                 icon={<TrendingUp className="w-4 h-4" />}
                                 color="bg-aegis-cyan/20 text-aegis-cyan"
                             />
-                            <KanbanColumn 
-                                title="Verified" 
-                                status="Done" 
-                                tickets={MOCK_TICKETS} 
+                            <KanbanColumn
+                                title="Verified"
+                                projects={verified}
                                 icon={<CheckCircle2 className="w-4 h-4" />}
                                 color="bg-green-500/20 text-green-500"
                             />
