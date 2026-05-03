@@ -1085,6 +1085,28 @@ pub fn parse_task_type(s: &str) -> crate::pcb::TaskType {
     }
 }
 
+/// Retorna `true` si el buffer puede ser el inicio de una syscall de texto (legacy token mode).
+/// Solo los siguientes prefijos deben retener tokens:
+///   - `[SYS_CALL_...` — plugin, music, calendar, drive, gmail, maker, spawn
+///   - `[READ_FILE...` / `[WRITE_FILE...` — VCM file ops
+///   - `{"syscall":...` — SYS_EXEC, SYS_GIT_* (JSON mode)
+/// Cualquier otro `[` (markdown links, labels, etc.) se emite sin retener.
+fn could_be_syscall_prefix(buffer: &str) -> bool {
+    // Caso JSON: {"syscall":...
+    if buffer.contains("{\"syscall\"") || buffer.contains("{ \"syscall\"") {
+        return true;
+    }
+    // Caso texto: [SYS_CALL_... o [READ_FILE... o [WRITE_FILE...
+    if let Some(bracket_pos) = buffer.rfind('[') {
+        let after = &buffer[bracket_pos..];
+        return after.starts_with("[SYS_CALL_")
+            || after.starts_with("[READ_FILE")
+            || after.starts_with("[WRITE_FILE")
+            || after.starts_with("[SYS_");
+    }
+    false
+}
+
 /// Parser de Syscalls Cognitivas.
 /// Detecta llamadas estructuradas dentro del stream de texto de la IA.
 pub fn parse_syscall(text: &str) -> Option<Syscall> {
@@ -1326,10 +1348,12 @@ where
                 Ok(token) => {
                     self.buffer.push_str(&token);
 
-                    // Si el token parece ser parte de una syscall potencial, seguimos acumulando
-                    if self.buffer.contains('[') {
+                    // Solo acumulamos si el buffer parece el inicio de una syscall de texto.
+                    // Syscalls de texto: "[SYS_CALL_..." o "{\"syscall\"...".
+                    // Cualquier otro "[" (markdown, links, etc.) se emite inmediatamente.
+                    if could_be_syscall_prefix(&self.buffer) {
                         // Si ya tenemos el cierre, intentamos parsear
-                        if self.buffer.contains(']') {
+                        if self.buffer.contains(']') || self.buffer.contains('}') {
                             if let Some(syscall) = parse_syscall(&self.buffer) {
                                 if let Some(pos) = self.buffer.find(']') {
                                     self.buffer.drain(0..=pos);
@@ -1338,6 +1362,10 @@ where
                                 }
                                 return Some(StreamItem::Syscall(syscall));
                             }
+                            // Tiene cierre pero no parsea como syscall — emitir como token normal
+                            let content = self.buffer.clone();
+                            self.buffer.clear();
+                            return Some(StreamItem::Token(content));
                         }
                         // Si no cerramos pero el buffer crece mucho sin cerrar, soltamos como tokens
                         if self.buffer.len() > 2048 {
@@ -1347,7 +1375,7 @@ where
                         }
                         continue;
                     } else {
-                        // Es un token normal
+                        // Token normal — emitir sin retener
                         let content = self.buffer.clone();
                         self.buffer.clear();
                         return Some(StreamItem::Token(content));
