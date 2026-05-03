@@ -1090,6 +1090,7 @@ pub fn parse_task_type(s: &str) -> crate::pcb::TaskType {
 ///   - `[SYS_CALL_...` — plugin, music, calendar, drive, gmail, maker, spawn
 ///   - `[READ_FILE...` / `[WRITE_FILE...` — VCM file ops
 ///   - `{"syscall":...` — SYS_EXEC, SYS_GIT_* (JSON mode)
+///
 /// Cualquier otro `[` (markdown links, labels, etc.) se emite sin retener.
 fn could_be_syscall_prefix(buffer: &str) -> bool {
     // Caso JSON: {"syscall":...
