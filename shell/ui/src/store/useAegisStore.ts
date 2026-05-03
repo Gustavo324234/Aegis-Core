@@ -146,6 +146,7 @@ interface AegisState {
     setEngineConfigured: (configured: boolean) => void;
     setTaskType: (taskType: TaskTypeValue) => void;
     setLastRoutingInfo: (info: RoutingInfo) => void;
+    loadChatHistory: (tenantId: string, sessionKey: string) => Promise<void>;
 }
 
 interface AegisAudioRefs {
@@ -311,6 +312,30 @@ export const useAegisStore = create<AegisState>()(
                 }
             },
 
+            loadChatHistory: async (tenantId: string, sessionKey: string) => {
+                try {
+                    const res = await fetch('/api/chat/history?limit=50', {
+                        headers: {
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        },
+                    });
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    const historicalMessages: Message[] = (data.messages || []).map((m: { role: string; content: string; timestamp: string }) => ({
+                        id: crypto.randomUUID(),
+                        role: m.role === 'USER' ? 'user' : 'assistant',
+                        content: m.content,
+                        timestamp: new Date(m.timestamp).getTime(),
+                        type: 'text',
+                    }));
+                    // Setear mensajes históricos ANTES de que el WebSocket empiece a recibir
+                    set({ messages: historicalMessages });
+                } catch {
+                    // Silencioso — si falla, el chat arranca vacío (comportamiento actual)
+                }
+            },
+
             createTenant: async (targetUsername: string) => {
                 const { tenantId, sessionKey } = get();
                 if (!tenantId || !sessionKey) return { success: false, message: 'No admin session' };
@@ -407,6 +432,10 @@ export const useAegisStore = create<AegisState>()(
                 const currentSocket = get().socket;
                 if (currentSocket) currentSocket.close();
                 set({ status: 'connecting' });
+
+                // Cargar historial persistido antes de abrir el WebSocket
+                void get().loadChatHistory(tenantId, sessionKey);
+
                 const socket = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
                 socket.onopen = () => {
                     set({ socket, status: 'idle' });

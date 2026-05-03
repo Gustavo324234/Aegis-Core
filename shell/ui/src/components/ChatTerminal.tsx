@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, AlertTriangle, X } from 'lucide-react';
+import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
 import { InputModeSelector } from './InputModeSelector';
 import { useTranslation } from '../i18n';
@@ -98,10 +98,6 @@ const ChatTerminal: React.FC = () => {
     const [isUploading, setIsUploading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showQR, setShowQR] = useState(false);
-    // CORE-232: banner dismissable para acceso HTTP/IP
-    const isHttpContext = window.location.protocol === 'http:' &&
-        !['localhost', '127.0.0.1'].includes(window.location.hostname);
-    const [showHttpBanner, setShowHttpBanner] = useState(isHttpContext);
 
     const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
         if (scrollRef.current) {
@@ -241,20 +237,6 @@ const ChatTerminal: React.FC = () => {
                     </div>
                 </header>
 
-                {/* CORE-232: banner de acceso HTTP/IP — solo visible fuera de localhost */}
-                {showHttpBanner && (
-                    <div className="shrink-0 flex items-center justify-between px-8 py-2 bg-amber-500/10 border-b border-amber-500/20">
-                        <div className="flex items-center gap-2">
-                            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-                            <span className="text-[10px] font-mono text-amber-300">
-                                Acceso local (HTTP). El historial de Cloudflare no está disponible aquí. Para historial unificado, usá siempre el link de Cloudflare.
-                            </span>
-                        </div>
-                        <button onClick={() => setShowHttpBanner(false)} className="text-white/20 hover:text-white/50 ml-4 flex-shrink-0">
-                            <X className="w-3.5 h-3.5" />
-                        </button>
-                    </div>
-                )}
 
                 {/* Mensajes — flex-1 + overflow-y-auto */}
                 <main ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', minHeight: 0 }} className="px-6 py-8 space-y-8 scrollbar-hide relative">
