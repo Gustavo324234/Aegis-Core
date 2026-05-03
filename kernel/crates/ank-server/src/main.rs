@@ -467,10 +467,29 @@ async fn main() -> Result<()> {
                             error!(pid = %pid, "HAL Runner failed: {}", e);
                             let _ = scheduler_tx_runner
                                 .send(SchedulerEvent::ProcessCompleted {
-                                    pid,
+                                    pid: pid.clone(),
                                     output: format!("error: {}", e),
                                 })
                                 .await;
+
+                            let _ = event_tx.send(ank_proto::v1::TaskEvent {
+                                pid: pid.clone(),
+                                timestamp: None,
+                                payload: Some(ank_proto::v1::task_event::Payload::Output(
+                                    "Lo siento, ocurrió un error al procesar tu mensaje.".to_string(),
+                                )),
+                            });
+
+                            let _ = event_tx.send(ank_proto::v1::TaskEvent {
+                                pid: pid.clone(),
+                                timestamp: None,
+                                payload: Some(ank_proto::v1::task_event::Payload::StatusUpdate(
+                                    Box::new(ank_proto::v1::Pcb {
+                                        state: 4,
+                                        ..Default::default()
+                                    }),
+                                )),
+                            });
                         }
                     }
                 });
