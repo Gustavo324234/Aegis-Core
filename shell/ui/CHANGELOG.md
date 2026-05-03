@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.13.0...shell-ui-v1.14.0) (2026-05-03)
+
+
+### Features
+
+* **shell:** CORE-246 Tenant — visualización de modelos en tab Motor ([#201](https://github.com/Gustavo324234/Aegis-Core/issues/201)) ([6dbf015](https://github.com/Gustavo324234/Aegis-Core/commit/6dbf01578666124ba294338ccc563c61abd4b9ea))
+
 ## [1.13.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.12.0...shell-ui-v1.13.0) (2026-05-03)
 
 
