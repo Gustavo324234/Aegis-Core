@@ -1,9 +1,9 @@
-import React, { useState, Component, type ReactNode } from 'react';
+import React, { useState, useEffect, Component, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import {
     LayoutDashboard,
     Trello,
-    Wallet,
+    Zap,
     ArrowLeft,
     Plus,
     MoreVertical,
@@ -11,13 +11,11 @@ import {
     Clock,
     AlertCircle,
     TrendingUp,
-    Calendar,
-    ChevronRight,
     Bot,
     Code2,
 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
-import type { ProjectSummary, AgentNodeSummary, AgentNodeState } from '../store/useAegisStore';
+import type { ProjectSummary, AgentNodeSummary, AgentNodeState, RoutingInfo } from '../store/useAegisStore';
 import AgentTreeWidget from './AgentTreeWidget';
 import { ProjectList } from './ProjectList';
 import { AgentTreeView } from './AgentTreeView';
@@ -203,64 +201,137 @@ const KanbanColumn: React.FC<{
     );
 };
 
-const FinancialWidget = () => {
+// CORE-250 — ApiCostWidget: muestra telemetría real de inferencia del store
+const ApiCostWidget: React.FC<{ lastRoutingInfo: RoutingInfo | null }> = ({ lastRoutingInfo }) => {
+    return (
+        <div className="glass p-6 rounded-2xl border border-white/10 h-full flex flex-col gap-6">
+            <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-aegis-cyan/10 text-aegis-cyan">
+                    <Zap className="w-5 h-5" />
+                </div>
+                <div>
+                    <h3 className="text-sm font-bold text-white">Uso de API</h3>
+                    <p className="text-[10px] text-white/40 font-mono uppercase">Sesión actual</p>
+                </div>
+            </div>
+
+            {!lastRoutingInfo ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center py-4">
+                    <p className="text-xs font-mono text-white/30 leading-relaxed">
+                        Sin datos de consumo disponibles para esta sesión.
+                    </p>
+                    <p className="text-[10px] font-mono text-white/20 max-w-[220px] leading-relaxed">
+                        Activá el Plugin Ledger para seguimiento de gastos.
+                    </p>
+                </div>
+            ) : (
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/[0.05]">
+                        <span className="text-[10px] font-mono text-white/40 uppercase tracking-wider">Proveedor</span>
+                        <span className="text-xs font-bold text-aegis-cyan">{lastRoutingInfo.provider}</span>
+                    </div>
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/[0.05]">
+                        <span className="text-[10px] font-mono text-white/40 uppercase tracking-wider">Modelo</span>
+                        <span className="text-xs font-bold text-white truncate max-w-[180px] text-right font-mono">{lastRoutingInfo.model_id}</span>
+                    </div>
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/[0.05]">
+                        <span className="text-[10px] font-mono text-white/40 uppercase tracking-wider">Latencia</span>
+                        <span className="text-xs font-bold text-white font-mono">{lastRoutingInfo.latency_ms} ms</span>
+                    </div>
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/[0.05]">
+                        <span className="text-[10px] font-mono text-white/40 uppercase tracking-wider">Tipo de tarea</span>
+                        <span className="text-xs font-bold text-white/70 font-mono">{lastRoutingInfo.task_type}</span>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+interface ChronosEvent {
+    title: string;
+    time: string;
+    urgency?: string;
+}
+
+function formatRelativeTime(iso: string): string {
+    const diff = new Date(iso).getTime() - Date.now();
+    if (diff <= 0) return 'pasado';
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `en ${mins} min`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `en ${hours}h`;
+    return `en ${Math.floor(hours / 24)}d`;
+}
+
+// CORE-251 — ChronosWidget: intenta fetch a /api/chronos/events, muestra estado vacío honesto si no existe
+const ChronosWidget: React.FC<{ tenantId: string | null; sessionKey: string | null }> = ({ tenantId, sessionKey }) => {
+    const [events, setEvents] = useState<ChronosEvent[]>([]);
+    const [loaded, setLoaded] = useState(false);
+
+    useEffect(() => {
+        if (!tenantId || !sessionKey) { setLoaded(true); return; }
+        fetch('/api/chronos/events?limit=3&from=now', {
+            headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey },
+        })
+            .then(r => {
+                if (!r.ok) { setLoaded(true); return null; }
+                return r.json() as Promise<{ events?: ChronosEvent[] }>;
+            })
+            .then(data => {
+                setEvents(data?.events ?? []);
+                setLoaded(true);
+            })
+            .catch(() => setLoaded(true));
+    }, [tenantId, sessionKey]);
+
     return (
         <div className="glass p-6 rounded-2xl border border-white/10 h-full flex flex-col gap-6">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl bg-green-500/10 text-green-500">
-                        <Wallet className="w-5 h-5" />
+                    <div className="p-2 rounded-xl bg-aegis-purple/10 text-aegis-purple">
+                        <Clock className="w-5 h-5" />
                     </div>
                     <div>
-                        <h3 className="text-sm font-bold text-white">Monthly Expenses</h3>
-                        <p className="text-[10px] text-white/40 font-mono uppercase">Ledger Plugin Active</p>
-                    </div>
-                </div>
-                <div className="text-right">
-                    <span className="text-2xl font-bold text-white">$1,240.50</span>
-                    <div className="flex items-center justify-end gap-1 text-[10px] text-green-500">
-                        <TrendingUp className="w-3 h-3" />
-                        <span>-12% vs last month</span>
+                        <h3 className="text-sm font-bold text-white">Neural Schedule</h3>
+                        <p className="text-[10px] text-white/40 font-mono uppercase">Chronos Plugin Active</p>
                     </div>
                 </div>
             </div>
 
-            <div className="space-y-4">
-                <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/[0.05]">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400">
-                            <Calendar className="w-4 h-4" />
-                        </div>
-                        <div>
-                            <p className="text-xs font-medium text-white/80">AWS Cloud Services</p>
-                            <p className="text-[9px] text-white/30 font-mono">Infrastructure</p>
-                        </div>
-                    </div>
-                    <span className="text-xs font-bold text-white">-$85.20</span>
+            {!loaded ? (
+                <div className="flex-1 flex items-center justify-center">
+                    <p className="text-[10px] font-mono text-white/20 uppercase tracking-widest animate-pulse">Cargando...</p>
                 </div>
-                <div className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/[0.05]">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-aegis-purple/20 flex items-center justify-center text-aegis-purple">
-                            <CheckCircle2 className="w-4 h-4" />
-                        </div>
-                        <div>
-                            <p className="text-xs font-medium text-white/80">OpenAI API Tier 1</p>
-                            <p className="text-[9px] text-white/30 font-mono">Core Intelligence</p>
-                        </div>
-                    </div>
-                    <span className="text-xs font-bold text-white">-$120.00</span>
+            ) : events.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 gap-3 text-center">
+                    <Clock className="w-8 h-8 text-white/10" />
+                    <p className="text-xs font-mono text-white/30">Sin eventos próximos.</p>
+                    <p className="text-[10px] font-mono text-white/20 max-w-[220px] leading-relaxed">
+                        Pedile a tu agente que agende algo: "Anotá una reunión para mañana a las 10".
+                    </p>
                 </div>
-            </div>
-
-            <button className="mt-auto w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-[10px] font-bold uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2">
-                Open Full Ledger <ChevronRight className="w-3 h-3" />
-            </button>
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {events.map((event, i) => (
+                        <div key={i} className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.05] space-y-2">
+                            <div className="flex justify-between items-start">
+                                <span className="text-[10px] font-mono text-aegis-cyan uppercase">
+                                    {formatRelativeTime(event.time)}
+                                </span>
+                                {event.urgency === 'high' && <AlertCircle className="w-3 h-3 text-aegis-cyan" />}
+                            </div>
+                            <h4 className="text-xs font-medium">{event.title}</h4>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 };
 
 const Dashboard: React.FC = () => {
-    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected, systemState, activeProjects, agentTree } = useAegisStore();
+    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected, systemState, activeProjects, agentTree, lastRoutingInfo } = useAegisStore();
     const { backlog, active, verified } = mapProjectsToCards(activeProjects, agentTree);
 
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -293,7 +364,7 @@ const Dashboard: React.FC = () => {
             {/* Header */}
             <header className="shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/40 backdrop-blur-3xl z-50" style={{ height: '56px' }}>
                 <div className="flex items-center gap-6">
-                    <button 
+                    <button
                         onClick={() => setCurrentView('chat')}
                         className="group flex items-center gap-2 text-white/40 hover:text-aegis-cyan transition-colors"
                     >
@@ -345,44 +416,14 @@ const Dashboard: React.FC = () => {
                         <p className={cn("font-mono text-xs uppercase tracking-widest", systemStatusColor)}>{systemStatusText}</p>
                     </div>
 
-                    {/* Financial Widget */}
+                    {/* API Cost Widget — CORE-250 */}
                     <div className="col-span-12 lg:col-span-4 h-full">
-                        <FinancialWidget />
+                        <ApiCostWidget lastRoutingInfo={lastRoutingInfo} />
                     </div>
 
-                    {/* Chronos / Upcoming */}
+                    {/* Chronos / Neural Schedule — CORE-251 */}
                     <div className="col-span-12 lg:col-span-8">
-                        <div className="glass p-6 rounded-2xl border border-white/10 h-full flex flex-col gap-6">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className="p-2 rounded-xl bg-aegis-purple/10 text-aegis-purple">
-                                        <Clock className="w-5 h-5" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-sm font-bold text-white">Neural Schedule</h3>
-                                        <p className="text-[10px] text-white/40 font-mono uppercase">Chronos Plugin Active</p>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.05] space-y-2">
-                                    <div className="flex justify-between items-start">
-                                        <span className="text-[10px] font-mono text-aegis-cyan">IN 15 MIN</span>
-                                        <AlertCircle className="w-3 h-3 text-aegis-cyan" />
-                                    </div>
-                                    <h4 className="text-xs font-medium">Sync Project Context</h4>
-                                    <p className="text-[9px] text-white/30">Review Git status and pending tickets.</p>
-                                </div>
-                                <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.05] space-y-2 opacity-50">
-                                    <div className="flex justify-between items-start">
-                                        <span className="text-[10px] font-mono text-white/40">IN 2 HOURS</span>
-                                    </div>
-                                    <h4 className="text-xs font-medium">Backup Ring 0 Identity</h4>
-                                    <p className="text-[9px] text-white/30">Standard maintenance protocol.</p>
-                                </div>
-                            </div>
-                        </div>
+                        <ChronosWidget tenantId={tenantId} sessionKey={sessionKey} />
                     </div>
 
                     {/* Kanban Board */}
@@ -391,7 +432,7 @@ const Dashboard: React.FC = () => {
                             <Trello className="w-5 h-5 text-aegis-cyan" />
                             <h2 className="text-xl font-bold uppercase tracking-widest">Cognitive Backlog</h2>
                         </div>
-                        
+
                         <div className="flex gap-8 overflow-x-auto pb-4 scrollbar-hide">
                             <KanbanColumn
                                 title="Backlog"
