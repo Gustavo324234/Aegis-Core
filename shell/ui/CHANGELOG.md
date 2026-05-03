@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.7...shell-ui-v1.11.0) (2026-05-03)
+
+
+### Features
+
+* **shell:** CORE-248 + CORE-252 Shell Observability — chat feedback y dashboard header ([#193](https://github.com/Gustavo324234/Aegis-Core/issues/193)) ([ea613ec](https://github.com/Gustavo324234/Aegis-Core/commit/ea613ec4cbc1cbeb5134f360d90efe58893c8733))
+
 ## [1.10.7](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.6...shell-ui-v1.10.7) (2026-05-02)
 
 
