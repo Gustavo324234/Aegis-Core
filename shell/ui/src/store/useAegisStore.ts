@@ -430,7 +430,7 @@ export const useAegisStore = create<AegisState>()(
                             if (payload.routing_info) get().setLastRoutingInfo(payload.routing_info as RoutingInfo);
                             if (payload.thought) { get().appendToken(payload.pid as string, payload.thought as string, 'thought'); set({ status: 'thinking' }); }
                             else if (payload.output) { get().appendToken(payload.pid as string, payload.output as string, 'text'); set({ status: 'thinking' }); }
-                            else if (payload.error) { get().appendToken(payload.pid as string, payload.error as string, 'error'); set({ status: 'error' }); }
+                            else if (payload.error) { get().addSystemMessage('No pude procesar tu mensaje. Intentá de nuevo en unos segundos.'); set({ status: 'error' }); }
                             else if (payload.status_update) {
                                 const su = payload.status_update as { state: string };
                                 if (su.state === 'STATE_COMPLETED') {
@@ -470,6 +470,8 @@ export const useAegisStore = create<AegisState>()(
                                 const sock = get().socket;
                                 if (sock) sock.close();
                                 set({ socket: null, status: 'error' });
+                            } else {
+                                get().addSystemMessage('No pude procesar tu mensaje. Intentá de nuevo en unos segundos.');
                             }
                             break;
                         }

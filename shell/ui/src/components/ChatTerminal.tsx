@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Settings, AlertCircle, Cpu, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, AlertTriangle, X } from 'lucide-react';
+import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, AlertTriangle, X } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
 import { InputModeSelector } from './InputModeSelector';
 import { useTranslation } from '../i18n';
@@ -88,10 +88,11 @@ const MessageItem: React.FC<{ message: Message }> = ({ message }) => {
 
 const ChatTerminal: React.FC = () => {
     const { t } = useTranslation();
-    const { messages, sendMessage, status, isRecording, sttAvailable, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout, fetchSirenConfig, inputMode } = useAegisStore();
+    const { messages, sendMessage, status, isRecording, sttAvailable, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout, fetchSirenConfig, inputMode, lastRoutingInfo } = useAegisStore();
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const isAtBottom = useRef(true);
+    const thinkingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [input, setInput] = useState('');
     const [voiceError, setVoiceError] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
@@ -117,12 +118,27 @@ const ChatTerminal: React.FC = () => {
 
     useEffect(() => { if (isAtBottom.current) scrollToBottom('smooth'); }, [messages]);
     useEffect(() => { if (tenantId && sessionKey) fetchSirenConfig(); }, [tenantId, sessionKey, fetchSirenConfig]);
+    useEffect(() => {
+        if (status !== 'thinking' && thinkingTimeoutRef.current) {
+            clearTimeout(thinkingTimeoutRef.current);
+            thinkingTimeoutRef.current = null;
+        }
+    }, [status]);
 
     const handleSend = () => {
         if (!input.trim()) return;
         sendMessage(input);
         setInput('');
         setTimeout(() => { isAtBottom.current = true; scrollToBottom('auto'); }, 10);
+
+        if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
+        thinkingTimeoutRef.current = setTimeout(() => {
+            if (useAegisStore.getState().status === 'thinking') {
+                useAegisStore.getState().addSystemMessage('El motor tardó demasiado en responder. Podés intentar de nuevo.');
+                useAegisStore.getState().setStatus('idle');
+            }
+            thinkingTimeoutRef.current = null;
+        }, 30_000);
     };
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -252,17 +268,31 @@ const ChatTerminal: React.FC = () => {
                             messages.map((msg, index) => <MessageItem key={msg.id + index} message={msg} />)
                         )}
                     </AnimatePresence>
-                    {status === 'thinking' && (
-                        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-3 text-aegis-purple/70 px-8 py-5 bg-aegis-purple/5 rounded-2xl border border-aegis-purple/10 max-w-fit mx-auto">
-                            <Cpu className="w-5 h-5 animate-pulse text-aegis-purple" />
-                            <span className="text-[11px] font-mono italic tracking-widest uppercase">ANK is processing payload...</span>
-                        </motion.div>
-                    )}
                     <div className="h-12" />
                 </main>
 
                 {/* Agent Activity — CORE-202 */}
                 <AgentActivityPanel />
+
+                {/* CORE-248: banner de estado enriquecido durante inferencia */}
+                {status === 'thinking' && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        className="shrink-0 flex items-center gap-3 px-6 py-3 bg-white/5 border-t border-white/5 text-white/50 text-xs font-mono"
+                    >
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-aegis-cyan" />
+                        <span>
+                            {lastRoutingInfo
+                                ? `${lastRoutingInfo.provider} / ${lastRoutingInfo.model_id}`
+                                : 'Procesando...'}
+                        </span>
+                        {lastRoutingInfo?.latency_ms != null && (
+                            <span className="text-white/20 ml-auto">{lastRoutingInfo.latency_ms}ms</span>
+                        )}
+                    </motion.div>
+                )}
 
                 {/* Input */}
                 <div className="shrink-0 p-6 bg-gradient-to-t from-black via-black/90 to-transparent border-t border-white/5">
