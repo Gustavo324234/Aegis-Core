@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.12.0...shell-ui-v1.13.0) (2026-05-03)
+
+
+### Features
+
+* **shell:** CORE-250 + CORE-251 ApiCostWidget y Chronos widget con datos reales ([#197](https://github.com/Gustavo324234/Aegis-Core/issues/197)) ([b4d42db](https://github.com/Gustavo324234/Aegis-Core/commit/b4d42dbd9af7a39757e5db7f9dd98efe4ec7d04d))
+
 ## [1.12.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.11.0...shell-ui-v1.12.0) (2026-05-03)
 
 
