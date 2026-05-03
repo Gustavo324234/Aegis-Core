@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.37](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.36...ank-core-v0.1.37) (2026-05-03)
+
+
+### Bug Fixes
+
+* **core:** resolve agent tool response and stream interception bugs ([#189](https://github.com/Gustavo324234/Aegis-Core/issues/189)) ([913e591](https://github.com/Gustavo324234/Aegis-Core/commit/913e591affe2ff40c1e28fb2760519d3f6ec0ceb))
+
 ## [0.1.36](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.35...ank-core-v0.1.36) (2026-05-02)
 
 
