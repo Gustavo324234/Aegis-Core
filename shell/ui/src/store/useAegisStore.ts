@@ -122,7 +122,7 @@ interface AegisState {
     setNeedsPasswordReset: (val: boolean) => void;
     setAdminActiveTab: (tab: string) => void;
     fetchSirenConfig: () => Promise<void>;
-    connect: (tenantId: string, sessionKey: string) => void;
+    connect: (tenantId: string, sessionKey: string) => Promise<void>;
     disconnect: () => void;
     sendMessage: (prompt: string) => void;
     appendToken: (msgId: string, token: string, type: MessageType) => void;
@@ -324,7 +324,7 @@ export const useAegisStore = create<AegisState>()(
                     const data = await res.json();
                     const historicalMessages: Message[] = (data.messages || []).map((m: { role: string; content: string; timestamp: string }) => ({
                         id: crypto.randomUUID(),
-                        role: m.role === 'USER' ? 'user' : 'assistant',
+                        role: m.role?.toLowerCase() === 'user' ? 'user' : 'assistant',
                         content: m.content,
                         timestamp: new Date(m.timestamp).getTime(),
                         type: 'text',
@@ -427,14 +427,14 @@ export const useAegisStore = create<AegisState>()(
                 } catch (e) { console.error('Change own password error:', e); return false; }
             },
 
-            connect: (tenantId, sessionKey) => {
+            connect: async (tenantId, sessionKey) => {
                 const wsUrl = buildWsUrl(`/ws/chat/${encodeURIComponent(tenantId)}`);
                 const currentSocket = get().socket;
                 if (currentSocket) currentSocket.close();
                 set({ status: 'connecting' });
 
-                // Cargar historial persistido antes de abrir el WebSocket
-                void get().loadChatHistory(tenantId, sessionKey);
+                // Cargar historial persistido ANTES de abrir el WebSocket (CORE-247)
+                await get().loadChatHistory(tenantId, sessionKey);
 
                 const socket = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
                 socket.onopen = () => {
