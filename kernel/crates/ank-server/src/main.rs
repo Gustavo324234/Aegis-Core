@@ -476,7 +476,8 @@ async fn main() -> Result<()> {
                                 pid: pid.clone(),
                                 timestamp: None,
                                 payload: Some(ank_proto::v1::task_event::Payload::Output(
-                                    "Lo siento, ocurrió un error al procesar tu mensaje.".to_string(),
+                                    "Lo siento, ocurrió un error al procesar tu mensaje."
+                                        .to_string(),
                                 )),
                             });
 
