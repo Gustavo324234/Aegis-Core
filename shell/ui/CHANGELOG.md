@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.11.0...shell-ui-v1.12.0) (2026-05-03)
+
+
+### Features
+
+* **shell:** CORE-249 Kanban con proyectos reales — elimina MOCK_TICKETS ([#195](https://github.com/Gustavo324234/Aegis-Core/issues/195)) ([f4fbb3d](https://github.com/Gustavo324234/Aegis-Core/commit/f4fbb3d0981337fe96246dc5cb33c478355b44ac))
+
 ## [1.11.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.10.7...shell-ui-v1.11.0) (2026-05-03)
 
 
