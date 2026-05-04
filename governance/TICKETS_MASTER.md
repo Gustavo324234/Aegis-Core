@@ -133,8 +133,6 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ### EPIC 47 — Agent Protocol v2: Tool Use + LLM Inference en Agent Loop
 
-> **Nota arquitectónica (smoke test 2026-05-03):** El `run_agent_loop` del `AgentOrchestrator` resuelve modelo y ciclo de vida pero **no ejecuta inferencia LLM**. Los agentes del árbol responden con summaries hardcodeados. La inferencia real (llamar al LLM con el prompt del agente, procesar la respuesta, ejecutar tool calls) es el corazón de este epic.
-
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
 | CORE-236 | feat | ToolRegistry — definición de herramientas + schema por proveedor | 📥 Todo | Crítica | Kernel Engineer |
@@ -156,6 +154,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-250 | feat | Dashboard: FinancialWidget con datos reales (API Cost) | 📥 Todo | Media | Shell Engineer |
 | CORE-251 | feat | Dashboard: Chronos widget honesto (sin eventos ficticios) | 📥 Todo | Media | Shell Engineer |
 | CORE-253 | fix | Kernel: SYS_CALL_PLUGIN con plugin no encontrado devuelve error legible al usuario | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-256 | feat | Admin: tab Sistema — gestión del servicio (start/stop/restart/status) desde la UI | 📥 Todo | Alta | Shell Engineer + Kernel Engineer |
 
 ---
 
@@ -188,6 +187,15 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-245 | feat | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | 📥 Todo | Alta | Shell Engineer |
 | CORE-246 | feat | Tenant: visualización de modelos disponibles por provider en tab Motor | 📥 Todo | Alta | Shell Engineer |
 | CORE-247 | feat | Historial de chat persistente: cargar al conectar, unificar IP y Cloudflare | 📥 Todo | Crítica | Kernel Engineer + Shell Engineer |
+
+---
+
+### Infraestructura Windows
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-254 | feat | CI/CD: installer Windows PowerShell + install.ps1 | ✅ Done | Alta | DevOps Engineer |
+| CORE-255 | fix | Installer: registro robusto del servicio Windows + opción -Repair | 📥 Todo | Crítica | DevOps Engineer |
 
 ---
 
