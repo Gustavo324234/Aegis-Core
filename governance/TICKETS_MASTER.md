@@ -148,13 +148,14 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
 | CORE-244 | fix | HAL Runner: StatusUpdate en path de error | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-248 | feat | Chat: indicador de estado enriquecido (modelo, provider, error amigable, timeout) | 📥 Todo | Crítica | Shell Engineer |
+| CORE-248 | feat | Chat: indicador de estado enriquecido (modelo, provider, error amigable, timeout) | ✅ Done | Crítica | Shell Engineer |
 | CORE-252 | feat | Dashboard: header con nombre real del tenant y estado del sistema real | 📥 Todo | Alta | Shell Engineer |
 | CORE-249 | feat | Dashboard: reemplazar MOCK_TICKETS con Kanban real del tenant | 📥 Todo | Alta | Shell Engineer |
 | CORE-250 | feat | Dashboard: FinancialWidget con datos reales (API Cost) | 📥 Todo | Media | Shell Engineer |
 | CORE-251 | feat | Dashboard: Chronos widget honesto (sin eventos ficticios) | 📥 Todo | Media | Shell Engineer |
 | CORE-253 | fix | Kernel: SYS_CALL_PLUGIN con plugin no encontrado devuelve error legible al usuario | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-256 | feat | Admin: tab Sistema — gestión del servicio (start/stop/restart/status) desde la UI | 📥 Todo | Alta | Shell Engineer + Kernel Engineer |
+| CORE-257 | fix | Kernel: Tunnel Manager — no reintentar si cloudflared no está instalado | 📥 Todo | Media | Kernel Engineer |
 
 ---
 
@@ -196,6 +197,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 |---|---|---|---|---|---|
 | CORE-254 | feat | CI/CD: installer Windows PowerShell + install.ps1 | ✅ Done | Alta | DevOps Engineer |
 | CORE-255 | fix | Installer: registro robusto del servicio Windows + opción -Repair | 📥 Todo | Crítica | DevOps Engineer |
+| CORE-258 | feat | CLI: soporte multiplataforma + comandos de gestión del servicio (Windows + Linux) | 📥 Todo | Alta | Kernel Engineer |
 
 ---
 
