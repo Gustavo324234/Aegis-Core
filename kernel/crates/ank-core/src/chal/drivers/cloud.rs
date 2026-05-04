@@ -1,5 +1,5 @@
 use crate::chal::{
-    DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError,
+    ChatMessage, DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -123,18 +123,12 @@ impl CloudProxyDriver {
 #[derive(Serialize)]
 struct ChatCompletionRequest {
     model: String,
-    messages: Vec<Message>,
+    messages: Vec<ChatMessage>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Serialize)]
-struct Message {
-    role: String,
-    content: String,
 }
 
 #[derive(Serialize)]
@@ -182,16 +176,13 @@ struct FunctionCallDelta {
 impl InferenceDriver for CloudProxyDriver {
     async fn generate_stream(
         &self,
-        prompt: String,
+        messages: Vec<ChatMessage>,
         grammar: Option<Grammar>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult {
         let mut request_body = ChatCompletionRequest {
             model: self.model_id.clone(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: prompt,
-            }],
+            messages,
             stream: true,
             response_format: None,
             tools,
