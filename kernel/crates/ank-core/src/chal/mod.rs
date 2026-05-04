@@ -525,7 +525,9 @@ impl CognitiveHAL {
                     // Prompt de prueba — en producción la respuesta incluiría tool_calls
                     let test_messages = vec![ChatMessage {
                         role: ChatRole::User,
-                        content: Some("[TOOL_USE_PROBE] Respond with a tool call if supported.".to_string()),
+                        content: Some(
+                            "[TOOL_USE_PROBE] Respond with a tool call if supported.".to_string(),
+                        ),
                         ..Default::default()
                     }];
                     match driver.generate_stream(test_messages, None, None).await {
@@ -639,7 +641,11 @@ impl CognitiveHAL {
         let system_content = if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
             format!(
                 "{}{}{}{}{}",
-                maker_section, SPAWN_INSTRUCTIONS, role_instructions, persona_section, music_section
+                maker_section,
+                SPAWN_INSTRUCTIONS,
+                role_instructions,
+                persona_section,
+                music_section
             )
         } else {
             format!(
@@ -782,15 +788,28 @@ mod tests {
         let hal = CognitiveHAL::new(pm)?;
         let pcb = PCB::new("test".into(), 5, "hola".into());
         let messages = hal.build_messages(&pcb, None).await;
-        let system_msg = messages.iter().find(|m| m.role == ChatRole::System).unwrap().content.as_ref().unwrap();
-        let user_msg = messages.iter().find(|m| m.role == ChatRole::User).unwrap().content.as_ref().unwrap();
+        let system_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::System)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+        let user_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::User)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
 
         assert!(
             !system_msg.contains("[USER_PROCESS_INSTRUCTION]"),
             "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
         );
         assert!(
-            system_msg.contains("HERRAMIENTAS (PLUGINS) DISPONIBLES:") || system_msg.contains("HERRAMIENTAS DISPONIBLES:"),
+            system_msg.contains("HERRAMIENTAS (PLUGINS) DISPONIBLES:")
+                || system_msg.contains("HERRAMIENTAS DISPONIBLES:"),
             "Deben aparecer los plugins de dominio por defecto"
         );
         assert!(
@@ -817,10 +836,25 @@ mod tests {
         let messages = hal
             .build_messages(&pcb, Some("Eres Eve, asistente de ACME Corp."))
             .await;
-        let system_msg = messages.iter().find(|m| m.role == ChatRole::System).unwrap().content.as_ref().unwrap();
-        let user_msg = messages.iter().find(|m| m.role == ChatRole::User).unwrap().content.as_ref().unwrap();
-        
-        assert!(system_msg.contains("Eve"), "El mensaje de sistema debe contener la persona");
+        let system_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::System)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+        let user_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::User)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+
+        assert!(
+            system_msg.contains("Eve"),
+            "El mensaje de sistema debe contener la persona"
+        );
         assert!(
             user_msg.contains("hola"),
             "El mensaje de usuario debe contener la instrucción"

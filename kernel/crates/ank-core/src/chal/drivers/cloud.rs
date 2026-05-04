@@ -1,5 +1,6 @@
 use crate::chal::{
-    ChatMessage, DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError,
+    ChatMessage, DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver,
+    SystemError,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
