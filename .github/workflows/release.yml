@@ -1,25 +1,233 @@
-name: SRE Release - Automated Versioning
+name: Release — Multiplatform Binaries
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: write
-  pull-requests: write
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_TERM_COLOR: always
 
 jobs:
-  release-please:
-    name: Google Release Please (The SRE Bot)
+  build-linux-x86:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libsqlcipher-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64
+
+      - name: Build ank-server
+        run: cargo build --release -p ank-server
+
+      - name: Package binary
+        run: |
+          cp target/release/ank-server ank-server-linux-x86_64
+          tar -czf ank-server-linux-x86_64.tar.gz ank-server-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: ank-server-linux-x86_64.tar.gz
+
+  build-linux-arm64:
+    name: Linux arm64
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler gcc-aarch64-linux-gnu
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-arm64
+
+      - name: Install SQLCipher for arm64
+        run: |
+          sudo apt-get install -y libsqlcipher-dev
+          # Cross-compile SQLCipher static lib for arm64
+          # Note: if SQLCipher is dynamically linked this step may need refinement
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Build ank-server (arm64)
+        run: cargo build --release -p ank-server --target aarch64-unknown-linux-gnu
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Package binary
+        run: |
+          cp target/aarch64-unknown-linux-gnu/release/ank-server ank-server-linux-arm64
+          tar -czf ank-server-linux-arm64.tar.gz ank-server-linux-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: ank-server-linux-arm64.tar.gz
+
+  build-windows-x86:
+    name: Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc
+        run: |
+          choco install protoc -y
+          echo "PROTOC=C:\ProgramData\chocolatey\bin\protoc.exe" >> $env:GITHUB_ENV
+
+      - name: Install vcpkg + SQLCipher
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          C:\vcpkg\vcpkg.exe install sqlcipher:x64-windows-static
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+          echo "SQLCIPHER_LIB_DIR=C:\vcpkg\installed\x64-windows-static\lib" >> $env:GITHUB_ENV
+          echo "SQLCIPHER_INCLUDE_DIR=C:\vcpkg\installed\x64-windows-static\include" >> $env:GITHUB_ENV
+          echo "SQLCIPHER_STATIC=1" >> $env:GITHUB_ENV
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x86_64
+
+      - name: Build ank-server (Windows)
+        run: cargo build --release -p ank-server --target x86_64-pc-windows-msvc
+
+      - name: Package binary
+        run: |
+          Copy-Item target\x86_64-pc-windows-msvc\release\ank-server.exe ank-server-windows-x86_64.exe
+          Compress-Archive -Path ank-server-windows-x86_64.exe -DestinationPath ank-server-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: ank-server-windows-x86_64.zip
+
+  build-macos-arm64:
+    name: macOS arm64 (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install protobuf sqlcipher
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-arm64
+
+      - name: Build ank-server (macOS arm64)
+        run: cargo build --release -p ank-server --target aarch64-apple-darwin
+        env:
+          SQLCIPHER_LIB_DIR: /opt/homebrew/opt/sqlcipher/lib
+          SQLCIPHER_INCLUDE_DIR: /opt/homebrew/opt/sqlcipher/include
+
+      - name: Package binary
+        run: |
+          cp target/aarch64-apple-darwin/release/ank-server ank-server-macos-arm64
+          tar -czf ank-server-macos-arm64.tar.gz ank-server-macos-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: ank-server-macos-arm64.tar.gz
+
+  build-ui:
+    name: UI Build
     runs-on: ubuntu-latest
     steps:
-      - name: Release Please Action
-        uses: googleapis/release-please-action@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          config-file: .github/release-please-config.json
-          manifest-file: .github/release-please-manifest.json
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: shell/ui/package-lock.json
+
+      - run: cd shell/ui && npm ci
+
+      - run: cd shell/ui && npm run build
+
+      - name: Package UI dist
+        run: tar -czf ui-dist.tar.gz -C shell/ui/dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui-dist.tar.gz
+
+  package-agents-config:
+    name: Package Agent Config Files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package agents config
+        run: tar -czf agents-config.tar.gz -C kernel/config/agents .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agents-config
+          path: agents-config.tar.gz
+
+  publish-release:
+    name: Publish Nightly Release
+    needs:
+      - build-linux-x86
+      - build-linux-arm64
+      - build-windows-x86
+      - build-macos-arm64
+      - build-ui
+      - package-agents-config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Delete existing nightly release
+        run: |
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Create nightly release with all artifacts
+        run: |
+          gh release create nightly \
+            --title "Aegis OS — Nightly Build" \
+            --notes "Automated nightly build from \`main\`. Not for production use." \
+            --prerelease \
+            artifacts/linux-x86_64/ank-server-linux-x86_64.tar.gz \
+            artifacts/linux-arm64/ank-server-linux-arm64.tar.gz \
+            artifacts/windows-x86_64/ank-server-windows-x86_64.zip \
+            artifacts/macos-arm64/ank-server-macos-arm64.tar.gz \
+            artifacts/ui-dist/ui-dist.tar.gz \
+            artifacts/agents-config/agents-config.tar.gz
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}

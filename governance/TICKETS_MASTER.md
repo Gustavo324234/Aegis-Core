@@ -12,7 +12,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 | EPIC 46 | Public Launch | ✅ Completa | 100% |
-| EPIC 47 | Agent Protocol v2: Tool Use | 📥 Planned | 0% |
+| EPIC 47 | Agent Protocol v2: Tool Use + LLM Inference en Agent Loop | 📥 Planned | 0% |
 | EPIC 48 | Shell Observability: Chat feedback + Dashboard real | 📥 Planned | 0% |
 
 ---
@@ -131,12 +131,14 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ---
 
-### EPIC 47 — Agent Protocol v2: Tool Use
+### EPIC 47 — Agent Protocol v2: Tool Use + LLM Inference en Agent Loop
+
+> **Nota arquitectónica (smoke test 2026-05-03):** El `run_agent_loop` del `AgentOrchestrator` resuelve modelo y ciclo de vida pero **no ejecuta inferencia LLM**. Los agentes del árbol responden con summaries hardcodeados. La inferencia real (llamar al LLM con el prompt del agente, procesar la respuesta, ejecutar tool calls) es el corazón de este epic.
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
 | CORE-236 | feat | ToolRegistry — definición de herramientas + schema por proveedor | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-234 | feat | AgentOrchestrator — migrar de token parsing a tool use dispatch | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-234 | feat | AgentOrchestrator.run_agent_loop — inferencia LLM real en arm Dispatch | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-235 | feat | SyscallExecutor — mapear tool call results a AgentMessage internos | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-237 | feat | Ollama fallback — detección de tool use support + modo degradado | 📥 Todo | Alta | Kernel Engineer |
 | CORE-238 | docs | Agent files + PROTOCOL.md — reescritura post tool use | 📥 Todo | Alta | Arquitecto IA |
@@ -153,6 +155,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-249 | feat | Dashboard: reemplazar MOCK_TICKETS con Kanban real del tenant | 📥 Todo | Alta | Shell Engineer |
 | CORE-250 | feat | Dashboard: FinancialWidget con datos reales (API Cost) | 📥 Todo | Media | Shell Engineer |
 | CORE-251 | feat | Dashboard: Chronos widget honesto (sin eventos ficticios) | 📥 Todo | Media | Shell Engineer |
+| CORE-253 | fix | Kernel: SYS_CALL_PLUGIN con plugin no encontrado devuelve error legible al usuario | 📥 Todo | Crítica | Kernel Engineer |
 
 ---
 
