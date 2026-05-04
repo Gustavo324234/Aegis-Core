@@ -191,13 +191,13 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ---
 
-### Infraestructura Windows
+### Infraestructura Windows + CLI
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
 | CORE-254 | feat | CI/CD: installer Windows PowerShell + install.ps1 | ✅ Done | Alta | DevOps Engineer |
 | CORE-255 | fix | Installer: registro robusto del servicio Windows + opción -Repair | 📥 Todo | Crítica | DevOps Engineer |
-| CORE-258 | feat | CLI: soporte multiplataforma + comandos de gestión del servicio (Windows + Linux) | 📥 Todo | Alta | Kernel Engineer |
+| CORE-258 | feat | CLI: ank-cli multiplataforma — fix headers + comandos servicio + CI + installers | 📥 Todo | Alta | Kernel Engineer + DevOps Engineer |
 
 ---
 
