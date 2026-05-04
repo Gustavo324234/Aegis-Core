@@ -231,9 +231,10 @@ function Install-AegisService {
         -StartupType Automatic `
         -ErrorAction Stop | Out-Null
 
+    # Variables de entorno del servicio — deben escribirse como REG_MULTI_SZ (String[])
     $regPath  = "HKLM:\SYSTEM\CurrentControlSet\Services\$SERVICE_NAME"
-    $envArray = $envVars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
-    Set-ItemProperty -Path $regPath -Name "Environment" -Value $envArray
+    $envArray = [string[]]($envVars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+    Set-ItemProperty -Path $regPath -Name "Environment" -Value $envArray -Type MultiString
 
     sc.exe failure $SERVICE_NAME reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
 
