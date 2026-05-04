@@ -12,8 +12,9 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 | EPIC 46 | Public Launch | ✅ Completa | 100% |
-| EPIC 47 | Agent Protocol v2: Tool Use + LLM Inference en Agent Loop | 📥 Planned | 0% |
+| EPIC 47 | Agent Protocol v2: Tool Use + LLM Inference en Agent Loop | 🔀 Absorbido por EPIC 49 | — |
 | EPIC 48 | Shell Observability: Chat feedback + Dashboard real | 📥 Planned | 0% |
+| EPIC 49 | Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up | 📥 Planned | 0% |
 
 ---
 
@@ -131,18 +132,6 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ---
 
-### EPIC 47 — Agent Protocol v2: Tool Use + LLM Inference en Agent Loop
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-236 | feat | ToolRegistry — definición de herramientas + schema por proveedor | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-234 | feat | AgentOrchestrator.run_agent_loop — inferencia LLM real en arm Dispatch | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-235 | feat | SyscallExecutor — mapear tool call results a AgentMessage internos | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-237 | feat | Ollama fallback — detección de tool use support + modo degradado | 📥 Todo | Alta | Kernel Engineer |
-| CORE-238 | docs | Agent files + PROTOCOL.md — reescritura post tool use | 📥 Todo | Alta | Arquitecto IA |
-
----
-
 ### EPIC 48 — Shell Observability: Chat feedback + Dashboard real
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
@@ -156,6 +145,32 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-253 | fix | Kernel: SYS_CALL_PLUGIN con plugin no encontrado devuelve error legible al usuario | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-256 | feat | Admin: tab Sistema — gestión del servicio (start/stop/restart/status) desde la UI | 📥 Todo | Alta | Shell Engineer + Kernel Engineer |
 | CORE-257 | fix | Kernel: Tunnel Manager — no reintentar si cloudflared no está instalado | 📥 Todo | Media | Kernel Engineer |
+
+---
+
+### EPIC 49 — Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up
+
+> Absorbe los tickets de EPIC 47. Ver documento completo en `governance/EPIC_49_COGNITIVE_LOOP.md`.
+
+**Fase 1 — Memoria Conversacional**
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-259 | feat | CloudProxyDriver: historial Vec<ChatMessage> en lugar de String | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-260 | feat | PCB: acumular historial de mensajes + SessionHistoryCache | 📥 Todo | Crítica | Kernel Engineer |
+
+**Fase 2 — Bucle ReAct Interno**
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-261 | feat | CognitiveHAL: bucle ReAct — tool call → resultado → LLM | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-262 | feat | AgentOrchestrator: inferencia LLM real en run_agent_loop | 📥 Todo | Crítica | Kernel Engineer |
+
+**Fase 3 — Comunicación Bottom-Up**
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-263 | feat | Herramienta ask_user + estado WaitingUser + enrutamiento Chat Agent | 📥 Todo | Alta | Kernel Engineer |
 
 ---
 
@@ -197,7 +212,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 |---|---|---|---|---|---|
 | CORE-254 | feat | CI/CD: installer Windows PowerShell + install.ps1 | ✅ Done | Alta | DevOps Engineer |
 | CORE-255 | fix | Installer: registro robusto del servicio Windows + opción -Repair | 📥 Todo | Crítica | DevOps Engineer |
-| CORE-258 | feat | CLI: ank-cli multiplataforma — fix headers + comandos servicio + CI + installers | 📥 Todo | Alta | Kernel Engineer + DevOps Engineer |
+| CORE-258 | feat | CLI: ank-cli multiplataforma — Windows + Linux + CI + installers | 📥 Todo | Alta | Kernel Engineer |
 
 ---
 
@@ -222,3 +237,4 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 - 🚧 **In Progress:** En desarrollo activo.
 - ✅ **Done:** Terminado y verificado.
 - ❌ **Blocked:** Detenido por dependencias.
+- 🔀 **Absorbido:** Consolidado en otro epic.
