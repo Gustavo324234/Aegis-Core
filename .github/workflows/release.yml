@@ -48,7 +48,7 @@ jobs:
       - name: Install cross-compilation tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler gcc-aarch64-linux-gnu
+          sudo apt-get install -y protobuf-compiler libsqlcipher-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -58,17 +58,12 @@ jobs:
         with:
           key: linux-arm64
 
-      - name: Install SQLCipher for arm64
-        run: |
-          sudo apt-get install -y libsqlcipher-dev
-          # Cross-compile SQLCipher static lib for arm64
-          # Note: if SQLCipher is dynamically linked this step may need refinement
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-
       - name: Build ank-server (arm64)
         run: cargo build --release -p ank-server --target aarch64-unknown-linux-gnu
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
 
       - name: Package binary
         run: |
@@ -129,8 +124,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: |
-          brew install protobuf sqlcipher
+        run: brew install protobuf sqlcipher
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -212,8 +206,7 @@ jobs:
           path: artifacts
 
       - name: Delete existing nightly release
-        run: |
-          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+        run: gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
