@@ -28,6 +28,11 @@ pub fn build_router(state: AppState) -> Router {
     let swagger_ui =
         SwaggerUi::new("/api/docs/:_").url("/api-docs/openapi.json", openapi::ApiDoc::openapi());
 
+    let cors = tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any);
+
     Router::new()
         .route("/health", get(status::health_check))
         .merge(swagger_ui)
@@ -57,5 +62,6 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/ws/agents", ws::agents::router())
         // Static Files (Catch-all)
         .fallback(static_files::spa_handler)
+        .layer(cors)
         .with_state(state)
 }
