@@ -51,6 +51,8 @@ pub struct AgentOrchestrator {
     channels: Arc<RwLock<HashMap<AgentId, mpsc::Sender<AgentMessage>>>>,
     persistence: Arc<AgentPersistence>,
     instruction_loader: Arc<RwLock<InstructionLoader>>,
+    /// CORE-262: HAL para inferencia LLM real en run_agent_loop.
+    pub hal: Arc<crate::chal::CognitiveHAL>,
 }
 
 impl AgentOrchestrator {
@@ -58,6 +60,7 @@ impl AgentOrchestrator {
         router: Arc<RwLock<CognitiveRouter>>,
         vcm: Arc<VirtualContextManager>,
         workspace_root: &std::path::Path,
+        hal: Arc<crate::chal::CognitiveHAL>,
     ) -> Self {
         let mut loader = InstructionLoader::default_from_workspace(workspace_root);
         if let Err(e) = loader.preload() {
@@ -73,6 +76,7 @@ impl AgentOrchestrator {
             channels: Arc::new(RwLock::new(HashMap::new())),
             persistence: Arc::new(AgentPersistence::from_env()),
             instruction_loader: Arc::new(RwLock::new(loader)),
+            hal,
         }
     }
 
@@ -763,6 +767,7 @@ impl AgentOrchestrator {
         let tree_ref = Arc::clone(&self.tree);
         let router_ref = Arc::clone(&self.router);
         let channels_ref = Arc::clone(&self.channels);
+        let hal_ref = Arc::clone(&self.hal);
 
         let (tx, rx) = {
             // Reemplazar el canal existente con uno que tenga rx
@@ -787,7 +792,16 @@ impl AgentOrchestrator {
         }
 
         tokio::spawn(async move {
-            Self::run_agent_loop(agent_id, tree_ref, router_ref, channels_ref, rx, parent_tx).await;
+            Self::run_agent_loop(
+                agent_id,
+                tree_ref,
+                router_ref,
+                channels_ref,
+                rx,
+                parent_tx,
+                hal_ref,
+            )
+            .await;
         });
     }
 
@@ -798,6 +812,7 @@ impl AgentOrchestrator {
         channels: Arc<RwLock<HashMap<AgentId, mpsc::Sender<AgentMessage>>>>,
         mut rx: mpsc::Receiver<AgentMessage>,
         parent_tx: Option<mpsc::Sender<AgentMessage>>,
+        hal: Arc<crate::chal::CognitiveHAL>,
     ) {
         let (role_label, task_type, model_preference) = {
             let t = tree.read().await;
@@ -818,7 +833,7 @@ impl AgentOrchestrator {
                 AgentMessage::Dispatch {
                     task_description,
                     context,
-                    reply_to,
+                    reply_to: _,
                     ..
                 } => {
                     info!(
@@ -842,13 +857,13 @@ impl AgentOrchestrator {
                         r.decide(&mock_pcb).await
                     };
 
-                    let model_id = match routing_result {
+                    let decision = match routing_result {
                         Ok(d) => {
                             info!(
                                 "[{}][CORE-208] → modelo: {} (task: {:?}, pref: {:?})",
                                 role_label, d.model_id, task_type, model_preference
                             );
-                            d.model_id
+                            d
                         }
                         Err(e) => {
                             warn!("[{}] CMR routing failed: {}", role_label, e);
@@ -857,27 +872,87 @@ impl AgentOrchestrator {
                         }
                     };
 
-                    let child_summary = context
+                    // Construir mensajes del agente
+                    let system_prompt = {
+                        let t = tree.read().await;
+                        t.get(&agent_id)
+                            .map(|n| n.system_prompt.clone())
+                            .unwrap_or_default()
+                    };
+
+                    let child_reports_text = context
                         .child_reports
                         .iter()
                         .map(|r| format!("• {}: {}", r.role_description, r.summary))
                         .collect::<Vec<_>>()
                         .join("\n");
 
-                    let summary = if child_summary.is_empty() {
-                        format!(
-                            "[{}] Task via model {}. Awaiting execution.",
-                            role_label, model_id
-                        )
-                    } else {
-                        format!("[{}] Aggregated:\n{}", role_label, child_summary)
+                    let mut messages = vec![crate::chal::ChatMessage {
+                        role: crate::chal::ChatRole::System,
+                        content: Some(system_prompt),
+                        ..Default::default()
+                    }];
+                    if !child_reports_text.is_empty() {
+                        messages.push(crate::chal::ChatMessage {
+                            role: crate::chal::ChatRole::System,
+                            content: Some(format!(
+                                "[REPORTES DE SUBAGENTES]\n{}",
+                                child_reports_text
+                            )),
+                            ..Default::default()
+                        });
+                    }
+                    messages.push(crate::chal::ChatMessage {
+                        role: crate::chal::ChatRole::User,
+                        content: Some(task_description.clone()),
+                        ..Default::default()
+                    });
+
+                    let tools = {
+                        let t = tree.read().await;
+                        t.get(&agent_id)
+                            .map(|n| {
+                                let provider = ProviderKind::from_string(&decision.provider);
+                                let defs = ToolRegistry::tools_for(&n.role, &provider);
+                                if defs.is_empty() {
+                                    None
+                                } else {
+                                    Some(defs)
+                                }
+                            })
+                            .flatten()
                     };
+
+                    let (text_tx, mut text_rx) = tokio::sync::mpsc::unbounded_channel::<
+                        Result<String, crate::chal::ExecutionError>,
+                    >();
+                    let hal_clone = Arc::clone(&hal);
+                    let model_id_for_meta = decision.model_id.clone();
+
+                    let collect_task = tokio::spawn(async move {
+                        let mut full = String::new();
+                        while let Some(Ok(token)) = text_rx.recv().await {
+                            full.push_str(&token);
+                        }
+                        full
+                    });
+
+                    if let Err(e) = hal_clone
+                        .execute_agent_loop(decision, messages, tools, text_tx, agent_id)
+                        .await
+                    {
+                        warn!("[{}] LLM execution failed: {}", role_label, e);
+                        Self::fail_agent(agent_id, &e.to_string(), &tree, &parent_tx).await;
+                        return;
+                    }
+
+                    let response = collect_task.await.unwrap_or_default();
 
                     {
                         let mut t = tree.write().await;
                         if let Some(n) = t.get_mut(&agent_id) {
                             n.set_state(AgentState::Complete);
-                            n.set_last_report(summary.clone());
+                            n.set_last_report(response.clone());
                         }
                     }
 
@@ -887,12 +962,9 @@ impl AgentOrchestrator {
                             result: AgentResult {
                                 agent_id,
                                 role_description: role_label.clone(),
-                                summary,
+                                summary: response,
                                 artifacts: Vec::new(),
-                                metadata: serde_json::json!({
-                                    "model_used": model_id,
-                                    "reply_to": reply_to.to_string(),
-                                }),
+                                metadata: serde_json::json!({ "model_used": model_id_for_meta }),
                             },
                             status: ReportStatus::Success,
                         };

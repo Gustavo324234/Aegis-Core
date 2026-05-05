@@ -171,11 +171,12 @@ async fn main() -> Result<()> {
         Arc::clone(&persistence) as Arc<dyn StatePersistor>
     ));
 
-    // CORE-158 (Epic 43): AgentOrchestrator — inicializado con router, VCM y workspace_root (CORE-206)
+    // CORE-158 (Epic 43): AgentOrchestrator — inicializado con router, VCM, workspace_root y HAL (CORE-262)
     let agent_orchestrator = Arc::new(AgentOrchestrator::new(
         Arc::clone(&router),
         Arc::new(VirtualContextManager::new()),
         &resolve_data_dir(),
+        Arc::clone(&hal),
     ));
 
     // CORE-261: Registrar el orchestrator en el HAL para el bucle ReAct interno.
