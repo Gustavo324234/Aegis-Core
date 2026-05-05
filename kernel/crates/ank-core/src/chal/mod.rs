@@ -738,6 +738,83 @@ impl CognitiveHAL {
                 }
             }
 
+            // CORE-263: supervisor pausa su ejecución esperando respuesta del usuario
+            "ask_user" => {
+                let question = args["question"].as_str().unwrap_or("").to_string();
+                let _context = args.get("context").and_then(|v| v.as_str()).map(String::from);
+
+                let agent_uuid = match pcb.agent_id {
+                    Some(id) => id,
+                    None => return "{\"error\":\"ask_user requiere agent_id en PCB\"}".to_string(),
+                };
+
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                let orchestrator = match orchestrator_opt {
+                    Some(o) => o,
+                    None => return "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
+                };
+
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
+                orchestrator.register_user_reply(agent_uuid, reply_tx).await;
+
+                {
+                    let mut tree = orchestrator.tree.write().await;
+                    if let Some(node) = tree.get_mut(&agent_uuid) {
+                        node.set_state(crate::agents::node::AgentState::WaitingUser);
+                    }
+                }
+
+                tracing::info!(
+                    agent = %agent_uuid,
+                    question = %question,
+                    "CORE-263: supervisor pausado esperando respuesta del usuario"
+                );
+
+                match tokio::time::timeout(std::time::Duration::from_secs(600), reply_rx).await {
+                    Ok(Ok(answer)) => {
+                        {
+                            let mut tree = orchestrator.tree.write().await;
+                            if let Some(node) = tree.get_mut(&agent_uuid) {
+                                node.set_state(crate::agents::node::AgentState::Running);
+                            }
+                        }
+                        format!("{{\"user_answer\": {}}}", serde_json::json!(answer))
+                    }
+                    _ => {
+                        {
+                            let mut tree = orchestrator.tree.write().await;
+                            if let Some(node) = tree.get_mut(&agent_uuid) {
+                                node.set_state(crate::agents::node::AgentState::Running);
+                            }
+                        }
+                        "{\"user_answer\": null, \"reason\": \"timeout\"}".to_string()
+                    }
+                }
+            }
+
+            // CORE-263: Chat Agent entrega la respuesta del usuario al supervisor pausado
+            "answer_supervisor" => {
+                let agent_id_str = args["agent_id"].as_str().unwrap_or("");
+                let answer = args["answer"].as_str().unwrap_or("").to_string();
+
+                let agent_uuid = match agent_id_str.parse::<uuid::Uuid>() {
+                    Ok(id) => id,
+                    Err(_) => return "{\"error\":\"agent_id inválido\"}".to_string(),
+                };
+
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                match orchestrator_opt {
+                    None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
+                    Some(orchestrator) => {
+                        if orchestrator.answer_user_question(agent_uuid, answer).await {
+                            "{\"status\":\"answer_delivered\"}".to_string()
+                        } else {
+                            "{\"status\":\"no_supervisor_waiting\"}".to_string()
+                        }
+                    }
+                }
+            }
+
             other => format!("{{\"error\":\"Unknown tool: {}\"}}", other),
         }
     }

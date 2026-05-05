@@ -53,6 +53,8 @@ pub struct AgentOrchestrator {
     instruction_loader: Arc<RwLock<InstructionLoader>>,
     /// CORE-262: HAL para inferencia LLM real en run_agent_loop.
     pub hal: Arc<crate::chal::CognitiveHAL>,
+    /// CORE-263: Canales oneshot para respuestas de usuario a supervisores pausados.
+    pending_user_replies: Arc<RwLock<HashMap<AgentId, tokio::sync::oneshot::Sender<String>>>>,
 }
 
 impl AgentOrchestrator {
@@ -77,6 +79,7 @@ impl AgentOrchestrator {
             persistence: Arc::new(AgentPersistence::from_env()),
             instruction_loader: Arc::new(RwLock::new(loader)),
             hal,
+            pending_user_replies: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -367,6 +370,27 @@ impl AgentOrchestrator {
         };
         self.send_to(target_id, msg).await?;
         Ok(query_id)
+    }
+
+    // --- Comunicación bottom-up: ask_user / answer_supervisor (CORE-263) ---
+
+    /// Registra un oneshot channel para que el supervisor con `agent_id` pueda recibir
+    /// la respuesta del usuario cuando éste responda via `answer_supervisor`.
+    pub async fn register_user_reply(
+        &self,
+        agent_id: AgentId,
+        tx: tokio::sync::oneshot::Sender<String>,
+    ) {
+        self.pending_user_replies.write().await.insert(agent_id, tx);
+    }
+
+    /// Entrega la respuesta del usuario al supervisor pausado. Retorna `true` si había
+    /// un supervisor esperando, `false` si no hay ninguno registrado para ese agent_id.
+    pub async fn answer_user_question(&self, agent_id: AgentId, answer: String) -> bool {
+        match self.pending_user_replies.write().await.remove(&agent_id) {
+            Some(tx) => tx.send(answer).is_ok(),
+            None => false,
+        }
     }
 
     // --- Modo degradado (CORE-237) ---
