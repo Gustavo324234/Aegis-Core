@@ -660,19 +660,20 @@ impl CognitiveHAL {
             )
         };
 
-        let messages = vec![
-            ChatMessage {
-                role: ChatRole::System,
-                content: Some(system_content),
-                ..Default::default()
-            },
-            // TODO CORE-260: extender con pcb.message_history
-            ChatMessage {
-                role: ChatRole::User,
-                content: Some(assembled_context),
-                ..Default::default()
-            },
-        ];
+        let mut messages = vec![ChatMessage {
+            role: ChatRole::System,
+            content: Some(system_content),
+            ..Default::default()
+        }];
+
+        // CORE-260: Historial previo de la sesión
+        messages.extend(pcb.message_history.clone());
+
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: Some(assembled_context),
+            ..Default::default()
+        });
 
         messages
     }

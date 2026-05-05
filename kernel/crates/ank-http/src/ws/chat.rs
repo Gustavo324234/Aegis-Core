@@ -1,5 +1,9 @@
 use crate::{citadel::hash_passphrase, state::AppState};
-use ank_core::{pcb::PCB, scheduler::SchedulerEvent};
+use ank_core::{
+    chal::{ChatMessage, ChatRole},
+    pcb::PCB,
+    scheduler::SchedulerEvent,
+};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -155,6 +159,10 @@ async fn handle_chat(
         send_onboarding_message(&mut socket, greeting).await;
         let _ = append_to_chat_history(&tenant_id, "ASSISTANT", greeting).await;
     }
+
+    // CORE-260: Cache de historial de mensajes de la sesión WebSocket (máx. 20).
+    let session_history: std::sync::Arc<tokio::sync::Mutex<std::collections::VecDeque<ChatMessage>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new()));
 
     // 3. Subscribe to workspace events (CORE-175)
     let mut workspace_rx = state.workspace_events.subscribe();
@@ -319,10 +327,17 @@ async fn handle_chat(
                         })
                         .unwrap_or(ank_core::scheduler::ModelPreference::HybridSmart)
                 };
+            let user_message_text = prompt.clone();
             let mut pcb = PCB::new(tenant_id.clone(), 5, prompt.clone());
             pcb.model_pref = pref;
             pcb.tenant_id = Some(tenant_id.clone());
             pcb.session_key = Some(hash.clone());
+
+            // CORE-260: Inyectar historial de la sesión en el PCB
+            {
+                let history = session_history.lock().await;
+                pcb.message_history = history.iter().cloned().collect();
+            }
 
             // CORE-FIX: Enable conversation history and semantic memory
             pcb.memory_pointers
@@ -385,6 +400,24 @@ async fn handle_chat(
             // Save assistant response to history
             if !full_response.is_empty() {
                 let _ = append_to_chat_history(&tenant_id, "ASSISTANT", &full_response).await;
+            }
+
+            // CORE-260: Actualizar SessionHistoryCache con el par user+assistant
+            if !full_response.is_empty() {
+                let mut history = session_history.lock().await;
+                history.push_back(ChatMessage {
+                    role: ChatRole::User,
+                    content: Some(user_message_text.clone()),
+                    ..Default::default()
+                });
+                history.push_back(ChatMessage {
+                    role: ChatRole::Assistant,
+                    content: Some(full_response.clone()),
+                    ..Default::default()
+                });
+                while history.len() > 20 {
+                    history.pop_front();
+                }
             }
         }
     }
