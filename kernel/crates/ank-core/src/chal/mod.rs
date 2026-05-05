@@ -554,6 +554,98 @@ impl CognitiveHAL {
         Ok(())
     }
 
+    /// CORE-262: Bucle ReAct para agentes del árbol.
+    /// Acepta mensajes ya construidos sin necesitar un PCB completo.
+    pub async fn execute_agent_loop(
+        self: Arc<Self>,
+        decision: crate::router::RoutingDecision,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<serde_json::Value>>,
+        text_tx: tokio::sync::mpsc::UnboundedSender<Result<String, ExecutionError>>,
+        agent_id: uuid::Uuid,
+    ) -> Result<(), SystemError> {
+        use crate::chal::drivers::CloudProxyDriver;
+
+        let driver = CloudProxyDriver::new(
+            Arc::clone(&self.http_client),
+            decision.api_url.clone(),
+            decision.api_key.clone(),
+            decision.model_id.clone(),
+        );
+
+        let mut messages = messages;
+        const MAX_ITERATIONS: usize = 10;
+
+        for _iteration in 0..MAX_ITERATIONS {
+            let raw_stream = driver
+                .generate_stream(messages.clone(), None, tools.clone())
+                .await?;
+            tokio::pin!(raw_stream);
+
+            let mut assistant_text = String::new();
+            let mut tool_calls: Vec<ToolCallRecord> = Vec::new();
+
+            while let Some(token_result) = raw_stream.next().await {
+                match token_result {
+                    Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                        let json_str = token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
+                        if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str) {
+                            tool_calls.push(ToolCallRecord {
+                                id: tc.id,
+                                type_: "function".to_string(),
+                                function: FunctionCallRecord {
+                                    name: tc.name,
+                                    arguments: tc.arguments.to_string(),
+                                },
+                            });
+                        }
+                    }
+                    Ok(text) => {
+                        assistant_text.push_str(&text);
+                        let _ = text_tx.send(Ok(text));
+                    }
+                    Err(e) => {
+                        let _ = text_tx.send(Err(e));
+                    }
+                }
+            }
+
+            if tool_calls.is_empty() {
+                break;
+            }
+
+            messages.push(ChatMessage {
+                role: ChatRole::Assistant,
+                content: if assistant_text.is_empty() {
+                    None
+                } else {
+                    Some(assistant_text)
+                },
+                tool_calls: Some(tool_calls.clone()),
+                ..Default::default()
+            });
+
+            let mut mock_pcb =
+                crate::pcb::PCB::new(format!("agent_{}", agent_id), 5, String::new());
+            mock_pcb.agent_id = Some(agent_id);
+
+            for tc in &tool_calls {
+                let result = self
+                    .execute_tool_call_internal(tc, &agent_id.to_string(), &mock_pcb)
+                    .await;
+                messages.push(ChatMessage {
+                    role: ChatRole::Tool,
+                    content: Some(result),
+                    tool_call_id: Some(tc.id.clone()),
+                    name: Some(tc.function.name.clone()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     /// CORE-261: Ejecuta un tool call interno y retorna el resultado como String.
     async fn execute_tool_call_internal(
         &self,
