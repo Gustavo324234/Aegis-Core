@@ -106,6 +106,10 @@ pub struct PCB {
     /// aquí está su AgentId (= uuid::Uuid). None para procesos cognitivos normales.
     #[serde(default)]
     pub agent_id: Option<uuid::Uuid>,
+
+    /// CORE-260: Historial de mensajes de la sesión actual (máx. 20).
+    #[serde(default)]
+    pub message_history: Vec<crate::chal::ChatMessage>,
 }
 
 use std::cmp::Ordering;
@@ -198,6 +202,7 @@ impl PCB {
             teleport_token: None,
             cancel_token: CancellationToken::new(),
             agent_id: None,
+            message_history: Vec::new(),
         }
     }
 
