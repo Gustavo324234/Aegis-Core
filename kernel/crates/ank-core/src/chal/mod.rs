@@ -355,8 +355,7 @@ impl CognitiveHAL {
                             .await
                         {
                             tracing::error!(pid = %pid_str, "ReAct loop error: {}", e);
-                            let _ =
-                                err_tx.send(Err(ExecutionError::Interrupted(e.to_string())));
+                            let _ = err_tx.send(Err(ExecutionError::Interrupted(e.to_string())));
                         }
                     });
 
@@ -463,7 +462,11 @@ impl CognitiveHAL {
         let provider = ProviderKind::from_string(&decision.provider);
         let tools = {
             let defs = ToolRegistry::tools_for(&AgentRole::ChatAgent, &provider);
-            if defs.is_empty() { None } else { Some(defs) }
+            if defs.is_empty() {
+                None
+            } else {
+                Some(defs)
+            }
         };
 
         let mut messages = self.build_messages(pcb, persona).await;
@@ -488,11 +491,8 @@ impl CognitiveHAL {
             while let Some(token_result) = raw_stream.next().await {
                 match token_result {
                     Ok(token) if token.starts_with("__TOOL_CALL__") => {
-                        let json_str =
-                            token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
-                        if let Ok(tc) =
-                            serde_json::from_str::<DriverToolCallPayload>(json_str)
-                        {
+                        let json_str = token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
+                        if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str) {
                             tool_calls.push(ToolCallRecord {
                                 id: tc.id,
                                 type_: "function".to_string(),
@@ -583,8 +583,7 @@ impl CognitiveHAL {
                             .clone()
                             .unwrap_or_else(|| scope.chars().take(40).collect());
                         let task_type_str = args["task_type"].as_str().unwrap_or("planning");
-                        let task_type =
-                            Some(crate::syscalls::parse_task_type(task_type_str));
+                        let task_type = Some(crate::syscalls::parse_task_type(task_type_str));
 
                         match orchestrator
                             .create_project(
@@ -617,14 +616,10 @@ impl CognitiveHAL {
                                     .to_string()
                             }
                         };
-                        let project =
-                            args["project"].as_str().unwrap_or("").to_string();
-                        let question =
-                            args["question"].as_str().unwrap_or("").to_string();
-                        let call = crate::agents::message::AgentToolCall::Query {
-                            project,
-                            question,
-                        };
+                        let project = args["project"].as_str().unwrap_or("").to_string();
+                        let question = args["question"].as_str().unwrap_or("").to_string();
+                        let call =
+                            crate::agents::message::AgentToolCall::Query { project, question };
                         match orchestrator.handle_tool_call(caller_id, call).await {
                             Ok(result) => result,
                             Err(e) => format!("{{\"error\":\"{}\"}}", e),
@@ -634,8 +629,7 @@ impl CognitiveHAL {
             }
 
             "call_plugin" => {
-                let plugin_name =
-                    args["plugin_name"].as_str().unwrap_or("").to_string();
+                let plugin_name = args["plugin_name"].as_str().unwrap_or("").to_string();
                 let plugin_args = args["args"]
                     .as_object()
                     .map(|o| serde_json::Value::Object(o.clone()).to_string())
