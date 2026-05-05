@@ -161,8 +161,9 @@ async fn handle_chat(
     }
 
     // CORE-260: Cache de historial de mensajes de la sesión WebSocket (máx. 20).
-    let session_history: std::sync::Arc<tokio::sync::Mutex<std::collections::VecDeque<ChatMessage>>> =
-        std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new()));
+    let session_history: std::sync::Arc<
+        tokio::sync::Mutex<std::collections::VecDeque<ChatMessage>>,
+    > = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new()));
 
     // 3. Subscribe to workspace events (CORE-175)
     let mut workspace_rx = state.workspace_events.subscribe();
