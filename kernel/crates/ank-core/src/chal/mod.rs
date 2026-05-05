@@ -134,12 +134,49 @@ impl<S: Stream> Stream for SyncStream<S> {
 pub type GenerateStreamResult =
     Result<Pin<Box<dyn Stream<Item = Result<String, ExecutionError>> + Send + Sync>>, SystemError>;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallRecord>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatRole {
+    #[default]
+    User,
+    System,
+    Assistant,
+    Tool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolCallRecord {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub function: FunctionCallRecord,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FunctionCallRecord {
+    pub name: String,
+    pub arguments: String,
+}
+
 /// --- INFERENCE DRIVER INTERFACE ---
 #[async_trait]
 pub trait InferenceDriver: Send + Sync {
     async fn generate_stream(
         &self,
-        prompt: String,
+        messages: Vec<ChatMessage>,
         grammar: Option<Grammar>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult;
@@ -345,8 +382,8 @@ impl CognitiveHAL {
             }
         })?;
 
-        let final_prompt = self.build_prompt(&pcb_snapshot, persona.as_deref()).await;
-        driver.generate_stream(final_prompt, None, None).await
+        let messages = self.build_messages(&pcb_snapshot, persona.as_deref()).await;
+        driver.generate_stream(messages, None, None).await
     }
 
     async fn execute_with_decision(
@@ -372,7 +409,7 @@ impl CognitiveHAL {
             decision.model_id.clone(),
         );
 
-        let final_prompt = self.build_prompt(pcb, persona).await;
+        let messages = self.build_messages(pcb, persona).await;
 
         // CORE-240: Obtener tools del ToolRegistry si el PCB es un agente del árbol
         let tools = if pcb.agent_id.is_some() {
@@ -397,7 +434,7 @@ impl CognitiveHAL {
         };
 
         match driver
-            .generate_stream(final_prompt.clone(), None, tools.clone())
+            .generate_stream(messages.clone(), None, tools.clone())
             .await
         {
             Ok(stream) => Ok(stream),
@@ -426,7 +463,7 @@ impl CognitiveHAL {
                         }
                     };
                     if let Ok(stream) = fallback_driver
-                        .generate_stream(final_prompt.clone(), None, fallback_tools)
+                        .generate_stream(messages.clone(), None, fallback_tools)
                         .await
                     {
                         return Ok(stream);
@@ -486,9 +523,14 @@ impl CognitiveHAL {
 
                 if let Some(driver) = driver {
                     // Prompt de prueba — en producción la respuesta incluiría tool_calls
-                    let test_prompt =
-                        "[TOOL_USE_PROBE] Respond with a tool call if supported.".to_string();
-                    match driver.generate_stream(test_prompt, None, None).await {
+                    let test_messages = vec![ChatMessage {
+                        role: ChatRole::User,
+                        content: Some(
+                            "[TOOL_USE_PROBE] Respond with a tool call if supported.".to_string(),
+                        ),
+                        ..Default::default()
+                    }];
+                    match driver.generate_stream(test_messages, None, None).await {
                         Ok(_) => {
                             // Respuesta exitosa → marcar Supported (en producción verificar tool_calls)
                             router
@@ -516,8 +558,8 @@ impl CognitiveHAL {
         }
     }
 
-    /// Construye el prompt final para el LLM usando VCM para ensamblar contexto.
-    pub async fn build_prompt(&self, pcb: &PCB, persona: Option<&str>) -> String {
+    /// Construye los mensajes para el LLM usando VCM para ensamblar contexto.
+    pub async fn build_messages(&self, pcb: &PCB, persona: Option<&str>) -> Vec<ChatMessage> {
         // 1. Ensamblar contexto via VCM (L1 + L2 + L3)
         let assembled_context = self
             .vcm
@@ -585,25 +627,8 @@ impl CognitiveHAL {
             pid = %pcb.pid,
             source = instruction_source,
             chars = role_instructions.len(),
-            "build_prompt: role instructions loaded"
+            "build_messages: role instructions loaded"
         );
-
-        let final_prompt = if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
-            format!(
-                "{}{}{}\n\n{}",
-                role_instructions, persona_section, music_section, assembled_context
-            )
-        } else {
-            format!(
-                "{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}\n\nCONTENIDO ENSAMBLADO (CONTEXTO):\n{}",
-                role_instructions,
-                persona_section,
-                music_section,
-                tool_prompt,
-                mcp_tool_prompt,
-                assembled_context
-            )
-        };
 
         let has_maker_plugin = self.plugin_manager.read().await.is_plugin_active("maker");
 
@@ -613,9 +638,43 @@ impl CognitiveHAL {
             ""
         };
 
-        // CORE-150: Maker Instructions
-        // CORE-154: Multi-Agent Instructions
-        format!("{}{}{}", maker_section, SPAWN_INSTRUCTIONS, final_prompt)
+        let system_content = if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
+            format!(
+                "{}{}{}{}{}",
+                maker_section,
+                SPAWN_INSTRUCTIONS,
+                role_instructions,
+                persona_section,
+                music_section
+            )
+        } else {
+            format!(
+                "{}{}{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}",
+                maker_section,
+                SPAWN_INSTRUCTIONS,
+                role_instructions,
+                persona_section,
+                music_section,
+                tool_prompt,
+                mcp_tool_prompt
+            )
+        };
+
+        let messages = vec![
+            ChatMessage {
+                role: ChatRole::System,
+                content: Some(system_content),
+                ..Default::default()
+            },
+            // TODO CORE-260: extender con pcb.message_history
+            ChatMessage {
+                role: ChatRole::User,
+                content: Some(assembled_context),
+                ..Default::default()
+            },
+        ];
+
+        messages
     }
 }
 
@@ -628,7 +687,7 @@ pub struct DummyDriver {
 impl InferenceDriver for DummyDriver {
     async fn generate_stream(
         &self,
-        _prompt: String,
+        _messages: Vec<ChatMessage>,
         _grammar: Option<Grammar>,
         _tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult {
@@ -722,47 +781,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_build_prompt_default_tools_presence() -> anyhow::Result<()> {
+    async fn test_build_messages_default_tools_presence() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let hal = CognitiveHAL::new(pm)?;
         let pcb = PCB::new("test".into(), 5, "hola".into());
-        let prompt = hal.build_prompt(&pcb, None).await;
+        let messages = hal.build_messages(&pcb, None).await;
+        let system_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::System)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+        let user_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::User)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+
         assert!(
-            !prompt.contains("[USER_PROCESS_INSTRUCTION]"),
+            !system_msg.contains("[USER_PROCESS_INSTRUCTION]"),
             "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
         );
         assert!(
-            prompt.contains("HERRAMIENTAS (PLUGINS) DISPONIBLES:"),
+            system_msg.contains("HERRAMIENTAS (PLUGINS) DISPONIBLES:")
+                || system_msg.contains("HERRAMIENTAS DISPONIBLES:"),
             "Deben aparecer los plugins de dominio por defecto"
         );
         assert!(
-            prompt.contains("ledger") && prompt.contains("chronos"),
+            system_msg.contains("ledger") && system_msg.contains("chronos"),
             "Debe contener las herramientas ledger y chronos"
         );
         assert!(
-            prompt.contains("hola"),
-            "El prompt debe contener la instrucción"
+            user_msg.contains("hola"),
+            "El mensaje de usuario debe contener la instrucción"
         );
         // CORE-148: Music instructions are only injected if plugin is active.
         assert!(
-            !prompt.contains("MÚSICA"),
+            !system_msg.contains("MÚSICA"),
             "Music instructions must NOT be present if plugin is not active (CORE-148)"
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_build_prompt_with_persona() -> anyhow::Result<()> {
+    async fn test_build_messages_with_persona() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
         let hal = CognitiveHAL::new(pm)?;
         let pcb = PCB::new("test".into(), 5, "hola".into());
-        let prompt = hal
-            .build_prompt(&pcb, Some("Eres Eve, asistente de ACME Corp."))
+        let messages = hal
+            .build_messages(&pcb, Some("Eres Eve, asistente de ACME Corp."))
             .await;
-        assert!(prompt.contains("Eve"), "El prompt debe contener la persona");
+        let system_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::System)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+        let user_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::User)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+
         assert!(
-            prompt.contains("hola"),
-            "El prompt debe contener la instrucción"
+            system_msg.contains("Eve"),
+            "El mensaje de sistema debe contener la persona"
+        );
+        assert!(
+            user_msg.contains("hola"),
+            "El mensaje de usuario debe contener la instrucción"
         );
         Ok(())
     }
