@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.38](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.37...ank-core-v0.1.38) (2026-05-05)
+
+
+### Features
+
+* **ank-core:** CORE-259 InferenceDriver accepts Vec&lt;ChatMessage&gt; + build_messages ([#209](https://github.com/Gustavo324234/Aegis-Core/issues/209)) ([6c2fea4](https://github.com/Gustavo324234/Aegis-Core/commit/6c2fea4099e0787f7571197f9c4bafa05a4c3bfc))
+* **ank-core:** CORE-260 PCB message_history + cache de sesión en WebSocket ([#210](https://github.com/Gustavo324234/Aegis-Core/issues/210)) ([da6a627](https://github.com/Gustavo324234/Aegis-Core/commit/da6a62764704dff902f55ccd00edca7100983e37))
+* **ank-core:** CORE-261 bucle ReAct en CognitiveHAL + limpieza StreamInterceptor ([#211](https://github.com/Gustavo324234/Aegis-Core/issues/211)) ([7deb854](https://github.com/Gustavo324234/Aegis-Core/commit/7deb8546fadc8a9df5313d808dbf61309c722aaa))
+* **ank-core:** CORE-262 AgentOrchestrator — inferencia LLM real en run_agent_loop ([#212](https://github.com/Gustavo324234/Aegis-Core/issues/212)) ([7a672d8](https://github.com/Gustavo324234/Aegis-Core/commit/7a672d8f40d6094ea16e4d03e04e2c681cbb2203))
+* **ank-core:** CORE-263 comunicación bottom-up supervisores → Chat Agent via ask_user ([#213](https://github.com/Gustavo324234/Aegis-Core/issues/213)) ([80be8ec](https://github.com/Gustavo324234/Aegis-Core/commit/80be8eccd8e2468cb281dde2b9ba7a15d6a741cf))
+
 ## [0.1.37](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.36...ank-core-v0.1.37) (2026-05-03)
 
 
