@@ -76,6 +76,8 @@ pub enum AgentState {
     Running,
     /// Esperando que sus subordinados terminen.
     WaitingReport,
+    /// CORE-263: El agente pausó esperando input del usuario via ask_user.
+    WaitingUser,
     Complete,
     Failed {
         reason: String,

@@ -63,10 +63,15 @@ impl ToolRegistry {
     fn definitions_for(role: &AgentRole) -> Vec<ToolDefinition> {
         match role {
             // CORE-243: ChatAgent no tiene agent_id — query_agent y report requieren uno.
-            // Solo puede hacer spawn_agent (para crear un ProjectSupervisor).
-            AgentRole::ChatAgent => vec![Self::spawn_agent()],
+            // Solo puede hacer spawn_agent (para crear un ProjectSupervisor) y answer_supervisor (CORE-263).
+            AgentRole::ChatAgent => vec![Self::spawn_agent(), Self::answer_supervisor()],
             AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
-                vec![Self::spawn_agent(), Self::query_agent(), Self::report()]
+                vec![
+                    Self::spawn_agent(),
+                    Self::query_agent(),
+                    Self::report(),
+                    Self::ask_user(),
+                ]
             }
             AgentRole::Specialist { .. } => vec![Self::report()],
         }
@@ -178,6 +183,50 @@ impl ToolRegistry {
             }),
         }
     }
+
+    /// CORE-263: Permite a supervisores pausar y preguntar al usuario via Chat Agent.
+    fn ask_user() -> ToolDefinition {
+        ToolDefinition {
+            name: "ask_user",
+            description: "Pausar la tarea y hacerle una pregunta al usuario via el Chat Agent. Usar cuando necesités una decisión que solo el usuario puede tomar. El supervisor queda en pausa hasta recibir la respuesta.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "La pregunta para el usuario."
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Contexto breve de por qué necesitás esta información."
+                    }
+                },
+                "required": ["question"]
+            }),
+        }
+    }
+
+    /// CORE-263: Permite al Chat Agent enviar la respuesta del usuario a un supervisor pausado.
+    fn answer_supervisor() -> ToolDefinition {
+        ToolDefinition {
+            name: "answer_supervisor",
+            description: "Enviar la respuesta del usuario a un supervisor que está esperando input. Usar cuando el usuario responde a una pregunta de un supervisor activo.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "UUID del agente supervisor que está esperando."
+                    },
+                    "answer": {
+                        "type": "string",
+                        "description": "La respuesta del usuario."
+                    }
+                },
+                "required": ["agent_id", "answer"]
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,13 +244,14 @@ mod tests {
     }
 
     #[test]
-    fn test_supervisor_gets_all_three() {
+    fn test_supervisor_gets_all_tools() {
         let role = AgentRole::Supervisor {
             name: "Kernel".into(),
             scope: "kernel modules".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::OpenAI);
-        assert_eq!(tools.len(), 3);
+        // CORE-263: supervisores ahora tienen 4 tools (+ ask_user)
+        assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
@@ -209,20 +259,22 @@ mod tests {
         assert!(names.contains(&"spawn_agent"));
         assert!(names.contains(&"query_agent"));
         assert!(names.contains(&"report"));
+        assert!(names.contains(&"ask_user"));
     }
 
     #[test]
     fn test_chat_agent_gets_only_spawn() {
         // CORE-243: ChatAgent no tiene agent_id, por lo que query_agent y report
-        // fallarían en SyscallExecutor. Solo recibe spawn_agent.
+        // fallarían en SyscallExecutor. Solo recibe spawn_agent y answer_supervisor (CORE-263).
         let role = AgentRole::ChatAgent;
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Groq);
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"spawn_agent"));
+        assert!(names.contains(&"answer_supervisor"));
         assert!(
             !names.contains(&"query_agent"),
             "ChatAgent no debe recibir query_agent"
