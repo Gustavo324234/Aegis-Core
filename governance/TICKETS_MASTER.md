@@ -12,9 +12,9 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 | EPIC 46 | Public Launch | ✅ Completa | 100% |
-| EPIC 47 | Agent Protocol v2: Tool Use + LLM Inference en Agent Loop | 🔀 Absorbido por EPIC 49 | — |
+| EPIC 47 | Agent Protocol v2 | 🔀 Absorbido por EPIC 49 | — |
 | EPIC 48 | Shell Observability: Chat feedback + Dashboard real | 📥 Planned | 0% |
-| EPIC 49 | Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up | 📥 Planned | 0% |
+| EPIC 49 | Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up | 🚧 In Progress | 60% |
 
 ---
 
@@ -136,7 +136,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-244 | fix | HAL Runner: StatusUpdate en path de error | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-244 | fix | HAL Runner: StatusUpdate en path de error | ✅ Done | Crítica | Kernel Engineer |
 | CORE-248 | feat | Chat: indicador de estado enriquecido (modelo, provider, error amigable, timeout) | ✅ Done | Crítica | Shell Engineer |
 | CORE-252 | feat | Dashboard: header con nombre real del tenant y estado del sistema real | 📥 Todo | Alta | Shell Engineer |
 | CORE-249 | feat | Dashboard: reemplazar MOCK_TICKETS con Kanban real del tenant | 📥 Todo | Alta | Shell Engineer |
@@ -150,20 +150,18 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 
 ### EPIC 49 — Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up
 
-> Absorbe los tickets de EPIC 47. Ver documento completo en `governance/EPIC_49_COGNITIVE_LOOP.md`.
-
 **Fase 1 — Memoria Conversacional**
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-259 | feat | CloudProxyDriver: historial Vec<ChatMessage> en lugar de String | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-260 | feat | PCB: acumular historial de mensajes + SessionHistoryCache | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-259 | feat | CloudProxyDriver: historial Vec<ChatMessage> en lugar de String | ✅ Done | Crítica | Kernel Engineer |
+| CORE-260 | feat | PCB: acumular historial de mensajes + SessionHistoryCache | ✅ Done | Crítica | Kernel Engineer |
 
 **Fase 2 — Bucle ReAct Interno**
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-261 | feat | CognitiveHAL: bucle ReAct — tool call → resultado → LLM | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-261 | feat | CognitiveHAL: bucle ReAct — tool call → resultado → LLM | ✅ Done | Crítica | Kernel Engineer |
 | CORE-262 | feat | AgentOrchestrator: inferencia LLM real en run_agent_loop | 📥 Todo | Crítica | Kernel Engineer |
 
 **Fase 3 — Comunicación Bottom-Up**
