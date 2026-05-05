@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.49](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.48...ank-server-v0.1.49) (2026-05-05)
+
+
+### Features
+
+* **ank-core:** CORE-261 bucle ReAct en CognitiveHAL + limpieza StreamInterceptor ([#211](https://github.com/Gustavo324234/Aegis-Core/issues/211)) ([7deb854](https://github.com/Gustavo324234/Aegis-Core/commit/7deb8546fadc8a9df5313d808dbf61309c722aaa))
+* **ank-core:** CORE-262 AgentOrchestrator — inferencia LLM real en run_agent_loop ([#212](https://github.com/Gustavo324234/Aegis-Core/issues/212)) ([7a672d8](https://github.com/Gustavo324234/Aegis-Core/commit/7a672d8f40d6094ea16e4d03e04e2c681cbb2203))
+
 ## [0.1.48](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.47...ank-server-v0.1.48) (2026-05-03)
 
 ## [0.1.47](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.46...ank-server-v0.1.47) (2026-05-03)

@@ -2,6 +2,18 @@
 
 
 
+## [0.1.45](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.44...ank-http-v0.1.45) (2026-05-05)
+
+
+### Features
+
+* **ank-core:** CORE-260 PCB message_history + cache de sesión en WebSocket ([#210](https://github.com/Gustavo324234/Aegis-Core/issues/210)) ([da6a627](https://github.com/Gustavo324234/Aegis-Core/commit/da6a62764704dff902f55ccd00edca7100983e37))
+
+
+### Bug Fixes
+
+* **installer:** windows and app ([#208](https://github.com/Gustavo324234/Aegis-Core/issues/208)) ([b8be87b](https://github.com/Gustavo324234/Aegis-Core/commit/b8be87b98796d50ec7018bcfb958526de5d46b17))
+
 ## [0.1.44](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.43...ank-http-v0.1.44) (2026-05-03)
 
 
