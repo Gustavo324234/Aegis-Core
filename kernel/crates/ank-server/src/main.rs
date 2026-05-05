@@ -178,6 +178,9 @@ async fn main() -> Result<()> {
         &resolve_data_dir(),
     ));
 
+    // CORE-261: Registrar el orchestrator en el HAL para el bucle ReAct interno.
+    hal.set_orchestrator(Arc::clone(&agent_orchestrator)).await;
+
     // 11. AppState
     let event_broker = Arc::new(RwLock::new(HashMap::new()));
     let telemetry = TelemetryState::new();
@@ -265,112 +268,9 @@ async fn main() -> Result<()> {
                             while let Some(item) = interceptor.next_item().await {
                                 match item {
                                     ank_core::syscalls::StreamItem::Token(token) => {
-                                        if let Some(json_str) = token.strip_prefix("__TOOL_CALL__")
-                                        {
-                                            #[derive(serde::Deserialize)]
-                                            struct AgentToolCallPayload {
-                                                name: String,
-                                                arguments: serde_json::Value,
-                                            }
-
-                                            if let Ok(payload) =
-                                                serde_json::from_str::<AgentToolCallPayload>(
-                                                    json_str,
-                                                )
-                                            {
-                                                let tool_call_opt = match payload.name.as_str() {
-                                                    "spawn_agent" => serde_json::from_value::<ank_core::agents::message::AgentToolCall>(serde_json::json!({ "Spawn": payload.arguments })).ok(),
-                                                    "query_agent" => serde_json::from_value::<ank_core::agents::message::AgentToolCall>(serde_json::json!({ "Query": payload.arguments })).ok(),
-                                                    "report" => serde_json::from_value::<ank_core::agents::message::AgentToolCall>(serde_json::json!({ "Report": payload.arguments })).ok(),
-                                                    _ => None,
-                                                };
-
-                                                if let Some(tool_call) = tool_call_opt {
-                                                    let pcb_snapshot =
-                                                        shared_pcb.read().await.clone();
-                                                    match executor
-                                                        .execute_agent_tool_call(
-                                                            &pcb_snapshot,
-                                                            tool_call,
-                                                        )
-                                                        .await
-                                                    {
-                                                        Ok(result_json) => {
-                                                            tracing::info!(pid = %pid, "AgentToolCall ejecutado con éxito");
-
-                                                            // CORE-241 FIX: Enviar confirmación al usuario
-                                                            // El result_json contiene {"status":"spawned","project":"Aegis"}
-                                                            // o {"acknowledged":true} — lo usamos para generar un mensaje natural.
-                                                            let user_msg = if result_json
-                                                                .contains("spawned")
-                                                            {
-                                                                // Extraer nombre del proyecto del JSON
-                                                                serde_json::from_str::<serde_json::Value>(&result_json)
-                                                                    .ok()
-                                                                    .and_then(|v| v["project"].as_str().map(String::from))
-                                                                    .map(|name| format!("Listo, activé el equipo para el proyecto **{}**.", name))
-                                                                    .unwrap_or_else(|| "Listo, activé el equipo.".to_string())
-                                                            } else if result_json
-                                                                .contains("acknowledged")
-                                                            {
-                                                                "Reporte recibido.".to_string()
-                                                            } else if result_json.contains("answer")
-                                                            {
-                                                                // Query reply — extraer la respuesta
-                                                                serde_json::from_str::<
-                                                                    serde_json::Value,
-                                                                >(
-                                                                    &result_json
-                                                                )
-                                                                .ok()
-                                                                .and_then(|v| {
-                                                                    v["answer"]
-                                                                        .as_str()
-                                                                        .map(String::from)
-                                                                })
-                                                                .unwrap_or_else(|| {
-                                                                    result_json.clone()
-                                                                })
-                                                            } else {
-                                                                result_json.clone()
-                                                            };
-
-                                                            full_output.push_str(&user_msg);
-                                                            tokens_emitted += 1;
-                                                            let _ = event_tx.send(ank_proto::v1::TaskEvent {
-                                                                pid: pid.clone(),
-                                                                timestamp: None,
-                                                                payload: Some(
-                                                                    ank_proto::v1::task_event::Payload::Output(user_msg),
-                                                                ),
-                                                            });
-                                                        }
-                                                        Err(e) => {
-                                                            tracing::error!(pid = %pid, "Error en AgentToolCall: {}", e);
-
-                                                            // Informar al usuario del error
-                                                            let err_msg = format!(
-                                                                "No pude completar la acción: {}",
-                                                                e
-                                                            );
-                                                            full_output.push_str(&err_msg);
-                                                            tokens_emitted += 1;
-                                                            let _ = event_tx.send(ank_proto::v1::TaskEvent {
-                                                                pid: pid.clone(),
-                                                                timestamp: None,
-                                                                payload: Some(
-                                                                    ank_proto::v1::task_event::Payload::Output(err_msg),
-                                                                ),
-                                                            });
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // CORE-241: No propagar el token de tool call al frontend
-                                            continue;
-                                        }
-
+                                        // CORE-261: __TOOL_CALL__ tokens ya son consumidos
+                                        // internamente por el bucle ReAct del HAL — el servidor
+                                        // recibe solo texto limpio de text_rx.
                                         tokens_emitted += 1;
                                         full_output.push_str(&token);
                                         let _ = event_tx.send(ank_proto::v1::TaskEvent {

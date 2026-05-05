@@ -14,6 +14,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
+use tokio_stream::StreamExt;
 use tracing::{info, warn};
 
 pub mod drivers;
@@ -186,6 +187,15 @@ pub trait InferenceDriver: Send + Sync {
     async fn load_model(&mut self, model_id: &str) -> Result<(), SystemError>;
 }
 
+/// Formato del token `__TOOL_CALL__` emitido por el CloudProxyDriver (CORE-261).
+/// Distinto del OpenAI `ToolCallRecord` — se convierte antes de inyectar al historial.
+#[derive(serde::Deserialize)]
+struct DriverToolCallPayload {
+    id: String,
+    name: String,
+    arguments: serde_json::Value,
+}
+
 /// --- COGNITIVE HAL (Hardware Abstraction Layer) ---
 pub struct CognitiveHAL {
     pub drivers: RwLock<HashMap<String, Box<dyn InferenceDriver + Send + Sync>>>,
@@ -199,6 +209,8 @@ pub struct CognitiveHAL {
     pub embedding_driver: Option<Arc<dyn EmbeddingDriver>>,
     /// CORE-226: InstructionLoader para inyectar chat_agent.md al Chat Agent principal.
     pub instruction_loader: Arc<RwLock<InstructionLoader>>,
+    /// CORE-261: AgentOrchestrator para ejecutar tool calls dentro del bucle ReAct.
+    pub agent_orchestrator: RwLock<Option<Arc<crate::agents::orchestrator::AgentOrchestrator>>>,
 }
 
 #[cfg(test)]
@@ -262,12 +274,22 @@ impl CognitiveHAL {
             swap_manager,
             embedding_driver,
             instruction_loader,
+            agent_orchestrator: RwLock::new(None),
         })
     }
 
     pub async fn set_router(&self, router: Arc<RwLock<CognitiveRouter>>) {
         let mut r = self.router.write().await;
         *r = Some(router);
+    }
+
+    /// CORE-261: Registra el AgentOrchestrator para uso en el bucle ReAct.
+    pub async fn set_orchestrator(
+        &self,
+        orchestrator: Arc<crate::agents::orchestrator::AgentOrchestrator>,
+    ) {
+        let mut a = self.agent_orchestrator.write().await;
+        *a = Some(orchestrator);
     }
 
     pub async fn register_driver(&self, id: &str, driver: Box<dyn InferenceDriver + Send + Sync>) {
@@ -289,7 +311,7 @@ impl CognitiveHAL {
     }
 
     pub async fn route_and_execute(
-        &self,
+        self: Arc<Self>,
         shared_pcb: SharedPCB,
         persona: Option<String>,
     ) -> GenerateStreamResult {
@@ -303,7 +325,7 @@ impl CognitiveHAL {
             )
         };
 
-        // Try CognitiveRouter first if available
+        // Try CognitiveRouter first if available — bucle ReAct (CORE-261)
         let router_opt = self.router.read().await.clone();
         if let Some(router_rw) = router_opt {
             let router = router_rw.read().await;
@@ -313,9 +335,35 @@ impl CognitiveHAL {
             };
             match router.decide(&pcb_snapshot).await {
                 Ok(decision) => {
-                    return self
-                        .execute_with_decision(decision, &pcb_snapshot, &pid, persona.as_deref())
-                        .await;
+                    let (text_tx, text_rx) =
+                        tokio::sync::mpsc::unbounded_channel::<Result<String, ExecutionError>>();
+                    let hal_arc = Arc::clone(&self);
+                    let pid_str = pid.clone();
+                    let persona_str = persona.clone();
+                    let pcb_clone = pcb_snapshot.clone();
+                    let err_tx = text_tx.clone();
+
+                    tokio::spawn(async move {
+                        if let Err(e) = hal_arc
+                            .execute_with_decision(
+                                decision,
+                                &pcb_clone,
+                                &pid_str,
+                                persona_str.as_deref(),
+                                text_tx,
+                            )
+                            .await
+                        {
+                            tracing::error!(pid = %pid_str, "ReAct loop error: {}", e);
+                            let _ =
+                                err_tx.send(Err(ExecutionError::Interrupted(e.to_string())));
+                        }
+                    });
+
+                    let stream = futures_util::stream::unfold(text_rx, |mut rx| async move {
+                        rx.recv().await.map(|item| (item, rx))
+                    });
+                    return Ok(Box::pin(SyncStream(stream)));
                 }
                 Err(e) => {
                     warn!(
@@ -386,20 +434,23 @@ impl CognitiveHAL {
         driver.generate_stream(messages, None, None).await
     }
 
+    /// CORE-261: Bucle ReAct — tool call → resultado → LLM, hasta MAX_ITERATIONS.
+    /// Envía tokens de texto al caller via `text_tx`; nunca reenvía `__TOOL_CALL__` tokens.
     async fn execute_with_decision(
         &self,
         decision: RoutingDecision,
         pcb: &PCB,
         pid: &str,
         persona: Option<&str>,
-    ) -> GenerateStreamResult {
+        text_tx: tokio::sync::mpsc::UnboundedSender<Result<String, ExecutionError>>,
+    ) -> Result<(), SystemError> {
         use crate::chal::drivers::CloudProxyDriver;
 
         tracing::info!(
             pid = %pid,
             model = %decision.model_id,
             provider = %decision.provider,
-            "CognitiveRouter: routing to model"
+            "CognitiveRouter: routing to model (ReAct loop)"
         );
 
         let driver = CloudProxyDriver::new(
@@ -409,68 +460,203 @@ impl CognitiveHAL {
             decision.model_id.clone(),
         );
 
-        let messages = self.build_messages(pcb, persona).await;
-
-        // CORE-240: Obtener tools del ToolRegistry si el PCB es un agente del árbol
-        let tools = if pcb.agent_id.is_some() {
-            // Determinar el rol del agente — por defecto ChatAgent
-            let role = AgentRole::ChatAgent;
-            let provider = ProviderKind::from_string(&decision.provider);
-            let tool_defs = ToolRegistry::tools_for(&role, &provider);
-            if tool_defs.is_empty() {
-                None
-            } else {
-                Some(tool_defs)
-            }
-        } else {
-            // El ChatAgent principal (sin agent_id) también recibe tools
-            let provider = ProviderKind::from_string(&decision.provider);
-            let tool_defs = ToolRegistry::tools_for(&AgentRole::ChatAgent, &provider);
-            if tool_defs.is_empty() {
-                None
-            } else {
-                Some(tool_defs)
-            }
+        let provider = ProviderKind::from_string(&decision.provider);
+        let tools = {
+            let defs = ToolRegistry::tools_for(&AgentRole::ChatAgent, &provider);
+            if defs.is_empty() { None } else { Some(defs) }
         };
 
-        match driver
-            .generate_stream(messages.clone(), None, tools.clone())
-            .await
-        {
-            Ok(stream) => Ok(stream),
-            Err(e) => {
-                for fallback in &decision.fallback_chain {
-                    warn!(
-                        pid = %pid,
-                        model = %fallback.model_id,
-                        "CognitiveRouter: primary failed, trying fallback"
-                    );
-                    let fallback_driver = CloudProxyDriver::new(
-                        Arc::clone(&self.http_client),
-                        fallback.api_url.clone(),
-                        fallback.api_key.clone(),
-                        fallback.model_id.clone(),
-                    );
-                    // Re-compute tools for fallback provider
-                    let fallback_tools = {
-                        let provider = ProviderKind::from_string(&fallback.provider);
-                        let role = AgentRole::ChatAgent;
-                        let defs = ToolRegistry::tools_for(&role, &provider);
-                        if defs.is_empty() {
-                            None
-                        } else {
-                            Some(defs)
+        let mut messages = self.build_messages(pcb, persona).await;
+
+        const MAX_ITERATIONS: usize = 10;
+        let mut finished = false;
+
+        for _iteration in 0..MAX_ITERATIONS {
+            let raw_stream = driver
+                .generate_stream(messages.clone(), None, tools.clone())
+                .await
+                .map_err(|e| {
+                    // Intentar fallback en la primera llamada
+                    e
+                })?;
+
+            tokio::pin!(raw_stream);
+
+            let mut assistant_text = String::new();
+            let mut tool_calls: Vec<ToolCallRecord> = Vec::new();
+
+            while let Some(token_result) = raw_stream.next().await {
+                match token_result {
+                    Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                        let json_str =
+                            token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
+                        if let Ok(tc) =
+                            serde_json::from_str::<DriverToolCallPayload>(json_str)
+                        {
+                            tool_calls.push(ToolCallRecord {
+                                id: tc.id,
+                                type_: "function".to_string(),
+                                function: FunctionCallRecord {
+                                    name: tc.name,
+                                    arguments: tc.arguments.to_string(),
+                                },
+                            });
                         }
-                    };
-                    if let Ok(stream) = fallback_driver
-                        .generate_stream(messages.clone(), None, fallback_tools)
-                        .await
-                    {
-                        return Ok(stream);
+                    }
+                    Ok(text) => {
+                        assistant_text.push_str(&text);
+                        let _ = text_tx.send(Ok(text));
+                    }
+                    Err(e) => {
+                        let _ = text_tx.send(Err(e));
                     }
                 }
-                Err(e)
             }
+
+            if tool_calls.is_empty() {
+                finished = true;
+                break;
+            }
+
+            // Inyectar respuesta del asistente con tool calls al historial
+            messages.push(ChatMessage {
+                role: ChatRole::Assistant,
+                content: if assistant_text.is_empty() {
+                    None
+                } else {
+                    Some(assistant_text.clone())
+                },
+                tool_calls: Some(tool_calls.clone()),
+                ..Default::default()
+            });
+
+            // Ejecutar cada tool call e inyectar resultado
+            for tc in &tool_calls {
+                let result = self.execute_tool_call_internal(tc, pid, pcb).await;
+                tracing::info!(
+                    pid = %pid,
+                    tool = %tc.function.name,
+                    "ReAct: tool ejecutado, inyectando resultado al historial"
+                );
+                messages.push(ChatMessage {
+                    role: ChatRole::Tool,
+                    content: Some(result),
+                    tool_call_id: Some(tc.id.clone()),
+                    name: Some(tc.function.name.clone()),
+                    ..Default::default()
+                });
+            }
+        }
+
+        if !finished {
+            let _ = text_tx.send(Ok(
+                "Lo siento, alcancé el límite máximo de pasos internos al procesar tu solicitud. Por favor, reformulá tu pedido."
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// CORE-261: Ejecuta un tool call interno y retorna el resultado como String.
+    async fn execute_tool_call_internal(
+        &self,
+        tc: &ToolCallRecord,
+        _pid: &str,
+        pcb: &PCB,
+    ) -> String {
+        let args: serde_json::Value =
+            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+
+        match tc.function.name.as_str() {
+            "spawn_agent" => {
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                match orchestrator_opt {
+                    None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
+                    Some(orchestrator) => {
+                        if pcb.agent_id.is_some() {
+                            return "{\"error\":\"spawn_agent solo aplica al Chat Agent (sin agent_id)\"}".to_string();
+                        }
+                        let name = args["name"].as_str().map(String::from);
+                        let scope = args["scope"].as_str().unwrap_or("").to_string();
+                        let project_name = name
+                            .clone()
+                            .unwrap_or_else(|| scope.chars().take(40).collect());
+                        let task_type_str = args["task_type"].as_str().unwrap_or("planning");
+                        let task_type =
+                            Some(crate::syscalls::parse_task_type(task_type_str));
+
+                        match orchestrator
+                            .create_project(
+                                project_name.clone(),
+                                scope,
+                                task_type,
+                                pcb.tenant_id.clone(),
+                            )
+                            .await
+                        {
+                            Ok(_) => format!(
+                                "{{\"status\":\"spawned\",\"project\":\"{}\"}}",
+                                project_name
+                            ),
+                            Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                        }
+                    }
+                }
+            }
+
+            "query_agent" => {
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                match orchestrator_opt {
+                    None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
+                    Some(orchestrator) => {
+                        let caller_id = match pcb.agent_id {
+                            Some(id) => id,
+                            None => {
+                                return "{\"error\":\"query_agent requiere agent_id en PCB\"}"
+                                    .to_string()
+                            }
+                        };
+                        let project =
+                            args["project"].as_str().unwrap_or("").to_string();
+                        let question =
+                            args["question"].as_str().unwrap_or("").to_string();
+                        let call = crate::agents::message::AgentToolCall::Query {
+                            project,
+                            question,
+                        };
+                        match orchestrator.handle_tool_call(caller_id, call).await {
+                            Ok(result) => result,
+                            Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                        }
+                    }
+                }
+            }
+
+            "call_plugin" => {
+                let plugin_name =
+                    args["plugin_name"].as_str().unwrap_or("").to_string();
+                let plugin_args = args["args"]
+                    .as_object()
+                    .map(|o| serde_json::Value::Object(o.clone()).to_string())
+                    .unwrap_or_else(|| "{}".to_string());
+                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                let pm = self.plugin_manager.read().await;
+                match pm
+                    .execute_plugin(
+                        tenant_id,
+                        &plugin_name,
+                        &plugin_args,
+                        pcb.session_key.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                }
+            }
+
+            other => format!("{{\"error\":\"Unknown tool: {}\"}}", other),
         }
     }
 
@@ -721,7 +907,7 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_smart_routing_high_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let hal = CognitiveHAL::new(pm)?;
+        let hal = Arc::new(CognitiveHAL::new(pm)?);
         hal.register_driver(
             "local-driver",
             Box::new(DummyDriver {
@@ -753,7 +939,7 @@ mod tests {
     #[tokio::test]
     async fn test_hybrid_smart_routing_low_priority() -> anyhow::Result<()> {
         let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let hal = CognitiveHAL::new(pm)?;
+        let hal = Arc::new(CognitiveHAL::new(pm)?);
         hal.register_driver(
             "local-driver",
             Box::new(DummyDriver {
