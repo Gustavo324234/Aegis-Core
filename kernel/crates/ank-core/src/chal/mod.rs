@@ -477,11 +477,7 @@ impl CognitiveHAL {
         for _iteration in 0..MAX_ITERATIONS {
             let raw_stream = driver
                 .generate_stream(messages.clone(), None, tools.clone())
-                .await
-                .map_err(|e| {
-                    // Intentar fallback en la primera llamada
-                    e
-                })?;
+                .await?;
 
             tokio::pin!(raw_stream);
 
