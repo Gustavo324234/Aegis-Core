@@ -66,7 +66,12 @@ impl ToolRegistry {
             // Solo puede hacer spawn_agent (para crear un ProjectSupervisor) y answer_supervisor (CORE-263).
             AgentRole::ChatAgent => vec![Self::spawn_agent(), Self::answer_supervisor()],
             AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
-                vec![Self::spawn_agent(), Self::query_agent(), Self::report(), Self::ask_user()]
+                vec![
+                    Self::spawn_agent(),
+                    Self::query_agent(),
+                    Self::report(),
+                    Self::ask_user(),
+                ]
             }
             AgentRole::Specialist { .. } => vec![Self::report()],
         }

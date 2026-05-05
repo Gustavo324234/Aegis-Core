@@ -741,7 +741,10 @@ impl CognitiveHAL {
             // CORE-263: supervisor pausa su ejecución esperando respuesta del usuario
             "ask_user" => {
                 let question = args["question"].as_str().unwrap_or("").to_string();
-                let _context = args.get("context").and_then(|v| v.as_str()).map(String::from);
+                let _context = args
+                    .get("context")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
 
                 let agent_uuid = match pcb.agent_id {
                     Some(id) => id,
