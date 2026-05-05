@@ -910,17 +910,15 @@ impl AgentOrchestrator {
 
                     let tools = {
                         let t = tree.read().await;
-                        t.get(&agent_id)
-                            .map(|n| {
-                                let provider = ProviderKind::from_string(&decision.provider);
-                                let defs = ToolRegistry::tools_for(&n.role, &provider);
-                                if defs.is_empty() {
-                                    None
-                                } else {
-                                    Some(defs)
-                                }
-                            })
-                            .flatten()
+                        t.get(&agent_id).and_then(|n| {
+                            let provider = ProviderKind::from_string(&decision.provider);
+                            let defs = ToolRegistry::tools_for(&n.role, &provider);
+                            if defs.is_empty() {
+                                None
+                            } else {
+                                Some(defs)
+                            }
+                        })
                     };
 
                     let (text_tx, mut text_rx) = tokio::sync::mpsc::unbounded_channel::<
