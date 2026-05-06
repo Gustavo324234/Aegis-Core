@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.41](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.40...ank-core-v0.1.41) (2026-05-06)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-267 mark_rate_limited al recibir 429 en CloudProxyDriver ([#226](https://github.com/Gustavo324234/Aegis-Core/issues/226)) ([8d2aec4](https://github.com/Gustavo324234/Aegis-Core/commit/8d2aec4f196efbec337bfd3c8e2c72fc9a3d07f8))
+
 ## [0.1.40](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.39...ank-core-v0.1.40) (2026-05-06)
 
 

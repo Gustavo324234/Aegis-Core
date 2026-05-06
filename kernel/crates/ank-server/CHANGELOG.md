@@ -2,6 +2,14 @@
 
 
 
+## [0.1.52](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.51...ank-server-v0.1.52) (2026-05-06)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-267 mark_rate_limited al recibir 429 en CloudProxyDriver ([#226](https://github.com/Gustavo324234/Aegis-Core/issues/226)) ([8d2aec4](https://github.com/Gustavo324234/Aegis-Core/commit/8d2aec4f196efbec337bfd3c8e2c72fc9a3d07f8))
+* **ank-server:** CORE-266 — Windows SCM handshake via --service flag ([#224](https://github.com/Gustavo324234/Aegis-Core/issues/224)) ([8b1e1a4](https://github.com/Gustavo324234/Aegis-Core/commit/8b1e1a4ed33d3398dac19f4ff8d111a1ac9c0d2e))
+
 ## [0.1.51](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.50...ank-server-v0.1.51) (2026-05-06)
 
 
