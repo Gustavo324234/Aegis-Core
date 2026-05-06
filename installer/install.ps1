@@ -22,8 +22,10 @@ $ErrorActionPreference = "Stop"
 
 $GITHUB_ORG   = "Gustavo324234"
 $GITHUB_REPO  = "Aegis-Core"
+$GITHUB_RAW   = "https://raw.githubusercontent.com/$GITHUB_ORG/$GITHUB_REPO/main"
 $RELEASE_URL  = "https://github.com/$GITHUB_ORG/$GITHUB_REPO/releases/download/$ReleaseTag"
 $BIN_NAME     = "ank-server.exe"
+$CLI_NAME     = "aegis.ps1"
 $SERVICE_NAME = "AegisOS"
 
 $SID_ADMINS = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
@@ -201,14 +203,14 @@ RUST_LOG=info
 }
 
 # Lee el aegis.env y escribe las vars en el registro del servicio (REG_MULTI_SZ).
-# Se llama tanto en instalacion fresca como en actualizacion — es idempotente.
-# Esto garantiza que el binario actual (pre-CORE-265) siempre reciba las vars
-# correctas independientemente del historial de instalaciones previas.
+# Se llama en instalacion fresca Y en actualizacion — es idempotente.
+# Garantiza que el binario actual (pre-CORE-265) siempre reciba las vars correctas
+# independientemente del historial de instalaciones previas.
 function Write-EnvToServiceRegistry {
     param([string]$EnvPath)
 
     if (-not (Test-Path $EnvPath)) {
-        Write-Warn "aegis.env no encontrado en $EnvPath — registro del servicio no actualizado."
+        Write-Warn "aegis.env no encontrado — registro del servicio no actualizado."
         return
     }
 
@@ -220,7 +222,7 @@ function Write-EnvToServiceRegistry {
     }
 
     if ($envVars.Count -eq 0) {
-        Write-Warn "aegis.env existe pero no contiene variables validas."
+        Write-Warn "aegis.env no contiene variables validas."
         return
     }
 
@@ -233,7 +235,44 @@ function Write-EnvToServiceRegistry {
     $envArray = [string[]]($envVars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
     Set-ItemProperty -Path $regPath -Name "Environment" -Value $envArray -Type MultiString
 
-    Write-OK "Variables de entorno sincronizadas en el registro del servicio ($($envVars.Count) vars)."
+    Write-OK "Variables de entorno sincronizadas en registro del servicio ($($envVars.Count) vars)."
+}
+
+function Install-AegisCLI {
+    Write-Step "Instalando Aegis CLI (aegis.ps1)..."
+
+    $cliDest = "$InstallDir\$CLI_NAME"
+
+    # Descargar aegis.ps1 desde el repo
+    try {
+        Invoke-WebRequest -Uri "$GITHUB_RAW/installer/$CLI_NAME" -OutFile $cliDest -UseBasicParsing
+    } catch {
+        Write-Warn "No se pudo descargar aegis.ps1: $_"
+        return
+    }
+
+    # Crear wrapper aegis.cmd en InstallDir para que funcione como comando sin extension
+    # Esto permite escribir 'aegis status' en lugar de 'aegis.ps1 status'
+    $wrapperPath = "$InstallDir\aegis.cmd"
+    $wrapperContent = "@echo off`r`npowershell.exe -ExecutionPolicy Bypass -File `"$cliDest`" %*"
+    [System.IO.File]::WriteAllText($wrapperPath, $wrapperContent, [System.Text.Encoding]::ASCII)
+
+    Write-OK "CLI instalado -> $cliDest"
+    Write-OK "Wrapper  -> $wrapperPath"
+    Write-OK "Uso: aegis status / aegis logs / aegis update"
+}
+
+function Add-ToPath {
+    Write-Step "Agregando $InstallDir al PATH del sistema..."
+
+    $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    if ($currentPath -notlike "*$InstallDir*") {
+        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$InstallDir", "Machine")
+        Write-OK "$InstallDir agregado al PATH."
+        Write-Warn "Reinicia la terminal para usar el comando 'aegis'."
+    } else {
+        Write-Step "$InstallDir ya estaba en el PATH."
+    }
 }
 
 function Install-AegisService {
@@ -245,7 +284,6 @@ function Install-AegisService {
         # ── MODO ACTUALIZACION ──────────────────────────────────────────────
         Write-Step "Actualizacion detectada — reiniciando servicio con nuevo binario..."
 
-        # Detener el servicio
         if ($existing.Status -ne 'Stopped') {
             Stop-Service $SERVICE_NAME -Force -ErrorAction SilentlyContinue
             $waited = 0
@@ -255,9 +293,8 @@ function Install-AegisService {
             }
         }
 
-        # Siempre reescribir las env vars en el registro desde el aegis.env.
-        # Garantiza consistencia independientemente del estado previo del registro
-        # (cubre instalaciones parciales, reinstalaciones, corrupcion de registro).
+        # Siempre reescribir env vars en el registro desde aegis.env.
+        # Cubre instalaciones parciales, reinstalaciones y corrupcion de registro.
         Write-EnvToServiceRegistry -EnvPath "$DataDir\aegis.env"
 
         try {
@@ -265,7 +302,7 @@ function Install-AegisService {
             Write-OK "Servicio '$SERVICE_NAME' reiniciado con nuevo binario."
         } catch {
             Write-Warn "El servicio no pudo reiniciarse: $_"
-            Write-Host "    Intentalo manualmente: Start-Service $SERVICE_NAME" -ForegroundColor Cyan
+            Write-Host "    Ejecuta: aegis start" -ForegroundColor Cyan
         }
 
     } else {
@@ -291,25 +328,8 @@ function Install-AegisService {
             Write-OK "Servicio '$SERVICE_NAME' iniciado."
         } catch {
             Write-Warn "El servicio no pudo iniciarse: $_"
-            Write-Host ""
-            Write-Host "  Diagnostico:" -ForegroundColor Yellow
-            Write-Host "    Ejecuta el binario directamente para ver el error exacto:" -ForegroundColor DarkGray
-            Write-Host "       & `"$InstallDir\$BIN_NAME`"" -ForegroundColor Cyan
-            Write-Host "    Una vez resuelto: Start-Service $SERVICE_NAME" -ForegroundColor Cyan
-            Write-Host ""
+            Write-Host "    Ejecuta: aegis diag" -ForegroundColor Cyan
         }
-    }
-}
-
-function Add-ToPath {
-    Write-Step "Agregando $InstallDir al PATH..."
-
-    $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    if ($currentPath -notlike "*$InstallDir*") {
-        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$InstallDir", "Machine")
-        Write-OK "$InstallDir agregado al PATH."
-    } else {
-        Write-Step "$InstallDir ya estaba en el PATH."
     }
 }
 
@@ -341,23 +361,17 @@ function Wait-AndShow {
         Write-Host "    http://localhost:8000" -ForegroundColor Cyan
         if ($ip) { Write-Host "    http://${ip}:8000  (red local)" -ForegroundColor Cyan }
     } else {
-        Write-Warn "Aegis no respondio en 30s."
-        Write-Host ""
-        Write-Host "  Para diagnosticar:" -ForegroundColor Yellow
-        Write-Host "    1. Ejecuta el binario directamente:" -ForegroundColor DarkGray
-        Write-Host "       & `"$InstallDir\$BIN_NAME`"" -ForegroundColor Cyan
-        Write-Host "    2. Revisa el Event Viewer:" -ForegroundColor DarkGray
-        Write-Host "       Get-EventLog -LogName System -Source 'Service Control Manager' -Newest 5 | Format-List" -ForegroundColor Cyan
-        Write-Host "    3. Inicialo manualmente: Start-Service $SERVICE_NAME" -ForegroundColor Cyan
+        Write-Host "  [!] Aegis no respondio en 30s." -ForegroundColor Yellow
+        Write-Host "      Ejecuta 'aegis diag' para diagnosticar." -ForegroundColor DarkGray
     }
 
     Write-Host ""
-    Write-Host "  Gestionar el servicio:" -ForegroundColor White
-    Write-Host "    Start-Service AegisOS  /  Stop-Service AegisOS  /  Restart-Service AegisOS" -ForegroundColor DarkGray
+    Write-Host "  CLI disponible (nueva terminal):" -ForegroundColor White
+    Write-Host "    aegis status    aegis logs    aegis diag    aegis update" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  Datos:         $DataDir" -ForegroundColor DarkGray
-    Write-Host "  Binario:       $InstallDir\$BIN_NAME" -ForegroundColor DarkGray
-    Write-Host "  Config:        $DataDir\aegis.env" -ForegroundColor DarkGray
+    Write-Host "  Datos:    $DataDir" -ForegroundColor DarkGray
+    Write-Host "  Binario:  $InstallDir\$BIN_NAME" -ForegroundColor DarkGray
+    Write-Host "  Config:   $DataDir\aegis.env" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  ################################################################" -ForegroundColor Green
     Write-Host ""
@@ -371,12 +385,13 @@ Get-AegisBinaries
 Get-AegisUI
 Get-AgentsConfig
 New-AegisEnvFile
+Install-AegisCLI
 
 if (-not $NoService) {
     Install-AegisService
 } else {
     Write-Warn "Modo --NoService: servicio no registrado."
-    Write-Host "  Iniciar manualmente: & '$InstallDir\$BIN_NAME'" -ForegroundColor Cyan
+    Write-Host "  Iniciar manualmente: aegis start" -ForegroundColor Cyan
 }
 
 Add-ToPath
