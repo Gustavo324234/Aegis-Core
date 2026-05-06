@@ -101,6 +101,9 @@ arrow-buffer       = "58"
 # OpenSSL: siempre vendorizado para builds cross-platform sin dependencia del sistema
 openssl            = { version = "0.10", features = ["vendored"] }
 
+# Windows service integration (used conditionally by ank-server on Windows)
+windows-service    = "0.7"
+
 [profile.release]
 opt-level     = 3
 lto            = "thin"
