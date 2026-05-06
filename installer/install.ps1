@@ -7,6 +7,14 @@
 # O localmente:
 #   powershell -ExecutionPolicy Bypass -File install.ps1
 # ==============================================================================
+#
+# Nota de arquitectura:
+#   ank-server lee C:/ProgramData/Aegis/aegis.env directamente al arrancar
+#   via dotenvy (CORE-265). El installer solo necesita garantizar que ese
+#   archivo exista con paths en forward slashes. No se requiere inyeccion
+#   de vars via registro de Windows ni Machine-level env vars.
+#
+# ==============================================================================
 
 #Requires -RunAsAdministrator
 
@@ -68,6 +76,13 @@ function Set-AegisAcl {
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($SID_ADMINS, $rights, $inherit, $propagation, $type)))
     $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($SID_SYSTEM, $rights, $inherit, $propagation, $type)))
     Set-Acl $Path $acl
+}
+
+# Convierte backslashes a forward slashes para que dotenvy pueda parsear los paths.
+# dotenvy interpreta \P, \A, \u, etc. como escape sequences y falla.
+function ConvertTo-ForwardSlashes {
+    param([string]$Path)
+    return $Path.Replace("\", "/")
 }
 
 function Test-Prerequisites {
@@ -179,6 +194,15 @@ function New-AegisEnvFile {
 
     if (Test-Path $envPath) {
         Write-Warn "Archivo de entorno existente preservado: $envPath"
+
+        # Migrar backslashes a forward slashes en archivos generados por versiones
+        # anteriores del installer. dotenvy falla al parsear \P, \A, etc.
+        $content = Get-Content $envPath -Raw
+        $fixed   = $content -replace '(?<==[^\r\n]*)\\(?=[^\r\n])', '/'
+        if ($fixed -ne $content) {
+            Set-Content -Path $envPath -Value $fixed -Encoding UTF8 -NoNewline
+            Write-OK "Paths en aegis.env migrados a forward slashes."
+        }
         return
     }
 
@@ -186,11 +210,14 @@ function New-AegisEnvFile {
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $rootKey = [BitConverter]::ToString($bytes).Replace("-", "").ToLower()
 
+    $dataDirFwd    = ConvertTo-ForwardSlashes $DataDir
+    $installDirFwd = ConvertTo-ForwardSlashes $InstallDir
+
     $envContent = @"
 AEGIS_ROOT_KEY=$rootKey
-AEGIS_DATA_DIR=$DataDir
-AEGIS_AGENTS_CONFIG_DIR=$DataDir\agents
-UI_DIST_PATH=$InstallDir\ui
+AEGIS_DATA_DIR=$dataDirFwd
+AEGIS_AGENTS_CONFIG_DIR=$dataDirFwd/agents
+UI_DIST_PATH=$installDirFwd/ui
 AEGIS_MODEL_PROFILE=cloud
 DEFAULT_MODEL_PREF=CloudOnly
 RUST_LOG=info
@@ -202,40 +229,32 @@ RUST_LOG=info
     Write-OK "Entorno generado: $envPath"
 }
 
-# Lee el aegis.env y escribe las vars en el registro del servicio (REG_MULTI_SZ).
-# Se llama en instalacion fresca Y en actualizacion — es idempotente.
-# Garantiza que el binario actual (pre-CORE-265) siempre reciba las vars correctas
-# independientemente del historial de instalaciones previas.
-function Write-EnvToServiceRegistry {
-    param([string]$EnvPath)
+# Detecta si la DB esta corrupta o desincronizada con la key actual.
+# Si es asi, la renombra con timestamp para que el binario cree una nueva limpia.
+function Repair-DatabaseIfCorrupted {
+    Write-Step "Verificando integridad de la base de datos..."
 
-    if (-not (Test-Path $EnvPath)) {
-        Write-Warn "aegis.env no encontrado — registro del servicio no actualizado."
+    $dbPath = "$DataDir\aegis.db"
+    if (-not (Test-Path $dbPath)) {
+        Write-Step "No hay base de datos existente — instalacion limpia."
         return
     }
 
-    $envVars = @{}
-    Get-Content $EnvPath | ForEach-Object {
-        if ($_ -match "^([^#=\s][^=]*)=(.*)$") {
-            $envVars[$matches[1].Trim()] = $matches[2].Trim()
-        }
+    $startOutput = & "$InstallDir\$BIN_NAME" 2>&1 | Select-Object -First 10
+    $dbCorrupted = $startOutput | Where-Object {
+        $_ -match "SQLCipher|hmac check failed|not a database|authentication failed"
     }
 
-    if ($envVars.Count -eq 0) {
-        Write-Warn "aegis.env no contiene variables validas."
-        return
+    if ($dbCorrupted) {
+        $timestamp  = Get-Date -Format "yyyyMMdd_HHmmss"
+        $backupPath = "$DataDir\aegis.db.bak_$timestamp"
+        Rename-Item $dbPath $backupPath
+        Write-Warn "Base de datos incompatible con la key actual."
+        Write-Warn "Renombrada a: aegis.db.bak_$timestamp (datos preservados)"
+        Write-Warn "El sistema iniciara con una base de datos nueva limpia."
+    } else {
+        Write-OK "Base de datos OK."
     }
-
-    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$SERVICE_NAME"
-    if (-not (Test-Path $regPath)) {
-        Write-Warn "Registro del servicio no encontrado — omitiendo escritura de env vars."
-        return
-    }
-
-    $envArray = [string[]]($envVars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
-    Set-ItemProperty -Path $regPath -Name "Environment" -Value $envArray -Type MultiString
-
-    Write-OK "Variables de entorno sincronizadas en registro del servicio ($($envVars.Count) vars)."
 }
 
 function Install-AegisCLI {
@@ -243,7 +262,6 @@ function Install-AegisCLI {
 
     $cliDest = "$InstallDir\$CLI_NAME"
 
-    # Descargar aegis.ps1 desde el repo
     try {
         Invoke-WebRequest -Uri "$GITHUB_RAW/installer/$CLI_NAME" -OutFile $cliDest -UseBasicParsing
     } catch {
@@ -251,28 +269,14 @@ function Install-AegisCLI {
         return
     }
 
-    # Crear wrapper aegis.cmd en InstallDir para que funcione como comando sin extension
-    # Esto permite escribir 'aegis status' en lugar de 'aegis.ps1 status'
-    $wrapperPath = "$InstallDir\aegis.cmd"
+    # Wrapper .cmd para que 'aegis' funcione sin extension en cualquier terminal
+    $wrapperPath    = "$InstallDir\aegis.cmd"
     $wrapperContent = "@echo off`r`npowershell.exe -ExecutionPolicy Bypass -File `"$cliDest`" %*"
     [System.IO.File]::WriteAllText($wrapperPath, $wrapperContent, [System.Text.Encoding]::ASCII)
 
     Write-OK "CLI instalado -> $cliDest"
     Write-OK "Wrapper  -> $wrapperPath"
-    Write-OK "Uso: aegis status / aegis logs / aegis update"
-}
-
-function Add-ToPath {
-    Write-Step "Agregando $InstallDir al PATH del sistema..."
-
-    $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    if ($currentPath -notlike "*$InstallDir*") {
-        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$InstallDir", "Machine")
-        Write-OK "$InstallDir agregado al PATH."
-        Write-Warn "Reinicia la terminal para usar el comando 'aegis'."
-    } else {
-        Write-Step "$InstallDir ya estaba en el PATH."
-    }
+    Write-OK "Uso: aegis status / aegis logs / aegis diag / aegis update"
 }
 
 function Install-AegisService {
@@ -282,6 +286,8 @@ function Install-AegisService {
 
     if ($existing) {
         # ── MODO ACTUALIZACION ──────────────────────────────────────────────
+        # ank-server lee aegis.env directamente (CORE-265).
+        # Solo detener, el binario ya fue reemplazado, reiniciar.
         Write-Step "Actualizacion detectada — reiniciando servicio con nuevo binario..."
 
         if ($existing.Status -ne 'Stopped') {
@@ -292,10 +298,6 @@ function Install-AegisService {
                 $waited++
             }
         }
-
-        # Siempre reescribir env vars en el registro desde aegis.env.
-        # Cubre instalaciones parciales, reinstalaciones y corrupcion de registro.
-        Write-EnvToServiceRegistry -EnvPath "$DataDir\aegis.env"
 
         try {
             Start-Service $SERVICE_NAME -ErrorAction Stop
@@ -314,12 +316,10 @@ function Install-AegisService {
         New-Service `
             -Name        $SERVICE_NAME `
             -DisplayName "Aegis OS — Cognitive Operating System" `
-            -Description "Aegis OS kernel (ank-server)." `
+            -Description "Aegis OS kernel (ank-server). Config: $DataDir\aegis.env" `
             -BinaryPathName $binPath `
             -StartupType Automatic `
             -ErrorAction Stop | Out-Null
-
-        Write-EnvToServiceRegistry -EnvPath "$DataDir\aegis.env"
 
         sc.exe failure $SERVICE_NAME reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
 
@@ -330,6 +330,19 @@ function Install-AegisService {
             Write-Warn "El servicio no pudo iniciarse: $_"
             Write-Host "    Ejecuta: aegis diag" -ForegroundColor Cyan
         }
+    }
+}
+
+function Add-ToPath {
+    Write-Step "Agregando $InstallDir al PATH del sistema..."
+
+    $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    if ($currentPath -notlike "*$InstallDir*") {
+        [Environment]::SetEnvironmentVariable("Path", "$currentPath;$InstallDir", "Machine")
+        Write-OK "$InstallDir agregado al PATH."
+        Write-Warn "Abre una terminal nueva para usar el comando 'aegis'."
+    } else {
+        Write-Step "$InstallDir ya estaba en el PATH."
     }
 }
 
@@ -362,11 +375,11 @@ function Wait-AndShow {
         if ($ip) { Write-Host "    http://${ip}:8000  (red local)" -ForegroundColor Cyan }
     } else {
         Write-Host "  [!] Aegis no respondio en 30s." -ForegroundColor Yellow
-        Write-Host "      Ejecuta 'aegis diag' para diagnosticar." -ForegroundColor DarkGray
+        Write-Host "      Abre una terminal nueva y ejecuta: aegis diag" -ForegroundColor DarkGray
     }
 
     Write-Host ""
-    Write-Host "  CLI disponible (nueva terminal):" -ForegroundColor White
+    Write-Host "  CLI (abre terminal nueva):" -ForegroundColor White
     Write-Host "    aegis status    aegis logs    aegis diag    aegis update" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  Datos:    $DataDir" -ForegroundColor DarkGray
@@ -385,6 +398,7 @@ Get-AegisBinaries
 Get-AegisUI
 Get-AgentsConfig
 New-AegisEnvFile
+Repair-DatabaseIfCorrupted
 Install-AegisCLI
 
 if (-not $NoService) {
