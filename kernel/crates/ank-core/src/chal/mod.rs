@@ -682,10 +682,31 @@ impl CognitiveHAL {
                             )
                             .await
                         {
-                            Ok(_) => format!(
-                                "{{\"status\":\"spawned\",\"project\":\"{}\"}}",
-                                project_name
-                            ),
+                            Ok(agent_id) => {
+                                let task = pcb.memory_pointers.l1_instruction.clone();
+                                if !task.is_empty() {
+                                    if let Err(e) =
+                                        orchestrator.dispatch(agent_id, task, vec![]).await
+                                    {
+                                        tracing::warn!(
+                                            agent = %agent_id,
+                                            "CORE-264: dispatch post-spawn falló: {}",
+                                            e
+                                        );
+                                    } else {
+                                        tracing::info!(
+                                            agent = %agent_id,
+                                            project = %project_name,
+                                            "CORE-264: Dispatch automático enviado al supervisor recién creado."
+                                        );
+                                    }
+                                }
+                                format!(
+                                    "{{\"status\":\"spawned\",\"project\":\"{}\",\"agent_id\":\"{}\"}}",
+                                    project_name,
+                                    agent_id
+                                )
+                            }
                             Err(e) => format!("{{\"error\":\"{}\"}}", e),
                         }
                     }
