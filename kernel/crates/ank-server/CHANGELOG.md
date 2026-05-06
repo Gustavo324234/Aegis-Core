@@ -1,5 +1,7 @@
 # Changelog
 
+
+
 ## [0.1.49](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.48...ank-server-v0.1.49) (2026-05-05)
 
 

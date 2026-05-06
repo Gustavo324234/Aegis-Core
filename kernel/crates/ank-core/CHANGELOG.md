@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.39](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.38...ank-core-v0.1.39) (2026-05-06)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-264 dispatch automático al supervisor tras spawn_agent ([#216](https://github.com/Gustavo324234/Aegis-Core/issues/216)) ([8ea2311](https://github.com/Gustavo324234/Aegis-Core/commit/8ea23113783a68cf322ab3291cd641bdbaa1ab0a))
+
 ## [0.1.38](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.37...ank-core-v0.1.38) (2026-05-05)
 
 
