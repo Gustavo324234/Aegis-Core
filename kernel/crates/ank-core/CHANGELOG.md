@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.40](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.39...ank-core-v0.1.40) (2026-05-06)
+
+
+### Bug Fixes
+
+* **ank-server:** CORE-265 — load aegis.env on startup for Windows service compatibility ([#218](https://github.com/Gustavo324234/Aegis-Core/issues/218)) ([796a664](https://github.com/Gustavo324234/Aegis-Core/commit/796a6640028ef4744ecc5539fcfb3528ac564bae))
+
 ## [0.1.39](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.38...ank-core-v0.1.39) (2026-05-06)
 
 
