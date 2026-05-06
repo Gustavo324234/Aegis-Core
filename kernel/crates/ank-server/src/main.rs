@@ -24,6 +24,36 @@ use tracing::{error, info, warn};
 mod server;
 use server::{auth_interceptor, AnkRpcServer};
 
+fn load_env_file() {
+    let mut candidates: Vec<std::path::PathBuf> = vec![];
+
+    // 1. Override explícito via variable de entorno
+    if let Ok(explicit) = std::env::var("AEGIS_ENV_FILE") {
+        candidates.push(std::path::PathBuf::from(explicit));
+    }
+
+    // 2. Path por defecto según plataforma
+    #[cfg(windows)]
+    candidates.push(std::path::PathBuf::from(r"C:\ProgramData\Aegis\aegis.env"));
+
+    #[cfg(not(windows))]
+    candidates.push(std::path::PathBuf::from("/etc/aegis/aegis.env"));
+
+    // 3. .env en el directorio de trabajo actual (dev convenience)
+    candidates.push(std::path::PathBuf::from(".env"));
+
+    for path in &candidates {
+        if path.exists() {
+            match dotenvy::from_path_override(path) {
+                Ok(_) => return, // tracing no está inicializado aún, no logueamos
+                Err(e) => eprintln!("[WARN] Failed to load env file {:?}: {}", path, e),
+            }
+        }
+    }
+    // Si no se encontró ningún env file, continuar normalmente.
+    // Linux/Docker: las vars vienen del entorno del proceso vía systemd EnvironmentFile=
+}
+
 fn resolve_data_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("AEGIS_DATA_DIR") {
         return std::path::PathBuf::from(dir);
@@ -46,6 +76,11 @@ async fn main() -> Result<()> {
         println!("Aegis Core v{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+
+    // 0b. Cargar archivo de entorno antes de leer cualquier variable
+    // Permite que ank-server funcione como servicio de Windows sin inyección
+    // de env vars via SCM. En Linux/Docker no tiene efecto si el archivo no existe.
+    load_env_file();
 
     // 1. Inicializar tracing
     let data_dir = resolve_data_dir();

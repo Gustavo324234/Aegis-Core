@@ -26,9 +26,6 @@ $RELEASE_URL  = "https://github.com/$GITHUB_ORG/$GITHUB_REPO/releases/download/$
 $BIN_NAME     = "ank-server.exe"
 $SERVICE_NAME = "AegisOS"
 
-# SIDs universales — funcionan en Windows en cualquier idioma
-# S-1-5-32-544 = Administrators (Administradores)
-# S-1-5-18     = SYSTEM (Sistema)
 $SID_ADMINS = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
 $SID_SYSTEM = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")
 
@@ -203,43 +200,88 @@ RUST_LOG=info
     Write-OK "Entorno generado: $envPath"
 }
 
-function Install-AegisService {
-    Write-Step "Registrando servicio de Windows..."
+# Escribe las vars del env file en el registro del servicio (REG_MULTI_SZ).
+# Solo se llama en instalacion fresca — en actualizacion el registro se preserva intacto.
+function Write-EnvToServiceRegistry {
+    param([string]$EnvPath)
 
     $envVars = @{}
-    Get-Content "$DataDir\aegis.env" | ForEach-Object {
-        if ($_ -match "^([^#=]+)=(.*)$") {
+    Get-Content $EnvPath | ForEach-Object {
+        if ($_ -match "^([^#=\s][^=]*)=(.*)$") {
             $envVars[$matches[1].Trim()] = $matches[2].Trim()
         }
     }
 
-    $existing = Get-Service -Name $SERVICE_NAME -ErrorAction SilentlyContinue
-    if ($existing) {
-        Write-Warn "Servicio existente encontrado — eliminando..."
-        Stop-Service $SERVICE_NAME -Force -ErrorAction SilentlyContinue
-        sc.exe delete $SERVICE_NAME | Out-Null
-        Start-Sleep -Seconds 2
-    }
-
-    $binPath = "`"$InstallDir\$BIN_NAME`""
-
-    New-Service `
-        -Name $SERVICE_NAME `
-        -DisplayName "Aegis OS — Cognitive Operating System" `
-        -Description "Aegis OS kernel (ank-server)." `
-        -BinaryPathName $binPath `
-        -StartupType Automatic `
-        -ErrorAction Stop | Out-Null
-
-    # Variables de entorno del servicio — deben escribirse como REG_MULTI_SZ (String[])
     $regPath  = "HKLM:\SYSTEM\CurrentControlSet\Services\$SERVICE_NAME"
     $envArray = [string[]]($envVars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
     Set-ItemProperty -Path $regPath -Name "Environment" -Value $envArray -Type MultiString
 
-    sc.exe failure $SERVICE_NAME reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+    Write-OK "Variables de entorno escritas en el registro del servicio ($($envVars.Count) vars)."
+}
 
-    Start-Service $SERVICE_NAME
-    Write-OK "Servicio '$SERVICE_NAME' iniciado."
+function Install-AegisService {
+    Write-Step "Configurando servicio de Windows..."
+
+    $existing = Get-Service -Name $SERVICE_NAME -ErrorAction SilentlyContinue
+
+    if ($existing) {
+        # ── MODO ACTUALIZACION ──────────────────────────────────────────────
+        # El servicio ya existe con su registro de env vars intacto.
+        # Solo detener, dejar que Get-AegisBinaries ya reemplazó el .exe, reiniciar.
+        # NO se toca el registro del servicio — preserva las vars de la instalacion original.
+        Write-Step "Actualizacion detectada — reiniciando servicio con nuevo binario..."
+
+        if ($existing.Status -ne 'Stopped') {
+            Stop-Service $SERVICE_NAME -Force -ErrorAction SilentlyContinue
+            $waited = 0
+            while ((Get-Service $SERVICE_NAME -ErrorAction SilentlyContinue).Status -ne 'Stopped' -and $waited -lt 15) {
+                Start-Sleep -Seconds 1
+                $waited++
+            }
+        }
+
+        try {
+            Start-Service $SERVICE_NAME -ErrorAction Stop
+            Write-OK "Servicio '$SERVICE_NAME' reiniciado con nuevo binario."
+        } catch {
+            Write-Warn "El servicio no pudo reiniciarse: $_"
+            Write-Host "    Intentalo manualmente: Start-Service $SERVICE_NAME" -ForegroundColor Cyan
+        }
+
+    } else {
+        # ── MODO INSTALACION FRESCA ─────────────────────────────────────────
+        # El servicio no existe — registrarlo desde cero con todas las env vars.
+        Write-Step "Instalacion fresca — registrando servicio..."
+
+        $binPath = "`"$InstallDir\$BIN_NAME`""
+
+        New-Service `
+            -Name        $SERVICE_NAME `
+            -DisplayName "Aegis OS — Cognitive Operating System" `
+            -Description "Aegis OS kernel (ank-server)." `
+            -BinaryPathName $binPath `
+            -StartupType Automatic `
+            -ErrorAction Stop | Out-Null
+
+        # Escribir env vars en el registro del servicio solo en instalacion fresca
+        Write-EnvToServiceRegistry -EnvPath "$DataDir\aegis.env"
+
+        # Politica de reinicio automatico ante fallos
+        sc.exe failure $SERVICE_NAME reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+
+        try {
+            Start-Service $SERVICE_NAME -ErrorAction Stop
+            Write-OK "Servicio '$SERVICE_NAME' iniciado."
+        } catch {
+            Write-Warn "El servicio no pudo iniciarse: $_"
+            Write-Host ""
+            Write-Host "  Diagnostico:" -ForegroundColor Yellow
+            Write-Host "    Ejecuta el binario directamente para ver el error exacto:" -ForegroundColor DarkGray
+            Write-Host "       & `"$InstallDir\$BIN_NAME`"" -ForegroundColor Cyan
+            Write-Host "    Una vez resuelto: Start-Service $SERVICE_NAME" -ForegroundColor Cyan
+            Write-Host ""
+        }
+    }
 }
 
 function Add-ToPath {
@@ -282,8 +324,14 @@ function Wait-AndShow {
         Write-Host "    http://localhost:8000" -ForegroundColor Cyan
         if ($ip) { Write-Host "    http://${ip}:8000  (red local)" -ForegroundColor Cyan }
     } else {
-        Write-Warn "Aegis no respondio en 30s. Revisa el log:"
-        Write-Host "    Get-EventLog -LogName Application -Source AegisOS -Newest 20" -ForegroundColor DarkGray
+        Write-Warn "Aegis no respondio en 30s."
+        Write-Host ""
+        Write-Host "  Para diagnosticar:" -ForegroundColor Yellow
+        Write-Host "    1. Ejecuta el binario directamente:" -ForegroundColor DarkGray
+        Write-Host "       & `"$InstallDir\$BIN_NAME`"" -ForegroundColor Cyan
+        Write-Host "    2. Revisa el Event Viewer:" -ForegroundColor DarkGray
+        Write-Host "       Get-EventLog -LogName System -Source 'Service Control Manager' -Newest 5 | Format-List" -ForegroundColor Cyan
+        Write-Host "    3. Inicialo manualmente: Start-Service $SERVICE_NAME" -ForegroundColor Cyan
     }
 
     Write-Host ""

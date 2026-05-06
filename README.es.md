@@ -3,7 +3,7 @@
 > **Un sistema operativo cognitivo.** Un binario. Sin dependencias de runtime. LLMs como ALUs bajo un motor de ejecución determinístico.
 
 [![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
-[![Build](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/ci.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
+[![Build](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/Gustavo324234)
 
 ---
@@ -34,7 +34,7 @@ Browser / App Mobile
         │
         ├── ank-http    HTTP :8000  — API REST, WebSocket, UI React embebida
         ├── ank-core    Motor cognitivo — scheduler, VCM, agentes, DAG, plugins
-        └── gRPC :50051 — CLI externa, federación multi-nodo
+        └── gRPC :50051 — comunicación interna, federación multi-nodo
 ```
 
 El sistema es multi-tenant: cada tenant tiene un entorno cognitivo aislado con sus propias capas de memoria (L1/L2/L3), árbol de agentes y almacenamiento cifrado (SQLCipher).
@@ -45,7 +45,9 @@ Ver [ARCHITECTURE.md](ARCHITECTURE.md) para detalle completo.
 
 ## Instalación Rápida
 
-**Requisitos:** Linux (Ubuntu 22.04+ / Debian 12+), `sudo`, `curl`
+Aegis distribuye binarios nativos pre-compilados para todas las plataformas principales. No se requiere compilación.
+
+### Linux (Ubuntu 22.04+ / Debian 12+)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh | sudo bash
@@ -71,21 +73,62 @@ Después de la instalación, Aegis arranca automáticamente e imprime tu URL de 
 ################################################################
 ```
 
-Abrí la URL en el navegador para completar el onboarding.
+### macOS (Apple Silicon e Intel)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh | sudo bash
+```
+
+El mismo `install.sh` detecta la plataforma y descarga el binario correcto (`macos-arm64` o `macos-x86_64`).
+
+### Windows (x86_64)
+
+Ejecutá PowerShell **como Administrador**:
+
+```powershell
+irm https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.ps1 | iex
+```
+
+Aegis se instala como un Servicio de Windows (`AegisOS`) y arranca automáticamente. Gestionalo con comandos estándar de PowerShell:
+
+```powershell
+Start-Service AegisOS
+Stop-Service AegisOS
+Restart-Service AegisOS
+Get-Service AegisOS
+```
+
+---
+
+## Plataformas soportadas
+
+Se publican binarios pre-compilados para cada commit a `main` (nightly) y cada release con tag:
+
+| Plataforma | Arquitectura | Binario |
+|---|---|---|
+| Linux | x86_64 | `ank-server-linux-x86_64.tar.gz` |
+| Linux | ARM64 | `ank-server-linux-arm64.tar.gz` |
+| macOS | Apple Silicon (ARM64) | `ank-server-macos-arm64.zip` |
+| macOS | Intel (x86_64) | `ank-server-macos-x86_64.zip` |
+| Windows | x86_64 | `ank-server-windows-x86_64.zip` |
+
+Todos los releases están disponibles en [github.com/Gustavo324234/Aegis-Core/releases](https://github.com/Gustavo324234/Aegis-Core/releases).
 
 ---
 
 ## Aegis CLI
 
-Después de la instalación, el comando `aegis` está disponible en todo el sistema.
+Después de la instalación en **Linux/macOS**, el comando `aegis` está disponible en todo el sistema.
+
+> **Windows:** No se instala CLI separado. Usá PowerShell para gestionar el Servicio de Windows `AegisOS`. Ver [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) para la tabla de equivalencias completa.
 
 ### Estado e información
 
 ```bash
 aegis status          # Salud del servicio y conectividad API
 aegis version         # Versión instalada
-aegis logs            # Seguir logs en vivo (últimas 50 líneas)
-aegis logs 100        # Seguir últimas 100 líneas
+aegis logs            # Seguir logs en vivo (últimas 100 líneas)
+aegis logs 200        # Seguir últimas 200 líneas
 aegis diag            # Reporte diagnóstico SRE completo
 ```
 
@@ -96,23 +139,23 @@ aegis start           # Iniciar el servicio
 aegis stop            # Detener el servicio
 aegis restart         # Reiniciar el servicio
 aegis token           # Imprimir URL de configuración con token fresco
+aegis tunnel          # Iniciar manualmente el túnel Cloudflare
 ```
 
 ### Actualizaciones
 
 ```bash
-aegis update          # Actualizar al último release estable
-aegis update --beta   # Actualizar al último build nightly (desde main)
-aegis update --stable # Apuntar explícitamente al canal estable
+aegis update          # Actualizar al último build nightly
+aegis update --stable # Actualizar al último release estable
 ```
 
-Ver [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) para referencia completa.
+Ver [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) para referencia completa y equivalentes Windows.
 
 ---
 
 ## Compilar desde el código fuente
 
-**Requisitos:** Rust 1.80+, Node.js 20+
+**Requisitos:** Rust 1.80+, Node.js 20+, `protoc`
 
 ```bash
 git clone https://github.com/Gustavo324234/Aegis-Core.git
@@ -134,7 +177,7 @@ aegis-core/
 ├── kernel/          Kernel Rust — ank-server, ank-core, ank-http, ank-cli
 ├── shell/ui/        Interfaz web — React 18 / Vite / TypeScript / Tailwind
 ├── app/             Cliente mobile — React Native / Expo
-├── installer/       Deployment — install.sh, aegis CLI, servicio systemd
+├── installer/       Deployment — install.sh, install.ps1, aegis CLI, servicio systemd
 ├── governance/      Tickets, docs de arquitectura, codex
 └── distro/          (futuro) distribución Linux
 ```
@@ -158,6 +201,8 @@ aegis-core/
 Aegis es open source y da la bienvenida a contribuciones.
 
 Leé [CONTRIBUTING.md](CONTRIBUTING.md) para empezar. Se valoran contribuciones de código, documentación, traducciones y reportes de bugs.
+
+El proyecto usa un flujo basado en tickets. Revisá [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md) para trabajo abierto.
 
 ---
 

@@ -26,6 +26,7 @@ openssl                      = { workspace = true, optional = true }
 rustls                       = { version = "0.23", features = ["ring"] }
 serde_json.workspace = true
 serde.workspace = true
+dotenvy.workspace = true
 
 [features]
 full_local       = ["ank-core/full_local"]

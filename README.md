@@ -3,7 +3,7 @@
 > **A cognitive operating system.** One binary. Zero runtime dependencies. LLMs as ALUs under a deterministic execution engine.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Build](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/ci.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
+[![Build](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/Gustavo324234)
 
 ---
@@ -34,7 +34,7 @@ Browser / Mobile App
         │
         ├── ank-http    HTTP :8000  — REST API, WebSocket, embedded React UI
         ├── ank-core    Cognitive engine — scheduler, VCM, agents, DAG, plugins
-        └── gRPC :50051 — external CLI, multi-node federation
+        └── gRPC :50051 — internal communication, multi-node federation
 ```
 
 The system is multi-tenant: each tenant gets an isolated cognitive environment with its own memory layers (L1/L2/L3), agent tree, and encrypted data store (SQLCipher).
@@ -45,13 +45,15 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full detail.
 
 ## Quick Install
 
-**Requirements:** Linux (Ubuntu 22.04+ / Debian 12+), `sudo`, `curl`
+Aegis ships pre-built native binaries for all major platforms. No compilation required.
+
+### Linux (Ubuntu 22.04+ / Debian 12+)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh | sudo bash
 ```
 
-The installer will guide you through:
+The installer guides you through:
 1. **Installation mode** — Native (recommended) or Docker
 2. **Inference profile** — Cloud (API keys), Local (Ollama), or Hybrid
 3. **Hardware tier** — Laptop/VPS, Workstation, or SRE-grade server
@@ -71,21 +73,62 @@ After install, Aegis starts automatically and prints your setup URL:
 ################################################################
 ```
 
-Open the URL in your browser to complete onboarding.
+### macOS (Apple Silicon & Intel)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh | sudo bash
+```
+
+The same `install.sh` detects the platform and downloads the correct binary (`macos-arm64` or `macos-x86_64`).
+
+### Windows (x86_64)
+
+Run PowerShell **as Administrator**:
+
+```powershell
+irm https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.ps1 | iex
+```
+
+Aegis installs as a Windows Service (`AegisOS`) and starts automatically. Manage it with standard PowerShell service commands:
+
+```powershell
+Start-Service AegisOS
+Stop-Service AegisOS
+Restart-Service AegisOS
+Get-Service AegisOS
+```
+
+---
+
+## Platform Support
+
+Pre-built binaries are published for every commit to `main` (nightly) and every tagged release:
+
+| Platform | Architecture | Binary |
+|---|---|---|
+| Linux | x86_64 | `ank-server-linux-x86_64.tar.gz` |
+| Linux | ARM64 | `ank-server-linux-arm64.tar.gz` |
+| macOS | Apple Silicon (ARM64) | `ank-server-macos-arm64.zip` |
+| macOS | Intel (x86_64) | `ank-server-macos-x86_64.zip` |
+| Windows | x86_64 | `ank-server-windows-x86_64.zip` |
+
+All releases are available at [github.com/Gustavo324234/Aegis-Core/releases](https://github.com/Gustavo324234/Aegis-Core/releases).
 
 ---
 
 ## Aegis CLI
 
-After installation, the `aegis` command is available system-wide.
+After installation on **Linux/macOS**, the `aegis` command is available system-wide.
+
+> **Windows:** No separate CLI is installed. Use PowerShell to manage the `AegisOS` Windows Service. See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for the full equivalents table.
 
 ### Status & Info
 
 ```bash
 aegis status          # Service health and API connectivity
 aegis version         # Installed version
-aegis logs            # Follow live logs (last 50 lines)
-aegis logs 100        # Follow last 100 lines
+aegis logs            # Follow live logs (last 100 lines)
+aegis logs 200        # Follow last 200 lines
 aegis diag            # Deep SRE diagnostic report
 ```
 
@@ -96,21 +139,23 @@ aegis start           # Start the service
 aegis stop            # Stop the service
 aegis restart         # Restart the service
 aegis token           # Print setup URL with fresh token
+aegis tunnel          # Manually start Cloudflare Tunnel
 ```
 
 ### Updates
 
 ```bash
-aegis update          # Update to latest stable release
-aegis update --beta   # Update to latest nightly build (from main)
-aegis update --stable # Explicitly target stable channel
+aegis update          # Update to latest nightly build
+aegis update --stable # Update to latest stable release
 ```
+
+See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for full command reference and Windows equivalents.
 
 ---
 
 ## Build from Source
 
-**Requirements:** Rust 1.80+, Node.js 20+
+**Requirements:** Rust 1.80+, Node.js 20+, `protoc`
 
 ```bash
 git clone https://github.com/Gustavo324234/Aegis-Core.git
@@ -140,7 +185,7 @@ aegis-core/
 ├── kernel/          Rust kernel — ank-server, ank-core, ank-http, ank-cli
 ├── shell/ui/        Web interface — React 18 / Vite / TypeScript / Tailwind
 ├── app/             Mobile client — React Native / Expo
-├── installer/       Deployment — install.sh, aegis CLI, systemd service
+├── installer/       Deployment — install.sh, install.ps1, aegis CLI, systemd service
 ├── governance/      Tickets, architecture docs, codex
 └── distro/          (future) Linux distribution
 ```
