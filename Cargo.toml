@@ -71,7 +71,7 @@ toml               = "0.8"
 clap               = { version = "4", features = ["derive"] }
 
 # Database
-rusqlite           = { version = "0.33.0", features = ["bundled-sqlcipher"] }
+rusqlite           = { version = "0.33.0", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 # System
 sysinfo            = "0.38"

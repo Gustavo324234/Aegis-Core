@@ -583,7 +583,7 @@ impl PluginManager {
             PluginError::SecurityViolation("Session key required for domain plugins".into())
         })?;
 
-        let db = TenantDB::open(tenant_id, key).map_err(|e| PluginError::IOError(e.to_string()))?;
+        let db = TenantDB::open(tenant_id, key).map_err(|e| PluginError::IOError(format!("{:#}", e)))?;
 
         let req: serde_json::Value =
             serde_json::from_str(input).map_err(|e| PluginError::LogicError(e.to_string()))?;
