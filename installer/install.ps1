@@ -11,8 +11,8 @@
 # Nota de arquitectura:
 #   ank-server lee C:/ProgramData/Aegis/aegis.env directamente al arrancar
 #   via dotenvy (CORE-265). El installer solo necesita garantizar que ese
-#   archivo exista con paths en forward slashes. No se requiere inyeccion
-#   de vars via registro de Windows ni Machine-level env vars.
+#   archivo exista con paths en forward slashes y valores con espacios entre
+#   comillas dobles (requisito de dotenvy).
 #
 # ==============================================================================
 
@@ -78,11 +78,14 @@ function Set-AegisAcl {
     Set-Acl $Path $acl
 }
 
-# Convierte backslashes a forward slashes para que dotenvy pueda parsear los paths.
-# dotenvy interpreta \P, \A, \u, etc. como escape sequences y falla.
-function ConvertTo-ForwardSlashes {
+# Normaliza un path para aegis.env:
+# 1. Backslashes -> forward slashes (dotenvy los interpreta como escapes)
+# 2. Envuelve en comillas dobles si contiene espacios (dotenvy requiere quoting)
+function Format-EnvPath {
     param([string]$Path)
-    return $Path.Replace("\", "/")
+    $p = $Path.Replace("\", "/")
+    if ($p -match " ") { return "`"$p`"" }
+    return $p
 }
 
 function Test-Prerequisites {
@@ -195,13 +198,30 @@ function New-AegisEnvFile {
     if (Test-Path $envPath) {
         Write-Warn "Archivo de entorno existente preservado: $envPath"
 
-        # Migrar backslashes a forward slashes en archivos generados por versiones
-        # anteriores del installer. dotenvy falla al parsear \P, \A, etc.
-        $content = Get-Content $envPath -Raw
-        $fixed   = $content -replace '(?<==[^\r\n]*)\\(?=[^\r\n])', '/'
-        if ($fixed -ne $content) {
-            Set-Content -Path $envPath -Value $fixed -Encoding UTF8 -NoNewline
-            Write-OK "Paths en aegis.env migrados a forward slashes."
+        # Normalizar vars de path en archivos de versiones anteriores:
+        # - Backslashes -> forward slashes
+        # - Valores con espacios -> entre comillas dobles
+        $pathVars = @("AEGIS_DATA_DIR", "AEGIS_AGENTS_CONFIG_DIR", "UI_DIST_PATH")
+        $lines    = Get-Content $envPath
+        $changed  = $false
+
+        $newLines = $lines | ForEach-Object {
+            $line = $_
+            foreach ($varName in $pathVars) {
+                if ($line -match "^$varName=(.*)$") {
+                    $val     = $matches[1].Trim('"')
+                    $newLine = "$varName=$(Format-EnvPath $val)"
+                    if ($newLine -ne $line) { $changed = $true }
+                    $line = $newLine
+                    break
+                }
+            }
+            $line
+        }
+
+        if ($changed) {
+            Set-Content -Path $envPath -Value $newLines -Encoding UTF8
+            Write-OK "aegis.env normalizado (forward slashes + quoting)."
         }
         return
     }
@@ -210,14 +230,11 @@ function New-AegisEnvFile {
     [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     $rootKey = [BitConverter]::ToString($bytes).Replace("-", "").ToLower()
 
-    $dataDirFwd    = ConvertTo-ForwardSlashes $DataDir
-    $installDirFwd = ConvertTo-ForwardSlashes $InstallDir
-
     $envContent = @"
 AEGIS_ROOT_KEY=$rootKey
-AEGIS_DATA_DIR=$dataDirFwd
-AEGIS_AGENTS_CONFIG_DIR=$dataDirFwd/agents
-UI_DIST_PATH=$installDirFwd/ui
+AEGIS_DATA_DIR=$(Format-EnvPath $DataDir)
+AEGIS_AGENTS_CONFIG_DIR=$(Format-EnvPath "$DataDir\agents")
+UI_DIST_PATH=$(Format-EnvPath "$InstallDir\ui")
 AEGIS_MODEL_PROFILE=cloud
 DEFAULT_MODEL_PREF=CloudOnly
 RUST_LOG=info
