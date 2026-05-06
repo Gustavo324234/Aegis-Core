@@ -328,7 +328,7 @@ function Install-AegisService {
         # ── MODO INSTALACION FRESCA ─────────────────────────────────────────
         Write-Step "Instalacion fresca — registrando servicio..."
 
-        $binPath = "`"$InstallDir\$BIN_NAME`""
+        $binPath = "`"$InstallDir\$BIN_NAME`" --service"
 
         New-Service `
             -Name        $SERVICE_NAME `

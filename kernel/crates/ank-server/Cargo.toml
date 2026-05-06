@@ -28,6 +28,9 @@ serde_json.workspace = true
 serde.workspace = true
 dotenvy.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-service = { workspace = true }
+
 [features]
 full_local       = ["ank-core/full_local"]
 embed-ui         = ["ank-http/embed-ui"]

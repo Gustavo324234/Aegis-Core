@@ -39,7 +39,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "windows-service",
+ "windows-service 0.6.0",
 ]
 
 [[package]]
@@ -243,6 +243,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+ "windows-service 0.7.0",
 ]
 
 [[package]]
@@ -3080,6 +3081,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad8935b44e7c13394a179a438e0cebba0fe08fe01b54f152e29a93b5cf993fd4"
 dependencies = [
  "cc",
+ "openssl-sys",
  "pkg-config",
  "vcpkg",
 ]
@@ -6360,6 +6362,17 @@ dependencies = [
  "bitflags 1.3.2",
  "widestring",
  "windows-sys 0.45.0",
+]
+
+[[package]]
+name = "windows-service"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d24d6bcc7f734a4091ecf8d7a64c5f7d7066f45585c1861eba06449909609c8a"
+dependencies = [
+ "bitflags 2.11.1",
+ "widestring",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

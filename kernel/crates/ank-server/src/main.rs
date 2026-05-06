@@ -64,23 +64,9 @@ fn resolve_data_dir() -> std::path::PathBuf {
     data_dir
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+pub(crate) async fn run_server() -> Result<()> {
     // CORE-147: Initialize rustls crypto provider (required for rustls 0.23+)
-    // We explicitly use 'ring' as the provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
-
-    // 0. Handle immediate flags
-    let args: Vec<String> = std::env::args().collect();
-    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
-        println!("Aegis Core v{}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-
-    // 0b. Cargar archivo de entorno antes de leer cualquier variable
-    // Permite que ank-server funcione como servicio de Windows sin inyección
-    // de env vars via SCM. En Linux/Docker no tiene efecto si el archivo no existe.
-    load_env_file();
 
     // 1. Inicializar tracing
     let data_dir = resolve_data_dir();
@@ -530,6 +516,90 @@ async fn main() -> Result<()> {
     http_server.serve().await?;
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    load_env_file();
+
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
+        println!("Aegis Core v{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    if args.contains(&"--service".to_string()) {
+        return windows_service_impl::run();
+    }
+
+    run_server().await
+}
+
+#[cfg(windows)]
+mod windows_service_impl {
+    use super::*;
+    use std::time::Duration;
+    use windows_service::{
+        define_windows_service,
+        service::{
+            ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
+            ServiceType,
+        },
+        service_control_handler::{self, ServiceControlHandlerResult},
+        service_dispatcher,
+    };
+
+    define_windows_service!(ffi_service_main, service_main);
+
+    pub fn run() -> Result<()> {
+        service_dispatcher::start("AegisOS", ffi_service_main)
+            .map_err(|e| anyhow::anyhow!("SCM dispatcher error: {}", e))
+    }
+
+    fn service_main(_args: Vec<std::ffi::OsString>) {
+        if let Err(e) = run_service() {
+            eprintln!("[ERROR] Windows service failed: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    fn run_service() -> Result<()> {
+        let event_handler = |control_event| match control_event {
+            ServiceControl::Stop | ServiceControl::Shutdown => {
+                std::process::exit(0);
+            }
+            _ => ServiceControlHandlerResult::NotImplemented,
+        };
+
+        let status_handle = service_control_handler::register("AegisOS", event_handler)?;
+
+        status_handle.set_service_status(ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: ServiceState::StartPending,
+            controls_accepted: ServiceControlAccept::empty(),
+            exit_code: ServiceExitCode::Win32(0),
+            checkpoint: 0,
+            wait_hint: Duration::from_secs(30),
+            process_id: None,
+        })?;
+
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            status_handle.set_service_status(ServiceStatus {
+                service_type: ServiceType::OWN_PROCESS,
+                current_state: ServiceState::Running,
+                controls_accepted: ServiceControlAccept::STOP,
+                exit_code: ServiceExitCode::Win32(0),
+                checkpoint: 0,
+                wait_hint: Duration::from_secs(0),
+                process_id: None,
+            })?;
+
+            super::run_server().await
+        })
+    }
 }
 
 async fn run_tunnel_and_monitor(
