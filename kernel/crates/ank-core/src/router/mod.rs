@@ -21,6 +21,7 @@ pub struct RoutingDecision {
     pub provider: String,
     pub api_url: String,
     pub api_key: String,
+    pub key_id: Option<String>,
     pub fallback_chain: Vec<FallbackDecision>,
 }
 
@@ -224,6 +225,7 @@ impl CognitiveRouter {
                 .clone()
                 .unwrap_or_else(|| entry_api_url(primary)),
             api_key: primary_key.api_key.clone(),
+            key_id: Some(primary_key.key_id.clone()),
             fallback_chain,
         })
     }
@@ -273,6 +275,10 @@ impl CognitiveRouter {
             }
         }
         self.catalog.replace_all(entries).await;
+    }
+
+    pub async fn mark_key_rate_limited(&self, key_id: &str, until: chrono::DateTime<chrono::Utc>) {
+        self.key_pool.mark_rate_limited(key_id, until).await;
     }
 
     async fn resolve_key(

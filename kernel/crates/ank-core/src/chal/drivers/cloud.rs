@@ -15,21 +15,47 @@ const RETRYABLE_STATUS_CODES: &[u16] = &[429, 502, 503, 504];
 const MAX_RETRIES: u32 = 2;
 const BASE_DELAY_MS: u64 = 1000;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CloudProxyDriver {
     pub api_url: String,
     pub api_key: String,
     pub model_id: String,
+    pub key_id: Option<String>,
     client: Arc<Client>,
+    /// CORE-267: callback invocado cuando el provider devuelve 429.
+    on_rate_limited: Option<Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>>,
+}
+
+impl std::fmt::Debug for CloudProxyDriver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CloudProxyDriver")
+            .field("api_url", &self.api_url)
+            .field("model_id", &self.model_id)
+            .field("key_id", &self.key_id)
+            .finish()
+    }
 }
 
 impl CloudProxyDriver {
     pub fn new(client: Arc<Client>, api_url: String, api_key: String, model_id: String) -> Self {
+        Self::new_with_callback(client, api_url, api_key, model_id, None, None)
+    }
+
+    pub fn new_with_callback(
+        client: Arc<Client>,
+        api_url: String,
+        api_key: String,
+        model_id: String,
+        key_id: Option<String>,
+        on_rate_limited: Option<Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>>,
+    ) -> Self {
         Self {
             client,
             api_url,
             api_key,
             model_id,
+            key_id,
+            on_rate_limited,
         }
     }
 
@@ -91,6 +117,17 @@ impl CloudProxyDriver {
                             status, text
                         )));
                         continue;
+                    }
+
+                    if status.as_u16() == 429 {
+                        if let Some(cb) = &self.on_rate_limited {
+                            let until = chrono::Utc::now() + chrono::Duration::seconds(60);
+                            cb(until);
+                            tracing::warn!(
+                                model = %self.model_id,
+                                "CORE-267: 429 recibido — key marcada como rate-limited por 60s"
+                            );
+                        }
                     }
 
                     return Ok(response);

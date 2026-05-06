@@ -182,6 +182,7 @@ pub(crate) async fn run_server() -> Result<()> {
         key_pool.clone(),
     )));
     hal.set_router(router.clone()).await;
+    hal.set_router_ref(router.clone()).await;
 
     let catalog_syncer = Arc::new(ank_core::router::syncer::CatalogSyncer::new(
         catalog, key_pool,

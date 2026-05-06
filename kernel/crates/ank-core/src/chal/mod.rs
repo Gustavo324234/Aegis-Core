@@ -211,6 +211,8 @@ pub struct CognitiveHAL {
     pub instruction_loader: Arc<RwLock<InstructionLoader>>,
     /// CORE-261: AgentOrchestrator para ejecutar tool calls dentro del bucle ReAct.
     pub agent_orchestrator: RwLock<Option<Arc<crate::agents::orchestrator::AgentOrchestrator>>>,
+    /// CORE-267: Referencia al router para notificar rate-limits desde el driver.
+    pub router_ref: RwLock<Option<Arc<RwLock<CognitiveRouter>>>>,
 }
 
 #[cfg(test)]
@@ -275,11 +277,18 @@ impl CognitiveHAL {
             embedding_driver,
             instruction_loader,
             agent_orchestrator: RwLock::new(None),
+            router_ref: RwLock::new(None),
         })
     }
 
     pub async fn set_router(&self, router: Arc<RwLock<CognitiveRouter>>) {
         let mut r = self.router.write().await;
+        *r = Some(router);
+    }
+
+    /// CORE-267: Registra el router para notificar rate-limits desde el CloudProxyDriver.
+    pub async fn set_router_ref(&self, router: Arc<RwLock<CognitiveRouter>>) {
+        let mut r = self.router_ref.write().await;
         *r = Some(router);
     }
 
@@ -452,11 +461,31 @@ impl CognitiveHAL {
             "CognitiveRouter: routing to model (ReAct loop)"
         );
 
-        let driver = CloudProxyDriver::new(
+        let on_rate_limited = {
+            let router_opt = self.router_ref.read().await.clone();
+            let key_id = decision.key_id.clone();
+            match (router_opt, key_id) {
+                (Some(router), Some(kid)) => {
+                    Some(Arc::new(move |until: chrono::DateTime<chrono::Utc>| {
+                        let router = Arc::clone(&router);
+                        let kid = kid.clone();
+                        tokio::spawn(async move {
+                            router.read().await.mark_key_rate_limited(&kid, until).await;
+                        });
+                    })
+                        as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
+                }
+                _ => None,
+            }
+        };
+
+        let driver = CloudProxyDriver::new_with_callback(
             Arc::clone(&self.http_client),
             decision.api_url.clone(),
             decision.api_key.clone(),
             decision.model_id.clone(),
+            decision.key_id.clone(),
+            on_rate_limited,
         );
 
         let provider = ProviderKind::from_string(&decision.provider);
@@ -566,11 +595,31 @@ impl CognitiveHAL {
     ) -> Result<(), SystemError> {
         use crate::chal::drivers::CloudProxyDriver;
 
-        let driver = CloudProxyDriver::new(
+        let on_rate_limited = {
+            let router_opt = self.router_ref.read().await.clone();
+            let key_id = decision.key_id.clone();
+            match (router_opt, key_id) {
+                (Some(router), Some(kid)) => {
+                    Some(Arc::new(move |until: chrono::DateTime<chrono::Utc>| {
+                        let router = Arc::clone(&router);
+                        let kid = kid.clone();
+                        tokio::spawn(async move {
+                            router.read().await.mark_key_rate_limited(&kid, until).await;
+                        });
+                    })
+                        as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
+                }
+                _ => None,
+            }
+        };
+
+        let driver = CloudProxyDriver::new_with_callback(
             Arc::clone(&self.http_client),
             decision.api_url.clone(),
             decision.api_key.clone(),
             decision.model_id.clone(),
+            decision.key_id.clone(),
+            on_rate_limited,
         );
 
         let mut messages = messages;
