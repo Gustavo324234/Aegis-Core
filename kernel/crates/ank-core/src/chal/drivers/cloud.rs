@@ -49,7 +49,14 @@ impl CloudProxyDriver {
         key_id: Option<String>,
         on_rate_limited: Option<Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>>,
     ) -> Self {
-        Self { client, api_url, api_key, model_id, key_id, on_rate_limited }
+        Self {
+            client,
+            api_url,
+            api_key,
+            model_id,
+            key_id,
+            on_rate_limited,
+        }
     }
 
     pub fn from_env(client: Arc<Client>) -> Option<Self> {

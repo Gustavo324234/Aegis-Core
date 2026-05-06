@@ -472,7 +472,8 @@ impl CognitiveHAL {
                         tokio::spawn(async move {
                             router.read().await.mark_key_rate_limited(&kid, until).await;
                         });
-                    }) as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
+                    })
+                        as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
                 }
                 _ => None,
             }
@@ -605,7 +606,8 @@ impl CognitiveHAL {
                         tokio::spawn(async move {
                             router.read().await.mark_key_rate_limited(&kid, until).await;
                         });
-                    }) as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
+                    })
+                        as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
                 }
                 _ => None,
             }
