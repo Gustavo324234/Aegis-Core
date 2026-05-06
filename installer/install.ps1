@@ -200,10 +200,17 @@ RUST_LOG=info
     Write-OK "Entorno generado: $envPath"
 }
 
-# Escribe las vars del env file en el registro del servicio (REG_MULTI_SZ).
-# Solo se llama en instalacion fresca — en actualizacion el registro se preserva intacto.
+# Lee el aegis.env y escribe las vars en el registro del servicio (REG_MULTI_SZ).
+# Se llama tanto en instalacion fresca como en actualizacion — es idempotente.
+# Esto garantiza que el binario actual (pre-CORE-265) siempre reciba las vars
+# correctas independientemente del historial de instalaciones previas.
 function Write-EnvToServiceRegistry {
     param([string]$EnvPath)
+
+    if (-not (Test-Path $EnvPath)) {
+        Write-Warn "aegis.env no encontrado en $EnvPath — registro del servicio no actualizado."
+        return
+    }
 
     $envVars = @{}
     Get-Content $EnvPath | ForEach-Object {
@@ -212,11 +219,21 @@ function Write-EnvToServiceRegistry {
         }
     }
 
-    $regPath  = "HKLM:\SYSTEM\CurrentControlSet\Services\$SERVICE_NAME"
+    if ($envVars.Count -eq 0) {
+        Write-Warn "aegis.env existe pero no contiene variables validas."
+        return
+    }
+
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$SERVICE_NAME"
+    if (-not (Test-Path $regPath)) {
+        Write-Warn "Registro del servicio no encontrado — omitiendo escritura de env vars."
+        return
+    }
+
     $envArray = [string[]]($envVars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
     Set-ItemProperty -Path $regPath -Name "Environment" -Value $envArray -Type MultiString
 
-    Write-OK "Variables de entorno escritas en el registro del servicio ($($envVars.Count) vars)."
+    Write-OK "Variables de entorno sincronizadas en el registro del servicio ($($envVars.Count) vars)."
 }
 
 function Install-AegisService {
@@ -226,11 +243,9 @@ function Install-AegisService {
 
     if ($existing) {
         # ── MODO ACTUALIZACION ──────────────────────────────────────────────
-        # El servicio ya existe con su registro de env vars intacto.
-        # Solo detener, dejar que Get-AegisBinaries ya reemplazó el .exe, reiniciar.
-        # NO se toca el registro del servicio — preserva las vars de la instalacion original.
         Write-Step "Actualizacion detectada — reiniciando servicio con nuevo binario..."
 
+        # Detener el servicio
         if ($existing.Status -ne 'Stopped') {
             Stop-Service $SERVICE_NAME -Force -ErrorAction SilentlyContinue
             $waited = 0
@@ -239,6 +254,11 @@ function Install-AegisService {
                 $waited++
             }
         }
+
+        # Siempre reescribir las env vars en el registro desde el aegis.env.
+        # Garantiza consistencia independientemente del estado previo del registro
+        # (cubre instalaciones parciales, reinstalaciones, corrupcion de registro).
+        Write-EnvToServiceRegistry -EnvPath "$DataDir\aegis.env"
 
         try {
             Start-Service $SERVICE_NAME -ErrorAction Stop
@@ -250,7 +270,6 @@ function Install-AegisService {
 
     } else {
         # ── MODO INSTALACION FRESCA ─────────────────────────────────────────
-        # El servicio no existe — registrarlo desde cero con todas las env vars.
         Write-Step "Instalacion fresca — registrando servicio..."
 
         $binPath = "`"$InstallDir\$BIN_NAME`""
@@ -263,10 +282,8 @@ function Install-AegisService {
             -StartupType Automatic `
             -ErrorAction Stop | Out-Null
 
-        # Escribir env vars en el registro del servicio solo en instalacion fresca
         Write-EnvToServiceRegistry -EnvPath "$DataDir\aegis.env"
 
-        # Politica de reinicio automatico ante fallos
         sc.exe failure $SERVICE_NAME reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
 
         try {
