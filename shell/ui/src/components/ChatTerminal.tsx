@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
+import { AgentBadge } from './AgentBadge';
 import { InputModeSelector } from './InputModeSelector';
 import { useTranslation } from '../i18n';
 import { AegisLogo } from './AegisLogo';
@@ -223,6 +224,7 @@ const ChatTerminal: React.FC = () => {
                         </button>
                     </div>
                     <div className="flex items-center gap-4">
+                        <AgentBadge />
                         <StatusBadge status={status} />
                         <div className="h-4 w-px bg-white/10" />
                         <div className="flex items-center gap-2">

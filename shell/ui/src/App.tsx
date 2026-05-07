@@ -10,6 +10,8 @@ import ForcePasswordChangeScreen from './components/ForcePasswordChangeScreen';
 import BootstrapSetup from './components/BootstrapSetup';
 import EngineSetupWizard from './components/EngineSetupWizard';
 import Dashboard from '@/components/Dashboard';
+import { AgentInboxList } from './components/AgentInboxList';
+import { AgentThread } from './components/AgentThread';
 
 
 // SRE-FIX: Error boundary para atrapar crashes de React y mostrar pantalla de recuperación
@@ -128,10 +130,10 @@ function App() {
         }
     }, [_hydrated, isAuthenticated, isAdmin, needsPasswordReset, isEngineConfigured, tenantId, sessionKey, status, connect]);
 
-    // CORE-230: si sessionKey es null pero la vista es dashboard, redirigir a chat antes de montar Dashboard
+    // CORE-230: si sessionKey es null pero la vista no es chat, redirigir a chat
     useEffect(() => {
-        if (_hydrated && currentView === 'dashboard' && !sessionKey) {
-            console.warn('[App] sessionKey null with dashboard view — redirecting to chat');
+        if (_hydrated && currentView !== 'chat' && !sessionKey) {
+            console.warn('[App] sessionKey null with non-chat view — redirecting to chat');
             setCurrentView('chat');
         }
     }, [_hydrated, currentView, sessionKey, setCurrentView]);
@@ -195,7 +197,15 @@ function App() {
                         </motion.div>
                     ) : (
                         <motion.div key="terminal" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: "easeOut" }} className="h-screen w-full">
-                            {currentView === 'chat' ? <ChatTerminal /> : <Dashboard />}
+                            {currentView === 'chat' ? (
+                            <ChatTerminal />
+                        ) : currentView === 'agents' ? (
+                            <AgentInboxList />
+                        ) : currentView === 'agent_thread' ? (
+                            <AgentThread />
+                        ) : (
+                            <Dashboard />
+                        )}
                         </motion.div>
                     )}
                 </AnimatePresence>
