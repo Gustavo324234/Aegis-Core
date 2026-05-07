@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.42](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.41...ank-core-v0.1.42) (2026-05-07)
+
+
+### Features
+
+* **ank-core:** CORE-275/273/274 — specialist filesystem tools + ProjectLedger + AgentEvent ([#227](https://github.com/Gustavo324234/Aegis-Core/issues/227)) ([f57d6ad](https://github.com/Gustavo324234/Aegis-Core/commit/f57d6ade9b8f8ed1558db1b4e12a825c4e8702a6))
+
 ## [0.1.41](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.40...ank-core-v0.1.41) (2026-05-06)
 
 
