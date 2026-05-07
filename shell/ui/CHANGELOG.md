@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.14.0...shell-ui-v1.15.0) (2026-05-07)
+
+
+### Features
+
+* **shell:** CORE-269/274/270 AgentInbox store, badge, thread UI ([#231](https://github.com/Gustavo324234/Aegis-Core/issues/231)) ([0da0d3b](https://github.com/Gustavo324234/Aegis-Core/commit/0da0d3bcd414f41e825d2c726ec18d6d591f4a65))
+
 ## [1.14.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.13.0...shell-ui-v1.14.0) (2026-05-03)
 
 
