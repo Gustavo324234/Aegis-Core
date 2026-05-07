@@ -730,9 +730,9 @@ impl CognitiveHAL {
                 .canonicalize()
                 .map_err(|e| format!("{{\"error\":\"invalid_path\",\"detail\":\"{}\"}}", e))?
         } else {
-            let parent = candidate
-                .parent()
-                .ok_or_else(|| "{\"error\":\"invalid_path\",\"detail\":\"no parent\"}".to_string())?;
+            let parent = candidate.parent().ok_or_else(|| {
+                "{\"error\":\"invalid_path\",\"detail\":\"no parent\"}".to_string()
+            })?;
             let canonical_parent = parent
                 .canonicalize()
                 .unwrap_or_else(|_| parent.to_path_buf());
@@ -954,7 +954,6 @@ impl CognitiveHAL {
             }
 
             // CORE-275: Specialist filesystem tools
-
             "read_file" => {
                 let input_path = args["path"].as_str().unwrap_or("").to_string();
                 let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -992,7 +991,10 @@ impl CognitiveHAL {
 
                 let input_path = args["path"].as_str().unwrap_or("").to_string();
                 let content = args["content"].as_str().unwrap_or("").to_string();
-                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("rewrite");
+                let mode = args
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("rewrite");
 
                 let workspace = Self::get_tenant_workspace(pcb);
 
@@ -1099,7 +1101,10 @@ impl CognitiveHAL {
 
                 let agent_uuid = match pcb.agent_id {
                     Some(id) => id,
-                    None => return "{\"error\":\"add_ledger_entry requiere agent_id en PCB\"}".to_string(),
+                    None => {
+                        return "{\"error\":\"add_ledger_entry requiere agent_id en PCB\"}"
+                            .to_string()
+                    }
                 };
 
                 let orchestrator_opt = self.agent_orchestrator.read().await.clone();
@@ -1108,7 +1113,10 @@ impl CognitiveHAL {
                     None => return "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
                 };
 
-                let tenant_id = pcb.tenant_id.clone().unwrap_or_else(|| "default".to_string());
+                let tenant_id = pcb
+                    .tenant_id
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string());
 
                 match orchestrator
                     .add_project_ledger_entry(&tenant_id, agent_uuid, content)

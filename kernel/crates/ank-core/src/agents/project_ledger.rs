@@ -69,13 +69,7 @@ impl ProjectLedger {
         let lines: Vec<String> = self
             .entries
             .iter()
-            .map(|e| {
-                format!(
-                    "[{}] {}",
-                    e.timestamp.format("%Y-%m-%d %H:%M"),
-                    e.content
-                )
-            })
+            .map(|e| format!("[{}] {}", e.timestamp.format("%Y-%m-%d %H:%M"), e.content))
             .collect();
         format!("[PROJECT HISTORY]\n{}", lines.join("\n"))
     }

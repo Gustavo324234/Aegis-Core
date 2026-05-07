@@ -202,8 +202,8 @@ impl AgentPersistence {
         let path = self.ledger_path(tenant_id, project_id);
         self.ensure_dir(path.parent().context("ledger path has no parent")?)?;
 
-        let json = serde_json::to_string_pretty(ledger)
-            .context("Failed to serialize ProjectLedger")?;
+        let json =
+            serde_json::to_string_pretty(ledger).context("Failed to serialize ProjectLedger")?;
         std::fs::write(&path, json.as_bytes())
             .with_context(|| format!("Failed to write project.json at {:?}", path))?;
 

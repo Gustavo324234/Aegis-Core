@@ -43,7 +43,6 @@ pub enum AgentEvent {
     },
 
     // --- EPIC 50: Agent Inbox events (CORE-274) ---
-
     /// Un supervisor pausó su ejecución y necesita respuesta del usuario.
     SupervisorQuestion {
         agent_id: AgentId,
@@ -54,9 +53,7 @@ pub enum AgentEvent {
     },
 
     /// Un supervisor fue reactivado tras recibir respuesta del usuario.
-    SupervisorResumed {
-        agent_id: AgentId,
-    },
+    SupervisorResumed { agent_id: AgentId },
 
     /// Un supervisor completó su tarea satisfactoriamente.
     SupervisorCompleted {

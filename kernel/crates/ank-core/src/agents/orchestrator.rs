@@ -204,7 +204,11 @@ impl AgentOrchestrator {
         let ledger_context = match self.persistence.load_ledger(tenant_id, project_id) {
             Ok(Some(ledger)) => {
                 let formatted = ledger.format_for_prompt();
-                if formatted.is_empty() { None } else { Some(formatted) }
+                if formatted.is_empty() {
+                    None
+                } else {
+                    Some(formatted)
+                }
             }
             _ => None,
         };
@@ -216,7 +220,8 @@ impl AgentOrchestrator {
 
             let snapshot = restored_tree.serialize()?;
             for mut node in snapshot.nodes {
-                let is_project_supervisor = matches!(node.role, AgentRole::ProjectSupervisor { .. });
+                let is_project_supervisor =
+                    matches!(node.role, AgentRole::ProjectSupervisor { .. });
 
                 // Construir contexto: state summary + ledger (solo para ProjectSupervisor)
                 let extra_context = if is_project_supervisor {
@@ -434,7 +439,10 @@ impl AgentOrchestrator {
             let node = tree
                 .get(&agent_id)
                 .ok_or_else(|| anyhow::anyhow!("Agent {} not found in tree", agent_id))?;
-            (node.project_id.clone(), node.role.display_name().to_string())
+            (
+                node.project_id.clone(),
+                node.role.display_name().to_string(),
+            )
         };
 
         let mut ledger = self
@@ -444,7 +452,8 @@ impl AgentOrchestrator {
             .unwrap_or_else(|| ProjectLedger::new(project_id.clone(), project_id.clone()));
 
         ledger.add_entry(content, agent_id.to_string(), role_label);
-        self.persistence.save_ledger(tenant_id, &project_id, &ledger)?;
+        self.persistence
+            .save_ledger(tenant_id, &project_id, &ledger)?;
         Ok(())
     }
 
