@@ -969,10 +969,7 @@ impl CognitiveHAL {
                 }
 
                 if !std::path::Path::new(&path).exists() {
-                    return format!(
-                        "{{\"error\":\"path_not_found\",\"path\":\"{}\"}}",
-                        path
-                    );
+                    return format!("{{\"error\":\"path_not_found\",\"path\":\"{}\"}}", path);
                 }
 
                 let tenant_id = match &pcb.tenant_id {
@@ -1030,9 +1027,7 @@ impl CognitiveHAL {
                     Ok(resp) => match resp.json::<serde_json::Value>().await {
                         Ok(data) => {
                             let empty = vec![];
-                            let raw = data["web"]["results"]
-                                .as_array()
-                                .unwrap_or(&empty);
+                            let raw = data["web"]["results"].as_array().unwrap_or(&empty);
                             let results: Vec<serde_json::Value> = raw
                                 .iter()
                                 .take(max_results)

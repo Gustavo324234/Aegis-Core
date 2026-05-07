@@ -1069,8 +1069,7 @@ impl AgentOrchestrator {
                         let is_supervisor = matches!(
                             tree.read().await.get(&agent_id).map(|n| &n.role),
                             Some(
-                                AgentRole::ProjectSupervisor { .. }
-                                    | AgentRole::Supervisor { .. }
+                                AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. }
                             )
                         );
                         if is_supervisor {
