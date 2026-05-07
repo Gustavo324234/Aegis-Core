@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.44](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.43...ank-core-v0.1.44) (2026-05-07)
+
+
+### Features
+
+* **ank-core,ank-http:** CORE-271/272 — respuesta directa a supervisor + get_project_ledger ([#233](https://github.com/Gustavo324234/Aegis-Core/issues/233)) ([8d62b35](https://github.com/Gustavo324234/Aegis-Core/commit/8d62b357897b7833c53caa56c637690369e2a70d))
+
 ## [0.1.43](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.42...ank-core-v0.1.43) (2026-05-07)
 
 
