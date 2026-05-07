@@ -41,4 +41,30 @@ pub enum AgentEvent {
     TreeSnapshot {
         nodes: Vec<crate::agents::orchestrator::AgentNodeSummary>,
     },
+
+    // --- EPIC 50: Agent Inbox events (CORE-274) ---
+    /// Un supervisor pausó su ejecución y necesita respuesta del usuario.
+    SupervisorQuestion {
+        agent_id: AgentId,
+        project_name: String,
+        question: String,
+        context: Option<String>,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+
+    /// Un supervisor fue reactivado tras recibir respuesta del usuario.
+    SupervisorResumed { agent_id: AgentId },
+
+    /// Un supervisor completó su tarea satisfactoriamente.
+    SupervisorCompleted {
+        agent_id: AgentId,
+        project_name: String,
+        summary: String,
+    },
+
+    /// Un supervisor agotó el timeout esperando respuesta del usuario.
+    SupervisorTimedOut {
+        agent_id: AgentId,
+        project_name: String,
+    },
 }

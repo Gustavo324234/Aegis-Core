@@ -1,18 +1,20 @@
 # .cargo/config.toml — Aegis Core workspace configuration
 #
 # Platform-specific environment variables for native dependencies.
-# The [target.x86_64-pc-windows-msvc.env] section is ONLY applied when
-# building with the Windows MSVC toolchain — Linux CI runners never see it.
+# Uses openssl-sys target-prefixed var names (X86_64_PC_WINDOWS_MSVC_*)
+# so that Windows-only paths are never applied to Linux/macOS CI runners.
 
 # ── Windows MSVC (local dev) ──────────────────────────────────────────────────
-# OpenSSL / SQLCipher: the Shining Light Win64 installer places MSVC .lib
-# files under lib/VC/x64/MD (MD = MultiDynamic, matches Rust's default CRT).
-# Without these, libsqlite3-sys (sqlcipher feature) emits a wrong search path
-# and the linker fails with LNK1181: cannot open input file 'libcrypto.lib'.
+# openssl-sys checks {TARGET_UPPERCASE}_OPENSSL_* before the generic OPENSSL_* vars.
+# Using X86_64_PC_WINDOWS_MSVC_* prefixes means these entries are only read when
+# cargo is compiling for the x86_64-pc-windows-msvc target.
+# Linux CI runners use x86_64-unknown-linux-gnu, so they never match these names
+# and fall through to vendor mode (build openssl-src from source with Perl).
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-L", "native=C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"]
 
 [env]
-OPENSSL_DIR         = "C:\\Program Files\\OpenSSL-Win64"
-OPENSSL_LIB_DIR     = "C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"
-OPENSSL_INCLUDE_DIR = "C:\\Program Files\\OpenSSL-Win64\\include"
+X86_64_PC_WINDOWS_MSVC_OPENSSL_NO_VENDOR   = "1"
+X86_64_PC_WINDOWS_MSVC_OPENSSL_DIR         = "C:\\Program Files\\OpenSSL-Win64"
+X86_64_PC_WINDOWS_MSVC_OPENSSL_LIB_DIR     = "C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"
+X86_64_PC_WINDOWS_MSVC_OPENSSL_INCLUDE_DIR = "C:\\Program Files\\OpenSSL-Win64\\include"
