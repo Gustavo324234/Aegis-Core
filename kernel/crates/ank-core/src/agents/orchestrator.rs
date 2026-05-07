@@ -234,7 +234,7 @@ impl AgentOrchestrator {
                         (None, true) => None,
                     }
                 } else {
-                    summaries.get(&node.agent_id).map(|s| s.clone())
+                    summaries.get(&node.agent_id).cloned()
                 };
 
                 if let Some(ctx) = extra_context {
