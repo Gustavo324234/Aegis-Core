@@ -9,13 +9,16 @@
 # files under lib/VC/x64/MD (MD = MultiDynamic, matches Rust's default CRT).
 # Without these, libsqlite3-sys (sqlcipher feature) emits a wrong search path
 # and the linker fails with LNK1181: cannot open input file 'libcrypto.lib'.
+#
+# NOTE: these env vars are scoped to [target.x86_64-pc-windows-msvc.env] so
+# they are NEVER exported to Linux / macOS CI runners. The global [env] section
+# must remain empty of OpenSSL paths to avoid breaking the Linux build.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-L", "native=C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"]
 
-[env]
+[target.x86_64-pc-windows-msvc.env]
 OPENSSL_DIR         = "C:\\Program Files\\OpenSSL-Win64"
 OPENSSL_LIB_DIR     = "C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"
 OPENSSL_INCLUDE_DIR = "C:\\Program Files\\OpenSSL-Win64\\include"
-# Prevents openssl-sys from trying to build OpenSSL from source via vendored openssl-src.
-# Uses the pre-installed Shining Light OpenSSL-Win64 instead.
+# Prevents openssl-sys from building OpenSSL from source (no Perl needed locally).
 OPENSSL_NO_VENDOR   = "1"
