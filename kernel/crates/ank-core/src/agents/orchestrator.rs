@@ -1,4 +1,5 @@
 use crate::agents::context::ContextBudget;
+use crate::agents::event::AgentEvent;
 use crate::agents::instructions::{state_summary_template, InstructionLoader};
 use crate::agents::message::{
     AgentContext, AgentMessage, AgentResult, AgentToolCall, QueryId, ReportStatus,
@@ -56,6 +57,8 @@ pub struct AgentOrchestrator {
     pub hal: Arc<crate::chal::CognitiveHAL>,
     /// CORE-263: Canales oneshot para respuestas de usuario a supervisores pausados.
     pending_user_replies: Arc<RwLock<HashMap<AgentId, tokio::sync::oneshot::Sender<String>>>>,
+    /// CORE-268: Canal de broadcast para emitir AgentEvents al WebSocket del tenant.
+    event_tx: std::sync::RwLock<Option<tokio::sync::broadcast::Sender<AgentEvent>>>,
 }
 
 impl AgentOrchestrator {
@@ -81,6 +84,7 @@ impl AgentOrchestrator {
             instruction_loader: Arc::new(RwLock::new(loader)),
             hal,
             pending_user_replies: Arc::new(RwLock::new(HashMap::new())),
+            event_tx: std::sync::RwLock::new(None),
         }
     }
 
@@ -421,6 +425,24 @@ impl AgentOrchestrator {
         match self.pending_user_replies.write().await.remove(&agent_id) {
             Some(tx) => tx.send(answer).is_ok(),
             None => false,
+        }
+    }
+
+    // --- CORE-268: AgentEvent broadcast channel ---
+
+    /// Registra el broadcast sender para emitir AgentEvents al WebSocket del tenant.
+    pub fn set_event_channel(&self, tx: tokio::sync::broadcast::Sender<AgentEvent>) {
+        if let Ok(mut guard) = self.event_tx.write() {
+            *guard = Some(tx);
+        }
+    }
+
+    /// Emite un AgentEvent al canal registrado. No-op si no hay canal configurado.
+    pub fn emit_event(&self, event: AgentEvent) {
+        if let Ok(guard) = self.event_tx.read() {
+            if let Some(tx) = &*guard {
+                let _ = tx.send(event);
+            }
         }
     }
 
@@ -1039,6 +1061,32 @@ impl AgentOrchestrator {
                         if let Some(n) = t.get_mut(&agent_id) {
                             n.set_state(AgentState::Complete);
                             n.set_last_report(response.clone());
+                        }
+                    }
+
+                    // CORE-268: emitir SupervisorCompleted para supervisores
+                    {
+                        let is_supervisor = matches!(
+                            tree.read().await.get(&agent_id).map(|n| &n.role),
+                            Some(
+                                AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. }
+                            )
+                        );
+                        if is_supervisor {
+                            let project_name = tree
+                                .read()
+                                .await
+                                .get(&agent_id)
+                                .map(|n| n.project_id.clone())
+                                .unwrap_or_default();
+                            let orch_opt = hal.agent_orchestrator.read().await.clone();
+                            if let Some(orch) = orch_opt {
+                                orch.emit_event(AgentEvent::SupervisorCompleted {
+                                    agent_id,
+                                    project_name,
+                                    summary: response.clone(),
+                                });
+                            }
                         }
                     }
 
