@@ -4,6 +4,8 @@ import { ttsPlayer } from '../audio/TTSPlayer';
 import { useMusicStore } from './musicStore';
 import { useTerminalStore } from './terminalStore';
 import { usePrStore } from './prStore';
+import { useAgentInboxStore } from './agentInboxStore';
+import type { AgentEventPayload as SupervisorEventPayload } from '../types/agentEvents';
 
 // CORE-204 — CAA agent types
 export type AgentRole =
@@ -102,7 +104,8 @@ interface AegisState {
     sttAvailable: boolean;
     sttProvider: string;
     sttApiKey: string;
-    currentView: 'chat' | 'dashboard';
+    currentView: 'chat' | 'dashboard' | 'agents' | 'agent_thread';
+    activeAgentId: string | null;
     inputMode: 'text' | 'audio' | 'conversation';
 
     // CORE-204 — agent stream state
@@ -118,7 +121,8 @@ interface AegisState {
 
     setHydrated: (val: boolean) => void;
     setInputMode: (mode: 'text' | 'audio' | 'conversation') => void;
-    setCurrentView: (view: 'chat' | 'dashboard') => void;
+    setCurrentView: (view: 'chat' | 'dashboard' | 'agents' | 'agent_thread') => void;
+    setActiveAgentId: (agentId: string | null) => void;
     setNeedsPasswordReset: (val: boolean) => void;
     setAdminActiveTab: (tab: string) => void;
     fetchSirenConfig: () => Promise<void>;
@@ -200,6 +204,7 @@ export const useAegisStore = create<AegisState>()(
             sttProvider: 'browser',
             sttApiKey: '',
             currentView: 'chat',
+            activeAgentId: null,
             inputMode: 'text',
 
             // CORE-204 — initial agent stream values
@@ -211,6 +216,7 @@ export const useAegisStore = create<AegisState>()(
 
             setHydrated: (val) => set({ _hydrated: val }),
             setCurrentView: (view) => set({ currentView: view }),
+            setActiveAgentId: (agentId) => set({ activeAgentId: agentId }),
             setInputMode: (mode) => set({ inputMode: mode }),
             setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
             setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
@@ -576,6 +582,32 @@ export const useAegisStore = create<AegisState>()(
                         case 'chat_notification': {
                             const d = data as { message: string };
                             get().addSystemMessage(d.message || '');
+                            break;
+                        }
+                        // CORE-274: eventos de supervisores desde el kernel
+                        case 'agent_event': {
+                            const payload = data as SupervisorEventPayload;
+                            const inbox = useAgentInboxStore.getState();
+                            switch (payload.type) {
+                                case 'supervisor_question':
+                                    inbox.addMessage({
+                                        agentId: payload.agent_id,
+                                        projectName: payload.project_name,
+                                        question: payload.question,
+                                        context: payload.context,
+                                        timestamp: payload.timestamp,
+                                        status: 'pending',
+                                    });
+                                    break;
+                                case 'supervisor_completed':
+                                    inbox.markAnswered(payload.agent_id);
+                                    break;
+                                case 'supervisor_timed_out':
+                                    inbox.markTimedOut(payload.agent_id);
+                                    break;
+                                case 'supervisor_resumed':
+                                    break;
+                            }
                             break;
                         }
                         case 'music_control': {
@@ -1153,7 +1185,8 @@ export const useAegisStore = create<AegisState>()(
                 lastError: state.lastError,
                 needsPasswordReset: state.needsPasswordReset,
                 lastTenantsUpdate: state.lastTenantsUpdate,
-                currentView: state.currentView,
+                // No persistir vistas de agente — el store es en memoria y se perdería al recargar
+                currentView: (state.currentView === 'chat' || state.currentView === 'dashboard') ? state.currentView : 'chat',
                 inputMode: state.inputMode,
                 sttProvider: state.sttProvider,  // CORE-231: persistir para que sobreviva recarga
             }),
