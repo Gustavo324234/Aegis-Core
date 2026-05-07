@@ -64,7 +64,11 @@ impl ToolRegistry {
         match role {
             // CORE-243: ChatAgent no tiene agent_id — query_agent y report requieren uno.
             // Solo puede hacer spawn_agent (para crear un ProjectSupervisor) y answer_supervisor (CORE-263).
-            AgentRole::ChatAgent => vec![Self::spawn_agent(), Self::answer_supervisor()],
+            AgentRole::ChatAgent => vec![
+                Self::spawn_agent(),
+                Self::answer_supervisor(),
+                Self::get_project_ledger(),
+            ],
             AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
                 vec![
                     Self::spawn_agent(),
@@ -348,6 +352,25 @@ impl ToolRegistry {
         }
     }
 
+    // --- CORE-272: Project ledger read for ChatAgent ---
+
+    fn get_project_ledger() -> ToolDefinition {
+        ToolDefinition {
+            name: "get_project_ledger",
+            description: "Get the history of a project: entries recorded by supervisors and exchanges with the user. Use ONLY when the user explicitly asks about a project's progress, decisions, or what was discussed with supervisors. Do not use proactively.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "project_name": {
+                        "type": "string",
+                        "description": "Name of the project to query."
+                    }
+                },
+                "required": ["project_name"]
+            }),
+        }
+    }
+
     // --- CORE-277: Web search for specialists ---
 
     fn web_search() -> ToolDefinition {
@@ -416,16 +439,18 @@ mod tests {
     #[test]
     fn test_chat_agent_gets_only_spawn() {
         // CORE-243: ChatAgent no tiene agent_id, por lo que query_agent y report
-        // fallarían en SyscallExecutor. Solo recibe spawn_agent y answer_supervisor (CORE-263).
+        // fallarían en SyscallExecutor. Solo recibe spawn_agent, answer_supervisor (CORE-263)
+        // y get_project_ledger (CORE-272).
         let role = AgentRole::ChatAgent;
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Groq);
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 3);
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"spawn_agent"));
         assert!(names.contains(&"answer_supervisor"));
+        assert!(names.contains(&"get_project_ledger"));
         assert!(
             !names.contains(&"query_agent"),
             "ChatAgent no debe recibir query_agent"

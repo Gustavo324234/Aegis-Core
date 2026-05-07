@@ -2,9 +2,11 @@ use crate::{
     citadel::{CitadelAuthenticated, CitadelCredentials},
     state::AppState,
 };
-use ank_core::agents::node::AgentRole;
+use ank_core::agents::{node::AgentRole, persistence::AgentPersistence};
 use axum::{
     extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
@@ -16,6 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/tree", get(get_agent_tree))
         .route("/:agent_id", get(get_agent))
         .route("/spawn", post(spawn_agent))
+        .route("/:agent_id/reply", post(reply_to_agent))
 }
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────
@@ -192,6 +195,80 @@ async fn spawn_agent(
     Ok(Json(SpawnAgentResponse {
         agent_id: new_id.to_string(),
     }))
+}
+
+// ── CORE-271: Respuesta directa al supervisor ────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct AgentReplyBody {
+    pub answer: String,
+}
+
+/// POST /api/agents/:agent_id/reply — entrega la respuesta del usuario al supervisor pausado.
+async fn reply_to_agent(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Path(agent_id_str): Path<String>,
+    Json(body): Json<AgentReplyBody>,
+) -> impl IntoResponse {
+    let agent_id = match agent_id_str.parse::<uuid::Uuid>() {
+        Ok(id) => id,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "invalid_agent_id" })),
+            )
+                .into_response()
+        }
+    };
+
+    if state
+        .agent_orchestrator
+        .answer_user_question(agent_id, body.answer.clone())
+        .await
+    {
+        update_user_exchange_in_ledger(&state, agent_id, &body.answer, &auth.tenant_id).await;
+        Json(serde_json::json!({ "status": "delivered" })).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no_supervisor_waiting" })),
+        )
+            .into_response()
+    }
+}
+
+async fn update_user_exchange_in_ledger(
+    state: &AppState,
+    agent_id: uuid::Uuid,
+    answer: &str,
+    tenant_id: &str,
+) {
+    let project_id = {
+        let tree = state.agent_orchestrator.tree.read().await;
+        match tree.get(&agent_id) {
+            Some(node) => node.project_id.clone(),
+            None => return,
+        }
+    };
+
+    let persistence = AgentPersistence::from_env();
+    let mut ledger = match persistence.load_ledger(tenant_id, &project_id) {
+        Ok(Some(l)) => l,
+        _ => return,
+    };
+
+    if let Some(exchange) = ledger
+        .user_exchanges
+        .iter_mut()
+        .rev()
+        .find(|e| e.answer.is_none())
+    {
+        exchange.answer = Some(answer.to_string());
+        exchange.answered_at = Some(chrono::Utc::now());
+    }
+
+    let _ = persistence.save_ledger(tenant_id, &project_id, &ledger);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
