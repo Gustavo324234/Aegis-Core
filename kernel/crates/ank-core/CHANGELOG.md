@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.43](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.42...ank-core-v0.1.43) (2026-05-07)
+
+
+### Features
+
+* **ank-core,ank-http:** CORE-276/277/268 — approved paths + web_search + AgentEvents WebSocket ([#229](https://github.com/Gustavo324234/Aegis-Core/issues/229)) ([56e8f79](https://github.com/Gustavo324234/Aegis-Core/commit/56e8f7955d4423f71280310c45b5b5882205e9b1))
+
 ## [0.1.42](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.41...ank-core-v0.1.42) (2026-05-07)
 
 
