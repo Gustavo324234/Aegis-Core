@@ -1217,6 +1217,61 @@ impl CognitiveHAL {
                 .to_string()
             }
 
+            // CORE-272: Chat Agent consulta el ledger de un proyecto por nombre
+            "get_project_ledger" => {
+                let project_name = args["project_name"].as_str().unwrap_or("").to_string();
+
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                let orchestrator = match orchestrator_opt {
+                    Some(o) => o,
+                    None => return "{\"error\":\"orchestrator_not_configured\"}".to_string(),
+                };
+
+                let project_id = {
+                    let tree = orchestrator.tree.read().await;
+                    tree.all_nodes()
+                        .iter()
+                        .filter_map(|n| {
+                            if let crate::agents::node::AgentRole::ProjectSupervisor {
+                                name, ..
+                            } = &n.role
+                            {
+                                if name.to_lowercase().contains(&project_name.to_lowercase()) {
+                                    return Some(n.project_id.clone());
+                                }
+                            }
+                            None
+                        })
+                        .next()
+                };
+
+                let project_id = match project_id {
+                    Some(id) => id,
+                    None => {
+                        return format!(
+                            "{{\"error\":\"project_not_found\",\"project\":\"{}\"}}",
+                            project_name
+                        )
+                    }
+                };
+
+                let tenant_id = match &pcb.tenant_id {
+                    Some(t) => t.clone(),
+                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
+                };
+
+                let persistence = crate::agents::persistence::AgentPersistence::from_env();
+                match persistence.load_ledger(&tenant_id, &project_id) {
+                    Ok(Some(ledger)) => serde_json::to_string(&ledger)
+                        .unwrap_or_else(|_| "{\"error\":\"serialization_error\"}".to_string()),
+                    Ok(None) => format!(
+                        "{{\"error\":\"no_ledger\",\"project_id\":\"{}\"}}",
+                        project_id
+                    ),
+                    Err(e) => format!("{{\"error\":\"load_failed\",\"detail\":\"{}\"}}", e),
+                }
+            }
+
             // CORE-273: Supervisores escriben al ledger del proyecto
             "add_ledger_entry" => {
                 let content = args["content"].as_str().unwrap_or("").to_string();

@@ -64,7 +64,11 @@ impl ToolRegistry {
         match role {
             // CORE-243: ChatAgent no tiene agent_id — query_agent y report requieren uno.
             // Solo puede hacer spawn_agent (para crear un ProjectSupervisor) y answer_supervisor (CORE-263).
-            AgentRole::ChatAgent => vec![Self::spawn_agent(), Self::answer_supervisor()],
+            AgentRole::ChatAgent => vec![
+                Self::spawn_agent(),
+                Self::answer_supervisor(),
+                Self::get_project_ledger(),
+            ],
             AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
                 vec![
                     Self::spawn_agent(),
@@ -344,6 +348,25 @@ impl ToolRegistry {
                     }
                 },
                 "required": ["path"]
+            }),
+        }
+    }
+
+    // --- CORE-272: Project ledger read for ChatAgent ---
+
+    fn get_project_ledger() -> ToolDefinition {
+        ToolDefinition {
+            name: "get_project_ledger",
+            description: "Get the history of a project: entries recorded by supervisors and exchanges with the user. Use ONLY when the user explicitly asks about a project's progress, decisions, or what was discussed with supervisors. Do not use proactively.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "project_name": {
+                        "type": "string",
+                        "description": "Name of the project to query."
+                    }
+                },
+                "required": ["project_name"]
             }),
         }
     }
