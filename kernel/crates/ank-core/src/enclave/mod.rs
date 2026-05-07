@@ -393,6 +393,43 @@ impl TenantDB {
     }
 }
 
+// --- CORE-276: Approved external paths ---
+const APPROVED_PATHS_KEY: &str = "approved_paths";
+
+impl TenantDB {
+    /// Returns the list of external paths approved by the user for specialist access.
+    pub fn get_approved_paths(&self) -> Result<Vec<String>> {
+        match self.get_kv(APPROVED_PATHS_KEY)? {
+            Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Adds a path to the approved list. Idempotent.
+    pub fn add_approved_path(&self, path: &str) -> Result<()> {
+        let mut paths = self.get_approved_paths().unwrap_or_default();
+        if !paths.iter().any(|p| p == path) {
+            paths.push(path.to_string());
+        }
+        let json = serde_json::to_string(&paths)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize approved_paths: {}", e))?;
+        self.set_kv(APPROVED_PATHS_KEY, &json)
+    }
+
+    /// Revokes approval for a path.
+    pub fn remove_approved_path(&self, path: &str) -> Result<()> {
+        let paths: Vec<String> = self
+            .get_approved_paths()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p != path)
+            .collect();
+        let json = serde_json::to_string(&paths)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize approved_paths: {}", e))?;
+        self.set_kv(APPROVED_PATHS_KEY, &json)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

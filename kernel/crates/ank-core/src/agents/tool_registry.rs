@@ -72,6 +72,7 @@ impl ToolRegistry {
                     Self::report(),
                     Self::ask_user(),
                     Self::add_ledger_entry(),
+                    Self::approve_path(),
                 ]
             }
             AgentRole::Specialist { .. } => vec![
@@ -79,6 +80,7 @@ impl ToolRegistry {
                 Self::read_file(),
                 Self::write_file(),
                 Self::list_files(),
+                Self::web_search(),
             ],
         }
     }
@@ -326,6 +328,48 @@ impl ToolRegistry {
             }),
         }
     }
+
+    // --- CORE-276: Approve external path ---
+
+    fn approve_path() -> ToolDefinition {
+        ToolDefinition {
+            name: "approve_path",
+            description: "Approve an external path for filesystem access by specialists. Only call this after the user has explicitly authorized access to that path via ask_user.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path to approve."
+                    }
+                },
+                "required": ["path"]
+            }),
+        }
+    }
+
+    // --- CORE-277: Web search for specialists ---
+
+    fn web_search() -> ToolDefinition {
+        ToolDefinition {
+            name: "web_search",
+            description: "Search the web for current information. Returns a list of results with titles, URLs, and snippets. Use when you need documentation, current data, or information not available in local files.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query. Be specific — 3-6 words work best."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum results to return. Default: 5. Max: 10."
+                    }
+                },
+                "required": ["query"]
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -338,13 +382,14 @@ mod tests {
             scope: "leer archivo".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Anthropic);
-        // CORE-275: Specialist ahora tiene 4 tools (report + 3 filesystem)
-        assert_eq!(tools.len(), 4);
+        // CORE-277: Specialist ahora tiene 5 tools (report + 3 filesystem + web_search)
+        assert_eq!(tools.len(), 5);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"report"));
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_file"));
         assert!(names.contains(&"list_files"));
+        assert!(names.contains(&"web_search"));
     }
 
     #[test]
@@ -354,8 +399,8 @@ mod tests {
             scope: "kernel modules".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::OpenAI);
-        // CORE-273: supervisores ahora tienen 5 tools (+ add_ledger_entry)
-        assert_eq!(tools.len(), 5);
+        // CORE-276: supervisores ahora tienen 6 tools (+ approve_path)
+        assert_eq!(tools.len(), 6);
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
@@ -365,6 +410,7 @@ mod tests {
         assert!(names.contains(&"report"));
         assert!(names.contains(&"ask_user"));
         assert!(names.contains(&"add_ledger_entry"));
+        assert!(names.contains(&"approve_path"));
     }
 
     #[test]

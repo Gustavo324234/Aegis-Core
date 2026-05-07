@@ -706,10 +706,13 @@ impl CognitiveHAL {
             .join("workspace")
     }
 
-    async fn get_approved_paths(_pcb: &PCB) -> Vec<String> {
-        // Leer del enclave del tenant — implementado en CORE-276
-        // Por ahora retorna vacío (solo workspace propio está disponible)
-        vec![]
+    async fn get_approved_paths(pcb: &PCB) -> Vec<String> {
+        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+        let session_key = pcb.session_key.as_deref().unwrap_or("");
+        match crate::enclave::TenantDB::open(tenant_id, session_key) {
+            Ok(db) => db.get_approved_paths().unwrap_or_default(),
+            Err(_) => vec![],
+        }
     }
 
     fn resolve_path(
@@ -876,7 +879,7 @@ impl CognitiveHAL {
             // CORE-263: supervisor pausa su ejecución esperando respuesta del usuario
             "ask_user" => {
                 let question = args["question"].as_str().unwrap_or("").to_string();
-                let _context = args
+                let context = args
                     .get("context")
                     .and_then(|v| v.as_str())
                     .map(String::from);
@@ -895,6 +898,13 @@ impl CognitiveHAL {
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
                 orchestrator.register_user_reply(agent_uuid, reply_tx).await;
 
+                let project_name = {
+                    let tree = orchestrator.tree.read().await;
+                    tree.get(&agent_uuid)
+                        .map(|n| n.project_id.clone())
+                        .unwrap_or_else(|| "proyecto".to_string())
+                };
+
                 {
                     let mut tree = orchestrator.tree.write().await;
                     if let Some(node) = tree.get_mut(&agent_uuid) {
@@ -908,6 +918,15 @@ impl CognitiveHAL {
                     "CORE-263: supervisor pausado esperando respuesta del usuario"
                 );
 
+                // CORE-268: notificar a la UI que el supervisor necesita respuesta
+                orchestrator.emit_event(crate::agents::event::AgentEvent::SupervisorQuestion {
+                    agent_id: agent_uuid,
+                    project_name: project_name.clone(),
+                    question: question.clone(),
+                    context: context.clone(),
+                    timestamp: chrono::Utc::now(),
+                });
+
                 match tokio::time::timeout(std::time::Duration::from_secs(600), reply_rx).await {
                     Ok(Ok(answer)) => {
                         {
@@ -916,6 +935,11 @@ impl CognitiveHAL {
                                 node.set_state(crate::agents::node::AgentState::Running);
                             }
                         }
+                        orchestrator.emit_event(
+                            crate::agents::event::AgentEvent::SupervisorResumed {
+                                agent_id: agent_uuid,
+                            },
+                        );
                         format!("{{\"user_answer\": {}}}", serde_json::json!(answer))
                     }
                     _ => {
@@ -925,8 +949,114 @@ impl CognitiveHAL {
                                 node.set_state(crate::agents::node::AgentState::Running);
                             }
                         }
+                        orchestrator.emit_event(
+                            crate::agents::event::AgentEvent::SupervisorTimedOut {
+                                agent_id: agent_uuid,
+                                project_name,
+                            },
+                        );
                         "{\"user_answer\": null, \"reason\": \"timeout\"}".to_string()
                     }
+                }
+            }
+
+            // CORE-276: supervisor aprueba un path externo tras recibir OK del usuario
+            "approve_path" => {
+                let path = args["path"].as_str().unwrap_or("").to_string();
+
+                if path.is_empty() {
+                    return "{\"error\":\"empty_path\"}".to_string();
+                }
+
+                if !std::path::Path::new(&path).exists() {
+                    return format!(
+                        "{{\"error\":\"path_not_found\",\"path\":\"{}\"}}",
+                        path
+                    );
+                }
+
+                let tenant_id = match &pcb.tenant_id {
+                    Some(t) => t.clone(),
+                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
+                };
+                let session_key = pcb.session_key.as_deref().unwrap_or("");
+
+                match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                    Ok(db) => match db.add_approved_path(&path) {
+                        Ok(_) => serde_json::json!({
+                            "status": "approved",
+                            "path": path
+                        })
+                        .to_string(),
+                        Err(e) => {
+                            format!("{{\"error\":\"persist_failed\",\"detail\":\"{}\"}}", e)
+                        }
+                    },
+                    Err(e) => {
+                        format!("{{\"error\":\"enclave_open_failed\",\"detail\":\"{}\"}}", e)
+                    }
+                }
+            }
+
+            // CORE-277: búsqueda web para specialists
+            "web_search" => {
+                let query = args["query"].as_str().unwrap_or("").to_string();
+                let max_results = args
+                    .get("max_results")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5)
+                    .min(10) as usize;
+
+                if query.is_empty() {
+                    return "{\"error\":\"empty_query\"}".to_string();
+                }
+
+                let api_key = match std::env::var("BRAVE_SEARCH_API_KEY").ok() {
+                    Some(k) if !k.is_empty() => k,
+                    _ => {
+                        return "{\"error\":\"web_search_not_configured\",\"detail\":\"BRAVE_SEARCH_API_KEY not set\"}".to_string();
+                    }
+                };
+
+                match self
+                    .http_client
+                    .get("https://api.search.brave.com/res/v1/web/search")
+                    .header("X-Subscription-Token", api_key)
+                    .header("Accept", "application/json")
+                    .query(&[("q", &query), ("count", &max_results.to_string())])
+                    .send()
+                    .await
+                {
+                    Ok(resp) => match resp.json::<serde_json::Value>().await {
+                        Ok(data) => {
+                            let empty = vec![];
+                            let raw = data["web"]["results"]
+                                .as_array()
+                                .unwrap_or(&empty);
+                            let results: Vec<serde_json::Value> = raw
+                                .iter()
+                                .take(max_results)
+                                .map(|r| {
+                                    serde_json::json!({
+                                        "title": r["title"],
+                                        "url": r["url"],
+                                        "snippet": r["description"]
+                                    })
+                                })
+                                .collect();
+                            let count = results.len();
+                            serde_json::json!({
+                                "results": results,
+                                "query": query,
+                                "count": count
+                            })
+                            .to_string()
+                        }
+                        Err(e) => {
+                            format!("{{\"error\":\"parse_failed\",\"detail\":\"{}\"}}", e)
+                        }
+                    },
+                    Err(e) => format!("{{\"error\":\"search_failed\",\"detail\":\"{}\"}}", e),
                 }
             }
 

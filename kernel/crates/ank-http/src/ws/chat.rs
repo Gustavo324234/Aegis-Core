@@ -20,8 +20,9 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::LazyLock;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
+use tracing::warn;
 
 #[allow(clippy::expect_used)]
 static MUSIC_PLAY_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -168,9 +169,15 @@ async fn handle_chat(
     // 3. Subscribe to workspace events (CORE-175)
     let mut workspace_rx = state.workspace_events.subscribe();
 
+    // CORE-268: Registrar canal de AgentEvents en el orchestrator y suscribirse.
+    state
+        .agent_orchestrator
+        .set_event_channel((*state.agent_event_tx).clone());
+    let mut agent_event_rx = state.agent_event_tx.subscribe();
+
     // 4. Loop
-    while let Some(Ok(msg)) = socket.next().await {
-        // Forward pending workspace events for this tenant before processing message
+    loop {
+        // Forward pending workspace events for this tenant before waiting
         loop {
             match workspace_rx.try_recv() {
                 Ok(event) if event.tenant_id == tenant_id => {
@@ -180,6 +187,32 @@ async fn handle_chat(
                 Err(_) => break,
             }
         }
+
+        let msg = tokio::select! {
+            ws_next = socket.recv() => {
+                match ws_next {
+                    Some(Ok(m)) => m,
+                    _ => break,
+                }
+            }
+            event_result = agent_event_rx.recv() => {
+                // CORE-274: envelope estándar { "event": "agent_event", "data": {...} }
+                match event_result {
+                    Ok(event) => {
+                        if let Ok(data) = serde_json::to_value(&event) {
+                            let frame = json!({ "event": "agent_event", "data": data });
+                            let _ = socket.send(Message::Text(frame.to_string())).await;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("[ChatWS] tenant={} agent_event_rx lagged by {} events", tenant_id, n);
+                    }
+                    Err(_) => {}
+                }
+                continue;
+            }
+        };
+
         let msg_text = match msg {
             Message::Text(t) => t,
             Message::Close(_) => break,

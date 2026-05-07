@@ -72,3 +72,16 @@ outside it.
 
 When reading large files, use `offset` and `length` to avoid loading
 more than you need.
+
+---
+
+## Web search
+
+Use `web_search` when you need information not available in local files:
+documentation, current prices, tutorials, recent news, API references.
+
+Be specific in your queries. Prefer 3-6 word queries over long sentences.
+Read the snippets returned — fetch a URL only if the snippet is insufficient
+and you have `read_file` access or another mechanism to retrieve it.
+
+Do not search for information you already have in your context.
