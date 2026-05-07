@@ -1,4 +1,5 @@
 use crate::agents::node::{AgentId, ProjectId};
+use crate::agents::project_ledger::ProjectLedger;
 use crate::agents::tree::AgentTree;
 use anyhow::Context;
 use std::path::{Path, PathBuf};
@@ -184,6 +185,60 @@ impl AgentPersistence {
             }
         }
         Ok(summaries)
+    }
+
+    // --- ProjectLedger (CORE-273) ---
+
+    pub fn ledger_path(&self, tenant_id: &str, project_id: &ProjectId) -> PathBuf {
+        self.project_dir(tenant_id, project_id).join("project.json")
+    }
+
+    pub fn save_ledger(
+        &self,
+        tenant_id: &str,
+        project_id: &ProjectId,
+        ledger: &ProjectLedger,
+    ) -> anyhow::Result<()> {
+        let path = self.ledger_path(tenant_id, project_id);
+        self.ensure_dir(path.parent().context("ledger path has no parent")?)?;
+
+        let json = serde_json::to_string_pretty(ledger)
+            .context("Failed to serialize ProjectLedger")?;
+        std::fs::write(&path, json.as_bytes())
+            .with_context(|| format!("Failed to write project.json at {:?}", path))?;
+
+        info!(
+            tenant = %tenant_id,
+            project = %project_id,
+            "[AgentPersistence] Ledger saved ({} entries).",
+            ledger.entries.len()
+        );
+        Ok(())
+    }
+
+    pub fn load_ledger(
+        &self,
+        tenant_id: &str,
+        project_id: &ProjectId,
+    ) -> anyhow::Result<Option<ProjectLedger>> {
+        let path = self.ledger_path(tenant_id, project_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let json = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read project.json at {:?}", path))?;
+
+        let ledger: ProjectLedger = serde_json::from_str(&json)
+            .with_context(|| format!("Failed to parse project.json at {:?}", path))?;
+
+        info!(
+            tenant = %tenant_id,
+            project = %project_id,
+            "[AgentPersistence] Ledger loaded ({} entries).",
+            ledger.entries.len()
+        );
+        Ok(Some(ledger))
     }
 
     /// Elimina todos los archivos de persistencia de un proyecto (archivado).

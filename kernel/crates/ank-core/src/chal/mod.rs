@@ -695,6 +695,71 @@ impl CognitiveHAL {
         Ok(())
     }
 
+    // --- CORE-275: Filesystem helpers ---
+
+    fn get_tenant_workspace(pcb: &PCB) -> std::path::PathBuf {
+        let data_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let tenant = pcb.tenant_id.as_deref().unwrap_or("default");
+        std::path::Path::new(&data_dir)
+            .join("users")
+            .join(tenant)
+            .join("workspace")
+    }
+
+    async fn get_approved_paths(_pcb: &PCB) -> Vec<String> {
+        // Leer del enclave del tenant — implementado en CORE-276
+        // Por ahora retorna vacío (solo workspace propio está disponible)
+        vec![]
+    }
+
+    fn resolve_path(
+        workspace: &std::path::Path,
+        input_path: &str,
+        approved_paths: &[String],
+    ) -> Result<std::path::PathBuf, String> {
+        let candidate = if std::path::Path::new(input_path).is_absolute() {
+            std::path::PathBuf::from(input_path)
+        } else {
+            workspace.join(input_path)
+        };
+
+        // Canonicalizar para resolver .. y symlinks.
+        // Si el archivo no existe aún (write_file), canonicalizar el padre.
+        let canonical = if candidate.exists() {
+            candidate
+                .canonicalize()
+                .map_err(|e| format!("{{\"error\":\"invalid_path\",\"detail\":\"{}\"}}", e))?
+        } else {
+            let parent = candidate
+                .parent()
+                .ok_or_else(|| "{\"error\":\"invalid_path\",\"detail\":\"no parent\"}".to_string())?;
+            let canonical_parent = parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf());
+            canonical_parent.join(candidate.file_name().unwrap_or_default())
+        };
+
+        // Verificar confinamiento al workspace
+        if canonical.starts_with(workspace) {
+            return Ok(canonical);
+        }
+
+        // Path externo — verificar aprobaciones
+        let canonical_str = canonical.to_string_lossy().to_string();
+        let approved = approved_paths
+            .iter()
+            .any(|a| canonical_str.starts_with(a.as_str()));
+
+        if approved {
+            Ok(canonical)
+        } else {
+            Err(format!(
+                "{{\"error\":\"path_requires_approval\",\"path\":\"{}\",\"message\":\"Este path está fuera del workspace. El usuario debe aprobarlo primero.\"}}",
+                canonical_str
+            ))
+        }
+    }
+
     /// CORE-261: Ejecuta un tool call interno y retorna el resultado como String.
     async fn execute_tool_call_internal(
         &self,
@@ -885,6 +950,172 @@ impl CognitiveHAL {
                             "{\"status\":\"no_supervisor_waiting\"}".to_string()
                         }
                     }
+                }
+            }
+
+            // CORE-275: Specialist filesystem tools
+
+            "read_file" => {
+                let input_path = args["path"].as_str().unwrap_or("").to_string();
+                let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let length = args.get("length").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+
+                let workspace = Self::get_tenant_workspace(pcb);
+                let approved = Self::get_approved_paths(pcb).await;
+
+                let resolved = match Self::resolve_path(&workspace, &input_path, &approved) {
+                    Ok(p) => p,
+                    Err(e) => return e,
+                };
+
+                match tokio::fs::read_to_string(&resolved).await {
+                    Ok(content) => {
+                        let lines: Vec<&str> = content.lines().collect();
+                        let total = lines.len();
+                        let start = offset.min(total);
+                        let end = (offset + length).min(total);
+                        let slice = &lines[start..end];
+                        serde_json::json!({
+                            "content": slice.join("\n"),
+                            "total_lines": total,
+                            "offset": offset,
+                            "returned_lines": slice.len()
+                        })
+                        .to_string()
+                    }
+                    Err(e) => format!("{{\"error\":\"read_failed\",\"detail\":\"{}\"}}", e),
+                }
+            }
+
+            "write_file" => {
+                use tokio::io::AsyncWriteExt;
+
+                let input_path = args["path"].as_str().unwrap_or("").to_string();
+                let content = args["content"].as_str().unwrap_or("").to_string();
+                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("rewrite");
+
+                let workspace = Self::get_tenant_workspace(pcb);
+
+                // write_file solo opera dentro del workspace — nunca en paths externos
+                let resolved = match Self::resolve_path(&workspace, &input_path, &[]) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return "{\"error\":\"write_outside_workspace\",\"message\":\"write_file solo puede escribir dentro del workspace del tenant.\"}".to_string();
+                    }
+                };
+
+                // Crear directorios intermedios si es necesario
+                if let Some(parent) = resolved.parent() {
+                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                        return format!("{{\"error\":\"mkdir_failed\",\"detail\":\"{}\"}}", e);
+                    }
+                }
+
+                let result = if mode == "append" {
+                    match tokio::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&resolved)
+                        .await
+                    {
+                        Ok(mut f) => f.write_all(content.as_bytes()).await,
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    tokio::fs::write(&resolved, content.as_bytes()).await
+                };
+
+                match result {
+                    Ok(_) => serde_json::json!({
+                        "status": "written",
+                        "path": resolved.to_string_lossy()
+                    })
+                    .to_string(),
+                    Err(e) => format!("{{\"error\":\"write_failed\",\"detail\":\"{}\"}}", e),
+                }
+            }
+
+            "list_files" => {
+                let input_path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let depth = args
+                    .get("depth")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(2)
+                    .min(4) as usize;
+
+                let workspace = Self::get_tenant_workspace(pcb);
+                let approved = Self::get_approved_paths(pcb).await;
+
+                let resolved = match Self::resolve_path(&workspace, input_path, &approved) {
+                    Ok(p) => p,
+                    Err(e) => return e,
+                };
+
+                fn walk(dir: &std::path::Path, max_depth: usize, current: usize) -> Vec<String> {
+                    if current > max_depth {
+                        return vec![];
+                    }
+                    let mut entries = vec![];
+                    if let Ok(rd) = std::fs::read_dir(dir) {
+                        let mut items: Vec<_> = rd.flatten().collect();
+                        items.sort_by_key(|e| e.file_name());
+                        for entry in items {
+                            let path = entry.path();
+                            let name = path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            if name.starts_with('.') || name == "target" || name == "node_modules" {
+                                continue;
+                            }
+                            if path.is_dir() {
+                                entries.push(format!("[DIR]  {}", name));
+                                for s in walk(&path, max_depth, current + 1) {
+                                    entries.push(format!("  {}", s));
+                                }
+                            } else {
+                                entries.push(format!("[FILE] {}", name));
+                            }
+                        }
+                    }
+                    entries
+                }
+
+                let listing = walk(&resolved, depth, 0);
+                serde_json::json!({
+                    "path": resolved.to_string_lossy(),
+                    "entries": listing
+                })
+                .to_string()
+            }
+
+            // CORE-273: Supervisores escriben al ledger del proyecto
+            "add_ledger_entry" => {
+                let content = args["content"].as_str().unwrap_or("").to_string();
+                if content.is_empty() {
+                    return "{\"error\":\"content is required\"}".to_string();
+                }
+
+                let agent_uuid = match pcb.agent_id {
+                    Some(id) => id,
+                    None => return "{\"error\":\"add_ledger_entry requiere agent_id en PCB\"}".to_string(),
+                };
+
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                let orchestrator = match orchestrator_opt {
+                    Some(o) => o,
+                    None => return "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
+                };
+
+                let tenant_id = pcb.tenant_id.clone().unwrap_or_else(|| "default".to_string());
+
+                match orchestrator
+                    .add_project_ledger_entry(&tenant_id, agent_uuid, content)
+                    .await
+                {
+                    Ok(_) => "{\"status\":\"recorded\"}".to_string(),
+                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
                 }
             }
 

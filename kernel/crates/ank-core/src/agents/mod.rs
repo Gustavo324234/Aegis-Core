@@ -7,6 +7,7 @@ pub mod node;
 pub mod orchestrator;
 pub mod persistence;
 pub mod project;
+pub mod project_ledger;
 pub mod tool_registry;
 pub mod tree;
 
@@ -22,5 +23,6 @@ pub use node::{AgentId, AgentNode, AgentRole, AgentState, ProjectId};
 pub use orchestrator::{AgentNodeSummary, AgentOrchestrator};
 pub use persistence::AgentPersistence;
 pub use project::{ProjectMetadata, ProjectRegistry, ProjectStatus};
+pub use project_ledger::{LedgerEntry, ProjectLedger, UserExchange};
 pub use tool_registry::{ProviderKind, ToolDefinition, ToolRegistry};
 pub use tree::{AgentTree, AgentTreeSnapshot};

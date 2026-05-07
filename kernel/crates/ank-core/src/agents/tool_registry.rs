@@ -45,10 +45,10 @@ pub struct ToolDefinition {
 /// Registra y serializa las herramientas del Agent Protocol v2 (EPIC 47).
 ///
 /// Cada agente recibe un set de herramientas según su rol:
-/// - ChatAgent            → [spawn_agent]  (query_agent requiere agent_id — ver CORE-243)
-/// - ProjectSupervisor    → [spawn_agent, query_agent, report]
-/// - Supervisor           → [spawn_agent, query_agent, report]
-/// - Specialist           → [report]
+/// - ChatAgent            → [spawn_agent, answer_supervisor]
+/// - ProjectSupervisor    → [spawn_agent, query_agent, report, ask_user, add_ledger_entry]
+/// - Supervisor           → [spawn_agent, query_agent, report, ask_user, add_ledger_entry]
+/// - Specialist           → [report, read_file, write_file, list_files]
 pub struct ToolRegistry;
 
 impl ToolRegistry {
@@ -71,9 +71,15 @@ impl ToolRegistry {
                     Self::query_agent(),
                     Self::report(),
                     Self::ask_user(),
+                    Self::add_ledger_entry(),
                 ]
             }
-            AgentRole::Specialist { .. } => vec![Self::report()],
+            AgentRole::Specialist { .. } => vec![
+                Self::report(),
+                Self::read_file(),
+                Self::write_file(),
+                Self::list_files(),
+            ],
         }
     }
 
@@ -227,6 +233,99 @@ impl ToolRegistry {
             }),
         }
     }
+
+    // --- CORE-275: Specialist filesystem tools ---
+
+    fn read_file() -> ToolDefinition {
+        ToolDefinition {
+            name: "read_file",
+            description: "Read the contents of a file. Path is relative to your workspace unless an absolute path was explicitly approved by the user.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path. Relative paths resolve inside the tenant workspace."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Optional: start reading from this line (0-based). Useful for large files."
+                    },
+                    "length": {
+                        "type": "integer",
+                        "description": "Optional: max number of lines to read. Default: 200."
+                    }
+                },
+                "required": ["path"]
+            }),
+        }
+    }
+
+    fn write_file() -> ToolDefinition {
+        ToolDefinition {
+            name: "write_file",
+            description: "Write or overwrite a file. Creates parent directories if needed. Path must be inside the workspace.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to workspace."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full content to write."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["rewrite", "append"],
+                        "description": "rewrite (default) replaces the file. append adds to the end."
+                    }
+                },
+                "required": ["path", "content"]
+            }),
+        }
+    }
+
+    fn list_files() -> ToolDefinition {
+        ToolDefinition {
+            name: "list_files",
+            description: "List files and directories at a path. Defaults to workspace root.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path. Defaults to workspace root if omitted."
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "Max recursion depth. Default: 2. Max: 4."
+                    }
+                },
+                "required": []
+            }),
+        }
+    }
+
+    // --- CORE-273: ProjectLedger tool ---
+
+    fn add_ledger_entry() -> ToolDefinition {
+        ToolDefinition {
+            name: "add_ledger_entry",
+            description: "Record something important in the project's permanent history. Use for design decisions, completed milestones, or relevant findings that the user should be able to consult later.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "What to record. Plain language, any domain."
+                    }
+                },
+                "required": ["content"]
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -234,13 +333,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_specialist_only_gets_report() {
+    fn test_specialist_gets_filesystem_tools() {
         let role = AgentRole::Specialist {
             scope: "leer archivo".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Anthropic);
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["name"], "report");
+        // CORE-275: Specialist ahora tiene 4 tools (report + 3 filesystem)
+        assert_eq!(tools.len(), 4);
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"report"));
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"write_file"));
+        assert!(names.contains(&"list_files"));
     }
 
     #[test]
@@ -250,8 +354,8 @@ mod tests {
             scope: "kernel modules".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::OpenAI);
-        // CORE-263: supervisores ahora tienen 4 tools (+ ask_user)
-        assert_eq!(tools.len(), 4);
+        // CORE-273: supervisores ahora tienen 5 tools (+ add_ledger_entry)
+        assert_eq!(tools.len(), 5);
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
@@ -260,6 +364,7 @@ mod tests {
         assert!(names.contains(&"query_agent"));
         assert!(names.contains(&"report"));
         assert!(names.contains(&"ask_user"));
+        assert!(names.contains(&"add_ledger_entry"));
     }
 
     #[test]
@@ -287,12 +392,13 @@ mod tests {
             scope: "test".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Anthropic);
+        // All tools in Anthropic format use input_schema
         assert!(
-            tools[0].get("input_schema").is_some(),
+            tools.iter().all(|t| t.get("input_schema").is_some()),
             "Anthropic format must use input_schema"
         );
         assert!(
-            tools[0].get("function").is_none(),
+            tools.iter().all(|t| t.get("function").is_none()),
             "Anthropic format must not use function wrapper"
         );
     }

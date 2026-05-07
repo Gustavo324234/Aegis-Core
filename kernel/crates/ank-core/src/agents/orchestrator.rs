@@ -6,6 +6,7 @@ use crate::agents::message::{
 };
 use crate::agents::node::{AgentId, AgentRole, AgentState, ProjectId};
 use crate::agents::persistence::AgentPersistence;
+use crate::agents::project_ledger::ProjectLedger;
 use crate::agents::tool_registry::{ProviderKind, ToolRegistry};
 
 use crate::agents::tree::AgentTree;
@@ -199,6 +200,15 @@ impl AgentOrchestrator {
 
         let node_count = restored_tree.len();
 
+        // Cargar el ledger del proyecto para inyectarlo al ProjectSupervisor (CORE-273)
+        let ledger_context = match self.persistence.load_ledger(tenant_id, project_id) {
+            Ok(Some(ledger)) => {
+                let formatted = ledger.format_for_prompt();
+                if formatted.is_empty() { None } else { Some(formatted) }
+            }
+            _ => None,
+        };
+
         // Insertar nodos en el árbol activo y asignar state summaries como contexto
         {
             let mut tree = self.tree.write().await;
@@ -206,12 +216,28 @@ impl AgentOrchestrator {
 
             let snapshot = restored_tree.serialize()?;
             for mut node in snapshot.nodes {
-                // Inyectar el state summary como contexto inicial si existe
-                if let Some(summary) = summaries.get(&node.agent_id) {
+                let is_project_supervisor = matches!(node.role, AgentRole::ProjectSupervisor { .. });
+
+                // Construir contexto: state summary + ledger (solo para ProjectSupervisor)
+                let extra_context = if is_project_supervisor {
+                    let summary = summaries.get(&node.agent_id).map(|s| s.as_str());
+                    let ledger_str = ledger_context.as_deref().unwrap_or("");
+                    match (summary, ledger_str.is_empty()) {
+                        (Some(s), false) => Some(format!("{}\n\n{}", s, ledger_str)),
+                        (Some(s), true) => Some(s.to_string()),
+                        (None, false) => Some(ledger_str.to_string()),
+                        (None, true) => None,
+                    }
+                } else {
+                    summaries.get(&node.agent_id).map(|s| s.clone())
+                };
+
+                if let Some(ctx) = extra_context {
                     let base_prompt =
-                        loader.build_system_prompt(&node.role, project_id, Some(summary.as_str()));
+                        loader.build_system_prompt(&node.role, project_id, Some(ctx.as_str()));
                     node.system_prompt = base_prompt;
                 }
+
                 let agent_id = node.agent_id;
                 let _parent_tx = node.parent_id.and_then(|_pid| {
                     // Se asignará al crear el canal — se pasa None por ahora
@@ -391,6 +417,35 @@ impl AgentOrchestrator {
             Some(tx) => tx.send(answer).is_ok(),
             None => false,
         }
+    }
+
+    // --- ProjectLedger (CORE-273) ---
+
+    /// Agrega una entrada al ledger del proyecto al que pertenece el agente.
+    /// Crea el ledger si no existe. Guarda inmediatamente en disco.
+    pub async fn add_project_ledger_entry(
+        &self,
+        tenant_id: &str,
+        agent_id: AgentId,
+        content: String,
+    ) -> anyhow::Result<()> {
+        let (project_id, role_label) = {
+            let tree = self.tree.read().await;
+            let node = tree
+                .get(&agent_id)
+                .ok_or_else(|| anyhow::anyhow!("Agent {} not found in tree", agent_id))?;
+            (node.project_id.clone(), node.role.display_name().to_string())
+        };
+
+        let mut ledger = self
+            .persistence
+            .load_ledger(tenant_id, &project_id)
+            .unwrap_or(None)
+            .unwrap_or_else(|| ProjectLedger::new(project_id.clone(), project_id.clone()));
+
+        ledger.add_entry(content, agent_id.to_string(), role_label);
+        self.persistence.save_ledger(tenant_id, &project_id, &ledger)?;
+        Ok(())
     }
 
     // --- Modo degradado (CORE-237) ---

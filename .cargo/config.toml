@@ -16,3 +16,6 @@ rustflags = ["-L", "native=C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"]
 OPENSSL_DIR         = "C:\\Program Files\\OpenSSL-Win64"
 OPENSSL_LIB_DIR     = "C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"
 OPENSSL_INCLUDE_DIR = "C:\\Program Files\\OpenSSL-Win64\\include"
+# Prevents openssl-sys from trying to build OpenSSL from source via vendored openssl-src.
+# Uses the pre-installed Shining Light OpenSSL-Win64 instead.
+OPENSSL_NO_VENDOR   = "1"
