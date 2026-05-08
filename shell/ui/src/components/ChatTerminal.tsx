@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard } from 'lucide-react';
+import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, Volume2, VolumeX } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
 import { AgentBadge } from './AgentBadge';
 import { InputModeSelector } from './InputModeSelector';
@@ -89,7 +89,7 @@ const MessageItem: React.FC<{ message: Message }> = ({ message }) => {
 
 const ChatTerminal: React.FC = () => {
     const { t } = useTranslation();
-    const { messages, sendMessage, status, isRecording, sttAvailable, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout, fetchSirenConfig, inputMode, lastRoutingInfo } = useAegisStore();
+    const { messages, sendMessage, status, isRecording, sttAvailable, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout, fetchSirenConfig, inputMode, lastRoutingInfo, voiceEnabled, setVoiceEnabled } = useAegisStore();
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const isAtBottom = useRef(true);
@@ -163,6 +163,16 @@ const ChatTerminal: React.FC = () => {
                 setTimeout(() => setVoiceError(null), 8000);
             }
         }
+    };
+
+    const handleVoiceToggle = () => {
+        const isInsecure = window.location.protocol === 'http:' &&
+            !['localhost', '127.0.0.1'].includes(window.location.hostname);
+        if (!voiceEnabled && isInsecure) {
+            alert('La voz requiere HTTPS. Configurá tu dominio con HTTPS para habilitar esta función.');
+            return;
+        }
+        setVoiceEnabled(!voiceEnabled);
     };
 
     const handleFileUpload = async (file: File) => {
@@ -301,6 +311,18 @@ const ChatTerminal: React.FC = () => {
                                 {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
                             </button>
                             <InputModeSelector />
+                            <button
+                                onClick={handleVoiceToggle}
+                                className={cn(
+                                    "p-2 rounded-lg transition-all",
+                                    voiceEnabled
+                                        ? "bg-aegis-cyan/20 text-aegis-cyan hover:bg-aegis-cyan/30"
+                                        : "bg-white/5 text-white/40 hover:text-white hover:bg-white/10"
+                                )}
+                                title={voiceEnabled ? "Desactivar voz" : "Activar voz"}
+                            >
+                                {voiceEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+                            </button>
                             {(inputMode === 'audio' || inputMode === 'conversation') && (
                                 <button
                                     onClick={handleToggleMic}
