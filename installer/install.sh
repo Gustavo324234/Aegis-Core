@@ -30,6 +30,9 @@ NC='\033[0m'
 INSTALL_MODE="1"
 ARCH="x86_64"
 INFERENCE_PROFILE="cloud"
+SETUP_HTTPS="false"
+AEGIS_DOMAIN=""
+AEGIS_EMAIL=""
 
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
@@ -151,6 +154,34 @@ show_main_menu() {
     read -rp "Selección [1-3]: " hw_choice
     export HW_PROFILE="${hw_choice:-1}"
 
+    echo ""
+    echo -e "${YELLOW}--- ACCESO HTTPS (recomendado para voz y acceso remoto) ---${NC}"
+    echo "  [1] Sin HTTPS — solo acceso local en http://IP:8000 [DEFAULT]"
+    echo "  [2] Con HTTPS — requiere un dominio apuntando a este servidor"
+    echo "      (Let's Encrypt automático via Caddy)"
+    read -rp "Selección [1-2]: " https_choice
+    case "${https_choice:-1}" in
+        2) SETUP_HTTPS="true" ;;
+        *) SETUP_HTTPS="false" ;;
+    esac
+
+    if [[ "$SETUP_HTTPS" == "true" ]]; then
+        local pub_ip
+        pub_ip=$(curl -s ifconfig.me 2>/dev/null || echo 'desconocida')
+        echo ""
+        echo -e "${YELLOW}Requisitos para HTTPS:${NC}"
+        echo "  1. Tu dominio debe apuntar a tu IP pública: ${pub_ip}"
+        echo "  2. Puertos 80 y 443 deben estar abiertos en tu router"
+        echo ""
+        read -rp "¿Cumplís estos requisitos? [s/N]: " ready
+        if [[ "$ready" != "s" && "$ready" != "S" ]]; then
+            SETUP_HTTPS="false"
+        else
+            read -rp "Dominio (ej: aegis.midominio.com): " AEGIS_DOMAIN
+            read -rp "Email para Let's Encrypt (para notificaciones de renovación): " AEGIS_EMAIL
+        fi
+    fi
+
 }
 
 show_inference_profile_menu() {
@@ -225,10 +256,56 @@ install_cloudflared() {
     fi
 }
 
+install_caddy() {
+    if command -v caddy &>/dev/null; then
+        log "Caddy ya instalado — omitiendo"
+        return
+    fi
+    log "Instalando Caddy..."
+    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https -qq >> "$LOG_FILE" 2>&1
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+        | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+        | tee /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -qq >> "$LOG_FILE" 2>&1
+    apt-get install -y caddy -qq >> "$LOG_FILE" 2>&1
+    success "Caddy instalado"
+}
+
+configure_caddy() {
+    local domain="$1"
+    local email="$2"
+
+    cat > /etc/caddy/Caddyfile <<EOF
+{
+    email ${email}
+}
+
+${domain} {
+    reverse_proxy localhost:8000
+
+    @websockets {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @websockets localhost:8000
+}
+EOF
+
+    systemctl enable caddy >> "$LOG_FILE" 2>&1
+    systemctl restart caddy >> "$LOG_FILE" 2>&1
+    success "Caddy configurado para ${domain}"
+    success "HTTPS automático via Let's Encrypt"
+}
+
 install_native() {
     log "Starting native installation..."
 
-    install_cloudflared
+    if [[ "$SETUP_HTTPS" == "true" ]]; then
+        install_caddy
+    else
+        install_cloudflared
+    fi
 
     if ! id -u aegis >/dev/null 2>&1; then
         log "Creating 'aegis' system user..."
@@ -304,6 +381,10 @@ UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
 EOF
+        if [[ "$SETUP_HTTPS" == "true" && -n "$AEGIS_DOMAIN" ]]; then
+            echo "AEGIS_DOMAIN=${AEGIS_DOMAIN}" >> "$ENV_FILE"
+            echo "AEGIS_BASE_URL=https://${AEGIS_DOMAIN}" >> "$ENV_FILE"
+        fi
         chmod 640 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
         success "Environment file → ${ENV_FILE}"
@@ -355,6 +436,10 @@ EOF
         systemctl start aegis.service
     } >> "$LOG_FILE" 2>&1
     success "Systemd service and CLI installed."
+
+    if [[ "$SETUP_HTTPS" == "true" && -n "$AEGIS_DOMAIN" ]]; then
+        configure_caddy "$AEGIS_DOMAIN" "$AEGIS_EMAIL"
+    fi
 }
 
 install_docker() {
@@ -450,7 +535,12 @@ wait_and_show() {
         echo -e "  Inference profile: ${CYAN}${INFERENCE_PROFILE}${NC}"
         echo ""
 
-        if [[ -n "$tunnel_url" ]]; then
+        if [[ "$SETUP_HTTPS" == "true" && -n "$AEGIS_DOMAIN" ]]; then
+            echo -e "${GREEN}  Acceso HTTPS:${NC}"
+            echo -e "  ${CYAN}https://${AEGIS_DOMAIN}${NC}"
+            echo -e "  Certificado: Let's Encrypt (renovación automática)"
+            echo ""
+        elif [[ -n "$tunnel_url" ]]; then
             echo -e "${GREEN}  Remote Access (HTTPS):${NC}"
             echo -e "  ${CYAN}${tunnel_url}${NC}"
             echo ""
@@ -466,8 +556,8 @@ wait_and_show() {
             echo -e "  Local Access (HTTP): ${CYAN}${PROTOCOL}://${ip}:8000${NC}"
             echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
         fi
-        
-        if [[ -z "$tunnel_url" ]]; then
+
+        if [[ "$SETUP_HTTPS" != "true" && -z "$tunnel_url" ]]; then
             echo ""
             echo -e "${YELLOW}  Note: Cloudflare Tunnel is still initializing.${NC}"
             echo -e "  Run ${CYAN}sudo aegis status${NC} in a few minutes to get the HTTPS URL."

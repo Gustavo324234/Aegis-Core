@@ -175,6 +175,11 @@ async fn handle_chat(
         .set_event_channel((*state.agent_event_tx).clone());
     let mut agent_event_rx = state.agent_event_tx.subscribe();
 
+    // CORE-279: Ticker de keepalive — ping cada 30s para mantener la conexión viva
+    // a través de proxies (Cloudflare, nginx, etc.) que cierran conexiones idle.
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     // 4. Loop
     loop {
         // Forward pending workspace events for this tenant before waiting
@@ -211,10 +216,18 @@ async fn handle_chat(
                 }
                 continue;
             }
+            // CORE-279: ping keepalive
+            _ = ping_interval.tick() => {
+                if socket.send(Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+                continue;
+            }
         };
 
         let msg_text = match msg {
             Message::Text(t) => t,
+            Message::Pong(_) => continue, // CORE-279: el browser responde automáticamente
             Message::Close(_) => break,
             _ => continue,
         };
