@@ -33,6 +33,9 @@ INFERENCE_PROFILE="cloud"
 SETUP_HTTPS="false"
 AEGIS_DOMAIN=""
 AEGIS_EMAIL=""
+AI_PROVIDER="none"
+AI_API_KEY=""
+AI_MODEL=""
 
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
@@ -180,6 +183,66 @@ show_main_menu() {
             read -rp "Dominio (ej: aegis.midominio.com): " AEGIS_DOMAIN
             read -rp "Email para Let's Encrypt (para notificaciones de renovación): " AEGIS_EMAIL
         fi
+    fi
+
+    echo ""
+    echo -e "${YELLOW}--- CONFIGURACIÓN DEL MOTOR DE IA ---${NC}"
+    echo -e "Aegis necesita al menos un proveedor de IA para funcionar."
+    echo ""
+    echo "  [1] OpenRouter  — acceso a 100+ modelos con una sola API key"
+    echo "                    (recomendado: claude-3-haiku, gpt-4o-mini)"
+    echo "                    Obtené tu key en: https://openrouter.ai/keys"
+    echo ""
+    echo "  [2] OpenAI      — GPT-4o, GPT-4o-mini"
+    echo "                    Obtené tu key en: https://platform.openai.com/api-keys"
+    echo ""
+    echo "  [3] Anthropic   — Claude 3.5 Haiku, Claude 3 Opus"
+    echo "                    Obtené tu key en: https://console.anthropic.com/keys"
+    echo ""
+    echo "  [4] Configurar después — el sistema arranca pero los agentes"
+    echo "                           no van a funcionar hasta que configures"
+    echo "                           un proveedor desde la UI"
+    echo ""
+    read -rp "Selección [1-4]: " provider_choice
+
+    AI_PROVIDER=""
+    AI_API_KEY=""
+    AI_MODEL=""
+
+    case "${provider_choice:-4}" in
+        1)
+            AI_PROVIDER="openrouter"
+            read -rp "OpenRouter API Key (sk-or-...): " AI_API_KEY
+            echo ""
+            echo "Modelo recomendado: anthropic/claude-3-haiku (rápido, económico)"
+            echo "Otros: openai/gpt-4o-mini, meta-llama/llama-3.1-8b-instruct:free"
+            read -rp "Modelo [default: anthropic/claude-3-haiku]: " AI_MODEL
+            AI_MODEL="${AI_MODEL:-anthropic/claude-3-haiku}"
+            ;;
+        2)
+            AI_PROVIDER="openai"
+            read -rp "OpenAI API Key (sk-...): " AI_API_KEY
+            read -rp "Modelo [default: gpt-4o-mini]: " AI_MODEL
+            AI_MODEL="${AI_MODEL:-gpt-4o-mini}"
+            ;;
+        3)
+            AI_PROVIDER="anthropic"
+            read -rp "Anthropic API Key (sk-ant-...): " AI_API_KEY
+            read -rp "Modelo [default: claude-3-5-haiku-20241022]: " AI_MODEL
+            AI_MODEL="${AI_MODEL:-claude-3-5-haiku-20241022}"
+            ;;
+        4)
+            warn "Sin proveedor configurado. Los agentes no funcionarán hasta configurar uno en la UI."
+            AI_PROVIDER="none"
+            ;;
+        *)
+            warn "Selección inválida. Sin proveedor configurado."
+            AI_PROVIDER="none"
+            ;;
+    esac
+
+    if [[ -n "$AI_API_KEY" ]]; then
+        log "Proveedor: ${AI_PROVIDER}, Modelo: ${AI_MODEL}"
     fi
 
 }
@@ -385,6 +448,15 @@ EOF
             echo "AEGIS_DOMAIN=${AEGIS_DOMAIN}" >> "$ENV_FILE"
             echo "AEGIS_BASE_URL=https://${AEGIS_DOMAIN}" >> "$ENV_FILE"
         fi
+        # CORE-285: Escribir configuración del motor de IA
+        if [[ "${AI_PROVIDER:-none}" != "none" && -n "${AI_API_KEY:-}" ]]; then
+            cat >> "$ENV_FILE" <<EOF
+AEGIS_DEFAULT_PROVIDER=${AI_PROVIDER}
+AEGIS_DEFAULT_MODEL=${AI_MODEL}
+AEGIS_DEFAULT_API_KEY=${AI_API_KEY}
+EOF
+            success "Motor de IA configurado: ${AI_PROVIDER} / ${AI_MODEL}"
+        fi
         chmod 640 "$ENV_FILE"
         chown aegis:aegis "$ENV_FILE"
         success "Environment file → ${ENV_FILE}"
@@ -533,6 +605,11 @@ wait_and_show() {
         ip=$(hostname -I 2>/dev/null | awk '{print $1}') || ip="localhost"
 
         echo -e "  Inference profile: ${CYAN}${INFERENCE_PROFILE}${NC}"
+        if [[ "${AI_PROVIDER:-none}" != "none" ]]; then
+            echo -e "  Motor de IA: ${CYAN}${AI_PROVIDER} / ${AI_MODEL}${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ Motor de IA: No configurado — configurá en Settings → Engine${NC}"
+        fi
         echo ""
 
         if [[ "$SETUP_HTTPS" == "true" && -n "$AEGIS_DOMAIN" ]]; then

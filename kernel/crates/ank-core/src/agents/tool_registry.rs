@@ -68,6 +68,7 @@ impl ToolRegistry {
                 Self::spawn_agent(),
                 Self::answer_supervisor(),
                 Self::get_project_ledger(),
+                Self::get_agent_status(), // CORE-289
             ],
             AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
                 vec![
@@ -371,6 +372,27 @@ impl ToolRegistry {
         }
     }
 
+    // --- CORE-289: Agent status for ChatAgent ---
+
+    fn get_agent_status() -> ToolDefinition {
+        ToolDefinition {
+            name: "get_agent_status",
+            description: "Get the current status of all agents working on a project. \
+                          Use this before spawning a new supervisor to check if one \
+                          already exists. Use when the user asks about project progress.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "project_name": {
+                        "type": "string",
+                        "description": "Name of the project to check. Leave empty to get all active projects."
+                    }
+                },
+                "required": []
+            }),
+        }
+    }
+
     // --- CORE-277: Web search for specialists ---
 
     fn web_search() -> ToolDefinition {
@@ -439,11 +461,11 @@ mod tests {
     #[test]
     fn test_chat_agent_gets_only_spawn() {
         // CORE-243: ChatAgent no tiene agent_id, por lo que query_agent y report
-        // fallarían en SyscallExecutor. Solo recibe spawn_agent, answer_supervisor (CORE-263)
-        // y get_project_ledger (CORE-272).
+        // fallarían en SyscallExecutor. Solo recibe spawn_agent, answer_supervisor (CORE-263),
+        // get_project_ledger (CORE-272) y get_agent_status (CORE-289).
         let role = AgentRole::ChatAgent;
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Groq);
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools
             .iter()
             .map(|t| t["function"]["name"].as_str().unwrap())
@@ -451,6 +473,7 @@ mod tests {
         assert!(names.contains(&"spawn_agent"));
         assert!(names.contains(&"answer_supervisor"));
         assert!(names.contains(&"get_project_ledger"));
+        assert!(names.contains(&"get_agent_status"));
         assert!(
             !names.contains(&"query_agent"),
             "ChatAgent no debe recibir query_agent"
