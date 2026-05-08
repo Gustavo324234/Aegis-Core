@@ -8,9 +8,10 @@ use crate::scheduler::{ModelPreference, SharedPCB};
 use crate::vcm::swap::LanceSwapManager;
 use crate::vcm::VirtualContextManager;
 use async_trait::async_trait;
+use regex::Regex;
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tokio_stream::Stream;
@@ -195,6 +196,13 @@ struct DriverToolCallPayload {
     name: String,
     arguments: serde_json::Value,
 }
+
+// CORE-282: Interceptar token legacy [SYS_AGENT_SPAWN(...)] emitido por modelos sin tool use
+// (e.g. openrouter/free). Captura: 1=role, 2=name, 3=scope.
+static LEGACY_SPAWN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[SYS_AGENT_SPAWN\(role="([^"]+)",\s*name="([^"]+)",\s*scope="([^"]+)"\)\]"#)
+        .unwrap_or_else(|_| panic!("FATAL: legacy spawn regex invalid"))
+});
 
 /// --- COGNITIVE HAL (Hardware Abstraction Layer) ---
 pub struct CognitiveHAL {
@@ -529,6 +537,22 @@ impl CognitiveHAL {
                         }
                     }
                     Ok(text) => {
+                        // CORE-282: Intercept legacy token for models without tool use
+                        if let Some(caps) = LEGACY_SPAWN_RE.captures(&text) {
+                            let args = serde_json::json!({
+                                "name": &caps[2],
+                                "scope": &caps[3]
+                            });
+                            tool_calls.push(ToolCallRecord {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                type_: "function".to_string(),
+                                function: FunctionCallRecord {
+                                    name: "spawn_agent".to_string(),
+                                    arguments: args.to_string(),
+                                },
+                            });
+                            continue; // never emit legacy token to output
+                        }
                         assistant_text.push_str(&text);
                         let _ = text_tx.send(Ok(text));
                     }
