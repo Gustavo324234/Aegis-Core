@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.46](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.45...ank-core-v0.1.46) (2026-05-08)
+
+
+### Bug Fixes
+
+* **chal,agents:** CORE-282/283 interceptar token legacy SYS_AGENT_SPAWN, honestidad chat_agent ([#237](https://github.com/Gustavo324234/Aegis-Core/issues/237)) ([f01e06a](https://github.com/Gustavo324234/Aegis-Core/commit/f01e06a54e4e835823513a31d0f4362b7ae67ebf))
+
 ## [0.1.45](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.44...ank-core-v0.1.45) (2026-05-08)
 
 
