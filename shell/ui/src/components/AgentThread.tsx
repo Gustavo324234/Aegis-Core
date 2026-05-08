@@ -37,6 +37,7 @@ export function AgentThread() {
   const { getByAgentId, addThreadMessage, markAnswered } = useAgentInboxStore();
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const msg = activeAgentId ? getByAgentId(activeAgentId) : undefined;
@@ -67,6 +68,7 @@ export function AgentThread() {
     if (!input.trim() || !isPending || isSending) return;
     const answer = input.trim();
     setInput('');
+    setErrorMessage(null);
     setIsSending(true);
 
     const now = new Date().toISOString();
@@ -80,19 +82,21 @@ export function AgentThread() {
           ...(tenantId && { 'x-citadel-tenant': tenantId }),
           ...(sessionKey && { 'x-citadel-key': sessionKey }),
         },
-        body: JSON.stringify({ reply: answer }),
+        body: JSON.stringify({ answer }),
       });
 
       if (res.ok) {
         addThreadMessage(msg.agentId, { role: 'user', content: answer, timestamp: now });
         markAnswered(msg.agentId);
+      } else if (res.status === 404) {
+        setErrorMessage('El supervisor ya no está esperando una respuesta.');
+        setInput(answer);
       } else {
-        console.error('[AgentThread] Reply failed:', res.status);
-        // Re-show input so the user can retry
+        setErrorMessage('No se pudo enviar la respuesta. Intentá de nuevo.');
         setInput(answer);
       }
-    } catch (err) {
-      console.error('[AgentThread] Reply error:', err);
+    } catch {
+      setErrorMessage('Error de conexión.');
       setInput(answer);
     } finally {
       setIsSending(false);
@@ -172,6 +176,11 @@ export function AgentThread() {
         {statusLabel && (
           <p className="text-center text-[9px] font-mono text-white/30 uppercase tracking-widest mb-3">
             {statusLabel}
+          </p>
+        )}
+        {errorMessage && (
+          <p className="text-center text-[9px] font-mono text-red-400/80 mb-3">
+            {errorMessage}
           </p>
         )}
         <div className="max-w-4xl mx-auto relative">
