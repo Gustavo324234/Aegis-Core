@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.15.1...shell-ui-v1.15.2) (2026-05-08)
+
+
+### Bug Fixes
+
+* **shell:** CORE-284 botón de reply al supervisor conectado al endpoint real ([#243](https://github.com/Gustavo324234/Aegis-Core/issues/243)) ([7edbece](https://github.com/Gustavo324234/Aegis-Core/commit/7edbece18f8925f7d8c85b04c0a645d322d15717))
+
 ## [1.15.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.15.0...shell-ui-v1.15.1) (2026-05-08)
 
 
