@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.15.0...shell-ui-v1.15.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **shell:** CORE-278 TTS en modo texto, toggle de voz simplificado ([#241](https://github.com/Gustavo324234/Aegis-Core/issues/241)) ([3110645](https://github.com/Gustavo324234/Aegis-Core/commit/31106454e21149d0a9d95197a717c6266c5bb1df))
+
 ## [1.15.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.14.0...shell-ui-v1.15.0) (2026-05-07)
 
 
