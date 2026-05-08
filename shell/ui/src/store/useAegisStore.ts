@@ -107,6 +107,7 @@ interface AegisState {
     currentView: 'chat' | 'dashboard' | 'agents' | 'agent_thread';
     activeAgentId: string | null;
     inputMode: 'text' | 'audio' | 'conversation';
+    voiceEnabled: boolean;
 
     // CORE-204 — agent stream state
     agentTree: AgentNodeSummary[];
@@ -121,6 +122,7 @@ interface AegisState {
 
     setHydrated: (val: boolean) => void;
     setInputMode: (mode: 'text' | 'audio' | 'conversation') => void;
+    setVoiceEnabled: (val: boolean) => void;
     setCurrentView: (view: 'chat' | 'dashboard' | 'agents' | 'agent_thread') => void;
     setActiveAgentId: (agentId: string | null) => void;
     setNeedsPasswordReset: (val: boolean) => void;
@@ -171,6 +173,12 @@ const buildWsUrl = (path: string) => {
 
 let telemetryInterval: number | null = null;
 
+function detectLanguage(text: string): string {
+    const spanishChars = /[áéíóúñÁÉÍÓÚÑ]/;
+    const commonSpanish = /\b(el|la|los|las|un|una|en|es|y|o|pero|por|para|si|no)\b/i;
+    return (spanishChars.test(text) || commonSpanish.test(text)) ? 'es-ES' : 'en-US';
+}
+
 // CORE-124: bump version para migrar stores viejos que tenían sessionKey persistida
 const STORE_VERSION = 4;
 
@@ -206,6 +214,7 @@ export const useAegisStore = create<AegisState>()(
             currentView: 'chat',
             activeAgentId: null,
             inputMode: 'text',
+            voiceEnabled: false,
 
             // CORE-204 — initial agent stream values
             agentTree: [],
@@ -218,6 +227,7 @@ export const useAegisStore = create<AegisState>()(
             setCurrentView: (view) => set({ currentView: view }),
             setActiveAgentId: (agentId) => set({ activeAgentId: agentId }),
             setInputMode: (mode) => set({ inputMode: mode }),
+            setVoiceEnabled: (val) => set({ voiceEnabled: val }),
             setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
             setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
 
@@ -470,6 +480,18 @@ export const useAegisStore = create<AegisState>()(
                                 const su = payload.status_update as { state: string };
                                 if (su.state === 'STATE_COMPLETED') {
                                     set({ status: 'idle', activePid: null });
+                                    // CORE-278: leer respuesta en voz alta si voiceEnabled está activo
+                                    if (get().voiceEnabled && typeof window !== 'undefined' && window.speechSynthesis) {
+                                        const messages = get().messages;
+                                        const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+                                        if (lastAssistant?.content) {
+                                            const utterance = new SpeechSynthesisUtterance(lastAssistant.content);
+                                            utterance.lang = detectLanguage(lastAssistant.content);
+                                            utterance.rate = 1.0;
+                                            window.speechSynthesis.cancel();
+                                            window.speechSynthesis.speak(utterance);
+                                        }
+                                    }
                                     // CORE-184: reactivar mic en modo conversación tras terminar el TTS
                                     if (get().inputMode === 'conversation') {
                                         const scheduleReactivation = () => {
@@ -1189,6 +1211,7 @@ export const useAegisStore = create<AegisState>()(
                 currentView: (state.currentView === 'chat' || state.currentView === 'dashboard') ? state.currentView : 'chat',
                 inputMode: state.inputMode,
                 sttProvider: state.sttProvider,  // CORE-231: persistir para que sobreviva recarga
+                voiceEnabled: state.voiceEnabled,
             }),
         }
     )
