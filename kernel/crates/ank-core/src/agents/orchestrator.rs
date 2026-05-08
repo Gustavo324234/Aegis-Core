@@ -37,6 +37,20 @@ pub struct AgentNodeSummary {
     pub degraded: bool,
 }
 
+/// CORE-287: Convierte un nombre de proyecto en un ID de filesystem válido.
+/// "Aegis-Core" → "aegis-core"
+/// "Mi Proyecto 2025!" → "mi-proyecto-2025"
+fn sanitize_project_id(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// Orquestador central del árbol de agentes cognitivos — Epic 45.
 ///
 /// Responsabilidades:
@@ -131,8 +145,14 @@ impl AgentOrchestrator {
         _task_type: Option<crate::pcb::TaskType>,
         tenant_id: Option<String>,
     ) -> anyhow::Result<crate::agents::node::AgentId> {
-        self.activate_project(tenant_id.as_deref().unwrap_or("default"), &scope, &name)
-            .await
+        // CORE-287: project_id es el nombre sanitizado, no el scope
+        let project_id = sanitize_project_id(&name);
+        self.activate_project(
+            tenant_id.as_deref().unwrap_or("default"),
+            &project_id,
+            &scope,
+        )
+        .await
     }
 
     async fn create_project_supervisor(
@@ -838,6 +858,23 @@ impl AgentOrchestrator {
             }
         }
 
+        // CORE-286: Marcar todos los nodos terminados como Failed si no estaban Complete
+        {
+            let mut tree = self.tree.write().await;
+            let all_ids: Vec<AgentId> = std::iter::once(*agent_id)
+                .chain(descendants.iter().copied())
+                .collect();
+            for id in all_ids {
+                if let Some(n) = tree.get_mut(&id) {
+                    if !matches!(n.state, AgentState::Complete) {
+                        n.set_state(AgentState::Failed {
+                            reason: "Terminated by orchestrator".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
         {
             let mut tree = self.tree.write().await;
             tree.prune(agent_id)?;
@@ -910,23 +947,10 @@ impl AgentOrchestrator {
         let channels_ref = Arc::clone(&self.channels);
         let hal_ref = Arc::clone(&self.hal);
 
-        let (tx, rx) = {
-            // Reemplazar el canal existente con uno que tenga rx
-            let tx_existing = {
-                let ch = channels_ref.try_read();
-                ch.ok().and_then(|c| c.get(&agent_id).cloned())
-            };
-            if tx_existing.is_some() {
-                // Ya hay canal — crear un nuevo par y actualizar
-                let (new_tx, new_rx) = mpsc::channel::<AgentMessage>(32);
-                (new_tx, new_rx)
-            } else {
-                mpsc::channel::<AgentMessage>(32)
-            }
-        };
-
+        // CORE-286: Crear siempre un par fresco — el tx viejo quedaba huérfano.
+        // Insertar ANTES de spawn para eliminar la race condition.
+        let (tx, rx) = mpsc::channel::<AgentMessage>(32);
         {
-            // Actualizar el canal en el mapa
             if let Ok(mut ch) = channels_ref.try_write() {
                 ch.insert(agent_id, tx);
             }
@@ -969,7 +993,42 @@ impl AgentOrchestrator {
             }
         };
 
-        while let Some(msg) = rx.recv().await {
+        const AGENT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+        let mut synthesis_done = false; // CORE-288: flag anti-síntesis múltiple
+
+        loop {
+            let msg = tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        Some(m) => m,
+                        None => {
+                            info!("[{}] Channel closed, loop exiting.", role_label);
+                            break;
+                        }
+                    }
+                }
+                _ = tokio::time::sleep(AGENT_IDLE_TIMEOUT) => {
+                    warn!(
+                        agent = %agent_id,
+                        "[{}] Idle timeout after {}s — self-terminating.",
+                        role_label,
+                        AGENT_IDLE_TIMEOUT.as_secs()
+                    );
+                    {
+                        let mut t = tree.write().await;
+                        if let Some(n) = t.get_mut(&agent_id) {
+                            if matches!(n.state, AgentState::Idle | AgentState::Running | AgentState::WaitingReport) {
+                                n.set_state(AgentState::Failed {
+                                    reason: "Idle timeout — no messages received in 5 minutes".to_string(),
+                                });
+                            }
+                        }
+                    }
+                    channels.write().await.remove(&agent_id);
+                    break;
+                }
+            };
+
             match msg {
                 AgentMessage::Dispatch {
                     task_description,
@@ -977,6 +1036,13 @@ impl AgentOrchestrator {
                     reply_to: _,
                     ..
                 } => {
+                    // CORE-288: ignorar Dispatch tardío si ya completamos con síntesis
+                    {
+                        let state = tree.read().await.get(&agent_id).map(|n| n.state.clone());
+                        if matches!(state, Some(AgentState::Complete)) && synthesis_done {
+                            continue;
+                        }
+                    }
                     info!(
                         agent = %agent_id,
                         "[{}] Dispatch: {}",
@@ -1153,6 +1219,10 @@ impl AgentOrchestrator {
                         if let Err(e) = ptx.send(report).await {
                             error!("[{}] Failed to report to parent: {}", role_label, e);
                         }
+                    } else {
+                        // CORE-288: ProjectSupervisor (sin padre) termina loop después de Complete
+                        channels.write().await.remove(&agent_id);
+                        break;
                     }
                 }
 
@@ -1188,7 +1258,10 @@ impl AgentOrchestrator {
                             .unwrap_or(false)
                     };
 
-                    if all_done {
+                    // CORE-288: solo sintetizar UNA vez — marcar antes de enviar
+                    if all_done && !synthesis_done {
+                        synthesis_done = true;
+
                         let child_results = {
                             let t = tree.read().await;
                             t.get(&agent_id)
@@ -1224,6 +1297,7 @@ impl AgentOrchestrator {
                             let _ = stx.send(synth).await;
                         }
                     }
+                    // Si all_done && synthesis_done → ignorar silenciosamente
                 }
 
                 // Query: responder con información sin generar trabajo (ADR-CAA-003)
@@ -1362,5 +1436,35 @@ impl AgentOrchestrator {
                 })
                 .await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_project_id_normal() {
+        assert_eq!(sanitize_project_id("Aegis-Core"), "aegis-core");
+    }
+
+    #[test]
+    fn test_sanitize_project_id_spaces() {
+        assert_eq!(sanitize_project_id("Mi Proyecto"), "mi-proyecto");
+    }
+
+    #[test]
+    fn test_sanitize_project_id_special_chars() {
+        assert_eq!(sanitize_project_id("Proyecto 2025!"), "proyecto-2025");
+    }
+
+    #[test]
+    fn test_sanitize_project_id_empty() {
+        assert_eq!(sanitize_project_id(""), "");
+    }
+
+    #[test]
+    fn test_sanitize_project_id_multiple_separators() {
+        assert_eq!(sanitize_project_id("My  --  Project"), "my-project");
     }
 }

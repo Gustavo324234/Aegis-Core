@@ -86,6 +86,14 @@ pub(crate) async fn run_server() -> Result<()> {
 
     info!("Aegis Core — Unified Binary Starting...");
 
+    // CORE-285: Advertir si no hay proveedor de IA configurado
+    if std::env::var("AEGIS_DEFAULT_API_KEY").is_err() {
+        warn!(
+            "⚠️  No AI provider configured. Agents will not work correctly. \
+             Configure a provider via the UI (Settings → Engine) or reinstall."
+        );
+    }
+
     // 2. Leer AEGIS_ROOT_KEY
     let root_key = std::env::var("AEGIS_ROOT_KEY")
         .context("FATAL: AEGIS_ROOT_KEY environment variable is missing.")?;

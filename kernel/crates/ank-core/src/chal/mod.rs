@@ -1331,6 +1331,59 @@ impl CognitiveHAL {
                 }
             }
 
+            // CORE-289: Chat Agent consulta el estado actual del árbol de agentes
+            "get_agent_status" => {
+                let project_name = args
+                    .get("project_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                let orchestrator = match orchestrator_opt {
+                    Some(o) => o,
+                    None => return "{\"error\":\"orchestrator_not_configured\"}".to_string(),
+                };
+
+                let snapshot = orchestrator.tree_snapshot().await;
+
+                let filtered: Vec<_> = if project_name.is_empty() {
+                    snapshot
+                } else {
+                    snapshot
+                        .into_iter()
+                        .filter(|n| {
+                            n.project_id
+                                .to_lowercase()
+                                .contains(&project_name.to_lowercase())
+                                || n.role_label
+                                    .to_lowercase()
+                                    .contains(&project_name.to_lowercase())
+                        })
+                        .collect()
+                };
+
+                if filtered.is_empty() {
+                    return serde_json::json!({
+                        "status": "no_active_agents",
+                        "project": project_name,
+                        "message": "No active agents for this project. You can spawn a new supervisor."
+                    })
+                    .to_string();
+                }
+
+                serde_json::to_string(&serde_json::json!({
+                    "agents": filtered.iter().map(|n| serde_json::json!({
+                        "role": n.role_label,
+                        "state": n.state,
+                        "project": n.project_id,
+                        "last_report": n.last_report,
+                        "degraded": n.degraded,
+                    })).collect::<Vec<_>>()
+                }))
+                .unwrap_or_else(|_| "{\"error\":\"serialization_error\"}".to_string())
+            }
+
             other => format!("{{\"error\":\"Unknown tool: {}\"}}", other),
         }
     }
