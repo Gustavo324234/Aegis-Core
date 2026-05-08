@@ -564,6 +564,37 @@ impl AgentOrchestrator {
                     }
                 }
 
+                // CORE-281: Deduplicación — si ya existe un ProjectSupervisor activo
+                // para este proyecto, retornar su ID sin crear uno nuevo.
+                if matches!(role, AgentRole::ProjectSupervisor { .. }) {
+                    let project_name = name.as_deref().unwrap_or(&scope).to_string();
+                    let existing_id = {
+                        let tree = self.tree.read().await;
+                        tree.all_nodes()
+                            .iter()
+                            .find(|n| {
+                                if let AgentRole::ProjectSupervisor { name: n_name, .. } = &n.role {
+                                    n_name.to_lowercase() == project_name.to_lowercase()
+                                        && !matches!(
+                                            n.state,
+                                            AgentState::Complete | AgentState::Failed { .. }
+                                        )
+                                } else {
+                                    false
+                                }
+                            })
+                            .map(|n| n.agent_id)
+                    };
+                    if let Some(existing_agent_id) = existing_id {
+                        return Ok(serde_json::json!({
+                            "status": "already_active",
+                            "agent_id": existing_agent_id.to_string(),
+                            "message": format!("ProjectSupervisor for '{}' is already active.", project_name)
+                        })
+                        .to_string());
+                    }
+                }
+
                 let agent_role = match role {
                     AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. } => {
                         AgentRole::Supervisor {
@@ -985,9 +1016,26 @@ impl AgentOrchestrator {
                     // Construir mensajes del agente
                     let system_prompt = {
                         let t = tree.read().await;
-                        t.get(&agent_id)
+                        let base = t
+                            .get(&agent_id)
                             .map(|n| n.system_prompt.clone())
-                            .unwrap_or_default()
+                            .unwrap_or_default();
+                        // CORE-281: Inyectar header [PROJECT] para ProjectSupervisor
+                        // para que nunca pregunte cuál es su proyecto.
+                        if let Some(n) = t.get(&agent_id) {
+                            if let AgentRole::ProjectSupervisor { name: ps_name, .. } = &n.role {
+                                format!(
+                                    "[PROJECT]\nName: {}\nProject ID: {}\nYour role: ProjectSupervisor\n\
+                                     You are responsible for this specific project. Do not ask the user \
+                                     which project to work on — you already know it is '{}'.\n\n{}",
+                                    ps_name, n.project_id, ps_name, base
+                                )
+                            } else {
+                                base
+                            }
+                        } else {
+                            base
+                        }
                     };
 
                     let child_reports_text = context
