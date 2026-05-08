@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.45](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.44...ank-core-v0.1.45) (2026-05-08)
+
+
+### Bug Fixes
+
+* **ank-http,agents,installer:** CORE-279/281/280 WS keepalive, supervisor dedup, Caddy HTTPS ([#235](https://github.com/Gustavo324234/Aegis-Core/issues/235)) ([9450c7d](https://github.com/Gustavo324234/Aegis-Core/commit/9450c7dd3249a7945765dfedc1d0ca7b7c958719))
+
 ## [0.1.44](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.43...ank-core-v0.1.44) (2026-05-07)
 
 
