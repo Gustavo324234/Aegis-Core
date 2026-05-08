@@ -12,6 +12,13 @@
 
 
 
+## [0.1.58](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.57...ank-server-v0.1.58) (2026-05-08)
+
+
+### Bug Fixes
+
+* **agents,installer:** CORE-285/286/287/288/289 — orchestrator fixes + provider config ([#239](https://github.com/Gustavo324234/Aegis-Core/issues/239)) ([c5f388e](https://github.com/Gustavo324234/Aegis-Core/commit/c5f388e4c1423a1f27b9f0f8b703c51edf36c9d5))
+
 ## [0.1.52](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.51...ank-server-v0.1.52) (2026-05-06)
 
 

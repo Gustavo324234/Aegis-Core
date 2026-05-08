@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.47](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.46...ank-core-v0.1.47) (2026-05-08)
+
+
+### Bug Fixes
+
+* **agents,installer:** CORE-285/286/287/288/289 — orchestrator fixes + provider config ([#239](https://github.com/Gustavo324234/Aegis-Core/issues/239)) ([c5f388e](https://github.com/Gustavo324234/Aegis-Core/commit/c5f388e4c1423a1f27b9f0f8b703c51edf36c9d5))
+
 ## [0.1.46](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.45...ank-core-v0.1.46) (2026-05-08)
 
 
