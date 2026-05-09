@@ -332,6 +332,7 @@ fn entry_api_url(entry: &ModelEntry) -> String {
         "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
         "groq" => "https://api.groq.com/openai/v1/chat/completions".to_string(),
         "ollama" => "http://localhost:11434/v1/chat/completions".to_string(),
+        "ollama_cloud" => "https://ollama.com/api/chat".to_string(),
         // Compatible OpenAI via OpenRouter — requiere key de OpenRouter
         "anthropic" | "deepseek" | "mistral" | "qwen" => {
             "https://openrouter.ai/api/v1/chat/completions".to_string()
