@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Shield, Globe, Zap, Box, Server, Activity, Terminal, Eye, EyeOff, Cpu, X, Loader2, Check, Search, Trash2, Settings } from 'lucide-react';
+import { Plus, Shield, Globe, Zap, Box, Server, Activity, Terminal, Eye, EyeOff, Cpu, X, Loader2, Check, Search, Trash2, Settings, Cloud } from 'lucide-react';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
 
@@ -296,7 +296,7 @@ const ProviderModal: React.FC<{
                                 exit={{ opacity: 0, x: 20 }}
                                 className="space-y-8"
                             >
-                                <div className="grid grid-cols-4 sm:grid-cols-8 gap-3">
+                                <div className="grid grid-cols-4 sm:grid-cols-9 gap-3">
                                     {(Object.keys(PROVIDER_PRESETS) as ProviderType[]).map((key) => {
                                         const preset = PROVIDER_PRESETS[key];
                                         const isSelected = selectedProvider === key;
@@ -318,6 +318,7 @@ const ProviderModal: React.FC<{
                                                     {key === 'grok' && <Box className="w-4 h-4" />}
                                                     {key === 'openrouter' && <Globe className="w-4 h-4" />}
                                                     {key === 'ollama' && <Server className="w-4 h-4" />}
+                                                    {key === 'ollama_cloud' && <Cloud className="w-4 h-4" />}
                                                     {key === 'gemini' && <Shield className="w-4 h-4" />}
                                                     {key === 'custom' && <Terminal className="w-4 h-4" />}
                                                 </div>

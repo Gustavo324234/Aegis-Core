@@ -41,6 +41,13 @@ export const PROVIDER_PRESETS = {
     keyLink: null,
     provider: "ollama"
   },
+  ollama_cloud: {
+    label: "Ollama Cloud",
+    url: "https://ollama.com/api/chat",
+    model: "llama3.3:70b-cloud",
+    keyLink: "https://ollama.com/settings/api-keys",
+    provider: "ollama_cloud"
+  },
   gemini: {
     label: "Gemini",
     url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
