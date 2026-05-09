@@ -7,6 +7,8 @@ interface ModelTaskScores {
     coding: number;
     planning: number;
     analysis: number;
+    summarization: number;
+    extraction: number;
 }
 
 interface ModelInfo {
@@ -28,6 +30,48 @@ function ScoreDots({ score }: { score: number }) {
                     {i < score ? '\u25CF' : '\u25CB'}
                 </span>
             ))}
+        </span>
+    );
+}
+
+function BenchScore({ scores, syncedAt }: { scores?: ModelTaskScores | null; syncedAt: string | null }) {
+    const { t } = useTranslation();
+    if (!scores) {
+        return <span className="text-white/20 font-mono" title={t('bench_no_data')}>{t('bench_no_data')}</span>;
+    }
+
+    const vals = [scores.chat, scores.coding, scores.planning, scores.analysis, scores.summarization, scores.extraction];
+    const sum = vals.reduce((a, b) => a + b, 0);
+    const avg = sum / vals.length;
+
+    if (avg === 0) {
+        return <span className="text-white/20 font-mono">{t('bench_no_data')}</span>;
+    }
+
+    const rounded = Math.min(5, Math.max(1, Math.round(avg * 10) / 10));
+    const filledSegments = Math.min(5, Math.max(0, Math.round(rounded)));
+
+    let colorClass: string;
+    if (rounded <= 2) colorClass = 'bg-red-500';
+    else if (rounded <= 3) colorClass = 'bg-yellow-500';
+    else if (rounded <= 4) colorClass = 'bg-green-400';
+    else colorClass = 'bg-green-500';
+
+    const tooltipText = syncedAt
+        ? t('bench_tooltip_synced', { date: new Date(syncedAt).toLocaleDateString() })
+        : t('bench_tooltip');
+
+    return (
+        <span className="group relative inline-flex items-center gap-1 cursor-default" title={tooltipText}>
+            <span className="text-[10px] font-mono text-white/60 w-4 text-right">{rounded.toFixed(1)}</span>
+            <span className="inline-flex gap-[1px]">
+                {Array.from({ length: 5 }, (_, i) => (
+                    <span
+                        key={i}
+                        className={`w-2 h-3 rounded-sm transition-colors ${i < filledSegments ? colorClass : 'bg-white/10'}`}
+                    />
+                ))}
+            </span>
         </span>
     );
 }
@@ -192,6 +236,7 @@ const ModelCatalogViewer: React.FC<{
                             <tr className="text-white/30 uppercase tracking-widest border-b border-white/5">
                                 <th className="text-left py-2 pr-4">{t('model')}</th>
                                 <th className="text-left py-2 pr-4">Provider</th>
+                                <th className="text-center py-2 pr-4">{t('bench')}</th>
                                 <th className="text-center py-2 pr-4">Chat</th>
                                 <th className="text-center py-2 pr-4">Code</th>
                                 <th className="text-center py-2 pr-4">Plan</th>
@@ -205,12 +250,35 @@ const ModelCatalogViewer: React.FC<{
                         <tbody>
                             {filtered.map((m) => (
                                 <tr key={m.model_id} className="border-b border-white/5 hover:bg-white/2">
-                                    <td className="py-3 pr-4 text-white/80">{m.display_name}</td>
+                                    <td className="py-3 pr-4 text-white/80">
+                                        <span>{m.display_name}</span>
+                                        {m.provider === 'ollama_cloud' && (
+                                            <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-mono bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+                                                {'\u2601'} Cloud
+                                            </span>
+                                        )}
+                                        {m.is_local && (
+                                            <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-mono bg-green-500/20 text-green-400 border border-green-500/30">
+                                                {'\u26A1'} Local
+                                            </span>
+                                        )}
+                                    </td>
                                     <td className="py-3 pr-4 text-white/40">{m.provider}</td>
-                                    <td className="py-3 pr-4 text-center"><ScoreDots score={m.task_scores.chat} /></td>
-                                    <td className="py-3 pr-4 text-center"><ScoreDots score={m.task_scores.coding} /></td>
-                                    <td className="py-3 pr-4 text-center"><ScoreDots score={m.task_scores.planning} /></td>
-                                    <td className="py-3 pr-4 text-center"><ScoreDots score={m.task_scores.analysis} /></td>
+                                    <td className="py-3 pr-4 text-center">
+                                        <BenchScore scores={m.task_scores} syncedAt={syncedAt} />
+                                    </td>
+                                    <td className="py-3 pr-4 text-center">
+                                        <ScoreDots score={m.task_scores?.chat ?? 0} />
+                                    </td>
+                                    <td className="py-3 pr-4 text-center">
+                                        <ScoreDots score={m.task_scores?.coding ?? 0} />
+                                    </td>
+                                    <td className="py-3 pr-4 text-center">
+                                        <ScoreDots score={m.task_scores?.planning ?? 0} />
+                                    </td>
+                                    <td className="py-3 pr-4 text-center">
+                                        <ScoreDots score={m.task_scores?.analysis ?? 0} />
+                                    </td>
                                     <td className="py-3 pr-4 text-right text-white/40">
                                         {m.is_local ? 'Free' : `$${(m.cost_input_per_mtok + m.cost_output_per_mtok).toFixed(2)}`}
                                     </td>

@@ -248,7 +248,11 @@ const dictionaries: Record<Language, Record<string, string>> = {
         https_warning_title: "Micrófono requiere HTTPS",
         https_warning_desc: "Accedé a Aegis via https:// para habilitar la voz",
         save_voice_config: "Guardar Voz",
-        language: "Idioma"
+        language: "Idioma",
+        bench: "Bench",
+        bench_tooltip: "Score calculado desde PinchBench (agente real)",
+        bench_tooltip_synced: "Score calculado desde PinchBench (agente real) — Última actualización: {{date}}",
+        bench_no_data: "—"
     },
     en: {
         change_password: 'Change Password',
@@ -495,7 +499,11 @@ const dictionaries: Record<Language, Record<string, string>> = {
         https_warning_title: "Microphone requires HTTPS",
         https_warning_desc: "Access Aegis via https:// to enable voice",
         save_voice_config: "Save Voice",
-        language: "Language"
+        language: "Language",
+        bench: "Bench",
+        bench_tooltip: "Score calculated from PinchBench (real agent)",
+        bench_tooltip_synced: "Score calculated from PinchBench (real agent) — Last updated: {{date}}",
+        bench_no_data: "—"
     }
 };
 
