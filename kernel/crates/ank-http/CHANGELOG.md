@@ -14,6 +14,13 @@
 
 
 
+## [0.1.55](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.54...ank-http-v0.1.55) (2026-05-09)
+
+
+### Features
+
+* **ank-core:** CORE-292 — ollama_cloud provider (remote API + SSRF allowlist) ([#245](https://github.com/Gustavo324234/Aegis-Core/issues/245)) ([eacdada](https://github.com/Gustavo324234/Aegis-Core/commit/eacdada0042833c2558786104ffae15875f2a2d5))
+
 ## [0.1.52](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.51...ank-http-v0.1.52) (2026-05-08)
 
 
