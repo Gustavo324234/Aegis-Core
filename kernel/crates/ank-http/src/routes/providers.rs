@@ -45,6 +45,7 @@ const ALLOWED_API_HOSTS: &[&str] = &[
     "api.together.xyz",
     "localhost",
     "127.0.0.1",
+    "ollama.com",
 ];
 
 /// Valida que `api_url` apunte a un host en la allowlist.
@@ -88,6 +89,29 @@ async fn list_provider_models(
             let res = client
                 .get("http://localhost:11434/api/tags")
                 .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+            let data: Value = res
+                .json()
+                .await
+                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+            if let Some(list) = data.get("models").and_then(|m| m.as_array()) {
+                for m in list {
+                    if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                        models.push(name.to_string());
+                    }
+                }
+            }
+        }
+        "ollama_cloud" => {
+            validate_api_url("https://ollama.com/api/tags")?;
+            let client = reqwest::Client::new();
+            let res = client
+                .get("https://ollama.com/api/tags")
+                .header("Authorization", format!("Bearer {}", req.api_key))
+                .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
                 .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
