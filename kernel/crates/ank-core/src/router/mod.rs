@@ -88,6 +88,10 @@ impl CognitiveRouter {
         self.catalog.all_entries().await
     }
 
+    pub async fn last_synced(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.catalog.last_synced().await
+    }
+
     pub async fn decide(&self, pcb: &PCB) -> Result<RoutingDecision, SystemError> {
         let task_type = pcb.task_type;
         let model_pref = pcb.model_pref;

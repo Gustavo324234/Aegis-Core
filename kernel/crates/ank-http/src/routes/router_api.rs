@@ -75,6 +75,8 @@ pub struct TenantKeysResponse {
 #[derive(Serialize, ToSchema)]
 pub struct RouterModelsResponse {
     pub models: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub synced_at: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -385,20 +387,30 @@ async fn list_router_models(
 ) -> Result<Json<RouterModelsResponse>, AegisHttpError> {
     let router = state.router.read().await;
     let raw_models = router.list_models_for_catalog().await;
+    let synced_at = router.last_synced().await.map(|dt| dt.to_rfc3339());
     let models: Vec<serde_json::Value> = raw_models
         .into_iter()
         .map(|m| {
             serde_json::json!({
-                "id": m.model_id,
-                "name": m.display_name,
+                "model_id": m.model_id,
+                "display_name": m.display_name,
                 "provider": m.provider,
-                "context_length": m.context_window,
-                "input_cost_per_mtok": m.cost_input_per_mtok,
-                "output_cost_per_mtok": m.cost_output_per_mtok,
+                "context_window": m.context_window,
+                "cost_input_per_mtok": m.cost_input_per_mtok,
+                "cost_output_per_mtok": m.cost_output_per_mtok,
+                "is_local": m.is_local,
+                "task_scores": {
+                    "chat": m.task_scores.chat,
+                    "coding": m.task_scores.coding,
+                    "planning": m.task_scores.planning,
+                    "analysis": m.task_scores.analysis,
+                    "summarization": m.task_scores.summarization,
+                    "extraction": m.task_scores.extraction,
+                },
             })
         })
         .collect();
-    Ok(Json(RouterModelsResponse { models }))
+    Ok(Json(RouterModelsResponse { models, synced_at }))
 }
 
 #[utoipa::path(
