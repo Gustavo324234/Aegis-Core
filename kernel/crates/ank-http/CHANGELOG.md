@@ -14,6 +14,13 @@
 
 
 
+## [0.1.56](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.55...ank-http-v0.1.56) (2026-05-09)
+
+
+### Features
+
+* **ui:** CORE-294 add benchmark score column and provider badges to CatalogViewer ([#247](https://github.com/Gustavo324234/Aegis-Core/issues/247)) ([cf611b8](https://github.com/Gustavo324234/Aegis-Core/commit/cf611b838f6ab0fa0c9e0ca24242281a0e9b2753))
+
 ## [0.1.55](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.54...ank-http-v0.1.55) (2026-05-09)
 
 

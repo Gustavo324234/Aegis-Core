@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.15.2...shell-ui-v1.16.0) (2026-05-09)
+
+
+### Features
+
+* **ui:** CORE-294 add benchmark score column and provider badges to CatalogViewer ([#247](https://github.com/Gustavo324234/Aegis-Core/issues/247)) ([cf611b8](https://github.com/Gustavo324234/Aegis-Core/commit/cf611b838f6ab0fa0c9e0ca24242281a0e9b2753))
+
 ## [1.15.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.15.1...shell-ui-v1.15.2) (2026-05-08)
 
 
