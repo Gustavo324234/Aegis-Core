@@ -1,6 +1,6 @@
-- model_id: "anthropic/claude-sonnet-4-6"
-  provider: "anthropic"
-  display_name: "Claude Sonnet 4.6"
+- model_id: anthropic/claude-sonnet-4-6
+  provider: anthropic
+  display_name: Claude Sonnet 4.6
   context_window: 200000
   cost_input_per_mtok: 3.0
   cost_output_per_mtok: 15.0
@@ -15,10 +15,9 @@
     analysis: 5
     summarization: 4
     extraction: 5
-
-- model_id: "anthropic/claude-opus-4-6"
-  provider: "anthropic"
-  display_name: "Claude Opus 4.6"
+- model_id: anthropic/claude-opus-4-6
+  provider: anthropic
+  display_name: Claude Opus 4.6
   context_window: 200000
   cost_input_per_mtok: 15.0
   cost_output_per_mtok: 75.0
@@ -33,10 +32,9 @@
     analysis: 5
     summarization: 5
     extraction: 5
-
-- model_id: "openai/gpt-4o"
-  provider: "openai"
-  display_name: "GPT-4o"
+- model_id: openai/gpt-4o
+  provider: openai
+  display_name: GPT-4o
   context_window: 128000
   cost_input_per_mtok: 2.5
   cost_output_per_mtok: 10.0
@@ -51,10 +49,9 @@
     analysis: 5
     summarization: 4
     extraction: 5
-
-- model_id: "openai/gpt-4o-mini"
-  provider: "openai"
-  display_name: "GPT-4o Mini"
+- model_id: openai/gpt-4o-mini
+  provider: openai
+  display_name: GPT-4o Mini
   context_window: 128000
   cost_input_per_mtok: 0.15
   cost_output_per_mtok: 0.6
@@ -69,10 +66,9 @@
     analysis: 3
     summarization: 4
     extraction: 4
-
-- model_id: "openai/o3-mini"
-  provider: "openai"
-  display_name: "O3 Mini"
+- model_id: openai/o3-mini
+  provider: openai
+  display_name: O3 Mini
   context_window: 128000
   cost_input_per_mtok: 1.1
   cost_output_per_mtok: 4.4
@@ -87,12 +83,9 @@
     analysis: 5
     summarization: 3
     extraction: 4
-
-# --- Gemini 3.1 (preview) ---
-
-- model_id: "gemini-3.1-pro-preview"
-  provider: "gemini"
-  display_name: "Gemini 3.1 Pro (Preview)"
+- model_id: gemini-3.1-pro-preview
+  provider: gemini
+  display_name: Gemini 3.1 Pro (Preview)
   context_window: 1048576
   cost_input_per_mtok: 2.0
   cost_output_per_mtok: 12.0
@@ -109,10 +102,9 @@
     analysis: 5
     summarization: 5
     extraction: 5
-
-- model_id: "gemini-3.1-flash-lite-preview"
-  provider: "gemini"
-  display_name: "Gemini 3.1 Flash Lite (Preview)"
+- model_id: gemini-3.1-flash-lite-preview
+  provider: gemini
+  display_name: Gemini 3.1 Flash Lite (Preview)
   context_window: 1048576
   cost_input_per_mtok: 0.25
   cost_output_per_mtok: 1.5
@@ -129,12 +121,9 @@
     analysis: 3
     summarization: 4
     extraction: 4
-
-# --- Gemini 3 (preview) ---
-
-- model_id: "gemini-3-flash-preview"
-  provider: "gemini"
-  display_name: "Gemini 3 Flash (Preview)"
+- model_id: gemini-3-flash-preview
+  provider: gemini
+  display_name: Gemini 3 Flash (Preview)
   context_window: 1048576
   cost_input_per_mtok: 0.5
   cost_output_per_mtok: 3.0
@@ -151,12 +140,9 @@
     analysis: 5
     summarization: 5
     extraction: 4
-
-# --- Gemini 2.5 (estable) ---
-
-- model_id: "gemini-2.5-pro"
-  provider: "gemini"
-  display_name: "Gemini 2.5 Pro"
+- model_id: gemini-2.5-pro
+  provider: gemini
+  display_name: Gemini 2.5 Pro
   context_window: 1048576
   cost_input_per_mtok: 1.25
   cost_output_per_mtok: 10.0
@@ -173,10 +159,9 @@
     analysis: 5
     summarization: 5
     extraction: 5
-
-- model_id: "gemini-2.5-flash"
-  provider: "gemini"
-  display_name: "Gemini 2.5 Flash"
+- model_id: gemini-2.5-flash
+  provider: gemini
+  display_name: Gemini 2.5 Flash
   context_window: 1048576
   cost_input_per_mtok: 0.3
   cost_output_per_mtok: 2.5
@@ -193,10 +178,9 @@
     analysis: 4
     summarization: 5
     extraction: 4
-
-- model_id: "gemini-2.5-flash-lite"
-  provider: "gemini"
-  display_name: "Gemini 2.5 Flash Lite"
+- model_id: gemini-2.5-flash-lite
+  provider: gemini
+  display_name: Gemini 2.5 Flash Lite
   context_window: 1048576
   cost_input_per_mtok: 0.1
   cost_output_per_mtok: 0.4
@@ -213,12 +197,9 @@
     analysis: 3
     summarization: 4
     extraction: 3
-
-# --- Gemini 2.0 (en claves activas) ---
-
-- model_id: "gemini-2.0-flash"
-  provider: "gemini"
-  display_name: "Gemini 2.0 Flash"
+- model_id: gemini-2.0-flash
+  provider: gemini
+  display_name: Gemini 2.0 Flash
   context_window: 1000000
   cost_input_per_mtok: 0.1
   cost_output_per_mtok: 0.4
@@ -233,10 +214,9 @@
     analysis: 4
     summarization: 4
     extraction: 4
-
-- model_id: "gemini-2.0-flash-lite"
-  provider: "gemini"
-  display_name: "Gemini 2.0 Flash Lite"
+- model_id: gemini-2.0-flash-lite
+  provider: gemini
+  display_name: Gemini 2.0 Flash Lite
   context_window: 1000000
   cost_input_per_mtok: 0.075
   cost_output_per_mtok: 0.3
@@ -251,12 +231,9 @@
     analysis: 3
     summarization: 3
     extraction: 3
-
-# --- Gemini 1.5 (en claves activas) ---
-
-- model_id: "gemini-1.5-pro"
-  provider: "gemini"
-  display_name: "Gemini 1.5 Pro"
+- model_id: gemini-1.5-pro
+  provider: gemini
+  display_name: Gemini 1.5 Pro
   context_window: 2097152
   cost_input_per_mtok: 1.25
   cost_output_per_mtok: 5.0
@@ -271,10 +248,9 @@
     analysis: 4
     summarization: 4
     extraction: 4
-
-- model_id: "gemini-1.5-flash"
-  provider: "gemini"
-  display_name: "Gemini 1.5 Flash"
+- model_id: gemini-1.5-flash
+  provider: gemini
+  display_name: Gemini 1.5 Flash
   context_window: 1048576
   cost_input_per_mtok: 0.075
   cost_output_per_mtok: 0.3
@@ -289,10 +265,9 @@
     analysis: 3
     summarization: 4
     extraction: 4
-
-- model_id: "groq/llama-3.3-70b-versatile"
-  provider: "groq"
-  display_name: "Llama 3.3 70B (Groq)"
+- model_id: groq/llama-3.3-70b-versatile
+  provider: groq
+  display_name: Llama 3.3 70B (Groq)
   context_window: 128000
   cost_input_per_mtok: 0.59
   cost_output_per_mtok: 0.79
@@ -307,10 +282,9 @@
     analysis: 4
     summarization: 4
     extraction: 4
-
-- model_id: "groq/mixtral-8x7b"
-  provider: "groq"
-  display_name: "Mixtral 8x7B (Groq)"
+- model_id: groq/mixtral-8x7b
+  provider: groq
+  display_name: Mixtral 8x7B (Groq)
   context_window: 32768
   cost_input_per_mtok: 0.27
   cost_output_per_mtok: 0.27
@@ -325,13 +299,12 @@
     analysis: 3
     summarization: 4
     extraction: 3
-
-- model_id: "deepseek/deepseek-r1"
-  provider: "deepseek"
-  display_name: "DeepSeek R1"
+- model_id: deepseek/deepseek-r1
+  provider: deepseek
+  display_name: DeepSeek R1
   context_window: 65536
-  cost_input_per_mtok: 0.55
-  cost_output_per_mtok: 2.19
+  cost_input_per_mtok: 0.7
+  cost_output_per_mtok: 2.5
   supports_tools: false
   supports_json_mode: false
   is_local: false
@@ -343,10 +316,9 @@
     analysis: 5
     summarization: 3
     extraction: 4
-
-- model_id: "mistralai/mistral-large"
-  provider: "mistral"
-  display_name: "Mistral Large"
+- model_id: mistralai/mistral-large
+  provider: mistral
+  display_name: Mistral Large
   context_window: 131072
   cost_input_per_mtok: 2.0
   cost_output_per_mtok: 6.0
@@ -361,13 +333,12 @@
     analysis: 4
     summarization: 4
     extraction: 4
-
-- model_id: "qwen/qwen-2.5-72b-instruct"
-  provider: "qwen"
-  display_name: "Qwen 2.5 72B"
+- model_id: qwen/qwen-2.5-72b-instruct
+  provider: qwen
+  display_name: Qwen 2.5 72B
   context_window: 131072
-  cost_input_per_mtok: 0.4
-  cost_output_per_mtok: 1.2
+  cost_input_per_mtok: 0.36
+  cost_output_per_mtok: 0.4
   supports_tools: true
   supports_json_mode: true
   is_local: false
@@ -379,13 +350,12 @@
     analysis: 4
     summarization: 4
     extraction: 4
-
-- model_id: "meta-llama/llama-3.3-70b-instruct"
-  provider: "openrouter"
-  display_name: "Llama 3.3 70B"
+- model_id: meta-llama/llama-3.3-70b-instruct
+  provider: openrouter
+  display_name: Llama 3.3 70B
   context_window: 131072
-  cost_input_per_mtok: 0.2
-  cost_output_per_mtok: 0.4
+  cost_input_per_mtok: 0.1
+  cost_output_per_mtok: 0.32
   supports_tools: true
   supports_json_mode: false
   is_local: false
@@ -397,13 +367,12 @@
     analysis: 4
     summarization: 4
     extraction: 3
-
-- model_id: "meta-llama/llama-3.1-70b-instruct"
-  provider: "openrouter"
-  display_name: "Llama 3.1 70B"
+- model_id: meta-llama/llama-3.1-70b-instruct
+  provider: openrouter
+  display_name: Llama 3.1 70B
   context_window: 131072
-  cost_input_per_mtok: 0.12
-  cost_output_per_mtok: 0.3
+  cost_input_per_mtok: 0.4
+  cost_output_per_mtok: 0.4
   supports_tools: true
   supports_json_mode: false
   is_local: false
@@ -415,10 +384,9 @@
     analysis: 3
     summarization: 4
     extraction: 3
-
-- model_id: "openrouter/free"
-  provider: "openrouter"
-  display_name: "OpenRouter Free Tier"
+- model_id: openrouter/free
+  provider: openrouter
+  display_name: OpenRouter Free Tier
   context_window: 131072
   cost_input_per_mtok: 0.0
   cost_output_per_mtok: 0.0
@@ -433,10 +401,9 @@
     analysis: 3
     summarization: 3
     extraction: 3
-
-- model_id: "meta-llama/llama-3.1-8b-instruct"
-  provider: "ollama"
-  display_name: "Llama 3.1 8B (local)"
+- model_id: meta-llama/llama-3.1-8b-instruct
+  provider: ollama
+  display_name: Llama 3.1 8B (local)
   context_window: 131072
   cost_input_per_mtok: 0.0
   cost_output_per_mtok: 0.0
@@ -451,10 +418,9 @@
     analysis: 2
     summarization: 3
     extraction: 2
-
-- model_id: "ollama/mistral-7b"
-  provider: "ollama"
-  display_name: "Mistral 7B (local)"
+- model_id: ollama/mistral-7b
+  provider: ollama
+  display_name: Mistral 7B (local)
   context_window: 32768
   cost_input_per_mtok: 0.0
   cost_output_per_mtok: 0.0

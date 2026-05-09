@@ -15,6 +15,7 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 47 | Agent Protocol v2 | 🔀 Absorbido por EPIC 49 | — |
 | EPIC 48 | Shell Observability: Chat feedback + Dashboard real | 📥 Planned | 0% |
 | EPIC 49 | Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up | 🚧 In Progress | 60% |
+| EPIC 51 | Model Intelligence: PinchBench Scores + Ollama Cloud | 🚧 In Progress | 40% |
 
 ---
 
@@ -169,6 +170,18 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
 | CORE-263 | feat | Herramienta ask_user + estado WaitingUser + enrutamiento Chat Agent | 📥 Todo | Alta | Kernel Engineer |
+
+---
+
+### EPIC 51 — Model Intelligence: PinchBench Scores + Ollama Cloud
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-290 | chore | `tools/update_models.py` — script de sincronización de modelos y scores | ✅ Done | Alta | Arquitecto IA |
+| CORE-291 | chore | `models.yaml` — actualizar scores y costos con datos reales (primera ejecución) | ✅ Done | Alta | Arquitecto IA |
+| CORE-292 | feat | Kernel: provider `ollama_cloud` — URL remota + allowlist SSRF | 📥 Todo | Alta | Kernel Engineer |
+| CORE-293 | feat | `models.yaml` — agregar modelos Ollama Cloud (`is_local: false`) | 📥 Todo | Media | Arquitecto IA |
+| CORE-294 | feat | Shell: CatalogViewer — columna Benchmark score + badge Ollama Cloud | 📥 Todo | Alta | Shell Engineer |
 
 ---
 
