@@ -135,11 +135,13 @@ impl SirenRouter {
                 warn!("SirenRouter: ElevenLabs selected but no valid api_key in profile. Falling back.");
                 // Fallback: intentar con la key global del perfil de root/admin
                 if profile.engine_id == "elevenlabs" {
-                    if let Ok(Some(admin_profile)) = self.persistence.get_voice_profile("root").await {
+                    if let Ok(Some(admin_profile)) =
+                        self.persistence.get_voice_profile("root").await
+                    {
                         if admin_profile.engine_id == "elevenlabs" {
-                            if let Ok(settings) =
-                                serde_json::from_str::<serde_json::Value>(&admin_profile.settings_json)
-                            {
+                            if let Ok(settings) = serde_json::from_str::<serde_json::Value>(
+                                &admin_profile.settings_json,
+                            ) {
                                 if let Some(api_key) = settings["api_key"].as_str() {
                                     if !api_key.is_empty() {
                                         let voice = if profile.voice_id.is_empty() {
@@ -158,7 +160,10 @@ impl SirenRouter {
                                                 );
                                                 return Ok(Arc::new(driver));
                                             }
-                                            Err(e) => warn!("SirenRouter: Admin ElevenLabsDriver failed: {}", e),
+                                            Err(e) => warn!(
+                                                "SirenRouter: Admin ElevenLabsDriver failed: {}",
+                                                e
+                                            ),
                                         }
                                     }
                                 }
