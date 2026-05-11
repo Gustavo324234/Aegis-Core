@@ -9,7 +9,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import * as secureStorage from '@/services/secureStorage';
 import { PROVIDERS } from '@/constants/providers';
 import { TRANSLATIONS, Language } from '@/constants/i18n';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -303,14 +303,14 @@ export default function SettingsScreen() {
             style={[styles.oauthBtn, { borderColor: '#4285F4' }]} 
             onPress={() => router.push('/(main)/connected-accounts')}
           >
-            <Ionicons name="logo-google" size={18} color="#4285F4" />
+            <MaterialCommunityIcons name="google" size={18} color="#4285F4" />
             <Text style={styles.oauthBtnText}>Google</Text>
           </TouchableOpacity>
           <TouchableOpacity 
             style={[styles.oauthBtn, { borderColor: '#1DB954' }]} 
             onPress={() => router.push('/(main)/connected-accounts')}
           >
-            <Ionicons name="logo-spotify" size={18} color="#1DB954" />
+            <MaterialCommunityIcons name="spotify" size={18} color="#1DB954" />
             <Text style={styles.oauthBtnText}>Spotify</Text>
           </TouchableOpacity>
         </View>
