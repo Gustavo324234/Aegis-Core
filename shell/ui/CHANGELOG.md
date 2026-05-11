@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.16.0...shell-ui-v1.16.1) (2026-05-09)
+
+
+### Bug Fixes
+
+* **ui:** CORE-292 add ollama_cloud to enginePresets and ProvidersTab icon grid ([#249](https://github.com/Gustavo324234/Aegis-Core/issues/249)) ([8845954](https://github.com/Gustavo324234/Aegis-Core/commit/88459541b000b78f403a016346fe6fcaed471cdb))
+
 ## [1.16.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.15.2...shell-ui-v1.16.0) (2026-05-09)
 
 
