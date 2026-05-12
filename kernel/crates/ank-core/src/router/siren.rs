@@ -133,6 +133,44 @@ impl SirenRouter {
                     }
                 }
                 warn!("SirenRouter: ElevenLabs selected but no valid api_key in profile. Falling back.");
+                // Fallback: intentar con la key global del perfil de root/admin
+                if profile.engine_id == "elevenlabs" {
+                    if let Ok(Some(admin_profile)) =
+                        self.persistence.get_voice_profile("root").await
+                    {
+                        if admin_profile.engine_id == "elevenlabs" {
+                            if let Ok(settings) = serde_json::from_str::<serde_json::Value>(
+                                &admin_profile.settings_json,
+                            ) {
+                                if let Some(api_key) = settings["api_key"].as_str() {
+                                    if !api_key.is_empty() {
+                                        let voice = if profile.voice_id.is_empty() {
+                                            admin_profile.voice_id.clone()
+                                        } else {
+                                            profile.voice_id.clone()
+                                        };
+                                        match crate::chal::drivers::ElevenLabsDriver::new(
+                                            api_key.to_string(),
+                                            voice,
+                                        ) {
+                                            Ok(driver) => {
+                                                info!(
+                                                    "SirenRouter: Using admin ElevenLabs key for tenant '{}'",
+                                                    tenant_id
+                                                );
+                                                return Ok(Arc::new(driver));
+                                            }
+                                            Err(e) => warn!(
+                                                "SirenRouter: Admin ElevenLabsDriver failed: {}",
+                                                e
+                                            ),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             } else if let Some(engine) = engines.get(&profile.engine_id) {
                 return Ok(engine.clone());
             } else {
