@@ -18,24 +18,27 @@ const ProviderCard: React.FC<{
     provider: ProviderEntry;
     onDelete: (keyId: string) => void;
     onEdit: (provider: ProviderEntry) => void;
-}> = ({ provider, onDelete, onEdit }) => {
+    onToggle: (keyId: string, active: boolean) => Promise<void>;
+}> = ({ provider, onDelete, onEdit, onToggle }) => {
     const { t } = useTranslation();
+    const [isToggling, setIsToggling] = useState(false);
     const isRateLimited = provider.rate_limited_until && new Date(provider.rate_limited_until) > new Date();
-    const status = !provider.is_active ? 'inactive' : isRateLimited ? 'limited' : 'active';
-
-    const statusColors = {
-        active: 'text-green-400 border-green-500/30 bg-green-500/10',
-        limited: 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10',
-        inactive: 'text-white/30 border-white/10 bg-white/5',
-    };
 
     const providerLabel = PROVIDER_PRESETS[provider.provider as ProviderType]?.label ?? provider.provider;
+
+    const handleToggle = async () => {
+        setIsToggling(true);
+        try {
+            await onToggle(provider.key_id, !provider.is_active);
+        } finally {
+            setIsToggling(false);
+        }
+    };
 
     return (
         <div className="glass p-5 rounded-2xl border border-white/10 hover:border-white/20 transition-all group/card">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                    {/* Icono del provider */}
                     <div className="p-2 rounded-lg bg-white/5">
                         <Globe className="w-5 h-5 text-aegis-cyan" />
                     </div>
@@ -59,21 +62,41 @@ const ProviderCard: React.FC<{
                             FREE
                         </span>
                     )}
-                    {/* Badge de estado */}
-                    <span className={`px-2 py-0.5 rounded text-[9px] font-mono uppercase border ${statusColors[status]}`}>
-                        {status === 'active' ? t('status_active') : status === 'limited' ? t('status_limited') : t('status_inactive')}
-                    </span>
+                    {/* Rate limited badge — no bloquea el toggle */}
+                    {isRateLimited && (
+                        <span className="px-2 py-0.5 rounded text-[9px] font-mono uppercase border text-yellow-400 border-yellow-500/30 bg-yellow-500/10">
+                            {t('status_limited')}
+                        </span>
+                    )}
+
+                    {/* Toggle ON/OFF */}
+                    <button
+                        onClick={handleToggle}
+                        disabled={isToggling}
+                        className={`relative w-11 h-6 rounded-full transition-colors duration-300
+                            ${provider.is_active ? 'bg-green-500/40 border-green-500/50' : 'bg-white/10 border-white/20'}
+                            border hover:opacity-80 disabled:opacity-50`}
+                        title={provider.is_active ? t('status_active') : t('status_inactive')}
+                    >
+                        {isToggling ? (
+                            <Loader2 className="absolute inset-0 m-auto w-3.5 h-3.5 animate-spin text-white/50" />
+                        ) : (
+                            <div className={`absolute top-0.5 w-5 h-5 rounded-full transition-all duration-300
+                                ${provider.is_active ? 'left-5 bg-green-400' : 'left-0.5 bg-white/30'}`}
+                            />
+                        )}
+                    </button>
 
                     {/* Acciones */}
                     <button onClick={() => onEdit(provider)} className="p-1.5 rounded hover:bg-white/10 transition-colors">
                         <Settings className="w-4 h-4 text-white/30 hover:text-white/70" />
                     </button>
-                    <button 
+                    <button
                         onClick={() => {
                             if (window.confirm(t('confirm_delete_provider', { name: provider.label || providerLabel }))) {
                                 onDelete(provider.key_id);
                             }
-                        }} 
+                        }}
                         className="p-1.5 rounded hover:bg-red-500/10 transition-colors group"
                     >
                         <Trash2 className="w-4 h-4 text-white/30 group-hover:text-red-500" />
@@ -472,6 +495,32 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
         }
     }, [tenantId, sessionKey]);
 
+    const handleToggle = async (keyId: string, newActive: boolean) => {
+        setProviders(prev => prev.map(p =>
+            p.key_id === keyId ? { ...p, is_active: newActive } : p
+        ));
+        try {
+            const res = await fetch(`/api/router/keys/global/${keyId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId!,
+                    'x-citadel-key': sessionKey!,
+                },
+                body: JSON.stringify({ is_active: newActive }),
+            });
+            if (!res.ok) {
+                setProviders(prev => prev.map(p =>
+                    p.key_id === keyId ? { ...p, is_active: !newActive } : p
+                ));
+            }
+        } catch {
+            setProviders(prev => prev.map(p =>
+                p.key_id === keyId ? { ...p, is_active: !newActive } : p
+            ));
+        }
+    };
+
     const handleDelete = async (keyId: string) => {
         try {
             const res = await fetch(`/api/router/keys/global/${keyId}`, {
@@ -530,10 +579,11 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {providers.map(provider => (
-                        <ProviderCard 
-                            key={provider.key_id} 
-                            provider={provider} 
+                        <ProviderCard
+                            key={provider.key_id}
+                            provider={provider}
                             onDelete={handleDelete}
+                            onToggle={handleToggle}
                             onEdit={(p) => {
                                 setEditingProvider(p);
                                 setShowModal(true);
