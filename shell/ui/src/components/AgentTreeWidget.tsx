@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Building2, Wrench, Zap, Bot } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Building2, Wrench, Zap, Bot, AlertCircle, Loader2 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -30,20 +30,13 @@ interface AgentTreeDto {
     total_agents: number;
 }
 
-// ── Mock data (fallback cuando backend no está listo) ────────────────────────
+type AgentTreeState =
+    | { status: 'connecting' }
+    | { status: 'connected'; agents: AgentTreeDto }
+    | { status: 'empty' }
+    | { status: 'error'; message: string };
 
-const MOCK_TREE: AgentTreeDto = {
-    total_agents: 6,
-    roots: ['proj-aegis'],
-    nodes: [
-        { agent_id: 'proj-aegis', role: 'ProjectSupervisor', project_id: 'aegis', domain: 'Aegis OS', parent_id: null, children: ['dom-kernel', 'dom-shell'], state: 'WaitingReport', task_type: 'PLANNING', created_at: new Date().toISOString() },
-        { agent_id: 'dom-kernel', role: 'DomainSupervisor', project_id: 'aegis', domain: 'Kernel Engineer', parent_id: 'proj-aegis', children: ['spec-scheduler', 'spec-auth'], state: 'WaitingReport', task_type: 'CODE', created_at: new Date().toISOString() },
-        { agent_id: 'dom-shell', role: 'DomainSupervisor', project_id: 'aegis', domain: 'Shell Engineer', parent_id: 'proj-aegis', children: ['spec-ui'], state: 'Running', task_type: 'CODE', created_at: new Date().toISOString() },
-        { agent_id: 'spec-scheduler', role: 'Specialist', project_id: 'aegis', domain: 'scheduler.rs', parent_id: 'dom-kernel', children: [], state: 'Complete', task_type: 'CODE', created_at: new Date().toISOString() },
-        { agent_id: 'spec-auth', role: 'Specialist', project_id: 'aegis', domain: 'citadel auth', parent_id: 'dom-kernel', children: [], state: 'Running', task_type: 'CODE', created_at: new Date().toISOString() },
-        { agent_id: 'spec-ui', role: 'Specialist', project_id: 'aegis', domain: 'AgentTreeWidget.tsx', parent_id: 'dom-shell', children: [], state: 'Running', task_type: 'CODE', created_at: new Date().toISOString() },
-    ],
-};
+const MAX_RETRIES = 3;
 
 // ── State config ─────────────────────────────────────────────────────────────
 
@@ -94,20 +87,13 @@ function AgentRow({ node, nodeMap, depth }: AgentRowProps) {
                 )}
                 style={{ marginLeft: depth > 0 ? `${depth * 24}px` : undefined }}
             >
-                {/* Vertical connector for non-root */}
                 <RoleIcon role={node.role} />
-
-                {/* Domain name */}
                 <span className="text-xs font-medium text-white/80 flex-1 truncate">
                     {node.domain}
                 </span>
-
-                {/* Task type badge */}
                 <span className="text-[9px] font-mono px-2 py-0.5 rounded bg-white/5 text-white/30 uppercase tracking-widest shrink-0">
                     {node.task_type.replace('Coding', 'CODE').replace('Planning', 'PLAN')}
                 </span>
-
-                {/* State indicator */}
                 <div className="flex items-center gap-1.5 shrink-0">
                     <div
                         className={cn(
@@ -119,8 +105,6 @@ function AgentRow({ node, nodeMap, depth }: AgentRowProps) {
                     <span className={cn('text-[9px] font-mono', cfg.color)}>{cfg.label}</span>
                 </div>
             </div>
-
-            {/* Render children recursively */}
             {node.children.map(childId => {
                 const child = nodeMap.get(childId);
                 return child ? (
@@ -139,65 +123,137 @@ interface AgentTreeWidgetProps {
 }
 
 const AgentTreeWidget: React.FC<AgentTreeWidgetProps> = ({ tenantId, sessionKey }) => {
-    const [tree, setTree] = useState<AgentTreeDto>({ nodes: [], roots: [], total_agents: 0 });
+    const [treeState, setTreeState] = useState<AgentTreeState>({ status: 'connecting' });
+    const wsRef = useRef<WebSocket | null>(null);
+    const retryCountRef = useRef(0);
+    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const fetchTree = async () => {
+    const connect = () => {
         if (!tenantId || !sessionKey) {
-            setTree(MOCK_TREE);
+            setTreeState({ status: 'empty' });
             return;
         }
-        try {
-            const res = await fetch('/api/agents/tree', {
-                headers: {
-                    'x-citadel-tenant': tenantId,
-                    'x-citadel-key': sessionKey,
-                },
-            });
-            if (res.ok) {
-                setTree(await res.json());
-            } else {
-                setTree(MOCK_TREE);
+
+        setTreeState({ status: 'connecting' });
+        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const ws = new WebSocket(`${protocol}://${window.location.host}/ws/agents/${tenantId}`);
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+            retryCountRef.current = 0;
+        };
+
+        ws.onmessage = (e) => {
+            try {
+                const tree = JSON.parse(e.data as string) as AgentTreeDto;
+                setTreeState(
+                    tree.total_agents > 0
+                        ? { status: 'connected', agents: tree }
+                        : { status: 'empty' }
+                );
+            } catch {
+                // ignore malformed frames
             }
-        } catch {
-            setTree(MOCK_TREE);
+        };
+
+        ws.onerror = () => {
+            ws.close();
+        };
+
+        ws.onclose = () => {
+            wsRef.current = null;
+            if (retryCountRef.current < MAX_RETRIES) {
+                const delay = 1000 * Math.pow(2, retryCountRef.current);
+                retryCountRef.current++;
+                retryTimerRef.current = setTimeout(connect, delay);
+            } else {
+                setTreeState({ status: 'error', message: 'No se pudo conectar al stream de agentes' });
+            }
+        };
+    };
+
+    const handleRetry = () => {
+        retryCountRef.current = 0;
+        if (retryTimerRef.current) {
+            clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = null;
         }
+        if (wsRef.current) {
+            wsRef.current.onclose = null;
+            wsRef.current.close();
+            wsRef.current = null;
+        }
+        connect();
     };
 
     useEffect(() => {
-        void fetchTree();
-        const interval = setInterval(() => void fetchTree(), 2000);
-        return () => clearInterval(interval);
+        connect();
+        return () => {
+            if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+            if (wsRef.current) {
+                wsRef.current.onclose = null;
+                wsRef.current.close();
+            }
+        };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tenantId, sessionKey]);
 
-    const nodeMap = useMemo(() => {
+    const { nodeMap, rootNodes } = useMemo(() => {
+        if (treeState.status !== 'connected') return { nodeMap: new Map(), rootNodes: [] };
         const map = new Map<string, AgentNodeDto>();
-        tree.nodes.forEach(n => map.set(n.agent_id, n));
-        return map;
-    }, [tree]);
+        treeState.agents.nodes.forEach(n => map.set(n.agent_id, n));
+        const roots = treeState.agents.roots
+            .map(id => map.get(id))
+            .filter((n): n is AgentNodeDto => !!n);
+        return { nodeMap: map, rootNodes: roots };
+    }, [treeState]);
 
-    const rootNodes = useMemo(
-        () => tree.roots.map(id => nodeMap.get(id)).filter((n): n is AgentNodeDto => !!n),
-        [tree.roots, nodeMap],
-    );
+    if (treeState.status === 'connecting') {
+        return (
+            <div className="glass p-6 rounded-2xl border border-white/10 flex items-center justify-center gap-3 min-h-[120px]">
+                <Loader2 className="w-4 h-4 animate-spin text-aegis-cyan/40" />
+                <span className="text-[10px] font-mono text-white/20 uppercase tracking-widest">Conectando...</span>
+            </div>
+        );
+    }
+
+    if (treeState.status === 'error') {
+        return (
+            <div className="glass p-6 rounded-2xl border border-red-500/20 flex flex-col items-center justify-center gap-3 min-h-[120px]">
+                <AlertCircle className="w-5 h-5 text-red-500/50" />
+                <p className="text-[10px] font-mono text-white/30 uppercase tracking-widest">AgentTreeWidget unavailable</p>
+                <p className="text-[9px] font-mono text-white/20 text-center">{treeState.message}</p>
+                <button
+                    onClick={handleRetry}
+                    className="text-[9px] font-mono text-white/20 hover:text-white/50 uppercase tracking-widest underline"
+                >
+                    retry
+                </button>
+            </div>
+        );
+    }
+
+    if (treeState.status === 'empty') {
+        return (
+            <div className="glass p-6 rounded-2xl border border-white/10">
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-white/20">
+                    <Bot className="w-10 h-10" />
+                    <p className="text-xs font-mono uppercase tracking-widest">Sin agentes activos</p>
+                    <p className="text-[10px] text-white/10 text-center max-w-xs">
+                        Iniciá un proyecto para ver el árbol de agentes
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="glass p-6 rounded-2xl border border-white/10">
-            {tree.total_agents === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 gap-3 text-white/20">
-                    <Bot className="w-10 h-10" />
-                    <p className="text-xs font-mono uppercase tracking-widest">No hay agentes activos</p>
-                    <p className="text-[10px] text-white/10 text-center max-w-xs">
-                        Los agentes se activarán cuando inicies una tarea compleja
-                    </p>
-                </div>
-            ) : (
-                <div className="flex flex-col gap-1">
-                    {rootNodes.map(root => (
-                        <AgentRow key={root.agent_id} node={root} nodeMap={nodeMap} depth={0} />
-                    ))}
-                </div>
-            )}
+            <div className="flex flex-col gap-1">
+                {rootNodes.map(root => (
+                    <AgentRow key={root.agent_id} node={root} nodeMap={nodeMap} depth={0} />
+                ))}
+            </div>
         </div>
     );
 };
