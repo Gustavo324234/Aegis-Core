@@ -1,8 +1,8 @@
-[package]
+﻿[package]
 name = "ank-http"
-version = "0.1.56"
+version = "0.1.57"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 
 [dependencies]
 ank-core  = { path = "../ank-core" }

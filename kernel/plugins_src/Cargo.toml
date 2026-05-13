@@ -1,8 +1,8 @@
-[package]
+﻿[package]
 name = "plugins_src"
 version = "0.1.5"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib"]

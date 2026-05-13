@@ -183,7 +183,9 @@ pub(crate) async fn run_server() -> Result<()> {
     let key_pool = Arc::new(ank_core::router::key_pool::KeyPool::new(
         Arc::clone(&persistence) as Arc<dyn StatePersistor>,
     ));
-    let _ = key_pool.load().await;
+    if let Err(e) = key_pool.load().await {
+        tracing::error!("CORE-213: key_pool.load() falló al iniciar — las claves de API no están disponibles: {}", e);
+    }
 
     let router = Arc::new(RwLock::new(CognitiveRouter::new(
         catalog.clone(),
