@@ -1475,6 +1475,7 @@ impl CognitiveHAL {
             }
 
             // CORE-289: Chat Agent consulta el estado actual del árbol de agentes
+            // CORE-300: filtrar por tenant_id del PCB — aislamiento cross-tenant.
             "get_agent_status" => {
                 let project_name = args
                     .get("project_name")
@@ -1488,7 +1489,11 @@ impl CognitiveHAL {
                     None => return "{\"error\":\"orchestrator_not_configured\"}".to_string(),
                 };
 
-                let snapshot = orchestrator.tree_snapshot().await;
+                let tenant_id = pcb
+                    .tenant_id
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string());
+                let snapshot = orchestrator.tree_snapshot_for_tenant(&tenant_id).await;
 
                 let filtered: Vec<_> = if project_name.is_empty() {
                     snapshot
