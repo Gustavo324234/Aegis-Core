@@ -13,9 +13,11 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 | EPIC 46 | Public Launch | ✅ Completa | 100% |
 | EPIC 47 | Agent Protocol v2 | 🔀 Absorbido por EPIC 49 | — |
-| EPIC 48 | Shell Observability: Chat feedback + Dashboard real | 📥 Planned | 0% |
-| EPIC 49 | Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up | 🚧 In Progress | 60% |
-| EPIC 51 | Model Intelligence: PinchBench Scores + Ollama Cloud | 🚧 In Progress | 40% |
+| EPIC 48 | Shell Observability | 🔀 Absorbido por EPIC 53 | — |
+| EPIC 49 | Cognitive Loop | 🔀 Absorbido por EPIC 53 | — |
+| EPIC 51 | Model Intelligence | 🔀 Absorbido por EPIC 53 | — |
+| EPIC 52 | Voice Quality | 🚧 In Progress | 0% |
+| EPIC 53 | Stabilization: Agent Loop, Observability & Infrastructure | 🚧 In Progress | 0% |
 
 ---
 
@@ -128,118 +130,75 @@ Este archivo es la fuente única de verdad para el estado de todos los tickets d
 | CORE-221 | ops | Topics del repo | ✅ Done | Media | Tavo |
 | CORE-222 | ops | Social preview image | ✅ Done | Media | Tavo |
 | CORE-223 | docs | .github/CODEOWNERS | ✅ Done | Media | Arquitecto IA |
-| CORE-224 | chore | Limpiar directorios temporales | 📥 Todo | Baja | Tavo |
-| CORE-225 | chore | License field en Cargo.toml → MIT | 📥 Todo | Alta | Kernel Engineer |
 
 ---
 
-### EPIC 48 — Shell Observability: Chat feedback + Dashboard real
+### EPIC 52 — Voice Quality
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-244 | fix | HAL Runner: StatusUpdate en path de error | ✅ Done | Crítica | Kernel Engineer |
-| CORE-248 | feat | Chat: indicador de estado enriquecido (modelo, provider, error amigable, timeout) | ✅ Done | Crítica | Shell Engineer |
-| CORE-252 | feat | Dashboard: header con nombre real del tenant y estado del sistema real | 📥 Todo | Alta | Shell Engineer |
-| CORE-249 | feat | Dashboard: reemplazar MOCK_TICKETS con Kanban real del tenant | 📥 Todo | Alta | Shell Engineer |
-| CORE-250 | feat | Dashboard: FinancialWidget con datos reales (API Cost) | 📥 Todo | Media | Shell Engineer |
-| CORE-251 | feat | Dashboard: Chronos widget honesto (sin eventos ficticios) | 📥 Todo | Media | Shell Engineer |
-| CORE-253 | fix | Kernel: SYS_CALL_PLUGIN con plugin no encontrado devuelve error legible al usuario | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-256 | feat | Admin: tab Sistema — gestión del servicio (start/stop/restart/status) desde la UI | 📥 Todo | Alta | Shell Engineer + Kernel Engineer |
-| CORE-257 | fix | Kernel: Tunnel Manager — no reintentar si cloudflared no está instalado | 📥 Todo | Media | Kernel Engineer |
+| CORE-295 | fix | Voice: voz metálica (Mock fallback) + key admin como fallback TTS + preservar stt_provider | 📥 Todo | Crítica | Kernel + Shell Engineer |
 
 ---
 
-### EPIC 49 — Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up
+### EPIC 53 — Stabilization: Agent Loop, Observability & Infrastructure
 
-**Fase 1 — Memoria Conversacional**
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-259 | feat | CloudProxyDriver: historial Vec<ChatMessage> en lugar de String | ✅ Done | Crítica | Kernel Engineer |
-| CORE-260 | feat | PCB: acumular historial de mensajes + SessionHistoryCache | ✅ Done | Crítica | Kernel Engineer |
-
-**Fase 2 — Bucle ReAct Interno**
+**Fase 1 — Agent Loop (Crítico)**
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-261 | feat | CognitiveHAL: bucle ReAct — tool call → resultado → LLM | ✅ Done | Crítica | Kernel Engineer |
+| CORE-300 | fix | Kernel: aislamiento cross-tenant en ProjectRegistry | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-298 | fix | Kernel: dispatch post-spawn falla — No channel for agent | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-262 | feat | AgentOrchestrator: inferencia LLM real en run_agent_loop | 📥 Todo | Crítica | Kernel Engineer |
-
-**Fase 3 — Comunicación Bottom-Up**
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
+| CORE-297 | fix | chat_agent.md: flujo automático de proyectos y delegación | 📥 Todo | Crítica | Arquitecto IA |
 | CORE-263 | feat | Herramienta ask_user + estado WaitingUser + enrutamiento Chat Agent | 📥 Todo | Alta | Kernel Engineer |
 
----
-
-### EPIC 51 — Model Intelligence: PinchBench Scores + Ollama Cloud
+**Fase 2 — Shell Observability (Alta)**
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-290 | chore | `tools/update_models.py` — script de sincronización de modelos y scores | ✅ Done | Alta | Arquitecto IA |
-| CORE-291 | chore | `models.yaml` — actualizar scores y costos con datos reales (primera ejecución) | ✅ Done | Alta | Arquitecto IA |
+| CORE-299 | fix | Shell: timeout del cliente desincronizado con el ReAct loop | 📥 Todo | Alta | Shell + Kernel Engineer |
+| CORE-301 | fix | Shell: AgentTreeWidget unavailable | 📥 Todo | Alta | Shell Engineer |
+| CORE-252 | feat | Dashboard: header con nombre real del tenant y estado del sistema | 📥 Todo | Alta | Shell Engineer |
+| CORE-249 | feat | Dashboard: reemplazar MOCK_TICKETS con Kanban real del tenant | 📥 Todo | Alta | Shell Engineer |
+| CORE-253 | fix | Kernel: SYS_CALL_PLUGIN con plugin no encontrado devuelve error legible | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-256 | feat | Admin: tab Sistema — gestión del servicio desde la UI | 📥 Todo | Alta | Shell + Kernel Engineer |
+| CORE-250 | feat | Dashboard: FinancialWidget con datos reales (API Cost) | 📥 Todo | Media | Shell Engineer |
+| CORE-251 | feat | Dashboard: Chronos widget honesto (sin eventos ficticios) | 📥 Todo | Media | Shell Engineer |
+| CORE-257 | fix | Kernel: Tunnel Manager — no reintentar si cloudflared no instalado | 📥 Todo | Media | Kernel Engineer |
+
+**Fase 3 — UX & Providers (Alta)**
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-247 | feat | Historial de chat persistente: cargar al conectar, unificar IP y Cloudflare | 📥 Todo | Crítica | Kernel + Shell Engineer |
+| CORE-245 | feat | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | 📥 Todo | Alta | Shell Engineer |
+| CORE-246 | feat | Tenant: visualización de modelos disponibles por provider en tab Motor | 📥 Todo | Alta | Shell Engineer |
+
+**Fase 4 — Model Intelligence (Media)**
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
 | CORE-292 | feat | Kernel: provider `ollama_cloud` — URL remota + allowlist SSRF | 📥 Todo | Alta | Kernel Engineer |
 | CORE-293 | feat | `models.yaml` — agregar modelos Ollama Cloud (`is_local: false`) | 📥 Todo | Media | Arquitecto IA |
 | CORE-294 | feat | Shell: CatalogViewer — columna Benchmark score + badge Ollama Cloud | 📥 Todo | Alta | Shell Engineer |
 
----
-
-### Bugs pre-lanzamiento — Multi-Agent Pipeline (Kernel)
+**Fase 5 — Infraestructura (Alta)**
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-226 | fix | Kernel: Chat Agent carga chat_agent.md via InstructionLoader | ✅ Done | Crítica | Kernel Engineer |
-| CORE-227 | fix | Kernel: SPAWN_INSTRUCTIONS unificado al formato SYS_AGENT_SPAWN | ✅ Done | Crítica | Kernel Engineer |
-| CORE-228 | fix | Kernel: SyscallExecutor wired con AgentOrchestrator | ✅ Done | Crítica | Kernel Engineer |
-| CORE-229 | fix | Installer: agents config se despliega en producción | ✅ Done | Alta | DevOps Engineer |
-
----
-
-### Bugs pre-lanzamiento — Shell / UX
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-230 | fix | Shell: Dashboard crashea al montar y dispara AegisErrorBoundary ("Session Error") | ✅ Done | Crítica | Shell Engineer |
-| CORE-231 | fix | Shell: Micrófono falla silenciosamente en HTTP — falta feedback al usuario | ✅ Done | Crítica | Shell Engineer |
-| CORE-232 | fix | Shell: IP vs Cloudflare producen chats separados — falta aviso y pre-fill de login | ✅ Done | Alta | Shell Engineer |
-| CORE-233 | feat | Shell: Settings del tenant — simplificar y unificar configuración en 4 tabs | ✅ Done | Alta | Shell Engineer |
-
----
-
-### Mejoras UX — Panel de providers y chat
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-245 | feat | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | 📥 Todo | Alta | Shell Engineer |
-| CORE-246 | feat | Tenant: visualización de modelos disponibles por provider en tab Motor | 📥 Todo | Alta | Shell Engineer |
-| CORE-247 | feat | Historial de chat persistente: cargar al conectar, unificar IP y Cloudflare | 📥 Todo | Crítica | Kernel Engineer + Shell Engineer |
-
----
-
-### Infraestructura Windows + CLI
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-254 | feat | CI/CD: installer Windows PowerShell + install.ps1 | ✅ Done | Alta | DevOps Engineer |
+| CORE-296 | feat | Installer: puerto HTTP configurable + soporte entorno multi-servicio | 📥 Todo | Crítica | DevOps Engineer |
 | CORE-255 | fix | Installer: registro robusto del servicio Windows + opción -Repair | 📥 Todo | Crítica | DevOps Engineer |
-| CORE-258 | feat | CLI: ank-cli multiplataforma — Windows + Linux + CI + installers | 📥 Todo | Alta | Kernel Engineer |
+| CORE-258 | feat | CLI: ank-cli multiplataforma — Windows + Linux + CI | 📥 Todo | Alta | Kernel Engineer |
 
----
+**Fase 6 — Deuda técnica y cleanup (Baja)**
 
-### Bugs de infraestructura
-
-| ID | Tipo | Título | Estado | Prioridad | Responsable |
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| OPS-001 | ops | Re-registrar API keys Gemini/OpenRouter en DB via UI tras reinicio | 📥 Todo | Crítica | Tavo (manual) |
-
----
-
-### Deuda técnica pendiente
-
-| ID | Tipo | Título | Estado | Prioridad |
-|---|---|---|---|---|
-| CORE-213 | fix | Kernel: loguear error en key_pool.load() al arranque | 📥 Todo | Media |
+| CORE-225 | chore | License field en Cargo.toml → MIT | 📥 Todo | Alta | Kernel Engineer |
+| CORE-213 | fix | Kernel: loguear error en key_pool.load() al arranque | 📥 Todo | Media | Kernel Engineer |
+| CORE-224 | chore | Limpiar directorios temporales | 📥 Todo | Baja | Tavo |
+| OPS-001 | ops | Re-registrar API keys tras reinicio (workaround manual) | 📥 Todo | Crítica | Tavo |
 
 ---
 
