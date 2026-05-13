@@ -10,6 +10,8 @@ use tokio::sync::RwLock;
 pub struct ModelUsageTracker {
     minute_window: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
     daily_counts: Arc<RwLock<HashMap<String, (u32, NaiveDate)>>>,
+    latency_samples: Arc<RwLock<HashMap<String, VecDeque<u32>>>>,
+    error_window: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
 }
 
 impl Default for ModelUsageTracker {
@@ -23,6 +25,8 @@ impl ModelUsageTracker {
         Self {
             minute_window: Arc::new(RwLock::new(HashMap::new())),
             daily_counts: Arc::new(RwLock::new(HashMap::new())),
+            latency_samples: Arc::new(RwLock::new(HashMap::new())),
+            error_window: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -101,5 +105,50 @@ impl ModelUsageTracker {
         }
 
         factor
+    }
+
+    /// Registers the observed round-trip latency (ms) after a completed request.
+    pub async fn record_latency(&self, model_id: &str, latency_ms: u32) {
+        let mut map = self.latency_samples.write().await;
+        let samples = map.entry(model_id.to_string()).or_default();
+        if samples.len() >= 20 {
+            samples.pop_front();
+        }
+        samples.push_back(latency_ms);
+    }
+
+    /// Records a provider error to temporarily penalise the model in scoring.
+    pub async fn record_error(&self, model_id: &str) {
+        let now = Instant::now();
+        let mut map = self.error_window.write().await;
+        let queue = map.entry(model_id.to_string()).or_default();
+        let cutoff = now - Duration::from_secs(300);
+        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+            queue.pop_front();
+        }
+        queue.push_back(now);
+    }
+
+    /// Returns the average observed latency, or None if no samples exist yet.
+    pub async fn observed_latency_ms(&self, model_id: &str) -> Option<u32> {
+        let map = self.latency_samples.read().await;
+        let samples = map.get(model_id)?;
+        if samples.is_empty() {
+            return None;
+        }
+        let avg = samples.iter().map(|&v| v as u64).sum::<u64>() / samples.len() as u64;
+        Some(avg as u32)
+    }
+
+    /// Returns the number of errors recorded in the last 5 minutes.
+    pub async fn recent_errors(&self, model_id: &str) -> u32 {
+        let now = Instant::now();
+        let cutoff = now - Duration::from_secs(300);
+        let mut map = self.error_window.write().await;
+        let queue = map.entry(model_id.to_string()).or_default();
+        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+            queue.pop_front();
+        }
+        queue.len() as u32
     }
 }

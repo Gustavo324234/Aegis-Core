@@ -143,10 +143,17 @@ impl CognitiveRouter {
             .iter()
             .map(|e| e.cost_input_per_mtok + e.cost_output_per_mtok)
             .fold(0.0_f64, f64::max);
-        let max_latency = available
-            .iter()
-            .map(|e| e.avg_latency_ms.unwrap_or(1500) as f64)
-            .fold(0.0_f64, f64::max);
+        let max_latency = {
+            let mut ml = 0.0_f64;
+            for e in &available {
+                let obs = self.tracker.observed_latency_ms(&e.model_id).await;
+                let lat = obs.unwrap_or(e.avg_latency_ms.unwrap_or(2000)) as f64;
+                if lat > ml {
+                    ml = lat;
+                }
+            }
+            ml
+        };
 
         // For each candidate: if no paid key exists, apply free-tier capacity factor.
         // Models at capacity (factor == 0.0) are hard-excluded; approaching limit
@@ -172,7 +179,14 @@ impl CognitiveRouter {
                 continue;
             }
 
-            let base = self.compute_score(&entry, task_type, max_cost, max_latency);
+            let ctx = ScoreCtx {
+                prompt: &pcb.memory_pointers.l1_instruction,
+                max_cost,
+                max_latency,
+                observed_latency: self.tracker.observed_latency_ms(&entry.model_id).await,
+                recent_errors: self.tracker.recent_errors(&entry.model_id).await,
+            };
+            let base = self.compute_score(&entry, task_type, &ctx);
             // Soft penalty: multiply by sqrt(capacity) so a model at 50% headroom
             // scores ~70% of its base, still competitive but deprioritised.
             scored.push((base * capacity.sqrt(), entry));
@@ -234,15 +248,24 @@ impl CognitiveRouter {
         })
     }
 
-    fn compute_score(
-        &self,
-        entry: &ModelEntry,
-        task_type: TaskType,
-        max_cost: f64,
-        max_latency: f64,
-    ) -> f64 {
-        let quality = entry.score_for(task_type) as f64 / 5.0;
+    pub fn tracker_ref(&self) -> &Arc<ModelUsageTracker> {
+        &self.tracker
+    }
 
+    fn compute_score(&self, entry: &ModelEntry, task_type: TaskType, ctx: &ScoreCtx<'_>) -> f64 {
+        let (prompt, max_cost, max_latency, observed_latency, recent_errors) = (
+            ctx.prompt,
+            ctx.max_cost,
+            ctx.max_latency,
+            ctx.observed_latency,
+            ctx.recent_errors,
+        );
+        // ── 1. Quality (40%) ─────────────────────────────────────────
+        let base_quality = entry.score_for(task_type) as f64 / 5.0;
+        let content_boost = detect_content_type(prompt, task_type);
+        let quality = (base_quality * (1.0 + content_boost)).min(1.0);
+
+        // ── 2. Cost (25%) ────────────────────────────────────────────
         let total_cost = entry.cost_input_per_mtok + entry.cost_output_per_mtok;
         let cost_inv = if max_cost > 0.0 {
             1.0 - (total_cost / max_cost)
@@ -250,14 +273,32 @@ impl CognitiveRouter {
             1.0
         };
 
-        let latency = entry.avg_latency_ms.unwrap_or(1500) as f64;
+        // ── 3. Speed (20%) ───────────────────────────────────────────
+        let effective_latency =
+            observed_latency.unwrap_or(entry.avg_latency_ms.unwrap_or(2000)) as f64;
         let speed_inv = if max_latency > 0.0 {
-            1.0 - (latency / max_latency)
+            1.0 - (effective_latency / max_latency).min(1.0)
         } else {
             1.0
         };
 
-        quality * 0.40 + 1.0_f64 * 0.30 + cost_inv * 0.20 + speed_inv * 0.10
+        // ── 4. Context fit (15%) ─────────────────────────────────────
+        let estimated_tokens = (prompt.len() / 4).max(1);
+        let context_fit = if entry.context_window as usize > estimated_tokens * 4 {
+            1.0
+        } else if entry.context_window as usize > estimated_tokens * 2 {
+            0.7
+        } else if entry.context_window as usize > estimated_tokens {
+            0.3
+        } else {
+            0.0
+        };
+
+        // ── 5. Error penalty ─────────────────────────────────────────
+        let error_penalty = (recent_errors as f64 * 0.10).min(0.30);
+
+        let raw = quality * 0.40 + cost_inv * 0.25 + speed_inv * 0.20 + context_fit * 0.15;
+        (raw * (1.0 - error_penalty)).max(0.0)
     }
 
     /// Busca una entrada en el catálogo por model_id (CORE-237).
@@ -308,6 +349,80 @@ impl CognitiveRouter {
             .get_available_key(&entry.provider, &entry.model_id, tenant_id)
             .await
     }
+}
+
+struct ScoreCtx<'a> {
+    prompt: &'a str,
+    max_cost: f64,
+    max_latency: f64,
+    observed_latency: Option<u32>,
+    recent_errors: u32,
+}
+
+/// Analyses the prompt with lexical signals and returns a boost (0.0–0.30)
+/// when the detected content type matches the declared task_type.
+fn detect_content_type(prompt: &str, task_type: TaskType) -> f64 {
+    let lower = prompt.to_lowercase();
+
+    let code_signals = [
+        "```",
+        "fn ",
+        "def ",
+        "function ",
+        "import ",
+        "class ",
+        "let ",
+        "const ",
+        "var ",
+        "=>",
+        "{}",
+    ];
+    let code_score: f64 = code_signals.iter().filter(|s| lower.contains(*s)).count() as f64
+        / code_signals.len() as f64;
+
+    let analysis_signals = [
+        "analiza",
+        "analyze",
+        "compare",
+        "compara",
+        "diferencia",
+        "¿por qué",
+        "why",
+        "explica",
+        "explain",
+        "cuál es mejor",
+    ];
+    let analysis_score: f64 = analysis_signals
+        .iter()
+        .filter(|s| lower.contains(*s))
+        .count() as f64
+        / analysis_signals.len() as f64;
+
+    let planning_signals = [
+        "plan",
+        "roadmap",
+        "pasos",
+        "steps",
+        "cómo hacer",
+        "how to",
+        "estrategia",
+        "strategy",
+        "prioridad",
+    ];
+    let planning_score: f64 = planning_signals
+        .iter()
+        .filter(|s| lower.contains(*s))
+        .count() as f64
+        / planning_signals.len() as f64;
+
+    let boost = match task_type {
+        TaskType::Code => code_score,
+        TaskType::Analysis => analysis_score,
+        TaskType::Planning => planning_score,
+        _ => 0.0,
+    };
+
+    (boost * 0.30_f64).min(0.30)
 }
 
 /// Returns the model ID as expected by the provider's native API.
