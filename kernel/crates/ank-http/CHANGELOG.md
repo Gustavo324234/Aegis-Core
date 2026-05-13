@@ -16,6 +16,13 @@
 
 
 
+## [0.1.58](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.57...ank-http-v0.1.58) (2026-05-13)
+
+
+### Features
+
+* **ank-http:** CORE-256 service management endpoints — status, restart, stop ([#256](https://github.com/Gustavo324234/Aegis-Core/issues/256)) ([85baa1c](https://github.com/Gustavo324234/Aegis-Core/commit/85baa1c571daa05b48f020355d59d91593f20497))
+
 ## [0.1.56](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.55...ank-http-v0.1.56) (2026-05-09)
 
 

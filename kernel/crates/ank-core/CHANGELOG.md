@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.51](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.50...ank-core-v0.1.51) (2026-05-13)
+
+
+### Features
+
+* **ank-core:** CORE-301 CMR v2 — contextual scoring, real latency, error penalty ([#259](https://github.com/Gustavo324234/Aegis-Core/issues/259)) ([3a25074](https://github.com/Gustavo324234/Aegis-Core/commit/3a250749741052e2844c28e14672723d5b76ac3b))
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-253 SYS_CALL_PLUGIN returns user-friendly error when plugin not found ([#257](https://github.com/Gustavo324234/Aegis-Core/issues/257)) ([7a52128](https://github.com/Gustavo324234/Aegis-Core/commit/7a52128cd1b38c0946d0ebd6b78cd79bf037f6f8))
+
 ## [0.1.50](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.49...ank-core-v0.1.50) (2026-05-11)
 
 
