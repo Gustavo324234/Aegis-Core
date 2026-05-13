@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "ank-core"
 version = "0.1.50"
 edition = "2021"
