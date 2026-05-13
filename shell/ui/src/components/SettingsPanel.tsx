@@ -39,6 +39,8 @@ interface SirenConfig {
     api_key?: string;
     voice_id: string;
     stt_available?: boolean;
+    stt_provider?: string;
+    stt_api_key?: string;
 }
 
 interface Voice {
@@ -442,6 +444,8 @@ const VozTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, 
     const [voiceId, setVoiceId] = useState('');
     const [voices, setVoices] = useState<Voice[]>([]);
     const [showKey, setShowKey] = useState(false);
+    const [sttProvider, setSttProvider] = useState('browser');
+    const [sttApiKey, setSttApiKey] = useState('');
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -464,6 +468,8 @@ const VozTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, 
                 setProvider(data.provider || 'voxtral');
                 setApiKey(data.api_key || '');
                 setVoiceId(data.voice_id || '');
+                setSttProvider(data.stt_provider || 'browser');
+                setSttApiKey(data.stt_api_key || '');
             }
         } catch (err) {
             console.error('Fetch siren config error:', err);
@@ -497,7 +503,7 @@ const VozTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, 
             const res = await fetch('/api/siren/config', {
                 method: 'POST',
                 headers: getHeaders(),
-                body: JSON.stringify({ provider, api_key: apiKey, voice_id: voiceId }),
+                body: JSON.stringify({ provider, api_key: apiKey, voice_id: voiceId, stt_provider: sttProvider, stt_api_key: sttApiKey }),
             });
             if (res.ok) {
                 setMessage({ type: 'success', text: t('siren_saved') });
