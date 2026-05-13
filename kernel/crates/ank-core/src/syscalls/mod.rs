@@ -1476,7 +1476,7 @@ mod tests {
         };
 
         let res = executor.execute(&pcb, syscall).await;
-        assert!(matches!(res, Err(SyscallError::PluginError(_))));
+        assert!(matches!(res, Ok(msg) if msg.contains("no está instalado")));
         Ok(())
     }
 
