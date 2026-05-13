@@ -1,12 +1,18 @@
-use crate::{citadel::hash_passphrase, error::AegisHttpError, state::AppState};
+use crate::{
+    citadel::{hash_passphrase, CitadelError},
+    error::AegisHttpError,
+    state::AppState,
+};
 use ank_core::SchedulerEvent;
 use axum::{
     extract::State,
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
 use utoipa::ToSchema;
+
+static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 #[derive(serde::Serialize, ToSchema)]
 pub struct SystemStatusResponse {
@@ -53,6 +59,133 @@ pub fn system_router() -> Router<AppState> {
         .route("/sync_version", get(get_sync_version))
         .route("/connection-info", get(get_connection_info))
         .route("/hw_profile", post(crate::routes::engine::set_hw_profile))
+        .route("/service/status", get(get_service_status))
+        .route("/service/restart", post(service_restart))
+        .route("/service/stop", post(service_stop))
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct ServiceStatusResponse {
+    pub status: String,
+    pub uptime_secs: u64,
+    pub pid: u32,
+}
+
+async fn require_service_master_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), AegisHttpError> {
+    let tenant_id = headers
+        .get("x-citadel-tenant")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AegisHttpError::Citadel(CitadelError::MissingTenant))?;
+
+    let raw_key = headers
+        .get("x-citadel-key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AegisHttpError::Citadel(CitadelError::MissingKey))?;
+
+    let hash = hash_passphrase(raw_key);
+    let citadel = state.citadel.lock().await;
+
+    let is_auth = citadel
+        .enclave
+        .authenticate_master(tenant_id, &hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    if !is_auth {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+    }
+
+    Ok(())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/system/service/status",
+    tag = "status",
+    responses(
+        (status = 200, description = "Service status", body = ServiceStatusResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin key (plaintext)")
+    )
+)]
+pub async fn get_service_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ServiceStatusResponse>, AegisHttpError> {
+    require_service_master_auth(&state, &headers).await?;
+
+    let uptime_secs = PROCESS_START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs();
+
+    Ok(Json(ServiceStatusResponse {
+        status: "running".to_string(),
+        uptime_secs,
+        pid: std::process::id(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/system/service/restart",
+    tag = "status",
+    responses(
+        (status = 202, description = "Restart scheduled"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin key (plaintext)")
+    )
+)]
+pub async fn service_restart(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, AegisHttpError> {
+    require_service_master_auth(&state, &headers).await?;
+
+    tracing::warn!("CORE-256: service restart requested by master admin — exiting for process manager restart");
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        std::process::exit(0);
+    });
+
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/system/service/stop",
+    tag = "status",
+    responses(
+        (status = 202, description = "Stop scheduled"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin key (plaintext)")
+    )
+)]
+pub async fn service_stop(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, AegisHttpError> {
+    require_service_master_auth(&state, &headers).await?;
+
+    tracing::warn!("CORE-256: service stop requested by master admin — exiting");
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        std::process::exit(0);
+    });
+
+    Ok(StatusCode::ACCEPTED)
 }
 
 #[utoipa::path(
