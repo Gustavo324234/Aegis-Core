@@ -179,17 +179,14 @@ impl CognitiveRouter {
                 continue;
             }
 
-            let observed_lat = self.tracker.observed_latency_ms(&entry.model_id).await;
-            let errors = self.tracker.recent_errors(&entry.model_id).await;
-            let base = self.compute_score(
-                &entry,
-                task_type,
-                &pcb.memory_pointers.l1_instruction,
+            let ctx = ScoreCtx {
+                prompt: &pcb.memory_pointers.l1_instruction,
                 max_cost,
                 max_latency,
-                observed_lat,
-                errors,
-            );
+                observed_latency: self.tracker.observed_latency_ms(&entry.model_id).await,
+                recent_errors: self.tracker.recent_errors(&entry.model_id).await,
+            };
+            let base = self.compute_score(&entry, task_type, &ctx);
             // Soft penalty: multiply by sqrt(capacity) so a model at 50% headroom
             // scores ~70% of its base, still competitive but deprioritised.
             scored.push((base * capacity.sqrt(), entry));
@@ -255,16 +252,14 @@ impl CognitiveRouter {
         &self.tracker
     }
 
-    fn compute_score(
-        &self,
-        entry: &ModelEntry,
-        task_type: TaskType,
-        prompt: &str,
-        max_cost: f64,
-        max_latency: f64,
-        observed_latency: Option<u32>,
-        recent_errors: u32,
-    ) -> f64 {
+    fn compute_score(&self, entry: &ModelEntry, task_type: TaskType, ctx: &ScoreCtx<'_>) -> f64 {
+        let (prompt, max_cost, max_latency, observed_latency, recent_errors) = (
+            ctx.prompt,
+            ctx.max_cost,
+            ctx.max_latency,
+            ctx.observed_latency,
+            ctx.recent_errors,
+        );
         // ── 1. Quality (40%) ─────────────────────────────────────────
         let base_quality = entry.score_for(task_type) as f64 / 5.0;
         let content_boost = detect_content_type(prompt, task_type);
@@ -354,6 +349,14 @@ impl CognitiveRouter {
             .get_available_key(&entry.provider, &entry.model_id, tenant_id)
             .await
     }
+}
+
+struct ScoreCtx<'a> {
+    prompt: &'a str,
+    max_cost: f64,
+    max_latency: f64,
+    observed_latency: Option<u32>,
+    recent_errors: u32,
 }
 
 /// Analyses the prompt with lexical signals and returns a boost (0.0–0.30)
