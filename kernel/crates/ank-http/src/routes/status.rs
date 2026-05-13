@@ -151,7 +151,9 @@ pub async fn service_restart(
 ) -> Result<StatusCode, AegisHttpError> {
     require_service_master_auth(&state, &headers).await?;
 
-    tracing::warn!("CORE-256: service restart requested by master admin — exiting for process manager restart");
+    tracing::warn!(
+        "CORE-256: service restart requested by master admin — exiting for process manager restart"
+    );
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         std::process::exit(0);
