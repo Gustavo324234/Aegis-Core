@@ -1,8 +1,8 @@
-[package]
+﻿[package]
 name = "ank-server"
 version = "0.1.60"
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 
 [[bin]]
 name = "ank-server"
