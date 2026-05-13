@@ -362,15 +362,32 @@ fn detect_content_type(prompt: &str, task_type: TaskType) -> f64 {
     let lower = prompt.to_lowercase();
 
     let code_signals = [
-        "```", "fn ", "def ", "function ", "import ", "class ", "let ", "const ", "var ", "=>",
+        "```",
+        "fn ",
+        "def ",
+        "function ",
+        "import ",
+        "class ",
+        "let ",
+        "const ",
+        "var ",
+        "=>",
         "{}",
     ];
     let code_score: f64 = code_signals.iter().filter(|s| lower.contains(*s)).count() as f64
         / code_signals.len() as f64;
 
     let analysis_signals = [
-        "analiza", "analyze", "compare", "compara", "diferencia", "¿por qué", "why", "explica",
-        "explain", "cuál es mejor",
+        "analiza",
+        "analyze",
+        "compare",
+        "compara",
+        "diferencia",
+        "¿por qué",
+        "why",
+        "explica",
+        "explain",
+        "cuál es mejor",
     ];
     let analysis_score: f64 = analysis_signals
         .iter()
