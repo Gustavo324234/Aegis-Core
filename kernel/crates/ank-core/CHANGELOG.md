@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.50](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.49...ank-core-v0.1.50) (2026-05-11)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-295 — SirenRouter admin key fallback (fixes metallic voice) ([#251](https://github.com/Gustavo324234/Aegis-Core/issues/251)) ([02f6009](https://github.com/Gustavo324234/Aegis-Core/commit/02f60099f6e210be090409e749ad01d4b1490ca9))
+
 ## [0.1.49](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.48...ank-core-v0.1.49) (2026-05-09)
 
 
