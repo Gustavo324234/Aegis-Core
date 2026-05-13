@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.16.1...shell-ui-v1.16.2) (2026-05-13)
+
+
+### Bug Fixes
+
+* **ui:** CORE-295 preserve stt_provider and stt_api_key when saving voice config ([#253](https://github.com/Gustavo324234/Aegis-Core/issues/253)) ([fa108fc](https://github.com/Gustavo324234/Aegis-Core/commit/fa108fcc8492652db48c01765be5ddb7fbc81a1d))
+
 ## [1.16.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.16.0...shell-ui-v1.16.1) (2026-05-09)
 
 
