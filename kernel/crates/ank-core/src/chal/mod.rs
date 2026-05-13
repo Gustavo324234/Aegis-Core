@@ -896,6 +896,12 @@ impl CognitiveHAL {
                     .await
                 {
                     Ok(result) => result,
+                    // CORE-253: mensaje legible al usuario cuando el plugin no existe.
+                    Err(crate::plugins::PluginError::FunctionNotFound(_)) => format!(
+                        "El plugin '{}' no está instalado o no está activo en este tenant. \
+                         Podés activarlo desde Configuración → Plugins.",
+                        plugin_name
+                    ),
                     Err(e) => format!("{{\"error\":\"{}\"}}", e),
                 }
             }
