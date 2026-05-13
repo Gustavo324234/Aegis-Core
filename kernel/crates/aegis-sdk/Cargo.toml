@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "aegis-sdk"
 version = "0.1.4"
 edition = "2021"
