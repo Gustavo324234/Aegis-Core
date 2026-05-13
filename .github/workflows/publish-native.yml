@@ -145,7 +145,7 @@ jobs:
         run: cargo build --release -p ank-server --target x86_64-apple-darwin --features vendored-openssl
         env:
           CC_x86_64_apple_darwin: clang
-          CFLAGS_x86_64_apple_darwin: "-target x86_64-apple-darwin"
+          CFLAGS_x86_64_apple_darwin: "--target=x86_64-apple-darwin"
       - name: Package
         run: |
           mkdir -p dist
