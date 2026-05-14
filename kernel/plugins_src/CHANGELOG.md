@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/Gustavo324234/Aegis-Core/compare/plugins_src-v0.1.5...plugins_src-v0.1.6) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#271](https://github.com/Gustavo324234/Aegis-Core/issues/271)) ([c0e3090](https://github.com/Gustavo324234/Aegis-Core/commit/c0e309015c3456807bd6e57376bb20cba580e45f))
+
 ## [0.1.5](https://github.com/Gustavo324234/Aegis-Core/compare/plugins_src-v0.1.4...plugins_src-v0.1.5) (2026-05-02)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.17.0...shell-ui-v1.18.0) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#271](https://github.com/Gustavo324234/Aegis-Core/issues/271)) ([c0e3090](https://github.com/Gustavo324234/Aegis-Core/commit/c0e309015c3456807bd6e57376bb20cba580e45f))
+
 ## [1.17.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.16.2...shell-ui-v1.17.0) (2026-05-14)
 
 
