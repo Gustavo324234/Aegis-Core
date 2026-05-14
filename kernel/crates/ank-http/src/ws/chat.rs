@@ -82,6 +82,8 @@ struct ChatAction {
     action: String,
     prompt: Option<String>,
     pid: Option<String>,
+    #[serde(default)]
+    model_override: Option<String>,
 }
 
 fn default_action() -> String {
@@ -379,6 +381,7 @@ async fn handle_chat(
             pcb.model_pref = pref;
             pcb.tenant_id = Some(tenant_id.clone());
             pcb.session_key = Some(hash.clone());
+            pcb.model_override = action.model_override;
 
             // CORE-260: Inyectar historial de la sesión en el PCB
             {
