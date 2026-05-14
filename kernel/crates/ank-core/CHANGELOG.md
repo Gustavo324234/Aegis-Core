@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.54](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.53...ank-core-v0.1.54) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#271](https://github.com/Gustavo324234/Aegis-Core/issues/271)) ([c0e3090](https://github.com/Gustavo324234/Aegis-Core/commit/c0e309015c3456807bd6e57376bb20cba580e45f))
+
 ## [0.1.53](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.52...ank-core-v0.1.53) (2026-05-14)
 
 
