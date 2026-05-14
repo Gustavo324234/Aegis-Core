@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.53](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.52...ank-core-v0.1.53) (2026-05-14)
+
+
+### Features
+
+* **ank-core:** CORE-298 sync OpenRouter free models on key registration ([#267](https://github.com/Gustavo324234/Aegis-Core/issues/267)) ([49ac9c7](https://github.com/Gustavo324234/Aegis-Core/commit/49ac9c7775a6f8754f730d904adebb2f19179eec))
+
 ## [0.1.52](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.51...ank-core-v0.1.52) (2026-05-14)
 
 
