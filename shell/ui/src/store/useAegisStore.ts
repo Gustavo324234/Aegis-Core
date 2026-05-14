@@ -130,7 +130,7 @@ interface AegisState {
     fetchSirenConfig: () => Promise<void>;
     connect: (tenantId: string, sessionKey: string) => Promise<void>;
     disconnect: () => void;
-    sendMessage: (prompt: string) => void;
+    sendMessage: (prompt: string, modelOverride?: string | null) => void;
     appendToken: (msgId: string, token: string, type: MessageType) => void;
     setStatus: (status: SystemStatus) => void;
     clearHistory: () => void;
@@ -658,7 +658,7 @@ export const useAegisStore = create<AegisState>()(
 
             disconnect: () => get().socket?.close(),
 
-            sendMessage: (prompt) => {
+            sendMessage: (prompt, modelOverride) => {
                 const { socket, messages } = get();
                 if (!socket || socket.readyState !== WebSocket.OPEN) return;
                 ttsPlayer.initialize();
@@ -668,7 +668,9 @@ export const useAegisStore = create<AegisState>()(
                     : '';
                 const finalPrompt = musicContext + prompt;
                 set({ messages: [...messages, { id: `user-${Date.now()}`, role: 'user', content: prompt, type: 'text', timestamp: Date.now() }] });
-                socket.send(JSON.stringify({ prompt: finalPrompt, task_type: get().taskType }));
+                const payload: Record<string, unknown> = { prompt: finalPrompt, task_type: get().taskType };
+                if (modelOverride) payload.model_override = modelOverride;
+                socket.send(JSON.stringify(payload));
             },
 
             appendToken: (pid, token, type) => {
