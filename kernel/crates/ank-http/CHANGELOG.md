@@ -16,6 +16,13 @@
 
 
 
+## [0.1.59](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.58...ank-http-v0.1.59) (2026-05-14)
+
+
+### Features
+
+* **ank-core:** CORE-299 add model_override to PCB and WebSocket chat handler ([#265](https://github.com/Gustavo324234/Aegis-Core/issues/265)) ([21db419](https://github.com/Gustavo324234/Aegis-Core/commit/21db419ba06f835274dd5ccc582339f484f335df))
+
 ## [0.1.58](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.57...ank-http-v0.1.58) (2026-05-13)
 
 
