@@ -110,6 +110,10 @@ pub struct PCB {
     /// CORE-260: Historial de mensajes de la sesión actual (máx. 20).
     #[serde(default)]
     pub message_history: Vec<crate::chal::ChatMessage>,
+
+    /// CORE-299: Override directo del modelo, bypasea el CMR si está presente.
+    #[serde(default)]
+    pub model_override: Option<String>,
 }
 
 use std::cmp::Ordering;
@@ -203,6 +207,7 @@ impl PCB {
             cancel_token: CancellationToken::new(),
             agent_id: None,
             message_history: Vec::new(),
+            model_override: None,
         }
     }
 

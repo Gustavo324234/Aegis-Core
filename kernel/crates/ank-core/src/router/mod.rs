@@ -13,7 +13,7 @@ pub use catalog::{ModelCatalog, ModelEntry, ToolUseSupport};
 pub use key_pool::KeyPool;
 pub use rate_tracker::ModelUsageTracker;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone)]
 pub struct RoutingDecision {
@@ -96,6 +96,30 @@ impl CognitiveRouter {
         let task_type = pcb.task_type;
         let model_pref = pcb.model_pref;
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+
+        // CORE-299: Si el PCB tiene un model_override, bypassear el CMR y resolver directo.
+        if let Some(ref model_id) = pcb.model_override {
+            if let Some(entry) = self.catalog.find(model_id).await {
+                let key = self.resolve_key(&entry, tenant_id).await.ok_or_else(|| {
+                    SystemError::HardwareFailure(format!(
+                        "No key available for model_override '{}'",
+                        model_id
+                    ))
+                })?;
+                return Ok(RoutingDecision {
+                    model_id: bare_model_id(&entry.model_id, &entry.provider),
+                    provider: entry.provider.clone(),
+                    api_url: key.api_url.clone().unwrap_or_else(|| entry_api_url(&entry)),
+                    api_key: key.api_key.clone(),
+                    key_id: Some(key.key_id.clone()),
+                    fallback_chain: vec![],
+                });
+            }
+            warn!(
+                "model_override '{}' not found in catalog, falling back to CMR",
+                model_id
+            );
+        }
 
         // Step 1: Get candidates from catalog
         let all_candidates = self.catalog.get_candidates(task_type).await;
