@@ -5,7 +5,6 @@ use crate::{
 };
 use ank_core::router::key_pool::ApiKeyEntry;
 use ank_core::router::syncer;
-use tracing::{info, warn};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -13,6 +12,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 use utoipa::ToSchema;
 
 pub fn router() -> Router<AppState> {
@@ -182,7 +182,10 @@ async fn add_global_key(
         match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
             Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
             Ok(_) => {}
-            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
         }
     }
 
@@ -509,7 +512,10 @@ async fn update_global_key(
         match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
             Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
             Ok(_) => {}
-            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
         }
     }
 
