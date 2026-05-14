@@ -4,6 +4,7 @@ use crate::{
     state::AppState,
 };
 use ank_core::router::key_pool::ApiKeyEntry;
+use ank_core::router::syncer;
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -11,6 +12,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 use utoipa::ToSchema;
 
 pub fn router() -> Router<AppState> {
@@ -170,9 +172,22 @@ async fn add_global_key(
 
     let router = state.router.read().await;
     router
-        .add_global_key(entry)
+        .add_global_key(entry.clone())
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+    // CORE-298: on OpenRouter key registration, sync free-tier models into catalog (best-effort)
+    if entry.provider == "openrouter" {
+        let catalog = router.catalog_ref();
+        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
+            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
+            Ok(_) => {}
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
+        }
+    }
 
     Ok(Json(SyncResponse {
         success: true,
@@ -487,9 +502,22 @@ async fn update_global_key(
     };
 
     router
-        .add_global_key(entry)
+        .add_global_key(entry.clone())
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+    // CORE-298: on OpenRouter key update, sync free-tier models into catalog (best-effort)
+    if entry.provider == "openrouter" {
+        let catalog = router.catalog_ref();
+        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
+            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
+            Ok(_) => {}
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
+        }
+    }
 
     Ok(Json(SyncResponse {
         success: true,

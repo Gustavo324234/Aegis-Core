@@ -1,4 +1,4 @@
-use crate::router::catalog::{ModelCatalog, ModelEntry, TaskScores};
+use crate::router::catalog::{ModelCatalog, ModelEntry, TaskScores, ToolUseSupport};
 use crate::router::key_pool::KeyPool;
 use anyhow::Context;
 use reqwest::Client;
@@ -171,6 +171,77 @@ impl CatalogSyncer {
         self.catalog.replace_all(current).await;
         Ok(())
     }
+}
+
+/// Fetches the OpenRouter model list with the given key, filters to free-tier
+/// models (pricing.prompt == "0"), and adds any that are not yet in the catalog.
+/// Returns the number of new entries added.
+pub async fn sync_openrouter_free_models(
+    api_key: &str,
+    catalog: &Arc<ModelCatalog>,
+) -> anyhow::Result<usize> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://openrouter.ai/api/v1/models")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+
+    let models = resp["data"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("no data array in OpenRouter response"))?;
+
+    let mut added = 0usize;
+    for model in models {
+        let prompt_price = model["pricing"]["prompt"].as_str().unwrap_or("1");
+        if prompt_price != "0" {
+            continue;
+        }
+
+        let model_id = match model["id"].as_str() {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => continue,
+        };
+
+        if catalog.find(&model_id).await.is_some() {
+            continue;
+        }
+
+        let context = model["context_length"].as_u64().unwrap_or(131_072) as u32;
+        let name = model["name"].as_str().unwrap_or(&model_id).to_string();
+
+        let entry = ModelEntry {
+            model_id: model_id.clone(),
+            provider: "openrouter".to_string(),
+            display_name: format!("{} (free)", name),
+            context_window: context,
+            cost_input_per_mtok: 0.0,
+            cost_output_per_mtok: 0.0,
+            supports_tools: false,
+            supports_json_mode: false,
+            tool_use_support: ToolUseSupport::Unknown,
+            is_local: false,
+            avg_latency_ms: Some(2500),
+            free_tier_rpm: Some(20),
+            free_tier_rpd: Some(200),
+            task_scores: TaskScores {
+                chat: 3,
+                coding: 3,
+                planning: 3,
+                analysis: 3,
+                summarization: 3,
+                extraction: 3,
+            },
+        };
+
+        catalog.add_entry(entry).await;
+        added += 1;
+    }
+
+    Ok(added)
 }
 
 fn infer_task_scores(model_id: &str) -> TaskScores {

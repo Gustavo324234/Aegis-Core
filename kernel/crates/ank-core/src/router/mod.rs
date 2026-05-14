@@ -276,6 +276,10 @@ impl CognitiveRouter {
         &self.tracker
     }
 
+    pub fn catalog_ref(&self) -> Arc<ModelCatalog> {
+        self.catalog.clone()
+    }
+
     fn compute_score(&self, entry: &ModelEntry, task_type: TaskType, ctx: &ScoreCtx<'_>) -> f64 {
         let (prompt, max_cost, max_latency, observed_latency, recent_errors) = (
             ctx.prompt,
