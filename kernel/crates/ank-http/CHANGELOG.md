@@ -16,6 +16,13 @@
 
 
 
+## [0.1.62](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.61...ank-http-v0.1.62) (2026-05-15)
+
+
+### Features
+
+* **voice:** CORE-302 + speaker verification + wake word activation by agent name ([#274](https://github.com/Gustavo324234/Aegis-Core/issues/274)) ([5f7ad96](https://github.com/Gustavo324234/Aegis-Core/commit/5f7ad96ff453b0b21d132e241a1340ca9e779663))
+
 ## [0.1.61](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.60...ank-http-v0.1.61) (2026-05-14)
 
 

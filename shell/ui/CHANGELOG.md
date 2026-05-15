@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.18.0...shell-ui-v1.19.0) (2026-05-15)
+
+
+### Features
+
+* **voice:** CORE-302 + speaker verification + wake word activation by agent name ([#274](https://github.com/Gustavo324234/Aegis-Core/issues/274)) ([5f7ad96](https://github.com/Gustavo324234/Aegis-Core/commit/5f7ad96ff453b0b21d132e241a1340ca9e779663))
+
 ## [1.18.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.17.0...shell-ui-v1.18.0) (2026-05-14)
 
 
