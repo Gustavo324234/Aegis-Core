@@ -524,6 +524,15 @@ mod tests {
         async fn update_voice_profile(&self, _profile: VoiceProfile) -> anyhow::Result<()> {
             Ok(())
         }
+        async fn save_voice_fingerprint(&self, _tenant_id: &str, _fingerprint: &[f32], _threshold: f32) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn get_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<Option<(Vec<f32>, f32)>> {
+            Ok(None)
+        }
+        async fn delete_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
