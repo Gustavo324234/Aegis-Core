@@ -1,15 +1,39 @@
 //! Speaker verification via voice fingerprinting.
 //!
-//! Algorithm: sub-band RMS energy (8 bands) + zero-crossing rate per 25ms frame,
-//! averaged across all frames and L2-normalized → 9-dimensional voice fingerprint.
+//! Algorithm: Goertzel-based spectral power in 8 octave-spaced frequency bands
+//! (125 Hz – 7 kHz) + zero-crossing rate per 25ms frame, averaged across all
+//! frames and L2-normalized → 9-dimensional voice fingerprint.
 //! Verification uses cosine similarity (dot product of two unit vectors).
 //!
 //! No external DSP deps required — pure arithmetic on 16kHz 16-bit mono PCM.
 
 const FRAME_SAMPLES: usize = 400; // 25ms @ 16kHz
-const BAND_COUNT: usize = 8;
-const FEATURE_DIM: usize = BAND_COUNT + 1; // bands + ZCR
+const SAMPLE_RATE: f32 = 16000.0;
+
+// Octave-spaced center frequencies for 8 spectral bands (Hz).
+// Spans 125 Hz – 7 kHz so low-frequency and high-frequency content map to
+// clearly different feature indices, enabling frequency discrimination.
+const BAND_CENTERS: [f32; 8] = [125.0, 250.0, 500.0, 1000.0, 2000.0, 3500.0, 5500.0, 7000.0];
+const FEATURE_DIM: usize = BAND_CENTERS.len() + 1; // 8 spectral bands + ZCR
 pub const DEFAULT_THRESHOLD: f32 = 0.75;
+
+/// Goertzel algorithm: computes DFT power at `target_freq` Hz over `samples`.
+/// Returns normalized power (higher = more energy near that frequency).
+fn goertzel_power(samples: &[f32], target_freq: f32) -> f32 {
+    let n = samples.len() as f32;
+    let k = (n * target_freq / SAMPLE_RATE).round();
+    let omega = 2.0 * std::f32::consts::PI * k / n;
+    let coeff = 2.0 * omega.cos();
+    let mut s_prev2 = 0.0f32;
+    let mut s_prev1 = 0.0f32;
+    for &x in samples {
+        let s = x + coeff * s_prev1 - s_prev2;
+        s_prev2 = s_prev1;
+        s_prev1 = s;
+    }
+    let power = s_prev2 * s_prev2 + s_prev1 * s_prev1 - coeff * s_prev1 * s_prev2;
+    power.max(0.0) / n
+}
 
 /// Extract a normalized voice fingerprint from raw PCM bytes (16kHz, 16-bit LE, mono).
 /// Returns `None` if the audio is too short (< 1 frame).
@@ -39,18 +63,9 @@ pub fn extract_fingerprint(pcm_bytes: &[u8]) -> Option<Vec<f32>> {
             / frame.len() as f64;
         sums[0] += zcr;
 
-        // Sub-band RMS energies
-        let band_size = frame.len() / BAND_COUNT;
-        for b in 0..BAND_COUNT {
-            let start = b * band_size;
-            let end = ((b + 1) * band_size).min(frame.len());
-            let rms = (frame[start..end]
-                .iter()
-                .map(|&s| (s as f64).powi(2))
-                .sum::<f64>()
-                / (end - start) as f64)
-                .sqrt();
-            sums[1 + b] += rms;
+        // Frequency-domain power at each octave band center via Goertzel
+        for (b, &center_hz) in BAND_CENTERS.iter().enumerate() {
+            sums[1 + b] += goertzel_power(frame, center_hz) as f64;
         }
 
         frame_count += 1;
@@ -123,11 +138,14 @@ mod tests {
 
     #[test]
     fn different_voice_low_similarity() {
+        // 110 Hz concentrates Goertzel power in band 0 (125 Hz center).
+        // 880 Hz concentrates power in band 3 (1000 Hz center).
+        // Their feature vectors are nearly orthogonal, so cosine similarity << threshold.
         let a = make_sine(110.0, 16000); // bass-like
         let b = make_sine(880.0, 16000); // treble-like
         let fp_a = extract_fingerprint(&a).unwrap();
         let (ok, score) = verify(&b, &fp_a, DEFAULT_THRESHOLD);
         assert!(!ok, "Different audio should not verify: score={:.3}", score);
-        let _ = score; // score < threshold expected
+        assert!(score < DEFAULT_THRESHOLD, "Score {:.3} should be below threshold {}", score, DEFAULT_THRESHOLD);
     }
 }
