@@ -420,7 +420,12 @@ mod tests {
         async fn update_voice_profile(&self, _profile: VoiceProfile) -> Result<()> {
             Ok(())
         }
-        async fn save_voice_fingerprint(&self, _tenant_id: &str, _fingerprint: &[f32], _threshold: f32) -> Result<()> {
+        async fn save_voice_fingerprint(
+            &self,
+            _tenant_id: &str,
+            _fingerprint: &[f32],
+            _threshold: f32,
+        ) -> Result<()> {
             Ok(())
         }
         async fn get_voice_fingerprint(&self, _tenant_id: &str) -> Result<Option<(Vec<f32>, f32)>> {
