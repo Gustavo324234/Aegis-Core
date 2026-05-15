@@ -146,6 +146,11 @@ mod tests {
         let fp_a = extract_fingerprint(&a).unwrap();
         let (ok, score) = verify(&b, &fp_a, DEFAULT_THRESHOLD);
         assert!(!ok, "Different audio should not verify: score={:.3}", score);
-        assert!(score < DEFAULT_THRESHOLD, "Score {:.3} should be below threshold {}", score, DEFAULT_THRESHOLD);
+        assert!(
+            score < DEFAULT_THRESHOLD,
+            "Score {:.3} should be below threshold {}",
+            score,
+            DEFAULT_THRESHOLD
+        );
     }
 }
