@@ -13,6 +13,7 @@ pub mod pr_manager;
 pub mod router;
 pub mod scheduler;
 pub mod scribe;
+pub mod speaker_id;
 pub mod swarm; // Added pub mod swarm;
 pub mod syscalls;
 pub mod telemetry;

@@ -2,9 +2,10 @@ use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppStat
 use ank_core::scheduler::persistence::VoiceProfile;
 use axum::{
     extract::State,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
+use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -13,6 +14,9 @@ pub fn router() -> Router<AppState> {
         .route("/config", get(get_siren_config))
         .route("/config", post(set_siren_config))
         .route("/voices", get(list_siren_voices))
+        .route("/enroll", post(enroll_speaker))
+        .route("/enroll", delete(delete_enrollment))
+        .route("/enroll/status", get(enrollment_status))
 }
 
 #[derive(Deserialize)]
@@ -128,6 +132,75 @@ async fn set_siren_config(
         "success": true,
         "message": "Siren config updated successfully."
     })))
+}
+
+#[derive(Deserialize)]
+pub struct EnrollBody {
+    pub pcm_b64: String,
+    #[serde(default)]
+    pub threshold: Option<f32>,
+}
+
+async fn enroll_speaker(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Json(req): Json<EnrollBody>,
+) -> Result<Json<Value>, AegisHttpError> {
+    let pcm_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&req.pcm_b64)
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Invalid base64 PCM: {}", e)))?;
+
+    let fingerprint = ank_core::speaker_id::extract_fingerprint(&pcm_bytes).ok_or_else(|| {
+        AegisHttpError::Internal(anyhow::anyhow!(
+            "Audio demasiado corto para enrollment (mínimo 25ms)"
+        ))
+    })?;
+
+    let threshold = req
+        .threshold
+        .unwrap_or(ank_core::speaker_id::DEFAULT_THRESHOLD);
+
+    state
+        .persistence
+        .save_voice_fingerprint(&auth.tenant_id, &fingerprint, threshold)
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Voice fingerprint enrolled successfully.",
+        "threshold": threshold
+    })))
+}
+
+async fn delete_enrollment(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> Result<Json<Value>, AegisHttpError> {
+    state
+        .persistence
+        .delete_voice_fingerprint(&auth.tenant_id)
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Voice enrollment deleted."
+    })))
+}
+
+async fn enrollment_status(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> Result<Json<Value>, AegisHttpError> {
+    let enrolled = state
+        .persistence
+        .get_voice_fingerprint(&auth.tenant_id)
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?
+        .is_some();
+
+    Ok(Json(json!({ "enrolled": enrolled })))
 }
 
 async fn list_siren_voices() -> Json<Value> {

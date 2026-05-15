@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { motion } from 'framer-motion';
-import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2, Globe, Zap, HardDrive } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2, Globe, Zap, HardDrive, Fingerprint, Trash2, UserCheck, UserX } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import SttModelManager from './SttModelManager';
+import SpeakerEnrollModal from './SpeakerEnrollModal';
 
 const SIREN_PROVIDERS = (t: (key: string) => string) => [
     { id: 'voxtral', label: 'Voxtral Local', desc: t('voxtral_desc'), icon: <Mic className="w-5 h-5 text-aegis-cyan" /> },
@@ -34,6 +35,22 @@ const SirenConfigTab: React.FC = () => {
     const [sttProvider, setSttProvider] = useState('browser');
     const [sttApiKey, setSttApiKey] = useState('');
     const [showSttKey, setShowSttKey] = useState(false);
+    const [isEnrolled, setIsEnrolled] = useState(false);
+    const [showEnrollModal, setShowEnrollModal] = useState(false);
+    const [isDeletingEnroll, setIsDeletingEnroll] = useState(false);
+
+    const fetchEnrollmentStatus = useCallback(async () => {
+        if (!tenantId || !sessionKey) return;
+        try {
+            const res = await fetch('/api/siren/enroll/status', {
+                headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setIsEnrolled(data.enrolled ?? false);
+            }
+        } catch { /* silencio */ }
+    }, [tenantId, sessionKey]);
 
     const fetchConfig = useCallback(async () => {
         if (!tenantId || !sessionKey) return;
@@ -81,7 +98,8 @@ const SirenConfigTab: React.FC = () => {
     useEffect(() => {
         fetchConfig();
         fetchVoices();
-    }, [fetchConfig, fetchVoices]);
+        fetchEnrollmentStatus();
+    }, [fetchConfig, fetchVoices, fetchEnrollmentStatus]);
 
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -113,9 +131,24 @@ const SirenConfigTab: React.FC = () => {
         }
     };
 
+    const handleDeleteEnrollment = async () => {
+        if (!tenantId || !sessionKey) return;
+        setIsDeletingEnroll(true);
+        try {
+            await fetch('/api/siren/enroll', {
+                method: 'DELETE',
+                headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey }
+            });
+            setIsEnrolled(false);
+        } catch { /* silencio */ } finally {
+            setIsDeletingEnroll(false);
+        }
+    };
+
     if (isLoading) return <div className="flex justify-center p-12 animate-pulse font-mono text-white/30 text-xs uppercase tracking-widest">{t('syncing_siren_protocol')}</div>;
 
     return (
+        <>
         <div className="space-y-8 max-h-[70vh] overflow-y-auto pr-4 custom-scrollbar">
             <div className="glass p-8 rounded-2xl border border-white/10 shadow-2xl relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-4 opacity-10">
@@ -227,6 +260,52 @@ const SirenConfigTab: React.FC = () => {
                 </form>
             </div>
             
+            {/* ── Speaker ID ────────────────────────────────────────────────── */}
+            <div className="glass p-6 rounded-2xl border border-white/10 shadow-xl">
+                <div className="flex items-center gap-3 mb-5">
+                    <div className="p-2 rounded-lg bg-aegis-purple/10 border border-aegis-purple/30">
+                        <Fingerprint className="w-5 h-5 text-aegis-purple" />
+                    </div>
+                    <div>
+                        <h3 className="text-xs font-mono font-bold tracking-widest uppercase text-white">Speaker ID</h3>
+                        <p className="text-[9px] font-mono text-white/30 mt-0.5">Verificación de voz — solo tú podés activar Aegis</p>
+                    </div>
+                    <div className="ml-auto">
+                        {isEnrolled
+                            ? <span className="flex items-center gap-1.5 text-[9px] font-mono font-bold uppercase tracking-widest text-green-400"><UserCheck className="w-3.5 h-3.5" /> Enrollado</span>
+                            : <span className="flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-widest text-white/30"><UserX className="w-3.5 h-3.5" /> Sin perfil</span>
+                        }
+                    </div>
+                </div>
+
+                <p className="text-[9px] font-mono text-white/30 leading-relaxed mb-5">
+                    {isEnrolled
+                        ? 'Tu huella de voz está activa. El kernel verificará tu identidad antes de procesar cada audio. Si falla la verificación, el mensaje no se envía.'
+                        : 'Sin perfil, cualquier voz puede activar Aegis. Registrá tu voz para habilitar la verificación automática de speaker.'
+                    }
+                </p>
+
+                <div className="flex gap-3">
+                    <button
+                        onClick={() => setShowEnrollModal(true)}
+                        className="flex-1 py-3 rounded-xl bg-aegis-purple/10 hover:bg-aegis-purple/20 border border-aegis-purple/30 transition-all font-mono text-[10px] font-bold uppercase tracking-widest text-aegis-purple flex items-center justify-center gap-2"
+                    >
+                        <Mic className="w-3.5 h-3.5" />
+                        {isEnrolled ? 'Re-enrollar' : 'Enrollar voz'}
+                    </button>
+                    {isEnrolled && (
+                        <button
+                            onClick={handleDeleteEnrollment}
+                            disabled={isDeletingEnroll}
+                            className="py-3 px-4 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all font-mono text-[10px] text-red-400 flex items-center gap-2 disabled:opacity-50"
+                        >
+                            {isDeletingEnroll ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                            Eliminar
+                        </button>
+                    )}
+                </div>
+            </div>
+
             <div className="glass p-6 rounded-2xl border border-white/5 bg-white/2 shadow-xl">
                 <h3 className="text-xs font-mono font-bold tracking-widest uppercase text-white/40 flex items-center gap-2 mb-4">
                     <Terminal className="w-3.5 h-3.5 text-aegis-cyan" /> {t('technical_info')}
@@ -266,6 +345,18 @@ const SirenConfigTab: React.FC = () => {
                 )}
             </div>
         </div>
+
+        <AnimatePresence>
+            {showEnrollModal && tenantId && sessionKey && (
+                <SpeakerEnrollModal
+                    tenantId={tenantId}
+                    sessionKey={sessionKey}
+                    onSuccess={() => { setIsEnrolled(true); fetchEnrollmentStatus(); }}
+                    onClose={() => setShowEnrollModal(false)}
+                />
+            )}
+        </AnimatePresence>
+        </>
     );
 };
 
