@@ -1,4 +1,3 @@
-use base64::Engine as _;
 use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
 use ank_core::scheduler::persistence::VoiceProfile;
 use axum::{
@@ -6,6 +5,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -150,10 +150,15 @@ async fn enroll_speaker(
         .decode(&req.pcm_b64)
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Invalid base64 PCM: {}", e)))?;
 
-    let fingerprint = ank_core::speaker_id::extract_fingerprint(&pcm_bytes)
-        .ok_or_else(|| AegisHttpError::Internal(anyhow::anyhow!("Audio demasiado corto para enrollment (mínimo 25ms)")))?;
+    let fingerprint = ank_core::speaker_id::extract_fingerprint(&pcm_bytes).ok_or_else(|| {
+        AegisHttpError::Internal(anyhow::anyhow!(
+            "Audio demasiado corto para enrollment (mínimo 25ms)"
+        ))
+    })?;
 
-    let threshold = req.threshold.unwrap_or(ank_core::speaker_id::DEFAULT_THRESHOLD);
+    let threshold = req
+        .threshold
+        .unwrap_or(ank_core::speaker_id::DEFAULT_THRESHOLD);
 
     state
         .persistence

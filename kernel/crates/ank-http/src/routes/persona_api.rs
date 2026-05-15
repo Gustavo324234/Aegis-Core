@@ -29,7 +29,11 @@ fn parse_agent_name(persona: &Option<String>) -> String {
             let start = p.find(prefix)? + prefix.len();
             let end = start + p[start..].find('.')?;
             let name = p[start..end].trim();
-            if name.is_empty() { None } else { Some(name.to_string()) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
         })
         .unwrap_or_else(|| "Aegis".to_string())
 }

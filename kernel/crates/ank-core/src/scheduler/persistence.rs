@@ -24,7 +24,12 @@ pub trait StatePersistor: Send + Sync {
     async fn flush(&self) -> Result<()>;
     async fn get_voice_profile(&self, tenant_id: &str) -> Result<Option<VoiceProfile>>;
     async fn update_voice_profile(&self, profile: VoiceProfile) -> Result<()>;
-    async fn save_voice_fingerprint(&self, tenant_id: &str, fingerprint: &[f32], threshold: f32) -> Result<()>;
+    async fn save_voice_fingerprint(
+        &self,
+        tenant_id: &str,
+        fingerprint: &[f32],
+        threshold: f32,
+    ) -> Result<()>;
     async fn get_voice_fingerprint(&self, tenant_id: &str) -> Result<Option<(Vec<f32>, f32)>>;
     async fn delete_voice_fingerprint(&self, tenant_id: &str) -> Result<()>;
 }
@@ -248,10 +253,16 @@ impl StatePersistor for SQLCipherPersistor {
         .context("Spawn blocking failed during update_voice_profile")?
     }
 
-    async fn save_voice_fingerprint(&self, tenant_id: &str, fingerprint: &[f32], threshold: f32) -> Result<()> {
+    async fn save_voice_fingerprint(
+        &self,
+        tenant_id: &str,
+        fingerprint: &[f32],
+        threshold: f32,
+    ) -> Result<()> {
         use anyhow::Context;
         let tenant_id = tenant_id.to_string();
-        let fingerprint_json = serde_json::to_string(fingerprint).context("Failed to serialize fingerprint")?;
+        let fingerprint_json =
+            serde_json::to_string(fingerprint).context("Failed to serialize fingerprint")?;
         let conn = self.conn.clone();
         task::spawn_blocking(move || {
             let lock = conn.lock().map_err(|_| anyhow::anyhow!("Mutex poison error"))?;
@@ -297,7 +308,9 @@ impl StatePersistor for SQLCipherPersistor {
         let tenant_id = tenant_id.to_string();
         let conn = self.conn.clone();
         task::spawn_blocking(move || {
-            let lock = conn.lock().map_err(|_| anyhow::anyhow!("Mutex poison error"))?;
+            let lock = conn
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Mutex poison error"))?;
             lock.execute(
                 "DELETE FROM tenant_voice_fingerprints WHERE tenant_id = ?1",
                 [&tenant_id],
@@ -335,7 +348,12 @@ impl StatePersistor for MockPersistor {
     async fn update_voice_profile(&self, _profile: VoiceProfile) -> Result<()> {
         Ok(())
     }
-    async fn save_voice_fingerprint(&self, _tenant_id: &str, _fingerprint: &[f32], _threshold: f32) -> Result<()> {
+    async fn save_voice_fingerprint(
+        &self,
+        _tenant_id: &str,
+        _fingerprint: &[f32],
+        _threshold: f32,
+    ) -> Result<()> {
         Ok(())
     }
     async fn get_voice_fingerprint(&self, _tenant_id: &str) -> Result<Option<(Vec<f32>, f32)>> {

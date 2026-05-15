@@ -104,7 +104,8 @@ impl SirenRouter {
         }
         let settings = serde_json::from_str::<serde_json::Value>(settings_json).ok()?;
         let api_key = settings["api_key"].as_str().filter(|k| !k.is_empty())?;
-        match crate::chal::drivers::ElevenLabsDriver::new(api_key.to_string(), voice_id.to_string()) {
+        match crate::chal::drivers::ElevenLabsDriver::new(api_key.to_string(), voice_id.to_string())
+        {
             Ok(driver) => Some(Arc::new(driver) as Arc<dyn SirenEngine>),
             Err(e) => {
                 warn!("SirenRouter: ElevenLabsDriver creation failed: {}", e);
@@ -148,7 +149,10 @@ impl SirenRouter {
                 if let Some(driver) =
                     Self::try_elevenlabs_from_profile(&p.engine_id, &p.settings_json, &p.voice_id)
                 {
-                    info!("SirenRouter: Using tenant ElevenLabs key for '{}'", tenant_id);
+                    info!(
+                        "SirenRouter: Using tenant ElevenLabs key for '{}'",
+                        tenant_id
+                    );
                     return Ok(driver);
                 }
                 warn!(
@@ -203,7 +207,10 @@ impl SirenRouter {
         }
 
         // ── 5. Mock (última garantía) ─────────────────────────────────────────
-        warn!("SirenRouter: All engines failed for tenant '{}'. Using Mock.", tenant_id);
+        warn!(
+            "SirenRouter: All engines failed for tenant '{}'. Using Mock.",
+            tenant_id
+        );
         engines
             .get("mock")
             .cloned()
@@ -227,8 +234,7 @@ impl SirenRouter {
         if let Ok(Some((stored_fp, threshold))) =
             self.persistence.get_voice_fingerprint(tenant_id).await
         {
-            let (accepted, score) =
-                crate::speaker_id::verify(&pcm_data, &stored_fp, threshold);
+            let (accepted, score) = crate::speaker_id::verify(&pcm_data, &stored_fp, threshold);
             info!(
                 "SirenRouter: speaker_verification score={:.3} threshold={:.3} accepted={}",
                 score, threshold, accepted
