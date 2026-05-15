@@ -223,6 +223,25 @@ impl SirenRouter {
             .as_ref()
             .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.settings_json).ok());
 
+        // ── Speaker verification (si hay fingerprint guardado) ────────────────
+        if let Ok(Some((stored_fp, threshold))) =
+            self.persistence.get_voice_fingerprint(tenant_id).await
+        {
+            let (accepted, score) =
+                crate::speaker_id::verify(&pcm_data, &stored_fp, threshold);
+            info!(
+                "SirenRouter: speaker_verification score={:.3} threshold={:.3} accepted={}",
+                score, threshold, accepted
+            );
+            if !accepted {
+                return Err(anyhow::anyhow!(
+                    "SPEAKER_MISMATCH: voz no reconocida (score={:.2}, umbral={:.2})",
+                    score,
+                    threshold
+                ));
+            }
+        }
+
         let stt_provider = settings
             .as_ref()
             .and_then(|s| s["stt_provider"].as_str())

@@ -24,6 +24,9 @@ pub trait StatePersistor: Send + Sync {
     async fn flush(&self) -> Result<()>;
     async fn get_voice_profile(&self, tenant_id: &str) -> Result<Option<VoiceProfile>>;
     async fn update_voice_profile(&self, profile: VoiceProfile) -> Result<()>;
+    async fn save_voice_fingerprint(&self, tenant_id: &str, fingerprint: &[f32], threshold: f32) -> Result<()>;
+    async fn get_voice_fingerprint(&self, tenant_id: &str) -> Result<Option<(Vec<f32>, f32)>>;
+    async fn delete_voice_fingerprint(&self, tenant_id: &str) -> Result<()>;
 }
 
 pub struct SQLCipherPersistor {
@@ -72,6 +75,18 @@ impl SQLCipherPersistor {
 
         // Migración CORE-112: Añadir model_pref si no existe (para instalaciones previas)
         let _ = conn.execute("ALTER TABLE tenant_voice_profiles ADD COLUMN model_pref TEXT NOT NULL DEFAULT 'HybridSmart'", []);
+
+        // Tabla para voice fingerprints (speaker verification)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tenant_voice_fingerprints (
+                tenant_id TEXT PRIMARY KEY,
+                fingerprint_json TEXT NOT NULL,
+                threshold REAL NOT NULL DEFAULT 0.75,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .context("Failed to initialize tenant_voice_fingerprints table")?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -232,6 +247,68 @@ impl StatePersistor for SQLCipherPersistor {
         .await
         .context("Spawn blocking failed during update_voice_profile")?
     }
+
+    async fn save_voice_fingerprint(&self, tenant_id: &str, fingerprint: &[f32], threshold: f32) -> Result<()> {
+        use anyhow::Context;
+        let tenant_id = tenant_id.to_string();
+        let fingerprint_json = serde_json::to_string(fingerprint).context("Failed to serialize fingerprint")?;
+        let conn = self.conn.clone();
+        task::spawn_blocking(move || {
+            let lock = conn.lock().map_err(|_| anyhow::anyhow!("Mutex poison error"))?;
+            lock.execute(
+                "INSERT OR REPLACE INTO tenant_voice_fingerprints (tenant_id, fingerprint_json, threshold, updated_at)
+                 VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)",
+                (&tenant_id, &fingerprint_json, threshold),
+            )
+            .context("Failed to save voice fingerprint")?;
+            debug!(tenant_id = %tenant_id, "Voice fingerprint saved.");
+            Ok(())
+        })
+        .await
+        .context("Spawn blocking failed during save_voice_fingerprint")?
+    }
+
+    async fn get_voice_fingerprint(&self, tenant_id: &str) -> Result<Option<(Vec<f32>, f32)>> {
+        use anyhow::Context;
+        let tenant_id = tenant_id.to_string();
+        let conn = self.conn.clone();
+        task::spawn_blocking(move || {
+            let lock = conn.lock().map_err(|_| anyhow::anyhow!("Mutex poison error"))?;
+            let mut stmt = lock.prepare(
+                "SELECT fingerprint_json, threshold FROM tenant_voice_fingerprints WHERE tenant_id = ?1"
+            )?;
+            let mut rows = stmt.query([&tenant_id])?;
+            if let Some(row) = rows.next()? {
+                let json: String = row.get(0)?;
+                let threshold: f64 = row.get(1)?;
+                let fingerprint: Vec<f32> = serde_json::from_str(&json)
+                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+                Ok(Some((fingerprint, threshold as f32)))
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .context("Spawn blocking failed during get_voice_fingerprint")?
+    }
+
+    async fn delete_voice_fingerprint(&self, tenant_id: &str) -> Result<()> {
+        use anyhow::Context;
+        let tenant_id = tenant_id.to_string();
+        let conn = self.conn.clone();
+        task::spawn_blocking(move || {
+            let lock = conn.lock().map_err(|_| anyhow::anyhow!("Mutex poison error"))?;
+            lock.execute(
+                "DELETE FROM tenant_voice_fingerprints WHERE tenant_id = ?1",
+                [&tenant_id],
+            )
+            .context("Failed to delete voice fingerprint")?;
+            debug!(tenant_id = %tenant_id, "Voice fingerprint deleted.");
+            Ok(())
+        })
+        .await
+        .context("Spawn blocking failed during delete_voice_fingerprint")?
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +333,15 @@ impl StatePersistor for MockPersistor {
         Ok(None)
     }
     async fn update_voice_profile(&self, _profile: VoiceProfile) -> Result<()> {
+        Ok(())
+    }
+    async fn save_voice_fingerprint(&self, _tenant_id: &str, _fingerprint: &[f32], _threshold: f32) -> Result<()> {
+        Ok(())
+    }
+    async fn get_voice_fingerprint(&self, _tenant_id: &str) -> Result<Option<(Vec<f32>, f32)>> {
+        Ok(None)
+    }
+    async fn delete_voice_fingerprint(&self, _tenant_id: &str) -> Result<()> {
         Ok(())
     }
 }

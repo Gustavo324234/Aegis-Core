@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod chal;
+pub mod speaker_id;
 pub mod chronos;
 pub mod citadel;
 pub mod dag;
