@@ -1,10 +1,10 @@
-/// Speaker verification via voice fingerprinting.
-///
-/// Algorithm: sub-band RMS energy (8 bands) + zero-crossing rate per 25ms frame,
-/// averaged across all frames and L2-normalized → 9-dimensional voice fingerprint.
-/// Verification uses cosine similarity (dot product of two unit vectors).
-///
-/// No external DSP deps required — pure arithmetic on 16kHz 16-bit mono PCM.
+//! Speaker verification via voice fingerprinting.
+//!
+//! Algorithm: sub-band RMS energy (8 bands) + zero-crossing rate per 25ms frame,
+//! averaged across all frames and L2-normalized → 9-dimensional voice fingerprint.
+//! Verification uses cosine similarity (dot product of two unit vectors).
+//!
+//! No external DSP deps required — pure arithmetic on 16kHz 16-bit mono PCM.
 
 const FRAME_SAMPLES: usize = 400; // 25ms @ 16kHz
 const BAND_COUNT: usize = 8;
@@ -89,7 +89,7 @@ pub fn verify(incoming_pcm: &[u8], stored_fingerprint: &[f32], threshold: f32) -
     }
 }
 
-fn l2_normalize(v: &mut Vec<f32>) {
+fn l2_normalize(v: &mut [f32]) {
     let norm: f32 = v.iter().map(|&x| x * x).sum::<f32>().sqrt();
     if norm > 1e-9 {
         for x in v.iter_mut() {
