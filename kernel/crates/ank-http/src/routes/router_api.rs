@@ -182,12 +182,18 @@ async fn add_global_key(
         match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
             Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
             Ok(_) => {}
-            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
         }
     } else if let Some(models) = &entry.active_models {
         let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
         if n > 0 {
-            info!("CatalogSyncer: registered {} {} models into catalog", n, entry.provider);
+            info!(
+                "CatalogSyncer: registered {} {} models into catalog",
+                n, entry.provider
+            );
         }
     }
 
@@ -320,12 +326,18 @@ async fn add_tenant_key(
         match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
             Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models (tenant)", n),
             Ok(_) => {}
-            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
         }
     } else if let Some(models) = &entry.active_models {
         let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
         if n > 0 {
-            info!("CatalogSyncer: registered {} {} models into catalog (tenant)", n, entry.provider);
+            info!(
+                "CatalogSyncer: registered {} {} models into catalog (tenant)",
+                n, entry.provider
+            );
         }
     }
 
@@ -529,12 +541,18 @@ async fn update_global_key(
         match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
             Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
             Ok(_) => {}
-            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
         }
     } else if let Some(models) = &entry.active_models {
         let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
         if n > 0 {
-            info!("CatalogSyncer: registered {} {} models into catalog", n, entry.provider);
+            info!(
+                "CatalogSyncer: registered {} {} models into catalog",
+                n, entry.provider
+            );
         }
     }
 
@@ -602,12 +620,18 @@ async fn update_tenant_key(
         match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
             Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models (tenant)", n),
             Ok(_) => {}
-            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
         }
     } else if let Some(models) = &entry.active_models {
         let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
         if n > 0 {
-            info!("CatalogSyncer: registered {} {} models into catalog (tenant)", n, entry.provider);
+            info!(
+                "CatalogSyncer: registered {} {} models into catalog (tenant)",
+                n, entry.provider
+            );
         }
     }
 

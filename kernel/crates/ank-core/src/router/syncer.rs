@@ -80,7 +80,10 @@ impl CatalogSyncer {
                 if !models.is_empty() {
                     let n = register_provider_models(&key.provider, models, &self.catalog).await;
                     if n > 0 {
-                        info!("CatalogSyncer: registered {} models from {} key pool entry", n, key.provider);
+                        info!(
+                            "CatalogSyncer: registered {} models from {} key pool entry",
+                            n, key.provider
+                        );
                     }
                 }
             }

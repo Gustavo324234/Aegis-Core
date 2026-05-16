@@ -29,32 +29,110 @@ pub fn infer_task_type(prompt: &str) -> TaskType {
     let lower = prompt.to_lowercase();
 
     let code_signals: &[&str] = &[
-        "```", "fn ", "def ", "function ", "import ", "class ", "let ", "const ", "var ",
-        "=>", "bug", "stack trace", "error:", "exception", "compilá", "compila", "compile",
-        "implementá", "implementa", "implement", "refactor", "refactorizá", "código", "code",
-        "función", "function", "method", "método", "endpoint", "api", "regex", "sql",
-        "typescript", "javascript", "python", "rust", "golang",
+        "```",
+        "fn ",
+        "def ",
+        "function ",
+        "import ",
+        "class ",
+        "let ",
+        "const ",
+        "var ",
+        "=>",
+        "bug",
+        "stack trace",
+        "error:",
+        "exception",
+        "compilá",
+        "compila",
+        "compile",
+        "implementá",
+        "implementa",
+        "implement",
+        "refactor",
+        "refactorizá",
+        "código",
+        "code",
+        "función",
+        "function",
+        "method",
+        "método",
+        "endpoint",
+        "api",
+        "regex",
+        "sql",
+        "typescript",
+        "javascript",
+        "python",
+        "rust",
+        "golang",
     ];
     let analysis_signals: &[&str] = &[
-        "analiza", "analizá", "analyze", "compare", "compará", "diferencia",
-        "¿por qué", "por que", "why", "explica", "explicá", "explain", "cuál es mejor",
-        "trade-off", "tradeoff", "pros y contras",
+        "analiza",
+        "analizá",
+        "analyze",
+        "compare",
+        "compará",
+        "diferencia",
+        "¿por qué",
+        "por que",
+        "why",
+        "explica",
+        "explicá",
+        "explain",
+        "cuál es mejor",
+        "trade-off",
+        "tradeoff",
+        "pros y contras",
     ];
     let planning_signals: &[&str] = &[
-        "plan", "planeá", "planea", "roadmap", "pasos", "steps", "cómo hacer", "how to",
-        "estrategia", "strategy", "prioridad", "priorities", "design ", "diseñá", "diseña",
-        "arquitectura", "architecture", "decide entre",
+        "plan",
+        "planeá",
+        "planea",
+        "roadmap",
+        "pasos",
+        "steps",
+        "cómo hacer",
+        "how to",
+        "estrategia",
+        "strategy",
+        "prioridad",
+        "priorities",
+        "design ",
+        "diseñá",
+        "diseña",
+        "arquitectura",
+        "architecture",
+        "decide entre",
     ];
     let creative_signals: &[&str] = &[
-        "escribime", "escribí", "escribe", "redactá", "redacta", "write me",
-        "compose", "compón", "poema", "poem", "historia", "story", "guión", "guion",
-        "carta", "letter", "email para", "mail para", "ideas para", "creative",
-        "brainstorm", "imaginá", "imagina",
+        "escribime",
+        "escribí",
+        "escribe",
+        "redactá",
+        "redacta",
+        "write me",
+        "compose",
+        "compón",
+        "poema",
+        "poem",
+        "historia",
+        "story",
+        "guión",
+        "guion",
+        "carta",
+        "letter",
+        "email para",
+        "mail para",
+        "ideas para",
+        "creative",
+        "brainstorm",
+        "imaginá",
+        "imagina",
     ];
 
-    let score = |signals: &[&str]| -> usize {
-        signals.iter().filter(|s| lower.contains(*s)).count()
-    };
+    let score =
+        |signals: &[&str]| -> usize { signals.iter().filter(|s| lower.contains(*s)).count() };
 
     let code = score(code_signals);
     let analysis = score(analysis_signals);
@@ -326,8 +404,14 @@ mod tests {
 
     #[test]
     fn test_infer_task_type_code() {
-        assert_eq!(infer_task_type("hay un bug en mi función fn foo()"), TaskType::Code);
-        assert_eq!(infer_task_type("implementá un endpoint de login"), TaskType::Code);
+        assert_eq!(
+            infer_task_type("hay un bug en mi función fn foo()"),
+            TaskType::Code
+        );
+        assert_eq!(
+            infer_task_type("implementá un endpoint de login"),
+            TaskType::Code
+        );
         assert_eq!(infer_task_type("```rust\nfn main(){}\n```"), TaskType::Code);
     }
 
@@ -343,7 +427,10 @@ mod tests {
             infer_task_type("hacé un roadmap para migrar la base de datos"),
             TaskType::Planning
         );
-        assert_eq!(infer_task_type("design un sistema de cola"), TaskType::Planning);
+        assert_eq!(
+            infer_task_type("design un sistema de cola"),
+            TaskType::Planning
+        );
     }
 
     #[test]
