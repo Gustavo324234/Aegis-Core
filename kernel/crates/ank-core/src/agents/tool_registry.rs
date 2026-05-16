@@ -87,6 +87,7 @@ impl ToolRegistry {
                 Self::read_file(),
                 Self::write_file(),
                 Self::list_files(),
+                Self::execute_command(),
                 Self::web_search(),
             ],
         }
@@ -395,6 +396,35 @@ impl ToolRegistry {
         }
     }
 
+    // --- CORE-FIX: shell verification for specialists ---
+
+    fn execute_command() -> ToolDefinition {
+        ToolDefinition {
+            name: "execute_command",
+            description: "Run a shell command for VERIFICATION (build, test, lint, status checks). \
+                          Only whitelisted programs are allowed: cargo, rustc, npm, pnpm, yarn, \
+                          git, python, python3, pytest, node, deno, bun, go, gradle, mvn, make, \
+                          ls, echo, pwd, cat, head, tail. \
+                          60s timeout. Output truncated to 8KB per stream. \
+                          Use this to confirm your work compiles/passes tests, not to install \
+                          packages or modify external state.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Full command line, e.g. 'cargo check -p my-crate' or 'git status'."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory relative to the workspace. Defaults to workspace root."
+                    }
+                },
+                "required": ["command"]
+            }),
+        }
+    }
+
     // --- CORE-277: Web search for specialists ---
 
     fn web_search() -> ToolDefinition {
@@ -429,13 +459,14 @@ mod tests {
             scope: "leer archivo".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Anthropic);
-        // CORE-277: Specialist ahora tiene 5 tools (report + 3 filesystem + web_search)
-        assert_eq!(tools.len(), 5);
+        // CORE-FIX: Specialist tiene 6 tools (report + 3 filesystem + execute_command + web_search)
+        assert_eq!(tools.len(), 6);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"report"));
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_file"));
         assert!(names.contains(&"list_files"));
+        assert!(names.contains(&"execute_command"));
         assert!(names.contains(&"web_search"));
     }
 

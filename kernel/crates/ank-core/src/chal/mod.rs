@@ -1390,6 +1390,137 @@ impl CognitiveHAL {
                 .unwrap_or_else(|_| "{\"error\":\"serialization_error\"}".to_string())
             }
 
+            // CORE-FIX: Antes no existía handler para `report` — la tool definida en
+            // ToolRegistry caía en el fallback "Unknown tool: report" y los agentes
+            // del árbol no podían reportar status=error|blocked al supervisor padre.
+            // Ahora delegamos a AgentOrchestrator::handle_tool_call que ya tiene la
+            // lógica para setear AgentState y last_report en el nodo.
+            "report" => {
+                let caller_id = match pcb.agent_id {
+                    Some(id) => id,
+                    None => {
+                        return "{\"error\":\"report requires agent_id in PCB (only tree agents can report)\"}".to_string();
+                    }
+                };
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                let orchestrator = match orchestrator_opt {
+                    Some(o) => o,
+                    None => return "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
+                };
+
+                let status_str = args["status"].as_str().unwrap_or("completed");
+                let status = match status_str.to_lowercase().as_str() {
+                    "error" => crate::agents::message::ToolCallReportStatus::Error,
+                    "blocked" => crate::agents::message::ToolCallReportStatus::Blocked,
+                    _ => crate::agents::message::ToolCallReportStatus::Completed,
+                };
+                let summary = args["summary"].as_str().unwrap_or("").to_string();
+                let observations = args
+                    .get("observations")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+
+                let call = crate::agents::message::AgentToolCall::Report {
+                    status,
+                    summary,
+                    observations,
+                };
+                match orchestrator.handle_tool_call(caller_id, call).await {
+                    Ok(result) => result,
+                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                }
+            }
+
+            // CORE-FIX: Specialists declaran "Verify the result (build, test, lint)"
+            // en su prompt pero antes no tenían ninguna tool para hacerlo. Esta tool
+            // permite ejecutar comandos de verificación con una whitelist estricta,
+            // timeout de 60s y output truncado a 8KB. No es un shell general.
+            "execute_command" => {
+                const ALLOWED_PROGRAMS: &[&str] = &[
+                    "cargo", "rustc", "npm", "pnpm", "yarn", "git", "python", "python3",
+                    "pytest", "node", "deno", "bun", "go", "gradle", "mvn", "make",
+                    "ls", "echo", "pwd", "cat", "head", "tail",
+                ];
+                const TIMEOUT_SECS: u64 = 60;
+                const MAX_OUTPUT_BYTES: usize = 8 * 1024;
+
+                let command = args["command"].as_str().unwrap_or("").trim().to_string();
+                if command.is_empty() {
+                    return "{\"error\":\"empty_command\"}".to_string();
+                }
+
+                let program = command.split_whitespace().next().unwrap_or("");
+                if !ALLOWED_PROGRAMS.contains(&program) {
+                    return format!(
+                        "{{\"error\":\"command_not_allowed\",\"detail\":\"'{}' is not whitelisted\",\"allowed\":{}}}",
+                        program,
+                        serde_json::to_string(ALLOWED_PROGRAMS).unwrap_or_else(|_| "[]".to_string())
+                    );
+                }
+
+                let workspace = Self::get_tenant_workspace(pcb);
+                let cwd_arg = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
+                let cwd = match Self::resolve_path(&workspace, cwd_arg, &[]) {
+                    Ok(p) if p.is_dir() => p,
+                    _ => workspace.clone(),
+                };
+
+                let output_result = if cfg!(windows) {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(TIMEOUT_SECS),
+                        tokio::process::Command::new("cmd")
+                            .args(["/C", command.as_str()])
+                            .current_dir(&cwd)
+                            .output(),
+                    )
+                    .await
+                } else {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(TIMEOUT_SECS),
+                        tokio::process::Command::new("sh")
+                            .args(["-c", command.as_str()])
+                            .current_dir(&cwd)
+                            .output(),
+                    )
+                    .await
+                };
+
+                fn truncate_output(mut s: String, max: usize) -> String {
+                    if s.len() > max {
+                        s.truncate(max);
+                        s.push_str("\n[...truncated]");
+                    }
+                    s
+                }
+
+                match output_result {
+                    Ok(Ok(output)) => {
+                        let stdout = truncate_output(
+                            String::from_utf8_lossy(&output.stdout).to_string(),
+                            MAX_OUTPUT_BYTES,
+                        );
+                        let stderr = truncate_output(
+                            String::from_utf8_lossy(&output.stderr).to_string(),
+                            MAX_OUTPUT_BYTES,
+                        );
+                        serde_json::json!({
+                            "exit_code": output.status.code(),
+                            "stdout": stdout,
+                            "stderr": stderr,
+                            "cwd": cwd.to_string_lossy(),
+                        })
+                        .to_string()
+                    }
+                    Ok(Err(e)) => {
+                        format!("{{\"error\":\"spawn_failed\",\"detail\":\"{}\"}}", e)
+                    }
+                    Err(_) => format!(
+                        "{{\"error\":\"timeout\",\"detail\":\"command exceeded {}s\"}}",
+                        TIMEOUT_SECS
+                    ),
+                }
+            }
+
             other => format!("{{\"error\":\"Unknown tool: {}\"}}", other),
         }
     }
