@@ -90,6 +90,22 @@ fn default_action() -> String {
     "submit".to_string()
 }
 
+/// CORE-FIX (A4): structured error event for the client. `code` is a stable
+/// machine-readable identifier the UI can match on; `message` is in Spanish
+/// and meant for end-users; `detail` is an optional technical detail kept
+/// out of the user-facing message but available for debugging panels.
+fn error_event(code: &str, message: &str, detail: Option<&str>) -> String {
+    json!({
+        "event": "error",
+        "data": {
+            "code": code,
+            "message": message,
+            "detail": detail,
+        }
+    })
+    .to_string()
+}
+
 async fn handle_chat(
     mut socket: WebSocket,
     tenant_id: String,
@@ -117,13 +133,11 @@ async fn handle_chat(
 
         if !is_auth {
             let _ = socket
-                .send(Message::Text(
-                    json!({
-                        "event": "error",
-                        "data": "Citadel AUTH_FAILURE: Access Denied."
-                    })
-                    .to_string(),
-                ))
+                .send(Message::Text(error_event(
+                    "auth_failed",
+                    "Sesión inválida o expirada. Reconectate para continuar.",
+                    Some("Citadel: tenant authentication rejected"),
+                )))
                 .await;
             let _ = socket.close().await;
             return;
@@ -236,11 +250,13 @@ async fn handle_chat(
 
         let action: ChatAction = match serde_json::from_str(&msg_text) {
             Ok(a) => a,
-            Err(_) => {
+            Err(e) => {
                 let _ = socket
-                    .send(Message::Text(
-                        json!({"event": "error", "data": "Invalid JSON"}).to_string(),
-                    ))
+                    .send(Message::Text(error_event(
+                        "invalid_payload",
+                        "El mensaje no tiene el formato esperado. Reintentá.",
+                        Some(&e.to_string()),
+                    )))
                     .await;
                 continue;
             }
@@ -261,10 +277,11 @@ async fn handle_chat(
                 stream_task_events(&mut socket, &pid, &state).await;
             } else {
                 let _ = socket
-                    .send(Message::Text(
-                        json!({"event": "error", "data": "Missing pid for watch action"})
-                            .to_string(),
-                    ))
+                    .send(Message::Text(error_event(
+                        "missing_pid",
+                        "Falta el ID de la tarea a observar.",
+                        None,
+                    )))
                     .await;
             }
         } else {
@@ -273,9 +290,11 @@ async fn handle_chat(
                 Some(p) => p,
                 None => {
                     let _ = socket
-                        .send(Message::Text(
-                            json!({"event": "error", "data": "Empty prompt received"}).to_string(),
-                        ))
+                        .send(Message::Text(error_event(
+                            "empty_prompt",
+                            "Mandaste un mensaje vacío.",
+                            None,
+                        )))
                         .await;
                     continue;
                 }
@@ -392,16 +411,14 @@ async fn handle_chat(
                         Some(model_id)
                     } else {
                         let _ = socket
-                            .send(Message::Text(
-                                json!({
-                                    "event": "error",
-                                    "data": format!(
-                                        "El modelo '{}' no está en el catálogo. Ignorando override.",
-                                        model_id
-                                    )
-                                })
-                                .to_string(),
-                            ))
+                            .send(Message::Text(error_event(
+                                "model_override_unknown",
+                                &format!(
+                                    "El modelo '{}' no está en el catálogo. Sigo con la selección automática.",
+                                    model_id
+                                ),
+                                Some(&format!("unknown model_id: {}", model_id)),
+                            )))
                             .await;
                         None
                     }
@@ -453,18 +470,39 @@ async fn handle_chat(
 
             let (tx, rx) = oneshot::channel();
 
-            if let Err(e) = state
-                .scheduler_tx
-                .send(SchedulerEvent::ScheduleTaskConfirmed(Box::new(pcb), tx))
-                .await
-            {
-                let _ = socket
-                    .send(Message::Text(
-                        json!({ "event": "error", "data": format!("Scheduler down: {}", e) })
-                            .to_string(),
-                    ))
-                    .await;
-                continue;
+            // CORE-FIX (A4 + C5): timeout on scheduler send so a stuck scheduler
+            // doesn't hang the WS handler indefinitely. 5s is generous —
+            // scheduler is in-process via mpsc, normal latency is sub-millisecond.
+            let send_result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                state
+                    .scheduler_tx
+                    .send(SchedulerEvent::ScheduleTaskConfirmed(Box::new(pcb), tx)),
+            )
+            .await;
+
+            match send_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let _ = socket
+                        .send(Message::Text(error_event(
+                            "scheduler_unavailable",
+                            "El núcleo no está aceptando tareas. Probá de nuevo en unos segundos.",
+                            Some(&e.to_string()),
+                        )))
+                        .await;
+                    continue;
+                }
+                Err(_) => {
+                    let _ = socket
+                        .send(Message::Text(error_event(
+                            "scheduler_timeout",
+                            "El núcleo está saturado y no respondió a tiempo. Probá de nuevo.",
+                            Some("scheduler_tx.send timed out after 5s"),
+                        )))
+                        .await;
+                    continue;
+                }
             }
 
             // Esperar confirmación del PID (best-effort)
@@ -532,6 +570,28 @@ async fn stream_with_receiver(
     while let Some(Ok(proto_event)) = stream.next().await {
         if let Some(ref payload) = proto_event.payload {
             if let ank_proto::v1::task_event::Payload::Output(ref text) = payload {
+                // CORE-FIX (A2): meta-tokens emitted by the HAL — never reach the user.
+                if let Some(json_str) = text.strip_prefix("__MODEL_SELECTED__") {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let _ = socket
+                            .send(Message::Text(
+                                json!({ "event": "model_selected", "data": meta }).to_string(),
+                            ))
+                            .await;
+                    }
+                    continue;
+                }
+                // CORE-FIX (A3): VCM / build-time warnings forwarded as a non-blocking event.
+                if let Some(json_str) = text.strip_prefix("__WARNING__") {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let _ = socket
+                            .send(Message::Text(
+                                json!({ "event": "warning", "data": meta }).to_string(),
+                            ))
+                            .await;
+                    }
+                    continue;
+                }
                 if let Some(caps) = MUSIC_PLAY_RE.captures(text) {
                     let provider = caps[1].to_string();
                     let track_id = caps[2].to_string();

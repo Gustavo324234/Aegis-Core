@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum TaskType {
     #[default]
     Chat,

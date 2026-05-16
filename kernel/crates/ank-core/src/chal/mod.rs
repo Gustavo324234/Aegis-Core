@@ -487,13 +487,17 @@ impl CognitiveHAL {
             }
         };
 
-        let driver = CloudProxyDriver::new_with_callback(
+        // Mutable so that B1 (fallback chain) can swap to a backup model on
+        // first-call failure without rebuilding the whole closure.
+        let mut active_model_id = decision.model_id.clone();
+        let mut active_provider = decision.provider.clone();
+        let mut driver = CloudProxyDriver::new_with_callback(
             Arc::clone(&self.http_client),
             decision.api_url.clone(),
             decision.api_key.clone(),
             decision.model_id.clone(),
             decision.key_id.clone(),
-            on_rate_limited,
+            on_rate_limited.clone(),
         );
 
         let provider = ProviderKind::from_string(&decision.provider);
@@ -506,15 +510,146 @@ impl CognitiveHAL {
             }
         };
 
-        let mut messages = self.build_messages(pcb, persona).await;
+        let (mut messages, build_warnings) =
+            self.build_messages_with_warnings(pcb, persona).await;
+
+        // CORE-FIX (A2): tell the client which model is about to answer so
+        // the UI can render a "Claude Sonnet 4.6" / "GPT-4o" badge. The token
+        // uses the same `__PREFIX__` convention as `__TOOL_CALL__` and is
+        // intercepted by the WebSocket handler before reaching the user-visible
+        // stream.
+        let send_model_event = |tx: &tokio::sync::mpsc::UnboundedSender<
+            Result<String, ExecutionError>,
+        >,
+                                model_id: &str,
+                                provider_str: &str| {
+            let payload = serde_json::json!({
+                "model_id": model_id,
+                "provider": provider_str,
+            });
+            let _ = tx.send(Ok(format!("__MODEL_SELECTED__{}", payload)));
+        };
+        send_model_event(&text_tx, &decision.model_id, &decision.provider);
+
+        // CORE-FIX (A3): surface any non-fatal warnings produced while building
+        // the context (e.g. VCM assembly failure). The WS handler renders these
+        // as a `warning` event so the user knows the response has reduced context.
+        for w in build_warnings {
+            let payload = serde_json::json!({ "category": "context_assembly", "message": w });
+            let _ = text_tx.send(Ok(format!("__WARNING__{}", payload)));
+        }
 
         const MAX_ITERATIONS: usize = 10;
         let mut finished = false;
 
-        for _iteration in 0..MAX_ITERATIONS {
-            let raw_stream = driver
+        for iteration in 0..MAX_ITERATIONS {
+            // CORE-FIX (B1): on the FIRST iteration, if the primary model
+            // refuses the request (rate-limit, 5xx, timeout), try the fallback
+            // chain before bubbling the error up to the user. After the first
+            // iteration we don't switch models — the conversation has tool
+            // history committed to the original model and changing mid-thread
+            // would confuse it.
+            let raw_stream = match driver
                 .generate_stream(messages.clone(), None, tools.clone())
-                .await?;
+                .await
+            {
+                Ok(s) => s,
+                Err(primary_err) if iteration == 0 && !decision.fallback_chain.is_empty() => {
+                    let tracker = self.router_ref.read().await.clone();
+                    if let Some(r) = &tracker {
+                        r.read()
+                            .await
+                            .tracker_ref()
+                            .record_failure(&active_model_id, &active_provider)
+                            .await;
+                    }
+                    warn!(
+                        pid = %pid,
+                        primary = %active_model_id,
+                        error = %primary_err,
+                        "primary model failed on first call — trying fallback chain"
+                    );
+
+                    let mut recovered: Option<_> = None;
+                    for fb in &decision.fallback_chain {
+                        let fb_driver = CloudProxyDriver::new_with_callback(
+                            Arc::clone(&self.http_client),
+                            fb.api_url.clone(),
+                            fb.api_key.clone(),
+                            fb.model_id.clone(),
+                            None,
+                            on_rate_limited.clone(),
+                        );
+                        match fb_driver
+                            .generate_stream(messages.clone(), None, tools.clone())
+                            .await
+                        {
+                            Ok(s) => {
+                                active_model_id = fb.model_id.clone();
+                                active_provider = fb.provider.clone();
+                                driver = fb_driver;
+                                send_model_event(
+                                    &text_tx,
+                                    &active_model_id,
+                                    &active_provider,
+                                );
+                                let wpayload = serde_json::json!({
+                                    "category": "model_fallback",
+                                    "message": format!(
+                                        "El modelo primario falló; respondiendo con {}.",
+                                        fb.model_id
+                                    )
+                                });
+                                let _ = text_tx
+                                    .send(Ok(format!("__WARNING__{}", wpayload)));
+                                recovered = Some(s);
+                                break;
+                            }
+                            Err(e) => {
+                                if let Some(r) = &tracker {
+                                    r.read()
+                                        .await
+                                        .tracker_ref()
+                                        .record_failure(&fb.model_id, &fb.provider)
+                                        .await;
+                                }
+                                warn!(
+                                    pid = %pid,
+                                    fallback = %fb.model_id,
+                                    error = %e,
+                                    "fallback model also failed"
+                                );
+                            }
+                        }
+                    }
+
+                    match recovered {
+                        Some(s) => s,
+                        None => {
+                            // All fallbacks failed too. Invalidate sticky so
+                            // the next request re-evaluates from scratch.
+                            if let Some(r) = &tracker {
+                                let tenant_id =
+                                    pcb.tenant_id.as_deref().unwrap_or("default");
+                                r.read().await.invalidate_sticky(tenant_id).await;
+                            }
+                            return Err(primary_err);
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Either mid-conversation failure or no fallback chain.
+                    // Record the failure and propagate.
+                    if let Some(r) = self.router_ref.read().await.clone() {
+                        r.read()
+                            .await
+                            .tracker_ref()
+                            .record_failure(&active_model_id, &active_provider)
+                            .await;
+                    }
+                    return Err(e);
+                }
+            };
 
             tokio::pin!(raw_stream);
 
@@ -602,6 +737,16 @@ impl CognitiveHAL {
                 "Lo siento, alcancé el límite máximo de pasos internos al procesar tu solicitud. Por favor, reformulá tu pedido."
                     .to_string(),
             ));
+        }
+
+        // CORE-FIX (D2): mark this model as successful so future routing
+        // decisions can reflect its real-world success rate.
+        if let Some(r) = self.router_ref.read().await.clone() {
+            r.read()
+                .await
+                .tracker_ref()
+                .record_success(&active_model_id)
+                .await;
         }
 
         Ok(())
@@ -1611,6 +1756,21 @@ impl CognitiveHAL {
 
     /// Construye los mensajes para el LLM usando VCM para ensamblar contexto.
     pub async fn build_messages(&self, pcb: &PCB, persona: Option<&str>) -> Vec<ChatMessage> {
+        let (messages, _warnings) = self.build_messages_with_warnings(pcb, persona).await;
+        messages
+    }
+
+    /// CORE-FIX (A3): variant that also returns any non-fatal warnings produced
+    /// while assembling the context (e.g. VCM failures that triggered a
+    /// fallback to the raw l1_instruction). Callers that have a way to surface
+    /// this to the user (the chat ReAct loop) should use this variant.
+    pub async fn build_messages_with_warnings(
+        &self,
+        pcb: &PCB,
+        persona: Option<&str>,
+    ) -> (Vec<ChatMessage>, Vec<String>) {
+        let mut warnings: Vec<String> = Vec::new();
+
         // 1. Ensamblar contexto via VCM (L1 + L2 + L3)
         let assembled_context = self
             .vcm
@@ -1626,6 +1786,10 @@ impl CognitiveHAL {
                     "VCM assembly failed: {}. Falling back to raw instruction.",
                     e
                 );
+                warnings.push(format!(
+                    "Context assembly failed; responding with reduced memory. Detail: {}",
+                    e
+                ));
                 pcb.memory_pointers.l1_instruction.clone()
             });
 
@@ -1726,7 +1890,7 @@ impl CognitiveHAL {
             ..Default::default()
         });
 
-        messages
+        (messages, warnings)
     }
 }
 
