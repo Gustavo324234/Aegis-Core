@@ -185,8 +185,7 @@ async fn add_global_key(
             Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
         }
     } else if let Some(models) = &entry.active_models {
-        let is_remote = entry.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
-        let n = syncer::register_provider_models(&entry.provider, models, is_remote, &catalog).await;
+        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
         if n > 0 {
             info!("CatalogSyncer: registered {} {} models into catalog", n, entry.provider);
         }
@@ -324,8 +323,7 @@ async fn add_tenant_key(
             Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
         }
     } else if let Some(models) = &entry.active_models {
-        let is_remote = entry.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
-        let n = syncer::register_provider_models(&entry.provider, models, is_remote, &catalog).await;
+        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
         if n > 0 {
             info!("CatalogSyncer: registered {} {} models into catalog (tenant)", n, entry.provider);
         }
@@ -534,8 +532,7 @@ async fn update_global_key(
             Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
         }
     } else if let Some(models) = &entry.active_models {
-        let is_remote = entry.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
-        let n = syncer::register_provider_models(&entry.provider, models, is_remote, &catalog).await;
+        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
         if n > 0 {
             info!("CatalogSyncer: registered {} {} models into catalog", n, entry.provider);
         }
@@ -608,8 +605,7 @@ async fn update_tenant_key(
             Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
         }
     } else if let Some(models) = &entry.active_models {
-        let is_remote = entry.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
-        let n = syncer::register_provider_models(&entry.provider, models, is_remote, &catalog).await;
+        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
         if n > 0 {
             info!("CatalogSyncer: registered {} {} models into catalog (tenant)", n, entry.provider);
         }

@@ -78,8 +78,7 @@ impl CatalogSyncer {
             }
             if let Some(models) = &key.active_models {
                 if !models.is_empty() {
-                    let is_remote = key.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
-                    let n = register_provider_models(&key.provider, models, is_remote, &self.catalog).await;
+                    let n = register_provider_models(&key.provider, models, &self.catalog).await;
                     if n > 0 {
                         info!("CatalogSyncer: registered {} models from {} key pool entry", n, key.provider);
                     }
@@ -199,7 +198,6 @@ impl CatalogSyncer {
 pub async fn register_provider_models(
     provider: &str,
     models: &[String],
-    is_remote: bool,
     catalog: &Arc<ModelCatalog>,
 ) -> usize {
     let mut added = 0usize;
@@ -244,8 +242,7 @@ pub async fn register_provider_models(
                 supports_tools: true,
                 supports_json_mode: true,
                 tool_use_support: ToolUseSupport::Unknown,
-                // Remote Ollama/custom endpoints are cloud models (not localhost)
-                is_local: !is_remote,
+                is_local: false,
                 avg_latency_ms: Some(3000),
                 free_tier_rpm: None,
                 free_tier_rpd: None,
