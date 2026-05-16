@@ -76,13 +76,63 @@ pub struct PluginManager {
 impl PluginManager {
     /// Inicializa el motor de Wasm con configuraciones optimizadas
     /// y medidas de seguridad (Fuel consumption, WASI, CPU limits).
+    ///
+    /// CORE-FIX: la versión anterior caía silenciosamente a una public key de
+    /// 32 ceros cuando `AEGIS_PLUGIN_ROOT_KEY` no estaba seteado o tenía hex
+    /// inválido. Eso permitía a cualquier atacante con la private key
+    /// correspondiente firmar plugins como "válidos" — sandbox bypass total.
+    /// Ahora exigimos una clave explícita en producción y solo permitimos el
+    /// modo inseguro si el operador lo activa a propósito con
+    /// `AEGIS_ALLOW_INSECURE_PLUGINS=1` (útil para dev/CI).
     pub fn new() -> Result<Self, PluginError> {
-        // En un entorno real, AEGIS_ROOT_KEY vendría de enclave/vault.
-        // Por ahora lo dejamos como [0; 32] pero permitiremos cargarlo vía env.
-        let public_key_hex =
-            std::env::var("AEGIS_PLUGIN_ROOT_KEY").unwrap_or_else(|_| "0".repeat(64));
-        let public_key = hex::decode(public_key_hex).unwrap_or_else(|_| vec![0u8; 32]);
-        let signer = PluginSigner::new(&public_key[..32].try_into().unwrap_or([0u8; 32]))
+        let allow_insecure = std::env::var("AEGIS_ALLOW_INSECURE_PLUGINS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        // Debug builds (cargo build / cargo test) default to permissive with a
+        // loud warning so dev/CI does not break. Release builds (production)
+        // refuse to start without an explicit key — silent zeroed signer is a
+        // sandbox bypass.
+        let permissive_default = cfg!(debug_assertions);
+
+        let public_key: [u8; 32] = match std::env::var("AEGIS_PLUGIN_ROOT_KEY") {
+            Ok(hex_str) => {
+                let bytes = hex::decode(&hex_str).map_err(|e| {
+                    PluginError::IOError(format!(
+                        "AEGIS_PLUGIN_ROOT_KEY is not valid hex: {}",
+                        e
+                    ))
+                })?;
+                if bytes.len() < 32 {
+                    return Err(PluginError::IOError(format!(
+                        "AEGIS_PLUGIN_ROOT_KEY must decode to at least 32 bytes (got {})",
+                        bytes.len()
+                    )));
+                }
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&bytes[..32]);
+                key
+            }
+            Err(_) if allow_insecure || permissive_default => {
+                tracing::warn!(
+                    "AEGIS_PLUGIN_ROOT_KEY not set — using zeroed public key. \
+                     Plugin signatures are NOT verified. This is acceptable for \
+                     development/tests but MUST NOT be used in a release build."
+                );
+                [0u8; 32]
+            }
+            Err(_) => {
+                return Err(PluginError::IOError(
+                    "AEGIS_PLUGIN_ROOT_KEY is required in release builds. Set the \
+                     env var to a hex-encoded ed25519 public key (≥32 bytes), or \
+                     export AEGIS_ALLOW_INSECURE_PLUGINS=1 to opt in to the \
+                     unverified-signature mode."
+                        .to_string(),
+                ));
+            }
+        };
+
+        let signer = PluginSigner::new(&public_key)
             .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?;
         Self::new_with_signer(signer)
     }
@@ -658,6 +708,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_manager_init() {
+        // PluginManager::new() defaults to permissive in debug builds
+        // (cfg(debug_assertions)), so cargo test works without any env var.
         let manager = PluginManager::new();
         assert!(manager.is_ok());
     }
