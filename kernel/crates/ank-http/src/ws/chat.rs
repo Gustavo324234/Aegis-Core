@@ -1,7 +1,7 @@
 use crate::{citadel::hash_passphrase, state::AppState};
 use ank_core::{
     chal::{ChatMessage, ChatRole},
-    pcb::PCB,
+    pcb::{infer_task_type, PCB},
     scheduler::SchedulerEvent,
 };
 use axum::{
@@ -376,12 +376,49 @@ async fn handle_chat(
                         })
                         .unwrap_or(ank_core::scheduler::ModelPreference::HybridSmart)
                 };
+            // CORE-FIX: Si el cliente pidió un model_override, verificar que exista en el
+            // catálogo antes de aceptarlo. Antes el router lo ignoraba en silencio y caía
+            // al CMR — el usuario seleccionaba un modelo y el sistema usaba otro sin avisar.
+            let validated_override = match action.model_override {
+                Some(model_id) if !model_id.trim().is_empty() => {
+                    let exists = state
+                        .router
+                        .read()
+                        .await
+                        .catalog_find(&model_id)
+                        .await
+                        .is_some();
+                    if exists {
+                        Some(model_id)
+                    } else {
+                        let _ = socket
+                            .send(Message::Text(
+                                json!({
+                                    "event": "error",
+                                    "data": format!(
+                                        "El modelo '{}' no está en el catálogo. Ignorando override.",
+                                        model_id
+                                    )
+                                })
+                                .to_string(),
+                            ))
+                            .await;
+                        None
+                    }
+                }
+                _ => None,
+            };
+
             let user_message_text = prompt.clone();
             let mut pcb = PCB::new(tenant_id.clone(), 5, prompt.clone());
             pcb.model_pref = pref;
             pcb.tenant_id = Some(tenant_id.clone());
             pcb.session_key = Some(hash.clone());
-            pcb.model_override = action.model_override;
+            pcb.model_override = validated_override;
+            // CORE-FIX: Inferir TaskType del prompt para que el CMR puntúe por el tipo
+            // de tarea real (Code/Planning/Analysis/Creative) y no siempre por Chat.
+            // Sin esto, un pedido de coding eligía gemini-flash-lite en lugar de claude-sonnet.
+            pcb.task_type = infer_task_type(&prompt);
 
             // CORE-260: Inyectar historial de la sesión en el PCB
             {

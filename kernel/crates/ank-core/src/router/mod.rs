@@ -124,20 +124,38 @@ impl CognitiveRouter {
         // Step 1: Get candidates from catalog
         let all_candidates = self.catalog.get_candidates(task_type).await;
 
-        // Step 2: Filter by model preference
-        let filtered: Vec<ModelEntry> = all_candidates
-            .into_iter()
-            .filter(|e| match model_pref {
-                ModelPreference::LocalOnly => e.is_local,
-                ModelPreference::CloudOnly => !e.is_local,
-                ModelPreference::HybridSmart => true,
-            })
-            .collect();
+        // Step 2: Filter by model preference.
+        // CORE-FIX: If LocalOnly produces no candidates (Ollama not running, no local
+        // model registered, etc.), fall back to HybridSmart instead of hard-failing.
+        // Hard-failing leaves the user staring at "no model available" even when cloud
+        // keys are configured — silently misleading. The downgrade is logged at WARN.
+        let (filtered, effective_pref): (Vec<ModelEntry>, ModelPreference) = {
+            let primary: Vec<ModelEntry> = all_candidates
+                .iter()
+                .cloned()
+                .filter(|e| match model_pref {
+                    ModelPreference::LocalOnly => e.is_local,
+                    ModelPreference::CloudOnly => !e.is_local,
+                    ModelPreference::HybridSmart => true,
+                })
+                .collect();
+
+            if primary.is_empty() && matches!(model_pref, ModelPreference::LocalOnly) {
+                warn!(
+                    "LocalOnly preference has no candidates for task_type={:?} \
+                     — falling back to HybridSmart so the request can still complete",
+                    task_type
+                );
+                (all_candidates, ModelPreference::HybridSmart)
+            } else {
+                (primary, model_pref)
+            }
+        };
 
         if filtered.is_empty() {
             return Err(SystemError::ModelNotFound(format!(
                 "No models available for task_type={:?} with model_pref={:?}",
-                task_type, model_pref
+                task_type, effective_pref
             )));
         }
 

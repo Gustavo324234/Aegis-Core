@@ -18,6 +18,64 @@ pub enum TaskType {
     Local,
 }
 
+/// Heuristically infer the cognitive nature of a user prompt so the router
+/// can pick a model whose `task_scores` actually match what's being asked.
+///
+/// Without this, every WebSocket-originated PCB defaults to `TaskType::Chat`
+/// and the CMR ranks candidates only against `task_scores.chat` — so a
+/// coding question can end up routed to a chat-tuned cheap model even when
+/// a strong coding model is available.
+pub fn infer_task_type(prompt: &str) -> TaskType {
+    let lower = prompt.to_lowercase();
+
+    let code_signals: &[&str] = &[
+        "```", "fn ", "def ", "function ", "import ", "class ", "let ", "const ", "var ",
+        "=>", "bug", "stack trace", "error:", "exception", "compilá", "compila", "compile",
+        "implementá", "implementa", "implement", "refactor", "refactorizá", "código", "code",
+        "función", "function", "method", "método", "endpoint", "api", "regex", "sql",
+        "typescript", "javascript", "python", "rust", "golang",
+    ];
+    let analysis_signals: &[&str] = &[
+        "analiza", "analizá", "analyze", "compare", "compará", "diferencia",
+        "¿por qué", "por que", "why", "explica", "explicá", "explain", "cuál es mejor",
+        "trade-off", "tradeoff", "pros y contras",
+    ];
+    let planning_signals: &[&str] = &[
+        "plan", "planeá", "planea", "roadmap", "pasos", "steps", "cómo hacer", "how to",
+        "estrategia", "strategy", "prioridad", "priorities", "design ", "diseñá", "diseña",
+        "arquitectura", "architecture", "decide entre",
+    ];
+    let creative_signals: &[&str] = &[
+        "escribime", "escribí", "escribe", "redactá", "redacta", "write me",
+        "compose", "compón", "poema", "poem", "historia", "story", "guión", "guion",
+        "carta", "letter", "email para", "mail para", "ideas para", "creative",
+        "brainstorm", "imaginá", "imagina",
+    ];
+
+    let score = |signals: &[&str]| -> usize {
+        signals.iter().filter(|s| lower.contains(*s)).count()
+    };
+
+    let code = score(code_signals);
+    let analysis = score(analysis_signals);
+    let planning = score(planning_signals);
+    let creative = score(creative_signals);
+
+    let max = code.max(analysis).max(planning).max(creative);
+    if max == 0 {
+        return TaskType::Chat;
+    }
+    if max == code {
+        TaskType::Code
+    } else if max == planning {
+        TaskType::Planning
+    } else if max == analysis {
+        TaskType::Analysis
+    } else {
+        TaskType::Creative
+    }
+}
+
 /// CORE-154: Role of a process within the multi-agent hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ProcessRole {
@@ -264,6 +322,43 @@ mod tests {
 
         // PcbByPriority implementa Ord para BinaryHeap — prioridad 10 > prioridad 1.
         assert!(PcbByPriority(pcb_high) > PcbByPriority(pcb_low));
+    }
+
+    #[test]
+    fn test_infer_task_type_code() {
+        assert_eq!(infer_task_type("hay un bug en mi función fn foo()"), TaskType::Code);
+        assert_eq!(infer_task_type("implementá un endpoint de login"), TaskType::Code);
+        assert_eq!(infer_task_type("```rust\nfn main(){}\n```"), TaskType::Code);
+    }
+
+    #[test]
+    fn test_infer_task_type_analysis() {
+        assert_eq!(infer_task_type("¿por qué falla esto?"), TaskType::Analysis);
+        assert_eq!(infer_task_type("compará A vs B"), TaskType::Analysis);
+    }
+
+    #[test]
+    fn test_infer_task_type_planning() {
+        assert_eq!(
+            infer_task_type("hacé un roadmap para migrar la base de datos"),
+            TaskType::Planning
+        );
+        assert_eq!(infer_task_type("design un sistema de cola"), TaskType::Planning);
+    }
+
+    #[test]
+    fn test_infer_task_type_creative() {
+        assert_eq!(
+            infer_task_type("escribime una historia corta"),
+            TaskType::Creative
+        );
+    }
+
+    #[test]
+    fn test_infer_task_type_chat_default() {
+        assert_eq!(infer_task_type("hola"), TaskType::Chat);
+        assert_eq!(infer_task_type("qué hora es"), TaskType::Chat);
+        assert_eq!(infer_task_type(""), TaskType::Chat);
     }
 
     #[test]
