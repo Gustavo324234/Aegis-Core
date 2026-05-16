@@ -176,16 +176,19 @@ async fn add_global_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    // CORE-298: on OpenRouter key registration, sync free-tier models into catalog (best-effort)
+    // Sync models into catalog immediately after key registration
+    let catalog = router.catalog_ref();
     if entry.provider == "openrouter" {
-        let catalog = router.catalog_ref();
         match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
             Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
             Ok(_) => {}
-            Err(e) => warn!(
-                "CatalogSyncer: failed to sync OpenRouter free models: {}",
-                e
-            ),
+            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+        }
+    } else if let Some(models) = &entry.active_models {
+        let is_remote = entry.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
+        let n = syncer::register_provider_models(&entry.provider, models, is_remote, &catalog).await;
+        if n > 0 {
+            info!("CatalogSyncer: registered {} {} models into catalog", n, entry.provider);
         }
     }
 
@@ -308,9 +311,25 @@ async fn add_tenant_key(
 
     let router = state.router.read().await;
     router
-        .add_tenant_key(&auth.tenant_id, entry)
+        .add_tenant_key(&auth.tenant_id, entry.clone())
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+    // Sync models into catalog immediately after key registration
+    let catalog = router.catalog_ref();
+    if entry.provider == "openrouter" {
+        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
+            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models (tenant)", n),
+            Ok(_) => {}
+            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+        }
+    } else if let Some(models) = &entry.active_models {
+        let is_remote = entry.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
+        let n = syncer::register_provider_models(&entry.provider, models, is_remote, &catalog).await;
+        if n > 0 {
+            info!("CatalogSyncer: registered {} {} models into catalog (tenant)", n, entry.provider);
+        }
+    }
 
     Ok(Json(SyncResponse {
         success: true,
@@ -506,16 +525,19 @@ async fn update_global_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    // CORE-298: on OpenRouter key update, sync free-tier models into catalog (best-effort)
+    // Sync models into catalog after key update
+    let catalog = router.catalog_ref();
     if entry.provider == "openrouter" {
-        let catalog = router.catalog_ref();
         match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
             Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
             Ok(_) => {}
-            Err(e) => warn!(
-                "CatalogSyncer: failed to sync OpenRouter free models: {}",
-                e
-            ),
+            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+        }
+    } else if let Some(models) = &entry.active_models {
+        let is_remote = entry.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
+        let n = syncer::register_provider_models(&entry.provider, models, is_remote, &catalog).await;
+        if n > 0 {
+            info!("CatalogSyncer: registered {} {} models into catalog", n, entry.provider);
         }
     }
 
@@ -573,9 +595,25 @@ async fn update_tenant_key(
     };
 
     router
-        .add_tenant_key(&auth.tenant_id, entry)
+        .add_tenant_key(&auth.tenant_id, entry.clone())
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+
+    // Sync models into catalog after key update
+    let catalog = router.catalog_ref();
+    if entry.provider == "openrouter" {
+        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
+            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models (tenant)", n),
+            Ok(_) => {}
+            Err(e) => warn!("CatalogSyncer: failed to sync OpenRouter free models: {}", e),
+        }
+    } else if let Some(models) = &entry.active_models {
+        let is_remote = entry.api_url.as_deref().map(|u| !u.is_empty()).unwrap_or(false);
+        let n = syncer::register_provider_models(&entry.provider, models, is_remote, &catalog).await;
+        if n > 0 {
+            info!("CatalogSyncer: registered {} {} models into catalog (tenant)", n, entry.provider);
+        }
+    }
 
     Ok(Json(SyncResponse {
         success: true,
