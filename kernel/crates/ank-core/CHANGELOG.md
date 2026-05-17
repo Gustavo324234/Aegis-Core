@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.59](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.58...ank-core-v0.1.59) (2026-05-17)
+
+
+### Features
+
+* **core:** stability pass — cancel propagation, VCM symlink guard, scheduler GC ([#292](https://github.com/Gustavo324234/Aegis-Core/issues/292)) ([618c58b](https://github.com/Gustavo324234/Aegis-Core/commit/618c58b4e8f255e7c0ee18a77fed6cf0d9a1e9e0))
+
 ## [0.1.58](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.57...ank-core-v0.1.58) (2026-05-17)
 
 

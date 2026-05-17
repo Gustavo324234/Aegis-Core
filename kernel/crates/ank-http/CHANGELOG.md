@@ -18,6 +18,13 @@
 
 
 
+## [0.1.66](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.65...ank-http-v0.1.66) (2026-05-17)
+
+
+### Features
+
+* **core:** stability pass — cancel propagation, VCM symlink guard, scheduler GC ([#292](https://github.com/Gustavo324234/Aegis-Core/issues/292)) ([618c58b](https://github.com/Gustavo324234/Aegis-Core/commit/618c58b4e8f255e7c0ee18a77fed6cf0d9a1e9e0))
+
 ## [0.1.64](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.63...ank-http-v0.1.64) (2026-05-17)
 
 
