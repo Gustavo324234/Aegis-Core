@@ -532,16 +532,71 @@ export const useAegisStore = create<AegisState>()(
                             break;
                         }
                         case 'error': {
-                            const errData = data as string;
-                            set({ status: 'error', lastError: errData || 'Unknown Kernel Panic' });
-                            if (errData === 'PASSWORD_MUST_CHANGE') {
+                            // CORE-FIX: backend now emits one of two shapes for `error`:
+                            //   legacy: data = "AUTH_FAILURE: Access Denied" (string)
+                            //   new:    data = { code, message, detail }    (object)
+                            // Normalise here so we accept both without losing the specific
+                            // user-facing message for categorised errors (auth_failed,
+                            // scheduler_unavailable, model_override_unknown, etc.).
+                            const structured = (typeof data === 'object' && data !== null)
+                                ? data as { code?: string; message?: string; detail?: string }
+                                : null;
+                            const legacy = (typeof data === 'string') ? data : null;
+                            const code = structured?.code ?? '';
+                            const message = structured?.message ?? legacy ?? 'Unknown Kernel Panic';
+
+                            set({ status: 'error', lastError: message });
+
+                            const isAuthFailure =
+                                code === 'auth_failed' ||
+                                (legacy?.includes('AUTH_FAILURE: Access Denied') ?? false);
+                            const isPasswordReset =
+                                code === 'password_must_change' ||
+                                legacy === 'PASSWORD_MUST_CHANGE';
+
+                            if (isPasswordReset) {
                                 set({ needsPasswordReset: true });
-                            } else if (errData?.includes('AUTH_FAILURE: Access Denied')) {
+                            } else if (isAuthFailure) {
                                 const sock = get().socket;
                                 if (sock) sock.close();
                                 set({ socket: null, status: 'error' });
                             } else {
-                                get().addSystemMessage('No pude procesar tu mensaje. Intentá de nuevo en unos segundos.');
+                                // Surface the actual message when we have one — falling back
+                                // to the generic "intentá de nuevo" only for unknown errors.
+                                get().addSystemMessage(
+                                    message !== 'Unknown Kernel Panic'
+                                        ? message
+                                        : 'No pude procesar tu mensaje. Intentá de nuevo en unos segundos.'
+                                );
+                            }
+                            break;
+                        }
+
+                        case 'model_selected': {
+                            // CORE-FIX: backend announces which model is about to answer
+                            // so the UI can show a badge. We piggy-back on lastRoutingInfo
+                            // (the existing routing display) and synthesise the missing
+                            // task_type / latency_ms fields — they get overwritten by
+                            // the real routing_info event when the model finishes.
+                            const meta = data as { model_id?: string; provider?: string };
+                            if (meta?.model_id) {
+                                get().setLastRoutingInfo({
+                                    model_id: meta.model_id,
+                                    provider: meta.provider ?? 'unknown',
+                                    task_type: get().lastRoutingInfo?.task_type ?? 'chat',
+                                    latency_ms: 0,
+                                });
+                            }
+                            break;
+                        }
+
+                        case 'warning': {
+                            // CORE-FIX: non-fatal warnings from the kernel (e.g. VCM context
+                            // assembly failure, fallback model swap). Show them as system
+                            // messages so the user knows the response is degraded.
+                            const w = data as { category?: string; message?: string };
+                            if (w?.message) {
+                                get().addSystemMessage(`⚠ ${w.message}`);
                             }
                             break;
                         }
