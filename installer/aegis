@@ -202,6 +202,21 @@ cmd_update() {
         printf '%b  → Aviso: agents-config no disponible en este release — se usan los fallbacks del binario%b\n' "$YELLOW" "$NC"
     fi
 
+    # CORE-FIX: release builds added by PR #277 refuse to start without
+    # AEGIS_PLUGIN_ROOT_KEY. If the user is upgrading from a version that
+    # didn't require it, backfill AEGIS_ALLOW_INSECURE_PLUGINS=1 so the
+    # service still boots after the update. The previous behaviour (silent
+    # fall-through to a zero-byte signer key) was no more secure than this
+    # explicit flag, so we're not regressing security — just making it
+    # visible. To harden later: generate an ed25519 keypair, set
+    # AEGIS_PLUGIN_ROOT_KEY=<hex>, and remove the insecure flag.
+    if [[ -f /etc/aegis/aegis.env ]]; then
+        if ! grep -qE "^(AEGIS_PLUGIN_ROOT_KEY|AEGIS_ALLOW_INSECURE_PLUGINS)=" /etc/aegis/aegis.env; then
+            echo "AEGIS_ALLOW_INSECURE_PLUGINS=1" | sudo tee -a /etc/aegis/aegis.env > /dev/null
+            printf '%b  → Backfilled AEGIS_ALLOW_INSECURE_PLUGINS=1 (required by release builds since PR #277)%b\n' "$YELLOW" "$NC"
+        fi
+    fi
+
     # CORE-147: Ensure cloudflared is installed
     if ! command -v cloudflared &>/dev/null; then
         printf "  → Instalando cloudflared...\n"
