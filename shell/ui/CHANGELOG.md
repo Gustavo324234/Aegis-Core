@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.19.1...shell-ui-v1.19.2) (2026-05-17)
+
+
+### Bug Fixes
+
+* **ui:** CORE-294 correct BenchScore color thresholds to match spec ([#286](https://github.com/Gustavo324234/Aegis-Core/issues/286)) ([f741913](https://github.com/Gustavo324234/Aegis-Core/commit/f741913569e22172e8163bd0bf05ef47c6032e58))
+
 ## [1.19.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.19.0...shell-ui-v1.19.1) (2026-05-17)
 
 
