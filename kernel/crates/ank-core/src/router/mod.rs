@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod discovery;
 pub mod key_pool;
 pub mod rate_tracker;
 pub mod siren;
