@@ -705,6 +705,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_manager_init() {
+        let _guard = crate::enclave::acquire_test_lock();
         // PluginManager::new() defaults to permissive in debug builds
         // (cfg(debug_assertions)), so cargo test works without any env var.
         let manager = PluginManager::new();
@@ -713,6 +714,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_wasm_execution_trap_handling() -> anyhow::Result<()> {
+        let _guard = crate::enclave::acquire_test_lock();
         use ed25519_dalek::SigningKey;
 
         // 1. Generar llaves de prueba
@@ -758,6 +760,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_domain_plugin_execution() -> anyhow::Result<()> {
+        let _guard = crate::enclave::acquire_test_lock();
         let manager = PluginManager::new()?;
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

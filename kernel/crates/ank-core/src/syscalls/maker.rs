@@ -252,6 +252,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_maker_js_execution() {
+        let _guard = crate::enclave::acquire_test_lock();
         let maker = MakerExecutor::new();
         let code = "return 1 + 1";
         let res = maker.execute("test", "js", code, "{}").await.unwrap();
@@ -260,6 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_maker_params_injection() {
+        let _guard = crate::enclave::acquire_test_lock();
         let maker = MakerExecutor::new();
         let code = "return params.name + ' ' + params.age";
         let params = r#"{"name": "Aegis", "age": 1}"#;
@@ -269,6 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_maker_filesystem_jail() {
+        let _guard = crate::enclave::acquire_test_lock();
         let dir = tempdir().unwrap();
         let tenant_id = "jail_test";
         // Simulamos la estructura de directorios que espera el executor
