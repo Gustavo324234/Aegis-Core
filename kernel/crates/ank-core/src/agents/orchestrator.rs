@@ -1126,6 +1126,14 @@ impl AgentOrchestrator {
         });
     }
 
+    // CI clippy flags this at 8 args. The function is a long-lived tokio task
+    // body that owns its dependencies (tree, router, channels, hal, rx, ...)
+    // for the agent's whole lifetime — bundling them into a single struct
+    // would add a layer of indirection without simplifying any caller, since
+    // `spawn_loop` is the only caller and it constructs each Arc separately.
+    // Tagged with a comment + targeted allow rather than #[allow] at module
+    // level so future additions get re-questioned.
+    #[allow(clippy::too_many_arguments)]
     async fn run_agent_loop(
         agent_id: AgentId,
         tree: Arc<RwLock<AgentTree>>,
