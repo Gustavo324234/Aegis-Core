@@ -110,7 +110,10 @@ pub struct CognitiveScheduler {
     /// None hasta que se inicialice con el CognitiveRouter y VCM.
     pub agent_orchestrator: Option<Arc<AgentOrchestrator>>,
     /// CORE-185: Pending output senders keyed by pid — fired when ProcessCompleted arrives.
-    pub output_pending: HashMap<String, oneshot::Sender<String>>,
+    /// CORE-FIX: each entry carries an Instant so the periodic GC can evict
+    /// senders that never received their ProcessCompleted (PCB crashed, HAL
+    /// runner died, etc.) instead of leaking oneshot Senders indefinitely.
+    pub output_pending: HashMap<String, (std::time::Instant, oneshot::Sender<String>)>,
 }
 
 impl CognitiveScheduler {
@@ -167,6 +170,25 @@ impl CognitiveScheduler {
                         let is_old = (now - pcb.created_at) > five_mins;
                         !(is_finished && is_old)
                     });
+
+                    // CORE-FIX: evict oneshot senders whose ProcessCompleted never
+                    // arrived (PCB crashed, HAL runner died, network drop). Without
+                    // this, output_pending grows unbounded across the lifetime of
+                    // the process. The Sender being dropped notifies any blocked
+                    // receiver with a RecvError, so the upstream waiter doesn't
+                    // hang forever either.
+                    let gc_threshold = std::time::Duration::from_secs(300);
+                    let before = self.output_pending.len();
+                    self.output_pending
+                        .retain(|_, (inserted_at, _)| inserted_at.elapsed() < gc_threshold);
+                    let evicted = before.saturating_sub(self.output_pending.len());
+                    if evicted > 0 {
+                        warn!(
+                            evicted,
+                            remaining = self.output_pending.len(),
+                            "scheduler GC: evicted stale output_pending senders (>5min without ProcessCompleted)"
+                        );
+                    }
                 }
             }
         }
@@ -238,7 +260,8 @@ impl CognitiveScheduler {
                 }
 
                 // CORE-185: Store sender so ProcessCompleted can deliver the LLM output.
-                self.output_pending.insert(confirmed_pid, confirm_tx);
+                self.output_pending
+                    .insert(confirmed_pid, (std::time::Instant::now(), confirm_tx));
             }
             SchedulerEvent::RegisterGraph(graph_box) => {
                 let graph = *graph_box;
@@ -342,7 +365,7 @@ impl CognitiveScheduler {
                 info!(pid = %pid, "Process completed locally.");
 
                 // CORE-185: Fire the output sender if a Siren WS handler is waiting.
-                if let Some(sender) = self.output_pending.remove(&pid) {
+                if let Some((_inserted_at, sender)) = self.output_pending.remove(&pid) {
                     let _ = sender.send(output.clone());
                 }
 
