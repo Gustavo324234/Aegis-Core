@@ -16,6 +16,13 @@
 
 
 
+## [0.1.63](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.62...ank-http-v0.1.63) (2026-05-17)
+
+
+### Bug Fixes
+
+* re-trigger release-please after squash merge of [#277](https://github.com/Gustavo324234/Aegis-Core/issues/277) ([#278](https://github.com/Gustavo324234/Aegis-Core/issues/278)) ([4d00193](https://github.com/Gustavo324234/Aegis-Core/commit/4d001936728e576e4bc5917f02b704af89de0ed0))
+
 ## [0.1.62](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.61...ank-http-v0.1.62) (2026-05-15)
 
 
