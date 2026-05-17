@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.57](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.56...ank-core-v0.1.57) (2026-05-17)
+
+
+### Features
+
+* **router:** auto-discover provider models when a key is added ([#280](https://github.com/Gustavo324234/Aegis-Core/issues/280)) ([010b562](https://github.com/Gustavo324234/Aegis-Core/commit/010b562d5cb53d4179d2a00075e688761162bc76))
+
 ## [0.1.56](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.55...ank-core-v0.1.56) (2026-05-17)
 
 
