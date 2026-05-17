@@ -190,12 +190,12 @@ impl CognitiveRouter {
         let (filtered, effective_pref): (Vec<ModelEntry>, ModelPreference) = {
             let primary: Vec<ModelEntry> = all_candidates
                 .iter()
-                .cloned()
                 .filter(|e| match model_pref {
                     ModelPreference::LocalOnly => e.is_local,
                     ModelPreference::CloudOnly => !e.is_local,
                     ModelPreference::HybridSmart => true,
                 })
+                .cloned()
                 .collect();
 
             if primary.is_empty() && matches!(model_pref, ModelPreference::LocalOnly) {
