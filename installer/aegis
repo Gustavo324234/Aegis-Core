@@ -141,9 +141,49 @@ cmd_update() {
     local ARCH
     ARCH=$(detect_arch)
     local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${TAG}"
+    local RAW_URL="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer"
 
     printf '%b%s%b\n' "$CYAN" "--- Aegis OS Upgrade Tool ---" "$NC"
     printf 'Canal: %b%s%b (Tag: %s)\n' "$YELLOW" "$CHANNEL" "$NC" "$TAG"
+
+    # CORE-FIX: refresh this very script + the systemd unit BEFORE doing the
+    # rest of the update. Bash loads the script into memory at invocation, so
+    # rewriting the file on disk is safe — the running update continues with
+    # the old logic and the new version takes effect on the NEXT `aegis update`.
+    # This is what makes future installer fixes (env-var backfills, new flags)
+    # actually reach already-deployed users. Without it, any improvement to the
+    # update flow is invisible until the operator manually re-runs install.sh.
+    local self_path="${BASH_SOURCE[0]}"
+    local self_tmp="/tmp/aegis-cli-update.$$"
+    if curl -sL --fail "${RAW_URL}/aegis" -o "$self_tmp" 2>/dev/null; then
+        # Sanity check — refuse to install a CLI script that isn't a bash script
+        # (catches GitHub returning an HTML 404 page or rate-limit JSON).
+        if head -1 "$self_tmp" | grep -q '^#!.*bash'; then
+            if ! cmp -s "$self_tmp" "$self_path"; then
+                printf '  → Self-updating CLI (%s)\n' "$self_path"
+                sudo cp "$self_tmp" "$self_path"
+                sudo chmod +x "$self_path"
+                printf '%b  → CLI updated. The change takes effect on the next aegis update run.%b\n' "$GREEN" "$NC"
+            fi
+        else
+            printf '%b  → Skipped self-update: downloaded file is not a bash script%b\n' "$YELLOW" "$NC"
+        fi
+        rm -f "$self_tmp"
+    fi
+
+    local unit_path="/etc/systemd/system/${SERVICE_NAME}.service"
+    local unit_tmp="/tmp/aegis-unit-update.$$"
+    if [[ -f "$unit_path" ]] && curl -sL --fail "${RAW_URL}/aegis.service" -o "$unit_tmp" 2>/dev/null; then
+        if head -1 "$unit_tmp" | grep -q '^\[Unit\]'; then
+            if ! cmp -s "$unit_tmp" "$unit_path"; then
+                printf '  → Updating systemd unit (%s)\n' "$unit_path"
+                sudo cp "$unit_tmp" "$unit_path"
+                sudo systemctl daemon-reload
+                printf '%b  → Unit updated + daemon-reload done.%b\n' "$GREEN" "$NC"
+            fi
+        fi
+        rm -f "$unit_tmp"
+    fi
 
     printf "Versión actual: "
     cmd_version || true
@@ -200,6 +240,21 @@ cmd_update() {
         printf '%b  → Instruction files updated → /etc/aegis/agents%b\n' "$GREEN" "$NC"
     else
         printf '%b  → Aviso: agents-config no disponible en este release — se usan los fallbacks del binario%b\n' "$YELLOW" "$NC"
+    fi
+
+    # CORE-FIX: release builds added by PR #277 refuse to start without
+    # AEGIS_PLUGIN_ROOT_KEY. If the user is upgrading from a version that
+    # didn't require it, backfill AEGIS_ALLOW_INSECURE_PLUGINS=1 so the
+    # service still boots after the update. The previous behaviour (silent
+    # fall-through to a zero-byte signer key) was no more secure than this
+    # explicit flag, so we're not regressing security — just making it
+    # visible. To harden later: generate an ed25519 keypair, set
+    # AEGIS_PLUGIN_ROOT_KEY=<hex>, and remove the insecure flag.
+    if [[ -f /etc/aegis/aegis.env ]]; then
+        if ! grep -qE "^(AEGIS_PLUGIN_ROOT_KEY|AEGIS_ALLOW_INSECURE_PLUGINS)=" /etc/aegis/aegis.env; then
+            echo "AEGIS_ALLOW_INSECURE_PLUGINS=1" | sudo tee -a /etc/aegis/aegis.env > /dev/null
+            printf '%b  → Backfilled AEGIS_ALLOW_INSECURE_PLUGINS=1 (required by release builds since PR #277)%b\n' "$YELLOW" "$NC"
+        fi
     fi
 
     # CORE-147: Ensure cloudflared is installed

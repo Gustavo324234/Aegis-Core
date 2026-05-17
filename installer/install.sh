@@ -443,6 +443,12 @@ AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
+# Release builds refuse to start without an explicit AEGIS_PLUGIN_ROOT_KEY
+# (hex-encoded ed25519 public key, ≥32 bytes). Until we ship a key-generation
+# command, opt into the unsigned-plugin mode so the installer's first boot
+# doesn't fail. To harden later: generate a real keypair, set
+# AEGIS_PLUGIN_ROOT_KEY=<hex>, and remove the line below.
+AEGIS_ALLOW_INSECURE_PLUGINS=1
 EOF
         if [[ "$SETUP_HTTPS" == "true" && -n "$AEGIS_DOMAIN" ]]; then
             echo "AEGIS_DOMAIN=${AEGIS_DOMAIN}" >> "$ENV_FILE"
@@ -468,6 +474,13 @@ EOF
         grep -q "AEGIS_DATA_DIR"            "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                     >> "$ENV_FILE"
         grep -q "AEGIS_MODEL_PROFILE"       "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"       >> "$ENV_FILE"
         grep -q "AEGIS_AGENTS_CONFIG_DIR"   "$ENV_FILE" || echo "AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents"   >> "$ENV_FILE"
+        # Backfill on upgrade: release builds added by PR #277 refuse to start
+        # without AEGIS_PLUGIN_ROOT_KEY. Preserve the previous "no signature
+        # verification" behaviour (the binary used to silently fall back to a
+        # zeroed key, which is no more secure than this flag) so the upgrade
+        # doesn't break running deployments.
+        grep -q "AEGIS_PLUGIN_ROOT_KEY\|AEGIS_ALLOW_INSECURE_PLUGINS" "$ENV_FILE" \
+            || echo "AEGIS_ALLOW_INSECURE_PLUGINS=1"                             >> "$ENV_FILE"
     fi
 
     # Write mode file
