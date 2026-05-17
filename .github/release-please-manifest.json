@@ -8,5 +8,5 @@
   "kernel/crates/aegis-supervisor": "0.1.5",
   "kernel/crates/aegis-sdk": "0.1.5",
   "kernel/plugins_src": "0.1.6",
-  "shell/ui": "1.19.1"
+  "shell/ui": "1.19.2"
 }
