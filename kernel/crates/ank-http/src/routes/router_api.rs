@@ -3,6 +3,7 @@ use crate::{
     error::AegisHttpError,
     state::AppState,
 };
+use ank_core::router::discovery::{fetch_provider_models, DiscoveredModel};
 use ank_core::router::key_pool::ApiKeyEntry;
 use ank_core::router::syncer;
 use axum::{
@@ -25,6 +26,10 @@ pub fn router() -> Router<AppState> {
         .route("/keys/tenant", get(list_tenant_keys))
         .route("/keys/tenant/:id", put(update_tenant_key))
         .route("/keys/tenant/:id", delete(delete_tenant_key))
+        // CORE-FIX: probe a provider's /models endpoint before the user commits
+        // to a key, so the UI can show the actual available list instead of a
+        // hand-curated (and inevitably stale) selection.
+        .route("/keys/probe-models", post(probe_models))
         .route("/models", get(list_router_models))
         .route("/sync", post(sync_router_catalog))
         .route("/status", get(router_status))
@@ -158,6 +163,25 @@ async fn add_global_key(
             })?
     };
 
+    // CORE-FIX: when the caller didn't pre-specify which models the key
+    // should expose, probe the provider's /models endpoint. This is how the
+    // catalog stays in sync with what the provider actually offers today
+    // (instead of hardcoded ids that go stale the moment a new Gemini
+    // ships). Falls back to None/empty if discovery fails — the user can
+    // always edit the list afterwards.
+    let active_models = match req.models {
+        Some(ms) if !ms.is_empty() => Some(ms),
+        _ => {
+            let discovered =
+                auto_discover_models(&req.provider, req.api_url.as_deref(), &api_key).await;
+            if discovered.is_empty() {
+                None
+            } else {
+                Some(discovered)
+            }
+        }
+    };
+
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
         provider: req.provider,
@@ -166,7 +190,7 @@ async fn add_global_key(
         label: req.label,
         is_active: true,
         rate_limited_until: None,
-        active_models: req.models,
+        active_models,
         is_free_tier: req.is_free_tier,
     };
 
@@ -302,6 +326,21 @@ async fn add_tenant_key(
             })?
     };
 
+    // CORE-FIX: same auto-discovery as add_global_key — keep catalog fresh
+    // instead of relying on the user remembering the exact model id strings.
+    let active_models = match req.models {
+        Some(ms) if !ms.is_empty() => Some(ms),
+        _ => {
+            let discovered =
+                auto_discover_models(&req.provider, req.api_url.as_deref(), &api_key).await;
+            if discovered.is_empty() {
+                None
+            } else {
+                Some(discovered)
+            }
+        }
+    };
+
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
         provider: req.provider,
@@ -310,7 +349,7 @@ async fn add_tenant_key(
         label: req.label,
         is_active: true,
         rate_limited_until: None,
-        active_models: req.models,
+        active_models,
         is_free_tier: req.is_free_tier,
     };
 
@@ -662,4 +701,112 @@ async fn router_status() -> Json<RouterStatusResponse> {
 /// can still supply it.
 fn is_keyless_provider(provider: &str) -> bool {
     matches!(provider.to_lowercase().as_str(), "ollama" | "custom")
+}
+
+// ── Model discovery ────────────────────────────────────────────────────────
+
+#[derive(Deserialize, ToSchema)]
+pub struct ProbeModelsRequest {
+    pub provider: String,
+    /// Required for paid providers (gemini, openai, anthropic, groq, etc.).
+    /// Ollama local can omit it.
+    #[serde(default)]
+    #[schema(format = "password")]
+    pub api_key: Option<String>,
+    /// Optional override for custom endpoints (Ollama remote, OpenAI-compat gateways).
+    #[serde(default)]
+    pub api_url: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ProbeModelsResponse {
+    pub provider: String,
+    pub models: Vec<DiscoveredModel>,
+}
+
+/// Probe a provider's `/models` endpoint without persisting the key.
+/// Lets the UI present the actual list of models the key has access to
+/// (instead of a hardcoded option set that drifts as providers ship updates).
+#[utoipa::path(
+    post,
+    path = "/api/router/keys/probe-models",
+    tag = "router",
+    request_body = ProbeModelsRequest,
+    responses(
+        (status = 200, description = "Discovered models", body = ProbeModelsResponse),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Provider rejected the key or unreachable")
+    )
+)]
+async fn probe_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ProbeModelsRequest>,
+) -> Result<Json<ProbeModelsResponse>, AegisHttpError> {
+    require_master_auth(&state, &headers).await?;
+
+    let api_key = if is_keyless_provider(&req.provider) {
+        req.api_key.unwrap_or_default()
+    } else {
+        req.api_key
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                AegisHttpError::BadRequest(
+                    "api_key is required to probe this provider".into(),
+                )
+            })?
+    };
+
+    match fetch_provider_models(&req.provider, req.api_url.as_deref(), &api_key).await {
+        Ok(models) => Ok(Json(ProbeModelsResponse {
+            provider: req.provider,
+            models,
+        })),
+        Err(e) => {
+            warn!(
+                provider = %req.provider,
+                error = %e,
+                "probe_models: provider rejected the key or is unreachable"
+            );
+            Err(AegisHttpError::BadGateway(format!(
+                "Provider '{}' did not return a model list: {}. Verify the key, \
+                 the api_url, and that the provider is reachable from this host.",
+                req.provider, e
+            )))
+        }
+    }
+}
+
+/// Auto-discover models when the caller didn't pass an explicit list.
+/// Returns the discovered ids so the caller can set them on the key entry.
+/// Empty result means "no discovery available for this provider" OR "discovery
+/// failed" — either way the caller should keep going and just register the key
+/// with whatever models the user already provided.
+async fn auto_discover_models(
+    provider: &str,
+    api_url: Option<&str>,
+    api_key: &str,
+) -> Vec<String> {
+    match fetch_provider_models(provider, api_url, api_key).await {
+        Ok(models) => {
+            let ids: Vec<String> = models.into_iter().map(|m| m.model_id).collect();
+            if !ids.is_empty() {
+                info!(
+                    provider = provider,
+                    count = ids.len(),
+                    "router_api: auto-discovered models for new key"
+                );
+            }
+            ids
+        }
+        Err(e) => {
+            warn!(
+                provider = provider,
+                error = %e,
+                "router_api: discovery failed; falling back to user-supplied models"
+            );
+            Vec::new()
+        }
+    }
 }
