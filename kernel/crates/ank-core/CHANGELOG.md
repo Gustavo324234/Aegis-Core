@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.56](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.55...ank-core-v0.1.56) (2026-05-17)
+
+
+### Bug Fixes
+
+* re-trigger release-please after squash merge of [#277](https://github.com/Gustavo324234/Aegis-Core/issues/277) ([#278](https://github.com/Gustavo324234/Aegis-Core/issues/278)) ([4d00193](https://github.com/Gustavo324234/Aegis-Core/commit/4d001936728e576e4bc5917f02b704af89de0ed0))
+
 ## [0.1.55](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.54...ank-core-v0.1.55) (2026-05-15)
 
 
