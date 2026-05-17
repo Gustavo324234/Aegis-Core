@@ -56,12 +56,14 @@ pub async fn fetch_provider_models(
 
     match provider_lc.as_str() {
         "gemini" | "google" => fetch_gemini(&client, api_url, api_key).await,
-        "openai" => fetch_openai_compatible(
-            &client,
-            api_url.unwrap_or("https://api.openai.com/v1"),
-            api_key,
-        )
-        .await,
+        "openai" => {
+            fetch_openai_compatible(
+                &client,
+                api_url.unwrap_or("https://api.openai.com/v1"),
+                api_key,
+            )
+            .await
+        }
         "groq" => {
             fetch_openai_compatible(
                 &client,
@@ -95,12 +97,8 @@ pub async fn fetch_provider_models(
             .await
         }
         "xai" => {
-            fetch_openai_compatible(
-                &client,
-                api_url.unwrap_or("https://api.x.ai/v1"),
-                api_key,
-            )
-            .await
+            fetch_openai_compatible(&client, api_url.unwrap_or("https://api.x.ai/v1"), api_key)
+                .await
         }
         "anthropic" => fetch_anthropic(&client, api_url, api_key).await,
         "ollama" => fetch_ollama(&client, api_url, api_key, false).await,
@@ -209,10 +207,7 @@ async fn fetch_gemini(
             // Keep only models that actually support text generation.
             let supports_generate = m["supportedGenerationMethods"]
                 .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .any(|v| v.as_str() == Some("generateContent"))
-                })
+                .map(|arr| arr.iter().any(|v| v.as_str() == Some("generateContent")))
                 .unwrap_or(true);
             if !supports_generate {
                 return None;

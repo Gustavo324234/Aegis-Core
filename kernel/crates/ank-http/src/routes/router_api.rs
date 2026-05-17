@@ -752,9 +752,7 @@ async fn probe_models(
         req.api_key
             .filter(|k| !k.trim().is_empty())
             .ok_or_else(|| {
-                AegisHttpError::BadRequest(
-                    "api_key is required to probe this provider".into(),
-                )
+                AegisHttpError::BadRequest("api_key is required to probe this provider".into())
             })?
     };
 
@@ -783,11 +781,7 @@ async fn probe_models(
 /// Empty result means "no discovery available for this provider" OR "discovery
 /// failed" — either way the caller should keep going and just register the key
 /// with whatever models the user already provided.
-async fn auto_discover_models(
-    provider: &str,
-    api_url: Option<&str>,
-    api_key: &str,
-) -> Vec<String> {
+async fn auto_discover_models(provider: &str, api_url: Option<&str>, api_key: &str) -> Vec<String> {
     match fetch_provider_models(provider, api_url, api_key).await {
         Ok(models) => {
             let ids: Vec<String> = models.into_iter().map(|m| m.model_id).collect();
