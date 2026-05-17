@@ -297,11 +297,8 @@ impl AgentOrchestrator {
             let mut order = vec![root_id];
             let mut stack: Vec<AgentId> = vec![root_id];
             while let Some(current) = stack.pop() {
-                let children: Vec<AgentId> = tree
-                    .children(&current)
-                    .iter()
-                    .map(|n| n.agent_id)
-                    .collect();
+                let children: Vec<AgentId> =
+                    tree.children(&current).iter().map(|n| n.agent_id).collect();
                 for child_id in children {
                     order.push(child_id);
                     stack.push(child_id);
@@ -1211,10 +1208,8 @@ impl AgentOrchestrator {
                     let (final_state, terminal_report) = {
                         let mut t = tree.write().await;
                         if let Some(n) = t.get_mut(&agent_id) {
-                            let already_terminal = matches!(
-                                n.state,
-                                AgentState::Complete | AgentState::Failed { .. }
-                            );
+                            let already_terminal =
+                                matches!(n.state, AgentState::Complete | AgentState::Failed { .. });
                             if !already_terminal {
                                 n.set_state(AgentState::Complete);
                             }

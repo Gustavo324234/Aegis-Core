@@ -510,25 +510,23 @@ impl CognitiveHAL {
             }
         };
 
-        let (mut messages, build_warnings) =
-            self.build_messages_with_warnings(pcb, persona).await;
+        let (mut messages, build_warnings) = self.build_messages_with_warnings(pcb, persona).await;
 
         // CORE-FIX (A2): tell the client which model is about to answer so
         // the UI can render a "Claude Sonnet 4.6" / "GPT-4o" badge. The token
         // uses the same `__PREFIX__` convention as `__TOOL_CALL__` and is
         // intercepted by the WebSocket handler before reaching the user-visible
         // stream.
-        let send_model_event = |tx: &tokio::sync::mpsc::UnboundedSender<
-            Result<String, ExecutionError>,
-        >,
-                                model_id: &str,
-                                provider_str: &str| {
-            let payload = serde_json::json!({
-                "model_id": model_id,
-                "provider": provider_str,
-            });
-            let _ = tx.send(Ok(format!("__MODEL_SELECTED__{}", payload)));
-        };
+        let send_model_event =
+            |tx: &tokio::sync::mpsc::UnboundedSender<Result<String, ExecutionError>>,
+             model_id: &str,
+             provider_str: &str| {
+                let payload = serde_json::json!({
+                    "model_id": model_id,
+                    "provider": provider_str,
+                });
+                let _ = tx.send(Ok(format!("__MODEL_SELECTED__{}", payload)));
+            };
         send_model_event(&text_tx, &decision.model_id, &decision.provider);
 
         // CORE-FIX (A3): surface any non-fatal warnings produced while building
@@ -588,11 +586,7 @@ impl CognitiveHAL {
                                 active_model_id = fb.model_id.clone();
                                 active_provider = fb.provider.clone();
                                 driver = fb_driver;
-                                send_model_event(
-                                    &text_tx,
-                                    &active_model_id,
-                                    &active_provider,
-                                );
+                                send_model_event(&text_tx, &active_model_id, &active_provider);
                                 let wpayload = serde_json::json!({
                                     "category": "model_fallback",
                                     "message": format!(
@@ -600,8 +594,7 @@ impl CognitiveHAL {
                                         fb.model_id
                                     )
                                 });
-                                let _ = text_tx
-                                    .send(Ok(format!("__WARNING__{}", wpayload)));
+                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                 recovered = Some(s);
                                 break;
                             }
@@ -629,8 +622,7 @@ impl CognitiveHAL {
                             // All fallbacks failed too. Invalidate sticky so
                             // the next request re-evaluates from scratch.
                             if let Some(r) = &tracker {
-                                let tenant_id =
-                                    pcb.tenant_id.as_deref().unwrap_or("default");
+                                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                                 r.read().await.invalidate_sticky(tenant_id).await;
                             }
                             return Err(primary_err);
@@ -1582,9 +1574,9 @@ impl CognitiveHAL {
             // timeout de 60s y output truncado a 8KB. No es un shell general.
             "execute_command" => {
                 const ALLOWED_PROGRAMS: &[&str] = &[
-                    "cargo", "rustc", "npm", "pnpm", "yarn", "git", "python", "python3",
-                    "pytest", "node", "deno", "bun", "go", "gradle", "mvn", "make",
-                    "ls", "echo", "pwd", "cat", "head", "tail",
+                    "cargo", "rustc", "npm", "pnpm", "yarn", "git", "python", "python3", "pytest",
+                    "node", "deno", "bun", "go", "gradle", "mvn", "make", "ls", "echo", "pwd",
+                    "cat", "head", "tail",
                 ];
                 const TIMEOUT_SECS: u64 = 60;
                 const MAX_OUTPUT_BYTES: usize = 8 * 1024;

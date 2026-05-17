@@ -401,7 +401,8 @@ impl ToolRegistry {
     fn execute_command() -> ToolDefinition {
         ToolDefinition {
             name: "execute_command",
-            description: "Run a shell command for VERIFICATION (build, test, lint, status checks). \
+            description:
+                "Run a shell command for VERIFICATION (build, test, lint, status checks). \
                           Only whitelisted programs are allowed: cargo, rustc, npm, pnpm, yarn, \
                           git, python, python3, pytest, node, deno, bun, go, gradle, mvn, make, \
                           ls, echo, pwd, cat, head, tail. \

@@ -98,10 +98,7 @@ impl PluginManager {
         let public_key: [u8; 32] = match std::env::var("AEGIS_PLUGIN_ROOT_KEY") {
             Ok(hex_str) => {
                 let bytes = hex::decode(&hex_str).map_err(|e| {
-                    PluginError::IOError(format!(
-                        "AEGIS_PLUGIN_ROOT_KEY is not valid hex: {}",
-                        e
-                    ))
+                    PluginError::IOError(format!("AEGIS_PLUGIN_ROOT_KEY is not valid hex: {}", e))
                 })?;
                 if bytes.len() < 32 {
                     return Err(PluginError::IOError(format!(
