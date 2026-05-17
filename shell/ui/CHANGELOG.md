@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.19.0...shell-ui-v1.19.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **ui:** accept structured error events + render model_selected and warning ([#282](https://github.com/Gustavo324234/Aegis-Core/issues/282)) ([00628b4](https://github.com/Gustavo324234/Aegis-Core/commit/00628b46a17e1c0e1d69ed782b6151c429f6b92b))
+
 ## [1.19.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.18.0...shell-ui-v1.19.0) (2026-05-15)
 
 
