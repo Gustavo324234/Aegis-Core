@@ -947,11 +947,7 @@ impl AgentOrchestrator {
         let tree = self.tree.read().await;
         tree.all_nodes()
             .iter()
-            .filter(|n| {
-                tenant_filter
-                    .map(|t| n.tenant_id == t)
-                    .unwrap_or(true)
-            })
+            .filter(|n| tenant_filter.map(|t| n.tenant_id == t).unwrap_or(true))
             .map(|n| {
                 let degraded_suffix = if n.is_degraded { " [degraded]" } else { "" };
                 let (role_label, task_type_str) = match &n.role {
