@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.19.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.19.1...shell-ui-v1.19.2) (2026-05-17)
+
+
+### Bug Fixes
+
+* **ui:** CORE-294 correct BenchScore color thresholds to match spec ([#286](https://github.com/Gustavo324234/Aegis-Core/issues/286)) ([f741913](https://github.com/Gustavo324234/Aegis-Core/commit/f741913569e22172e8163bd0bf05ef47c6032e58))
+
+## [1.19.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.19.0...shell-ui-v1.19.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **ui:** accept structured error events + render model_selected and warning ([#282](https://github.com/Gustavo324234/Aegis-Core/issues/282)) ([00628b4](https://github.com/Gustavo324234/Aegis-Core/commit/00628b46a17e1c0e1d69ed782b6151c429f6b92b))
+
+## [1.19.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.18.0...shell-ui-v1.19.0) (2026-05-15)
+
+
+### Features
+
+* **voice:** CORE-302 + speaker verification + wake word activation by agent name ([#274](https://github.com/Gustavo324234/Aegis-Core/issues/274)) ([5f7ad96](https://github.com/Gustavo324234/Aegis-Core/commit/5f7ad96ff453b0b21d132e241a1340ca9e779663))
+
+## [1.18.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.17.0...shell-ui-v1.18.0) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#271](https://github.com/Gustavo324234/Aegis-Core/issues/271)) ([c0e3090](https://github.com/Gustavo324234/Aegis-Core/commit/c0e309015c3456807bd6e57376bb20cba580e45f))
+
+## [1.17.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.16.2...shell-ui-v1.17.0) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#269](https://github.com/Gustavo324234/Aegis-Core/issues/269)) ([82f23d8](https://github.com/Gustavo324234/Aegis-Core/commit/82f23d8761bcac18eddf60f0900dfcda766d653b))
+
+## [1.16.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.16.1...shell-ui-v1.16.2) (2026-05-13)
+
+
+### Bug Fixes
+
+* **ui:** CORE-295 preserve stt_provider and stt_api_key when saving voice config ([#253](https://github.com/Gustavo324234/Aegis-Core/issues/253)) ([fa108fc](https://github.com/Gustavo324234/Aegis-Core/commit/fa108fcc8492652db48c01765be5ddb7fbc81a1d))
+
 ## [1.16.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.16.0...shell-ui-v1.16.1) (2026-05-09)
 
 

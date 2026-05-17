@@ -70,9 +70,53 @@ impl CloudProxyDriver {
         RETRYABLE_STATUS_CODES.contains(&status.as_u16())
     }
 
+    /// CORE-FIX (B2): Anthropic supports prompt caching via a `cache_control`
+    /// marker on a content block. The marker has to live INSIDE the content
+    /// (not as a top-level field), which means the message's `content` field
+    /// must become an array of content blocks instead of a plain string.
+    /// OpenRouter forwards this faithfully for Anthropic models.
+    ///
+    /// We apply it to the first `system` message we find — that's where the
+    /// big stable prefix lives (chat_agent.md, persona, tool definitions). A
+    /// 5-minute cache hit cuts Anthropic input token cost ~90% for that prefix.
+    fn is_anthropic_compatible(api_url: &str, model_id: &str) -> bool {
+        let url_lc = api_url.to_lowercase();
+        if url_lc.contains("anthropic.com") {
+            return true;
+        }
+        // OpenRouter exposes Anthropic models via the OpenAI-compatible API.
+        // Detect them by the model prefix.
+        url_lc.contains("openrouter.ai") && model_id.to_lowercase().contains("anthropic/")
+    }
+
+    fn apply_anthropic_prompt_caching(body: &mut serde_json::Value) {
+        let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+            return;
+        };
+        for msg in messages.iter_mut() {
+            let is_system = msg.get("role").and_then(|r| r.as_str()) == Some("system");
+            if !is_system {
+                continue;
+            }
+            // Only wrap if content is currently a plain string. If something
+            // else already wrote a content-block array, leave it alone.
+            let plain_text = match msg.get("content").and_then(|c| c.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let wrapped = serde_json::json!([{
+                "type": "text",
+                "text": plain_text,
+                "cache_control": {"type": "ephemeral"}
+            }]);
+            msg["content"] = wrapped;
+            break; // only the first system message
+        }
+    }
+
     async fn send_with_retry(
         &self,
-        request_body: ChatCompletionRequest,
+        request_body: serde_json::Value,
     ) -> Result<reqwest::Response, SystemError> {
         let mut last_error = None;
 
@@ -233,7 +277,21 @@ impl InferenceDriver for CloudProxyDriver {
             });
         }
 
-        let response = self.send_with_retry(request_body).await?;
+        // Serialize once so we can post-process for provider-specific extensions
+        // (Anthropic prompt caching today; future: Gemini system_instruction, etc.).
+        let mut body_json = serde_json::to_value(&request_body).map_err(|e| {
+            SystemError::HardwareFailure(format!("Failed to serialize request body: {}", e))
+        })?;
+
+        if Self::is_anthropic_compatible(&self.api_url, &self.model_id) {
+            Self::apply_anthropic_prompt_caching(&mut body_json);
+            tracing::debug!(
+                model = %self.model_id,
+                "CORE-FIX (B2): applied anthropic cache_control to system message"
+            );
+        }
+
+        let response = self.send_with_retry(body_json).await?;
 
         if !response.status().is_success() {
             let status = response.status();

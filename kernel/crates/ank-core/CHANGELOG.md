@@ -1,5 +1,73 @@
 # Changelog
 
+## [0.1.58](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.57...ank-core-v0.1.58) (2026-05-17)
+
+
+### Bug Fixes
+
+* **core:** CORE-300 tenant isolation in agent tree — partition by tenant_id ([#284](https://github.com/Gustavo324234/Aegis-Core/issues/284)) ([f8741ad](https://github.com/Gustavo324234/Aegis-Core/commit/f8741ad68ca9ecdc54c386aa8ee467434ec8dd42))
+
+## [0.1.57](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.56...ank-core-v0.1.57) (2026-05-17)
+
+
+### Features
+
+* **router:** auto-discover provider models when a key is added ([#280](https://github.com/Gustavo324234/Aegis-Core/issues/280)) ([010b562](https://github.com/Gustavo324234/Aegis-Core/commit/010b562d5cb53d4179d2a00075e688761162bc76))
+
+## [0.1.56](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.55...ank-core-v0.1.56) (2026-05-17)
+
+
+### Bug Fixes
+
+* re-trigger release-please after squash merge of [#277](https://github.com/Gustavo324234/Aegis-Core/issues/277) ([#278](https://github.com/Gustavo324234/Aegis-Core/issues/278)) ([4d00193](https://github.com/Gustavo324234/Aegis-Core/commit/4d001936728e576e4bc5917f02b704af89de0ed0))
+
+## [0.1.55](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.54...ank-core-v0.1.55) (2026-05-15)
+
+
+### Features
+
+* **voice:** CORE-302 + speaker verification + wake word activation by agent name ([#274](https://github.com/Gustavo324234/Aegis-Core/issues/274)) ([5f7ad96](https://github.com/Gustavo324234/Aegis-Core/commit/5f7ad96ff453b0b21d132e241a1340ca9e779663))
+
+## [0.1.54](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.53...ank-core-v0.1.54) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#271](https://github.com/Gustavo324234/Aegis-Core/issues/271)) ([c0e3090](https://github.com/Gustavo324234/Aegis-Core/commit/c0e309015c3456807bd6e57376bb20cba580e45f))
+
+## [0.1.53](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.52...ank-core-v0.1.53) (2026-05-14)
+
+
+### Features
+
+* **ank-core:** CORE-298 sync OpenRouter free models on key registration ([#267](https://github.com/Gustavo324234/Aegis-Core/issues/267)) ([49ac9c7](https://github.com/Gustavo324234/Aegis-Core/commit/49ac9c7775a6f8754f730d904adebb2f19179eec))
+
+## [0.1.52](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.51...ank-core-v0.1.52) (2026-05-14)
+
+
+### Features
+
+* **ank-core:** CORE-299 add model_override to PCB and WebSocket chat handler ([#265](https://github.com/Gustavo324234/Aegis-Core/issues/265)) ([21db419](https://github.com/Gustavo324234/Aegis-Core/commit/21db419ba06f835274dd5ccc582339f484f335df))
+
+## [0.1.51](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.50...ank-core-v0.1.51) (2026-05-13)
+
+
+### Features
+
+* **ank-core:** CORE-301 CMR v2 — contextual scoring, real latency, error penalty ([#259](https://github.com/Gustavo324234/Aegis-Core/issues/259)) ([3a25074](https://github.com/Gustavo324234/Aegis-Core/commit/3a250749741052e2844c28e14672723d5b76ac3b))
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-253 SYS_CALL_PLUGIN returns user-friendly error when plugin not found ([#257](https://github.com/Gustavo324234/Aegis-Core/issues/257)) ([7a52128](https://github.com/Gustavo324234/Aegis-Core/commit/7a52128cd1b38c0946d0ebd6b78cd79bf037f6f8))
+
+## [0.1.50](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.49...ank-core-v0.1.50) (2026-05-11)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-295 — SirenRouter admin key fallback (fixes metallic voice) ([#251](https://github.com/Gustavo324234/Aegis-Core/issues/251)) ([02f6009](https://github.com/Gustavo324234/Aegis-Core/commit/02f60099f6e210be090409e749ad01d4b1490ca9))
+
 ## [0.1.49](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.48...ank-core-v0.1.49) (2026-05-09)
 
 

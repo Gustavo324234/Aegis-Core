@@ -1,3 +1,7 @@
+// release-please trigger: PR #277 squash landed with a non-Conventional
+// title ("Fix/router chat supervisors") so release-please skipped it.
+// This anchor lets a new Conventional commit re-associate the PR's
+// changes with the ank-core package path.
 pub mod agents;
 pub mod chal;
 pub mod chronos;
@@ -13,6 +17,7 @@ pub mod pr_manager;
 pub mod router;
 pub mod scheduler;
 pub mod scribe;
+pub mod speaker_id;
 pub mod swarm; // Added pub mod swarm;
 pub mod syscalls;
 pub mod telemetry;

@@ -431,6 +431,17 @@ impl TenantDB {
 }
 
 #[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use anyhow::Context;
@@ -438,6 +449,7 @@ mod tests {
 
     #[test]
     fn test_secure_enclave_decryption_failure() -> anyhow::Result<()> {
+        let _guard = acquire_test_lock();
         let dir = tempdir().context("Failed to create tempdir")?;
         let base_path = dir.path();
 
@@ -487,6 +499,7 @@ mod tests {
 
     #[test]
     fn test_persona_set_get_delete() -> anyhow::Result<()> {
+        let _guard = acquire_test_lock();
         let tenant_id = format!(
             "test_persona_user_{}",
             std::time::SystemTime::now()
@@ -522,6 +535,7 @@ mod tests {
 
     #[test]
     fn test_persona_max_length() -> anyhow::Result<()> {
+        let _guard = acquire_test_lock();
         let tenant_id = format!(
             "test_maxlen_user_{}",
             std::time::SystemTime::now()

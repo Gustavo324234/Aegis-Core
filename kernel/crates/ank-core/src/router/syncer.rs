@@ -1,4 +1,4 @@
-use crate::router::catalog::{ModelCatalog, ModelEntry, TaskScores};
+use crate::router::catalog::{ModelCatalog, ModelEntry, TaskScores, ToolUseSupport};
 use crate::router::key_pool::KeyPool;
 use anyhow::Context;
 use reqwest::Client;
@@ -69,7 +69,27 @@ impl CatalogSyncer {
     }
 
     async fn sync_once(&self) -> anyhow::Result<()> {
-        // Only sync if we have an OpenRouter key
+        // Sync non-OpenRouter provider models (ollama, custom, etc.) from global key pool.
+        // This ensures their models survive restarts and appear in the catalog immediately.
+        let global_keys = self.key_pool.list_global_keys().await;
+        for key in &global_keys {
+            if key.provider == "openrouter" {
+                continue;
+            }
+            if let Some(models) = &key.active_models {
+                if !models.is_empty() {
+                    let n = register_provider_models(&key.provider, models, &self.catalog).await;
+                    if n > 0 {
+                        info!(
+                            "CatalogSyncer: registered {} models from {} key pool entry",
+                            n, key.provider
+                        );
+                    }
+                }
+            }
+        }
+
+        // Only sync OpenRouter catalog if we have an OpenRouter key
         if !self.key_pool.has_openrouter_key().await {
             return Ok(());
         }
@@ -173,6 +193,145 @@ impl CatalogSyncer {
     }
 }
 
+/// Register models declared in `active_models` of a non-OpenRouter provider key
+/// (e.g. ollama, custom, lmstudio) into the catalog so CognitiveRouter can route
+/// to them. Called both on key registration and during startup sync so that
+/// Ollama/custom model entries survive server restarts.
+/// Returns the number of new entries added.
+pub async fn register_provider_models(
+    provider: &str,
+    models: &[String],
+    catalog: &Arc<ModelCatalog>,
+) -> usize {
+    let mut added = 0usize;
+    for raw in models {
+        let model_id = raw.trim();
+        if model_id.is_empty() {
+            continue;
+        }
+        if catalog.find(model_id).await.is_some() {
+            continue;
+        }
+        let is_large = ["70b", "671b", "405b", "72b", "32b", "34b"]
+            .iter()
+            .any(|tag| model_id.contains(tag));
+        let scores = if is_large {
+            TaskScores {
+                chat: 5,
+                coding: 5,
+                planning: 5,
+                analysis: 5,
+                summarization: 4,
+                extraction: 5,
+            }
+        } else {
+            TaskScores {
+                chat: 3,
+                coding: 3,
+                planning: 3,
+                analysis: 3,
+                summarization: 3,
+                extraction: 3,
+            }
+        };
+        catalog
+            .add_entry(ModelEntry {
+                model_id: model_id.to_string(),
+                provider: provider.to_string(),
+                display_name: format!("{} ({})", model_id, provider),
+                context_window: 32_768,
+                cost_input_per_mtok: 0.0,
+                cost_output_per_mtok: 0.0,
+                supports_tools: true,
+                supports_json_mode: true,
+                tool_use_support: ToolUseSupport::Unknown,
+                is_local: false,
+                avg_latency_ms: Some(3000),
+                free_tier_rpm: None,
+                free_tier_rpd: None,
+                task_scores: scores,
+            })
+            .await;
+        info!(
+            "Catalog: registered {} model '{}' from key pool",
+            provider, model_id
+        );
+        added += 1;
+    }
+    added
+}
+
+/// Fetches the OpenRouter model list with the given key, filters to free-tier
+/// models (pricing.prompt == "0"), and adds any that are not yet in the catalog.
+/// Returns the number of new entries added.
+pub async fn sync_openrouter_free_models(
+    api_key: &str,
+    catalog: &Arc<ModelCatalog>,
+) -> anyhow::Result<usize> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://openrouter.ai/api/v1/models")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+
+    let models = resp["data"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("no data array in OpenRouter response"))?;
+
+    let mut added = 0usize;
+    for model in models {
+        let prompt_price = model["pricing"]["prompt"].as_str().unwrap_or("1");
+        if prompt_price != "0" {
+            continue;
+        }
+
+        let model_id = match model["id"].as_str() {
+            Some(id) if !id.is_empty() => id.to_string(),
+            _ => continue,
+        };
+
+        if catalog.find(&model_id).await.is_some() {
+            continue;
+        }
+
+        let context = model["context_length"].as_u64().unwrap_or(131_072) as u32;
+        let name = model["name"].as_str().unwrap_or(&model_id).to_string();
+
+        let entry = ModelEntry {
+            model_id: model_id.clone(),
+            provider: "openrouter".to_string(),
+            display_name: format!("{} (free)", name),
+            context_window: context,
+            cost_input_per_mtok: 0.0,
+            cost_output_per_mtok: 0.0,
+            supports_tools: false,
+            supports_json_mode: false,
+            tool_use_support: ToolUseSupport::Unknown,
+            is_local: false,
+            avg_latency_ms: Some(2500),
+            free_tier_rpm: Some(20),
+            free_tier_rpd: Some(200),
+            task_scores: TaskScores {
+                chat: 3,
+                coding: 3,
+                planning: 3,
+                analysis: 3,
+                summarization: 3,
+                extraction: 3,
+            },
+        };
+
+        catalog.add_entry(entry).await;
+        added += 1;
+    }
+
+    Ok(added)
+}
+
 fn infer_task_scores(model_id: &str) -> TaskScores {
     let id_lower = model_id.to_lowercase();
     let is_strong = id_lower.contains("claude") || id_lower.contains("gpt-4");
@@ -227,6 +386,23 @@ mod tests {
             Ok(None)
         }
         async fn update_voice_profile(&self, _profile: VoiceProfile) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn save_voice_fingerprint(
+            &self,
+            _tenant_id: &str,
+            _fingerprint: &[f32],
+            _threshold: f32,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn get_voice_fingerprint(
+            &self,
+            _tenant_id: &str,
+        ) -> anyhow::Result<Option<(Vec<f32>, f32)>> {
+            Ok(None)
+        }
+        async fn delete_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }

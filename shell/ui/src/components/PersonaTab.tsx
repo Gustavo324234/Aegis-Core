@@ -1,7 +1,27 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Bot, Save, RotateCcw, CheckCircle, AlertCircle } from 'lucide-react';
+import { Bot, Save, RotateCcw, CheckCircle, AlertCircle, Mic } from 'lucide-react';
 
 const MAX_PERSONA_CHARS = 4000;
+
+function extractAgentName(persona: string): string {
+  const prefix = 'Tu nombre es ';
+  const start = persona.indexOf(prefix);
+  if (start === -1) return '';
+  const after = persona.slice(start + prefix.length);
+  const end = after.indexOf('.');
+  return end === -1 ? after.trim() : after.slice(0, end).trim();
+}
+
+function setAgentNameInPersona(persona: string, name: string): string {
+  const prefix = 'Tu nombre es ';
+  const start = persona.indexOf(prefix);
+  const newClause = `${prefix}${name}.`;
+  if (start === -1) {
+    return persona ? `${newClause} ${persona}` : newClause;
+  }
+  const end = start + prefix.length + persona.slice(start + prefix.length).indexOf('.');
+  return persona.slice(0, start) + newClause + persona.slice(end + 1);
+}
 
 const PersonaTab: React.FC<{ tenantId: string | null; sessionKey: string | null }> = ({
   tenantId,
@@ -13,6 +33,10 @@ const PersonaTab: React.FC<{ tenantId: string | null; sessionKey: string | null 
   const [isSaving, setIsSaving] = useState(false);
   const [status, setStatus] = useState<'idle' | 'saved' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+
+  const [agentNameInput, setAgentNameInput] = useState('');
+  const [isSavingName, setIsSavingName] = useState(false);
+  const [nameSaved, setNameSaved] = useState(false);
 
   const citadelHeaders = useMemo(() => ({
     'Content-Type': 'application/json',
@@ -29,6 +53,7 @@ const PersonaTab: React.FC<{ tenantId: string | null; sessionKey: string | null 
         const value = data.persona ?? '';
         setPersona(value);
         setSaved(value);
+        setAgentNameInput(extractAgentName(value) || 'Aegis');
       })
       .catch(() => setErrorMsg('Error cargando persona'))
       .finally(() => setIsLoading(false));
@@ -68,6 +93,27 @@ const PersonaTab: React.FC<{ tenantId: string | null; sessionKey: string | null 
     setStatus('idle');
   };
 
+  const handleSaveName = async () => {
+    const name = agentNameInput.trim() || 'Aegis';
+    if (!tenantId || !sessionKey) return;
+    setIsSavingName(true);
+    const updated = setAgentNameInPersona(persona, name);
+    try {
+      const res = await fetch('/api/persona', {
+        method: 'POST',
+        headers: citadelHeaders,
+        body: JSON.stringify({ persona: updated }),
+      });
+      if (res.ok) {
+        setPersona(updated);
+        setSaved(updated);
+        setNameSaved(true);
+        setTimeout(() => setNameSaved(false), 2500);
+      }
+    } catch { /* silencioso */ }
+    setIsSavingName(false);
+  };
+
   const isDirty = persona !== saved;
   const charsLeft = MAX_PERSONA_CHARS - persona.length;
   const isOverLimit = charsLeft < 0;
@@ -95,6 +141,36 @@ const PersonaTab: React.FC<{ tenantId: string | null; sessionKey: string | null 
           para este tenant. Si está vacío, el agente se presenta como "Aegis" por defecto.
           Máximo {MAX_PERSONA_CHARS} caracteres.
         </p>
+      </div>
+
+      {/* Agent name — wake word trigger */}
+      <div className="glass p-6 rounded-2xl border border-white/10">
+        <div className="flex items-center gap-2 mb-3">
+          <Mic className="w-4 h-4 text-aegis-cyan" />
+          <h3 className="text-sm font-bold tracking-widest uppercase">Nombre del Agente</h3>
+        </div>
+        <p className="text-[10px] font-mono text-white/30 uppercase tracking-wide mb-4">
+          Palabra clave para activar el asistente por voz
+        </p>
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            value={agentNameInput}
+            onChange={(e) => setAgentNameInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSaveName(); }}
+            maxLength={32}
+            placeholder="Aegis"
+            className="flex-1 bg-black/60 border border-white/10 rounded-lg py-2 px-3 text-sm font-mono focus:border-aegis-cyan/50 focus:outline-none text-white placeholder-white/20"
+          />
+          <button
+            onClick={handleSaveName}
+            disabled={isSavingName}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-[10px] font-mono uppercase font-bold tracking-widest transition-colors bg-aegis-cyan/20 hover:bg-aegis-cyan/30 text-aegis-cyan border border-aegis-cyan/30 disabled:opacity-50"
+          >
+            {isSavingName ? '...' : nameSaved ? <CheckCircle className="w-3 h-3" /> : <Save className="w-3 h-3" />}
+            {!isSavingName && (nameSaved ? 'Guardado' : 'Guardar')}
+          </button>
+        </div>
       </div>
 
       <div className="glass p-6 rounded-2xl border border-white/10 space-y-4">

@@ -14,6 +14,59 @@
 
 
 
+
+
+
+
+## [0.1.64](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.63...ank-http-v0.1.64) (2026-05-17)
+
+
+### Features
+
+* **router:** auto-discover provider models when a key is added ([#280](https://github.com/Gustavo324234/Aegis-Core/issues/280)) ([010b562](https://github.com/Gustavo324234/Aegis-Core/commit/010b562d5cb53d4179d2a00075e688761162bc76))
+
+## [0.1.63](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.62...ank-http-v0.1.63) (2026-05-17)
+
+
+### Bug Fixes
+
+* re-trigger release-please after squash merge of [#277](https://github.com/Gustavo324234/Aegis-Core/issues/277) ([#278](https://github.com/Gustavo324234/Aegis-Core/issues/278)) ([4d00193](https://github.com/Gustavo324234/Aegis-Core/commit/4d001936728e576e4bc5917f02b704af89de0ed0))
+
+## [0.1.62](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.61...ank-http-v0.1.62) (2026-05-15)
+
+
+### Features
+
+* **voice:** CORE-302 + speaker verification + wake word activation by agent name ([#274](https://github.com/Gustavo324234/Aegis-Core/issues/274)) ([5f7ad96](https://github.com/Gustavo324234/Aegis-Core/commit/5f7ad96ff453b0b21d132e241a1340ca9e779663))
+
+## [0.1.61](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.60...ank-http-v0.1.61) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#271](https://github.com/Gustavo324234/Aegis-Core/issues/271)) ([c0e3090](https://github.com/Gustavo324234/Aegis-Core/commit/c0e309015c3456807bd6e57376bb20cba580e45f))
+
+## [0.1.60](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.59...ank-http-v0.1.60) (2026-05-14)
+
+
+### Features
+
+* **ank-core:** CORE-298 sync OpenRouter free models on key registration ([#267](https://github.com/Gustavo324234/Aegis-Core/issues/267)) ([49ac9c7](https://github.com/Gustavo324234/Aegis-Core/commit/49ac9c7775a6f8754f730d904adebb2f19179eec))
+
+## [0.1.59](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.58...ank-http-v0.1.59) (2026-05-14)
+
+
+### Features
+
+* **ank-core:** CORE-299 add model_override to PCB and WebSocket chat handler ([#265](https://github.com/Gustavo324234/Aegis-Core/issues/265)) ([21db419](https://github.com/Gustavo324234/Aegis-Core/commit/21db419ba06f835274dd5ccc582339f484f335df))
+
+## [0.1.58](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.57...ank-http-v0.1.58) (2026-05-13)
+
+
+### Features
+
+* **ank-http:** CORE-256 service management endpoints — status, restart, stop ([#256](https://github.com/Gustavo324234/Aegis-Core/issues/256)) ([85baa1c](https://github.com/Gustavo324234/Aegis-Core/commit/85baa1c571daa05b48f020355d59d91593f20497))
+
 ## [0.1.56](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.55...ank-http-v0.1.56) (2026-05-09)
 
 

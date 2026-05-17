@@ -16,8 +16,6 @@ pub trait SirenEngine: Send + Sync {
 
     /// Transcribe audio PCM a texto (STT).
     async fn transcribe(&self, _audio: Vec<u8>) -> Result<String> {
-        // Path mínimo (LIM-004): Si el motor no tiene STT real, devolvemos success
-        // con un placeholder para no romper el pipeline de chat.
         Ok("[audio received - STT pending]".to_string())
     }
 
@@ -29,7 +27,7 @@ pub trait SirenEngine: Send + Sync {
     }
 }
 
-/// Mock de Compatibilidad: Mueve la lógica de ruido actual de tts.rs.
+/// Mock de Compatibilidad
 pub struct MockSirenEngine;
 
 #[async_trait]
@@ -40,10 +38,8 @@ impl SirenEngine for MockSirenEngine {
 
     async fn synthesize(&self, text: String) -> Result<Vec<u8>> {
         info!("MockSirenEngine: Synthesizing '{}'", text);
-        // Generar 1/4 segundo de PCM (22050Hz, 16-bit simulado con 8-bit noise para compatibilidad)
         let audio_len = 22050 * 2 / 4;
         let mut mock_audio = vec![0u8; audio_len];
-
         for (i, sample) in mock_audio.iter_mut().enumerate() {
             *sample = (i % 256) as u8;
         }
@@ -64,19 +60,16 @@ impl SirenRouter {
         let mut engines: HashMap<String, Arc<dyn SirenEngine>> = HashMap::new();
         engines.insert("mock".to_string(), Arc::new(MockSirenEngine));
 
-        // Auto-Register VoxtralDriver if environment variable is present (SRE requirement)
         if let Ok(voxtral) = crate::chal::drivers::VoxtralDriver::from_env() {
             engines.insert("voxtral".to_string(), Arc::new(voxtral));
             info!("SirenRouter: VoxtralDriver detected in environment and registered.");
         }
 
-        // Auto-Register WhisperLocalEngine if a model is downloaded
         if let Some(whisper) = crate::chal::drivers::WhisperLocalEngine::from_env() {
             engines.insert("whisper-local".to_string(), Arc::new(whisper));
             info!("SirenRouter: WhisperLocalEngine detected and registered.");
         }
 
-        // Auto-Register EspeakEngine si espeak-ng está disponible en PATH
         if crate::chal::drivers::EspeakEngine::is_available() {
             let voice = std::env::var("AEGIS_TTS_VOICE").unwrap_or_else(|_| "es".to_string());
             let speed = std::env::var("AEGIS_TTS_SPEED")
@@ -94,13 +87,42 @@ impl SirenRouter {
         }
     }
 
-    /// Registra un nuevo motor en el router.
     pub async fn register_engine(&self, engine: Arc<dyn SirenEngine>) {
         let mut engines = self.engines.write().await;
         engines.insert(engine.id().to_string(), engine);
     }
 
-    /// Resuelve el motor basado en el tenant_id con lógica de auto-fallback (SRE Goal).
+    /// Intenta construir un ElevenLabsDriver desde un perfil dado.
+    /// Extrae la función para reutilizarla en el fallback a root.
+    fn try_elevenlabs_from_profile(
+        engine_id: &str,
+        settings_json: &str,
+        voice_id: &str,
+    ) -> Option<Arc<dyn SirenEngine>> {
+        if engine_id != "elevenlabs" {
+            return None;
+        }
+        let settings = serde_json::from_str::<serde_json::Value>(settings_json).ok()?;
+        let api_key = settings["api_key"].as_str().filter(|k| !k.is_empty())?;
+        match crate::chal::drivers::ElevenLabsDriver::new(api_key.to_string(), voice_id.to_string())
+        {
+            Ok(driver) => Some(Arc::new(driver) as Arc<dyn SirenEngine>),
+            Err(e) => {
+                warn!("SirenRouter: ElevenLabsDriver creation failed: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Resuelve el motor de voz para un tenant.
+    ///
+    /// Prioridad:
+    ///   1. Perfil propio del tenant (si tiene engine_id + api_key válidos)
+    ///   2. Perfil de root/admin (fallback global — siempre intentado si el tenant
+    ///      no tiene perfil propio o su perfil no tiene credenciales)
+    ///   3. Voxtral local (si está registrado)
+    ///   4. Espeak local (si está registrado)
+    ///   5. Mock (garantía de que el stream no se rompe)
     pub async fn resolve(&self, tenant_id: &str) -> Result<Arc<dyn SirenEngine>> {
         let profile = self
             .persistence
@@ -111,87 +133,84 @@ impl SirenRouter {
 
         let engines = self.engines.read().await;
 
-        // 1. Intentar motor preferido del perfil
-        if let Some(ref profile) = profile {
-            // ElevenLabs: crear driver dinámicamente desde settings_json del tenant
-            if profile.engine_id == "elevenlabs" {
-                if let Ok(settings) =
-                    serde_json::from_str::<serde_json::Value>(&profile.settings_json)
-                {
-                    if let Some(api_key) = settings["api_key"].as_str() {
-                        if !api_key.is_empty() {
-                            match crate::chal::drivers::ElevenLabsDriver::new(
-                                api_key.to_string(),
-                                profile.voice_id.clone(),
-                            ) {
-                                Ok(driver) => return Ok(Arc::new(driver)),
-                                Err(e) => {
-                                    warn!("SirenRouter: Failed to create ElevenLabsDriver: {}", e)
-                                }
-                            }
-                        }
-                    }
+        // ── 1. Perfil propio del tenant ───────────────────────────────────────
+        if let Some(ref p) = profile {
+            // Motor registrado (voxtral, espeak, whisper-local, etc.)
+            if p.engine_id != "elevenlabs" {
+                if let Some(engine) = engines.get(&p.engine_id) {
+                    return Ok(engine.clone());
                 }
-                warn!("SirenRouter: ElevenLabs selected but no valid api_key in profile. Falling back.");
-                // Fallback: intentar con la key global del perfil de root/admin
-                if profile.engine_id == "elevenlabs" {
-                    if let Ok(Some(admin_profile)) =
-                        self.persistence.get_voice_profile("root").await
-                    {
-                        if admin_profile.engine_id == "elevenlabs" {
-                            if let Ok(settings) = serde_json::from_str::<serde_json::Value>(
-                                &admin_profile.settings_json,
-                            ) {
-                                if let Some(api_key) = settings["api_key"].as_str() {
-                                    if !api_key.is_empty() {
-                                        let voice = if profile.voice_id.is_empty() {
-                                            admin_profile.voice_id.clone()
-                                        } else {
-                                            profile.voice_id.clone()
-                                        };
-                                        match crate::chal::drivers::ElevenLabsDriver::new(
-                                            api_key.to_string(),
-                                            voice,
-                                        ) {
-                                            Ok(driver) => {
-                                                info!(
-                                                    "SirenRouter: Using admin ElevenLabs key for tenant '{}'",
-                                                    tenant_id
-                                                );
-                                                return Ok(Arc::new(driver));
-                                            }
-                                            Err(e) => warn!(
-                                                "SirenRouter: Admin ElevenLabsDriver failed: {}",
-                                                e
-                                            ),
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if let Some(engine) = engines.get(&profile.engine_id) {
-                return Ok(engine.clone());
-            } else {
                 warn!(
-                    "SirenRouter: Profile found but engine '{}' not registered. Falling back.",
-                    profile.engine_id
+                    "SirenRouter: Engine '{}' not registered for tenant '{}'. Trying admin profile.",
+                    p.engine_id, tenant_id
                 );
+            } else {
+                // ElevenLabs: intentar con las credenciales del tenant
+                if let Some(driver) =
+                    Self::try_elevenlabs_from_profile(&p.engine_id, &p.settings_json, &p.voice_id)
+                {
+                    info!(
+                        "SirenRouter: Using tenant ElevenLabs key for '{}'",
+                        tenant_id
+                    );
+                    return Ok(driver);
+                }
+                warn!(
+                    "SirenRouter: Tenant '{}' has ElevenLabs but no valid api_key. Trying admin profile.",
+                    tenant_id
+                );
+            }
+        } else {
+            info!(
+                "SirenRouter: No voice profile for tenant '{}'. Trying admin profile.",
+                tenant_id
+            );
+        }
+
+        // ── 2. Perfil de root/admin (fallback global) ─────────────────────────
+        // Se intenta siempre que el tenant no tenga configuración propia válida.
+        // Permite que el admin configure una voz global sin que cada tenant
+        // tenga que configurarla individualmente.
+        if let Ok(Some(admin_profile)) = self.persistence.get_voice_profile("root").await {
+            if let Some(driver) = Self::try_elevenlabs_from_profile(
+                &admin_profile.engine_id,
+                &admin_profile.settings_json,
+                &admin_profile.voice_id,
+            ) {
+                info!(
+                    "SirenRouter: Using admin ElevenLabs profile for tenant '{}'",
+                    tenant_id
+                );
+                return Ok(driver);
+            }
+
+            // Motor registrado del admin (voxtral, espeak, etc.)
+            if admin_profile.engine_id != "elevenlabs" {
+                if let Some(engine) = engines.get(&admin_profile.engine_id) {
+                    info!(
+                        "SirenRouter: Using admin engine '{}' for tenant '{}'",
+                        admin_profile.engine_id, tenant_id
+                    );
+                    return Ok(engine.clone());
+                }
             }
         }
 
-        // 2. Fallback: Voxtral si está registrado
+        // ── 3. Voxtral local ──────────────────────────────────────────────────
         if let Some(voxtral) = engines.get("voxtral") {
             return Ok(voxtral.clone());
         }
 
-        // 3. Fallback: EspeakEngine (local, sin API key)
+        // ── 4. Espeak local ───────────────────────────────────────────────────
         if let Some(espeak) = engines.get("espeak") {
             return Ok(espeak.clone());
         }
 
-        // 4. Última instancia: Mock (garantiza que el stream no se rompa)
+        // ── 5. Mock (última garantía) ─────────────────────────────────────────
+        warn!(
+            "SirenRouter: All engines failed for tenant '{}'. Using Mock.",
+            tenant_id
+        );
         engines
             .get("mock")
             .cloned()
@@ -199,7 +218,6 @@ impl SirenRouter {
     }
 
     /// Procesa audio crudo para un tenant eligiendo el STT engine configurado.
-    /// Prioridad: groq (cloud) → whisper-local → engine del perfil → fallback mock.
     pub async fn process_audio(&self, tenant_id: &str, pcm_data: Vec<u8>) -> Result<String> {
         let profile = self
             .persistence
@@ -211,6 +229,24 @@ impl SirenRouter {
         let settings = profile
             .as_ref()
             .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.settings_json).ok());
+
+        // ── Speaker verification (si hay fingerprint guardado) ────────────────
+        if let Ok(Some((stored_fp, threshold))) =
+            self.persistence.get_voice_fingerprint(tenant_id).await
+        {
+            let (accepted, score) = crate::speaker_id::verify(&pcm_data, &stored_fp, threshold);
+            info!(
+                "SirenRouter: speaker_verification score={:.3} threshold={:.3} accepted={}",
+                score, threshold, accepted
+            );
+            if !accepted {
+                return Err(anyhow::anyhow!(
+                    "SPEAKER_MISMATCH: voz no reconocida (score={:.2}, umbral={:.2})",
+                    score,
+                    threshold
+                ));
+            }
+        }
 
         let stt_provider = settings
             .as_ref()
@@ -246,12 +282,9 @@ impl SirenRouter {
                 }
                 warn!("SirenRouter: Local STT selected but WhisperLocalEngine not registered.");
             }
-            // "browser" → el frontend maneja STT, el audio no debería llegar aquí.
-            // Devolvemos vacío en lugar de el placeholder roto.
             _ => return Ok(String::new()),
         }
 
-        // Último fallback si algo falló arriba
         let engines = self.engines.read().await;
         if let Some(whisper) = engines.get("whisper-local") {
             return whisper.transcribe(pcm_data).await;
@@ -260,5 +293,3 @@ impl SirenRouter {
         Ok(String::new())
     }
 }
-
-// Removed Default impl as it requires persistence layer now.
