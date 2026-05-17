@@ -546,6 +546,24 @@ async fn handle_chat(
             }
         }
     }
+
+    // CORE-FIX (A1): the WebSocket loop exited (client closed, network drop,
+    // or a fatal handler error). Cancel every agent that belongs to this
+    // tenant so background specialists stop burning provider tokens on work
+    // nobody is watching. Without this, agents would idle until the 5-minute
+    // AGENT_IDLE_TIMEOUT — long enough to rack up real cost on a chatty
+    // coding task with Claude Opus / GPT-4o.
+    let cancelled = state
+        .agent_orchestrator
+        .cancel_tenant_agents(&tenant_id)
+        .await;
+    if cancelled > 0 {
+        tracing::info!(
+            tenant = %tenant_id,
+            count = cancelled,
+            "ws/chat: cancelled tenant agents after WS disconnect"
+        );
+    }
 }
 
 async fn stream_task_events(socket: &mut WebSocket, pid: &str, state: &AppState) {

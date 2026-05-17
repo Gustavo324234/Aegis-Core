@@ -81,6 +81,12 @@ pub struct AgentOrchestrator {
     pending_user_replies: Arc<RwLock<HashMap<AgentId, tokio::sync::oneshot::Sender<String>>>>,
     /// CORE-268: Canal de broadcast para emitir AgentEvents al WebSocket del tenant.
     event_tx: std::sync::RwLock<Option<tokio::sync::broadcast::Sender<AgentEvent>>>,
+    /// CORE-FIX (A1): tokens de cancelación por agente. Cuando el usuario cierra
+    /// el WebSocket (o un endpoint admin lo pide), `cancel_tenant_agents`
+    /// dispara los tokens de todos los agents del tenant para que sus
+    /// `run_agent_loop`s salgan limpiamente en lugar de seguir quemando
+    /// tokens en background hasta el AGENT_IDLE_TIMEOUT de 5 min.
+    cancel_tokens: Arc<RwLock<HashMap<AgentId, tokio_util::sync::CancellationToken>>>,
 }
 
 impl AgentOrchestrator {
@@ -107,6 +113,7 @@ impl AgentOrchestrator {
             hal,
             pending_user_replies: Arc::new(RwLock::new(HashMap::new())),
             event_tx: std::sync::RwLock::new(None),
+            cancel_tokens: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -200,7 +207,14 @@ impl AgentOrchestrator {
             let mut ch = self.channels.write().await;
             ch.insert(agent_id, tx);
         }
-        self.spawn_loop(agent_id, rx, None);
+        // CORE-FIX (A1): create and register the cancel token so callers can
+        // tear this agent down on demand.
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        self.cancel_tokens
+            .write()
+            .await
+            .insert(agent_id, cancel_token.clone());
+        self.spawn_loop(agent_id, rx, None, cancel_token);
 
         info!(
             project = %project_id,
@@ -330,7 +344,13 @@ impl AgentOrchestrator {
                 let mut ch = self.channels.write().await;
                 ch.insert(agent_id, tx);
             }
-            self.spawn_loop(agent_id, rx, parent_tx);
+            // CORE-FIX (A1): create cancel token for the restored agent.
+            let cancel_token = tokio_util::sync::CancellationToken::new();
+            self.cancel_tokens
+                .write()
+                .await
+                .insert(agent_id, cancel_token.clone());
+            self.spawn_loop(agent_id, rx, parent_tx, cancel_token);
         }
 
         info!(
@@ -399,7 +419,13 @@ impl AgentOrchestrator {
             let mut ch = self.channels.write().await;
             ch.insert(agent_id, tx);
         }
-        self.spawn_loop(agent_id, rx, parent_tx);
+        // CORE-FIX (A1): per-agent cancel token.
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        self.cancel_tokens
+            .write()
+            .await
+            .insert(agent_id, cancel_token.clone());
+        self.spawn_loop(agent_id, rx, parent_tx, cancel_token);
 
         info!(
             parent = %parent_id,
@@ -488,6 +514,64 @@ impl AgentOrchestrator {
             Some(tx) => tx.send(answer).is_ok(),
             None => false,
         }
+    }
+
+    // --- CORE-FIX (A1): cancellation API ---
+
+    /// Cancel a single agent by id. Wakes its `run_agent_loop` immediately so
+    /// it exits the `tokio::select!` instead of waiting for AGENT_IDLE_TIMEOUT.
+    /// Returns `true` if a token was found and cancelled, `false` if the
+    /// agent doesn't exist or has already exited.
+    pub async fn cancel_agent(&self, agent_id: &AgentId) -> bool {
+        let tokens = self.cancel_tokens.read().await;
+        match tokens.get(agent_id) {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cancel every agent that belongs to `tenant_id`. Called by the WS chat
+    /// handler when the user disconnects so we stop burning provider tokens
+    /// on work the user is no longer watching. Returns how many agents were
+    /// signalled.
+    ///
+    /// Filters by `AgentNode.tenant_id` (CORE-300). Agents created before
+    /// tenant_id was tracked (i.e. with an empty tenant_id) are NOT touched
+    /// unless `tenant_id` is also empty — protects against accidentally
+    /// nuking legacy state on upgrade.
+    pub async fn cancel_tenant_agents(&self, tenant_id: &str) -> usize {
+        let target_ids: Vec<AgentId> = {
+            let tree = self.tree.read().await;
+            tree.all_nodes()
+                .iter()
+                .filter(|n| n.tenant_id == tenant_id)
+                .map(|n| n.agent_id)
+                .collect()
+        };
+
+        if target_ids.is_empty() {
+            return 0;
+        }
+
+        let tokens = self.cancel_tokens.read().await;
+        let mut cancelled = 0usize;
+        for id in &target_ids {
+            if let Some(token) = tokens.get(id) {
+                token.cancel();
+                cancelled += 1;
+            }
+        }
+        if cancelled > 0 {
+            info!(
+                tenant = %tenant_id,
+                count = cancelled,
+                "AgentOrchestrator: cancelled tenant agents on disconnect"
+            );
+        }
+        cancelled
     }
 
     // --- CORE-268: AgentEvent broadcast channel ---
@@ -1015,10 +1099,12 @@ impl AgentOrchestrator {
         agent_id: AgentId,
         rx: mpsc::Receiver<AgentMessage>,
         parent_tx: Option<mpsc::Sender<AgentMessage>>,
+        cancel_token: tokio_util::sync::CancellationToken,
     ) {
         let tree_ref = Arc::clone(&self.tree);
         let router_ref = Arc::clone(&self.router);
         let channels_ref = Arc::clone(&self.channels);
+        let cancel_tokens_ref = Arc::clone(&self.cancel_tokens);
         let hal_ref = Arc::clone(&self.hal);
 
         tokio::spawn(async move {
@@ -1030,8 +1116,13 @@ impl AgentOrchestrator {
                 rx,
                 parent_tx,
                 hal_ref,
+                cancel_token,
             )
             .await;
+            // CORE-FIX (A1): limpiar el token cuando el loop termina, sea por
+            // cancel, idle timeout, complete o channel close. Si no lo
+            // hiciéramos, `cancel_tokens` crecería indefinidamente.
+            cancel_tokens_ref.write().await.remove(&agent_id);
         });
     }
 
@@ -1043,6 +1134,7 @@ impl AgentOrchestrator {
         mut rx: mpsc::Receiver<AgentMessage>,
         parent_tx: Option<mpsc::Sender<AgentMessage>>,
         hal: Arc<crate::chal::CognitiveHAL>,
+        cancel_token: tokio_util::sync::CancellationToken,
     ) {
         let (role_label, task_type, model_preference) = {
             let t = tree.read().await;
@@ -1085,6 +1177,30 @@ impl AgentOrchestrator {
                             if matches!(n.state, AgentState::Idle | AgentState::Running | AgentState::WaitingReport) {
                                 n.set_state(AgentState::Failed {
                                     reason: "Idle timeout — no messages received in 5 minutes".to_string(),
+                                });
+                            }
+                        }
+                    }
+                    channels.write().await.remove(&agent_id);
+                    break;
+                }
+                // CORE-FIX (A1): listen for the cancellation token. Wakes the
+                // loop immediately when cancel_tenant_agents() (or cancel_agent)
+                // fires, even mid-Dispatch — instead of waiting up to 5 minutes
+                // for the idle timeout. Mark the node Failed{reason=Cancelled}
+                // so the parent supervisor sees this child died deliberately.
+                _ = cancel_token.cancelled() => {
+                    warn!(
+                        agent = %agent_id,
+                        "[{}] Cancelled by orchestrator — exiting loop.",
+                        role_label
+                    );
+                    {
+                        let mut t = tree.write().await;
+                        if let Some(n) = t.get_mut(&agent_id) {
+                            if !matches!(n.state, AgentState::Complete | AgentState::Failed { .. }) {
+                                n.set_state(AgentState::Failed {
+                                    reason: "Cancelled".to_string(),
                                 });
                             }
                         }

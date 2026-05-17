@@ -903,8 +903,15 @@ impl CognitiveHAL {
             canonical_parent.join(candidate.file_name().unwrap_or_default())
         };
 
-        // Verificar confinamiento al workspace
-        if canonical.starts_with(workspace) {
+        // CORE-FIX: canonicalize workspace BEFORE comparing. Without this, a
+        // workspace that contains a symlink anywhere in its path (e.g. /var/lib
+        // is a symlink to /mnt/data/lib on the host) produces a canonical
+        // candidate under /mnt/data/lib/... that does NOT start_with the
+        // original /var/lib/... — and we'd incorrectly reject legitimate paths.
+        let workspace_canonical = workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        if canonical.starts_with(&workspace_canonical) {
             return Ok(canonical);
         }
 

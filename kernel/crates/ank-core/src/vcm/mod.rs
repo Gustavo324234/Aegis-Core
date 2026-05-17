@@ -218,7 +218,20 @@ impl VirtualContextManager {
                     return Err(VCMError::PathTraversalDetected(path_part.to_string()));
                 }
 
-                let full_path = Path::new(&tenant_root).join(path_part);
+                // CORE-FIX: additional symlink-aware check. is_safe_path only
+                // looks at the path string, so a `link.md` symlink pointing at
+                // /etc/passwd would slip through. safe_resolve canonicalises
+                // both sides and ensures the resolved file lives inside the
+                // workspace.
+                let full_path = match safe_resolve(Path::new(&tenant_root), path_part) {
+                    Some(p) => p,
+                    None => {
+                        return Err(VCMError::PathTraversalDetected(format!(
+                            "{} (resolved outside workspace via symlink)",
+                            path_part
+                        )));
+                    }
+                };
                 let metadata = match tokio::fs::metadata(&full_path).await {
                     Ok(m) => m,
                     Err(e) => return Err(VCMError::IOError(format!("{}: {}", path_part, e))),
@@ -327,6 +340,11 @@ fn estimate_tokens(text: &str) -> usize {
 
 /// Auditoría de Seguridad: Previene el acceso a archivos fuera del sandbox de trabajo.
 /// Verifica que no existan retrocesos de directorio ("..") que escapen del root permitido.
+///
+/// **Solo string-level**: rechaza `..`, absolutes, y tenant_ids inválidos, pero no
+/// detecta symlinks. Si el path apunta a un archivo existente que es un symlink
+/// hacia fuera del workspace, esta función lo aprueba — el caller DEBE además
+/// llamar `safe_resolve` antes de abrir el archivo.
 pub fn is_safe_path(tenant_id: &str, path_str: &str) -> bool {
     // 1. Validar tenant_id para aislar namespace (prevenir Path Traversal via tenant_id)
     if tenant_id.is_empty()
@@ -361,6 +379,48 @@ pub fn is_safe_path(tenant_id: &str, path_str: &str) -> bool {
     }
 
     true
+}
+
+/// CORE-FIX: Canonicaliza un path relativo dentro del workspace del tenant y
+/// verifica que el resultado canonical SIGA dentro del workspace canonical.
+/// Esto cierra el agujero de `is_safe_path` cuando el path apunta a un symlink
+/// que sale del workspace (e.g. un specialist crea `link.md` apuntando a
+/// `/etc/passwd` y luego el VCM lo lee).
+///
+/// Returns Some(canonical) si el path está dentro del workspace después de
+/// resolver symlinks; None si está fuera o si la canonicalización falla.
+/// El path NO necesita existir — si no existe, se canonicaliza el padre y
+/// se appendea el nombre del archivo (útil para `write_file`).
+pub fn safe_resolve(workspace_root: &Path, path_str: &str) -> Option<std::path::PathBuf> {
+    let candidate = if Path::new(path_str).is_absolute() {
+        std::path::PathBuf::from(path_str)
+    } else {
+        workspace_root.join(path_str)
+    };
+
+    // Canonicalizar workspace ANTES de comparar — sin esto, un workspace con un
+    // symlink en el medio (e.g. /var/lib es symlink a /mnt/data/lib) hace que
+    // candidate.canonicalize() apunte a /mnt/data/lib/... mientras que workspace
+    // sigue siendo /var/lib/..., y starts_with() falla aunque el path SÍ esté
+    // dentro del workspace.
+    let workspace_canonical = workspace_root.canonicalize().ok()?;
+
+    let resolved = if candidate.exists() {
+        candidate.canonicalize().ok()?
+    } else {
+        // No existe (probablemente write_file de un archivo nuevo). Canonicaliza
+        // el padre y appendea el filename. Si el padre tampoco existe, ni
+        // siquiera se puede escribir — devolvemos None.
+        let parent = candidate.parent()?;
+        let parent_canonical = parent.canonicalize().ok()?;
+        parent_canonical.join(candidate.file_name()?)
+    };
+
+    if resolved.starts_with(&workspace_canonical) {
+        Some(resolved)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -480,5 +540,47 @@ mod tests {
         assert!(!is_safe_path("tenant_1", "/absolute/path"));
         assert!(!is_safe_path("../tenant_2", "docs/contract.md"));
         assert!(!is_safe_path("tenant/1", "docs/contract.md"));
+    }
+
+    /// CORE-FIX: confirm safe_resolve stops a symlink escape that is_safe_path
+    /// alone would miss — the string `inner/link.txt` is "safe" but the
+    /// canonical resolution must end inside the workspace.
+    #[cfg(unix)]
+    #[test]
+    fn test_safe_resolve_blocks_symlink_escape() {
+        use std::os::unix::fs::symlink;
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, b"PII").unwrap();
+
+        // Create a symlink INSIDE the workspace that points OUTSIDE.
+        let link = workspace.path().join("link.txt");
+        symlink(&secret, &link).unwrap();
+
+        // is_safe_path would approve this (no `..`, not absolute).
+        assert!(is_safe_path("tenant_1", "link.txt"));
+        // safe_resolve must reject it.
+        assert!(
+            safe_resolve(workspace.path(), "link.txt").is_none(),
+            "safe_resolve must reject symlinks that resolve outside the workspace"
+        );
+    }
+
+    #[test]
+    fn test_safe_resolve_accepts_normal_path_inside_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let target = workspace.path().join("doc.md");
+        std::fs::write(&target, b"hi").unwrap();
+
+        let resolved = safe_resolve(workspace.path(), "doc.md").expect("normal path must resolve");
+        assert!(resolved.starts_with(workspace.path().canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn test_safe_resolve_returns_none_for_nonexistent_parent() {
+        let workspace = tempfile::tempdir().unwrap();
+        // parent dir doesn't exist
+        assert!(safe_resolve(workspace.path(), "nope/inside/file.txt").is_none());
     }
 }
