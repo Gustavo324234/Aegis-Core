@@ -102,7 +102,9 @@ const ChatTerminal: React.FC = () => {
     const modelPickerRef = useRef<HTMLDivElement>(null);
     const isAtBottom = useRef(true);
     const thinkingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const processingBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [input, setInput] = useState('');
+    const [showProcessingBanner, setShowProcessingBanner] = useState(false);
     const [voiceError, setVoiceError] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
@@ -127,9 +129,16 @@ const ChatTerminal: React.FC = () => {
     useEffect(() => { if (isAtBottom.current) scrollToBottom('smooth'); }, [messages]);
     useEffect(() => { if (tenantId && sessionKey) fetchSirenConfig(); }, [tenantId, sessionKey, fetchSirenConfig]);
     useEffect(() => {
-        if (status !== 'thinking' && thinkingTimeoutRef.current) {
-            clearTimeout(thinkingTimeoutRef.current);
-            thinkingTimeoutRef.current = null;
+        if (status !== 'thinking') {
+            if (thinkingTimeoutRef.current) {
+                clearTimeout(thinkingTimeoutRef.current);
+                thinkingTimeoutRef.current = null;
+            }
+            if (processingBannerTimeoutRef.current) {
+                clearTimeout(processingBannerTimeoutRef.current);
+                processingBannerTimeoutRef.current = null;
+            }
+            setShowProcessingBanner(false);
         }
     }, [status]);
 
@@ -161,13 +170,23 @@ const ChatTerminal: React.FC = () => {
         setTimeout(() => { isAtBottom.current = true; scrollToBottom('auto'); }, 10);
 
         if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
+        if (processingBannerTimeoutRef.current) clearTimeout(processingBannerTimeoutRef.current);
+        setShowProcessingBanner(false);
+
+        processingBannerTimeoutRef.current = setTimeout(() => {
+            if (useAegisStore.getState().status === 'thinking') {
+                setShowProcessingBanner(true);
+            }
+            processingBannerTimeoutRef.current = null;
+        }, 5_000);
+
         thinkingTimeoutRef.current = setTimeout(() => {
             if (useAegisStore.getState().status === 'thinking') {
                 useAegisStore.getState().addSystemMessage('El motor tardó demasiado en responder. Podés intentar de nuevo.');
                 useAegisStore.getState().setStatus('idle');
             }
             thinkingTimeoutRef.current = null;
-        }, 30_000);
+        }, 120_000);
     };
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -300,8 +319,8 @@ const ChatTerminal: React.FC = () => {
                 {/* Agent Activity — CORE-202 */}
                 <AgentActivityPanel />
 
-                {/* CORE-248: banner de estado enriquecido durante inferencia */}
-                {status === 'thinking' && (
+                {/* CORE-248/299: banner de estado enriquecido — aparece tras 5s de espera */}
+                {status === 'thinking' && showProcessingBanner && (
                     <motion.div
                         initial={{ opacity: 0, y: 4 }}
                         animate={{ opacity: 1, y: 0 }}
