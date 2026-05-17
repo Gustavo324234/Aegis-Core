@@ -98,8 +98,12 @@ impl ProjectRegistry {
             let conn = rusqlite::Connection::open(&db_path)
                 .with_context(|| format!("Failed to open db for tenant {}", tenant_id))?;
 
-            conn.execute_batch(&format!("PRAGMA key = '{}';", session_key))
-                .ok();
+            // CORE-FIX: pragma_update escapa el valor (SQL injection si session_key
+            // contiene `'`) y propaga el error — el patrón anterior con
+            // format!(...).ok() permitía que el PRAGMA fallara en silencio y las
+            // queries siguientes ejecutaran sobre una conexión SIN cifrar.
+            conn.pragma_update(None, "key", &session_key)
+                .context("Failed to apply PRAGMA key for projects DB")?;
 
             // Tabla `projects` — schema canónico de Epic 45
             conn.execute_batch(
@@ -176,7 +180,10 @@ impl ProjectRegistry {
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let conn = rusqlite::Connection::open(&db_path).context("Failed to open db")?;
-            conn.execute_batch(&format!("PRAGMA key = '{}';", session_key)).ok();
+            // CORE-FIX: same security fix as load_from_db — escape session_key
+            // and propagate PRAGMA failure instead of writing plaintext.
+            conn.pragma_update(None, "key", &session_key)
+                .context("Failed to apply PRAGMA key for projects DB upsert")?;
 
             conn.execute(
                 "INSERT INTO projects (project_id, name, description, status, created_at, updated_at)

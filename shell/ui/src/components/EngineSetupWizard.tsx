@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Cpu, Globe, Zap, Box, Server, ShieldCheck, Eye, EyeOff, Terminal, Check, ArrowRight, Activity, AlertTriangle } from 'lucide-react';
+import { Cpu, Globe, Zap, Box, Server, ShieldCheck, Eye, EyeOff, Terminal, Check, ArrowRight, Activity, AlertTriangle, Bot } from 'lucide-react';
 import { useAegisStore, TaskTypeValue } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -29,7 +29,7 @@ interface GlobalEngine {
 
 const EngineSetupWizard: React.FC = () => {
     const { t } = useTranslation();
-    const { system_metrics, configureEngine, tenantId, taskType, setTaskType, setEngineConfigured } = useAegisStore();
+    const { system_metrics, configureEngine, tenantId, sessionKey, taskType, setTaskType, setEngineConfigured } = useAegisStore();
     const taskTypeList = TASK_TYPES(t);
     const [globalEngine, setGlobalEngine] = useState<GlobalEngine | null>(null);
     const [showCustom, setShowCustom] = useState(false);
@@ -42,6 +42,10 @@ const EngineSetupWizard: React.FC = () => {
     const [showKey, setShowKey] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    const [showAgentNameStep, setShowAgentNameStep] = useState(false);
+    const [agentNameInput, setAgentNameInput] = useState('Aegis');
+    const [isSavingName, setIsSavingName] = useState(false);
 
     const vramMb = system_metrics?.vram_total_mb ?? 0;
     const hasLowVRAM = vramMb < 4000;
@@ -110,6 +114,79 @@ const EngineSetupWizard: React.FC = () => {
         }
     };
 
+    const handleSaveAgentName = async () => {
+        const name = agentNameInput.trim() || 'Aegis';
+        setIsSavingName(true);
+        if (tenantId && sessionKey) {
+            try {
+                const persona = `Tu nombre es ${name}. Eres un asistente de inteligencia artificial personalizado.`;
+                await fetch('/api/persona', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-citadel-tenant': tenantId,
+                        'x-citadel-key': sessionKey,
+                    },
+                    body: JSON.stringify({ persona }),
+                });
+            } catch { /* falla silenciosa — el nombre se puede configurar luego */ }
+        }
+        setIsSavingName(false);
+        setEngineConfigured(true);
+    };
+
+    if (showAgentNameStep) {
+        return (
+            <div className="min-h-screen bg-black flex items-center justify-center p-4 text-white relative">
+                <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="w-full max-w-md z-10 bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl p-8"
+                >
+                    <div className="flex items-center gap-3 mb-2">
+                        <Bot className="w-6 h-6 text-aegis-cyan" />
+                        <h2 className="text-lg tracking-[0.2em] font-bold text-white uppercase">Nombra tu Agente</h2>
+                    </div>
+                    <p className="text-xs font-mono text-white/40 mb-8 uppercase tracking-widest">
+                        Este nombre activa el asistente por voz — puedes cambiarlo después
+                    </p>
+                    <div className="space-y-4">
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest ml-1">
+                                Nombre del Agente
+                            </label>
+                            <input
+                                type="text"
+                                value={agentNameInput}
+                                onChange={(e) => setAgentNameInput(e.target.value)}
+                                placeholder="Aegis"
+                                maxLength={32}
+                                autoFocus
+                                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveAgentName(); }}
+                                className="w-full bg-black/60 border border-white/10 rounded-lg py-3 px-4 text-sm font-mono focus:border-aegis-cyan/50 focus:outline-none text-white placeholder-white/20"
+                            />
+                            <p className="text-[9px] font-mono text-white/20 uppercase tracking-wide ml-1">
+                                Di este nombre para activar el modo de escucha
+                            </p>
+                        </div>
+                        <button
+                            onClick={handleSaveAgentName}
+                            disabled={isSavingName}
+                            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-aegis-cyan/80 to-aegis-purple/80 hover:from-aegis-cyan hover:to-aegis-purple text-white font-bold py-3 px-4 rounded-lg uppercase tracking-[0.2em] text-[10px] transition-all disabled:opacity-50"
+                        >
+                            {isSavingName ? 'Guardando...' : 'Iniciar Aegis Shell'}
+                            <ArrowRight className="w-3 h-3" />
+                        </button>
+                    </div>
+                </motion.div>
+                <div className="fixed bottom-6 flex items-center gap-2 text-[8px] font-mono text-white/20 uppercase tracking-[0.3em]">
+                    <ShieldCheck className="w-3 h-3" />
+                    <span>Ring-0 Citadel Interface — All credentials encrypted locally</span>
+                </div>
+            </div>
+        );
+    }
+
     if (showTaskTypeStep) {
         return (
             <div className="min-h-screen bg-black flex items-center justify-center p-4 text-white relative">
@@ -148,10 +225,10 @@ const EngineSetupWizard: React.FC = () => {
                         ))}
                     </div>
                     <button
-                        onClick={() => setEngineConfigured(true)}
+                        onClick={() => setShowAgentNameStep(true)}
                         className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-aegis-cyan/80 to-aegis-purple/80 hover:from-aegis-cyan hover:to-aegis-purple text-white font-bold py-3 px-4 rounded-lg uppercase tracking-[0.2em] text-[10px] transition-all"
                     >
-                        {t('start_aegis_shell')} <ArrowRight className="w-3 h-3" />
+                        Continuar <ArrowRight className="w-3 h-3" />
                     </button>
                 </motion.div>
                 <div className="fixed bottom-6 flex items-center gap-2 text-[8px] font-mono text-white/20 uppercase tracking-[0.3em]">

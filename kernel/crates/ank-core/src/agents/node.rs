@@ -95,6 +95,11 @@ pub struct AgentNode {
 
     pub project_id: ProjectId,
 
+    /// Tenant que posee este agente — aislamiento cross-tenant (CORE-300).
+    /// Usar `#[serde(default)]` para compatibilidad con árboles persistidos antes de este campo.
+    #[serde(default)]
+    pub tenant_id: String,
+
     /// System prompt base del agente. Cargado desde kernel/config/agents/*.md por InstructionLoader.
     pub system_prompt: String,
 
@@ -147,6 +152,7 @@ impl AgentNode {
             parent_id,
             children: Vec::new(),
             project_id,
+            tenant_id: String::new(),
             system_prompt: system_prompt.into(),
             task_type,
             model_preference,
@@ -159,6 +165,12 @@ impl AgentNode {
             is_restored: false,
             is_degraded: false,
         }
+    }
+
+    /// Builder: asocia este nodo al tenant indicado (CORE-300).
+    pub fn with_tenant(mut self, tenant_id: &str) -> Self {
+        self.tenant_id = tenant_id.to_string();
+        self
     }
 
     pub fn is_root(&self) -> bool {

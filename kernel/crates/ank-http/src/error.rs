@@ -16,6 +16,11 @@ pub enum AegisHttpError {
     BadRequest(String),
     #[error("Rate limit exceeded. Retry after {0} seconds")]
     RateLimitExceeded(u64),
+    /// 502 — an upstream provider (Anthropic, Gemini, OpenAI, …) rejected
+    /// the request or was unreachable. Used by router probe / discovery so
+    /// the UI can distinguish "your key is bad" from "our server crashed".
+    #[error("Upstream provider error: {0}")]
+    BadGateway(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -39,6 +44,9 @@ impl IntoResponse for AegisHttpError {
                     axum::http::HeaderValue::from(retry_after),
                 );
                 (StatusCode::TOO_MANY_REQUESTS, response).into_response()
+            }
+            AegisHttpError::BadGateway(m) => {
+                (StatusCode::BAD_GATEWAY, Json(json!({ "error": m }))).into_response()
             }
             AegisHttpError::Internal(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

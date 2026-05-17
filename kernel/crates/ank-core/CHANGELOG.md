@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.57](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.56...ank-core-v0.1.57) (2026-05-17)
+
+
+### Features
+
+* **router:** auto-discover provider models when a key is added ([#280](https://github.com/Gustavo324234/Aegis-Core/issues/280)) ([010b562](https://github.com/Gustavo324234/Aegis-Core/commit/010b562d5cb53d4179d2a00075e688761162bc76))
+
+## [0.1.56](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.55...ank-core-v0.1.56) (2026-05-17)
+
+
+### Bug Fixes
+
+* re-trigger release-please after squash merge of [#277](https://github.com/Gustavo324234/Aegis-Core/issues/277) ([#278](https://github.com/Gustavo324234/Aegis-Core/issues/278)) ([4d00193](https://github.com/Gustavo324234/Aegis-Core/commit/4d001936728e576e4bc5917f02b704af89de0ed0))
+
+## [0.1.55](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.54...ank-core-v0.1.55) (2026-05-15)
+
+
+### Features
+
+* **voice:** CORE-302 + speaker verification + wake word activation by agent name ([#274](https://github.com/Gustavo324234/Aegis-Core/issues/274)) ([5f7ad96](https://github.com/Gustavo324234/Aegis-Core/commit/5f7ad96ff453b0b21d132e241a1340ca9e779663))
+
+## [0.1.54](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.53...ank-core-v0.1.54) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#271](https://github.com/Gustavo324234/Aegis-Core/issues/271)) ([c0e3090](https://github.com/Gustavo324234/Aegis-Core/commit/c0e309015c3456807bd6e57376bb20cba580e45f))
+
 ## [0.1.53](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.52...ank-core-v0.1.53) (2026-05-14)
 
 

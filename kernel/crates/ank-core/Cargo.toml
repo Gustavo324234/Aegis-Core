@@ -1,6 +1,6 @@
 [package]
 name = "ank-core"
-version = "0.1.53"
+version = "0.1.57"
 edition = "2021"
 license = "MIT"
 

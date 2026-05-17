@@ -31,7 +31,27 @@ interface EngineStatus {
 
 interface PersonaData {
     prompt: string;
-    name?: string;
+    name: string;
+}
+
+const NAME_PREFIX = 'Tu nombre es ';
+
+function parsePersonaString(raw: string): PersonaData {
+    const start = raw.indexOf(NAME_PREFIX);
+    if (start === -1) return { name: '', prompt: raw };
+    const after = raw.slice(start + NAME_PREFIX.length);
+    const dotIdx = after.indexOf('.');
+    if (dotIdx === -1) return { name: after.trim(), prompt: '' };
+    const name = after.slice(0, dotIdx).trim();
+    const prompt = after.slice(dotIdx + 1).trim();
+    return { name, prompt };
+}
+
+function composePersonaString(data: PersonaData): string {
+    const n = data.name.trim();
+    const p = data.prompt.trim();
+    if (!n) return p;
+    return p ? `${NAME_PREFIX}${n}. ${p}` : `${NAME_PREFIX}${n}.`;
 }
 
 interface SirenConfig {
@@ -68,7 +88,7 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
                 const res = await fetch('/api/persona', { headers: getHeaders() });
                 if (res.ok) {
                     const data = await res.json();
-                    setPersona({ prompt: data.prompt || '', name: data.name || '' });
+                    setPersona(parsePersonaString(data.persona || ''));
                 }
             } catch (err) {
                 console.error('Fetch persona error:', err);
@@ -86,7 +106,7 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
             const res = await fetch('/api/persona', {
                 method: 'POST',
                 headers: getHeaders(),
-                body: JSON.stringify({ prompt: persona.prompt, name: persona.name }),
+                body: JSON.stringify({ persona: composePersonaString(persona) }),
             });
             if (res.ok) {
                 setMessage({ type: 'success', text: t('persona_saved') });
@@ -190,7 +210,7 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
             <div className="flex gap-3 pt-4 border-t border-white/10">
                 <button
                     onClick={handleReset}
-                    disabled={isSaving || !persona.prompt}
+                    disabled={isSaving || (!persona.prompt && !persona.name)}
                     className="flex-1 px-4 py-2.5 border border-white/10 rounded-lg text-[10px] font-mono text-white/40 hover:text-white hover:bg-white/5 transition-colors uppercase tracking-widest disabled:opacity-30"
                 >
                     <div className="text-left">
