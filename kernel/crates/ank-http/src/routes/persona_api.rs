@@ -16,6 +16,26 @@ pub fn router() -> Router<AppState> {
         .route("/", get(get_persona))
         .route("/", post(set_persona))
         .route("/", delete(delete_persona))
+        .route("/name", get(get_agent_name))
+}
+
+/// Extrae el nombre del agente de la cadena de persona.
+/// Formato esperado: "Tu nombre es {name}. ..."
+fn parse_agent_name(persona: &Option<String>) -> String {
+    persona
+        .as_deref()
+        .and_then(|p| {
+            let prefix = "Tu nombre es ";
+            let start = p.find(prefix)? + prefix.len();
+            let end = start + p[start..].find('.')?;
+            let name = p[start..end].trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .unwrap_or_else(|| "Aegis".to_string())
 }
 
 fn extract_auth(headers: &HeaderMap) -> Option<(String, String)> {
@@ -82,6 +102,18 @@ async fn set_persona(
             Json(json!({ "error": "Failed to open enclave" })),
         ),
     }
+}
+
+async fn get_agent_name(State(_state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let Some((tenant_id, session_key)) = extract_auth(&headers) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "name": "Aegis" })));
+    };
+    let hash = hash_passphrase(&session_key);
+    let persona = TenantDB::open(&tenant_id, &hash)
+        .ok()
+        .and_then(|db| db.get_persona().ok().flatten());
+    let name = parse_agent_name(&persona);
+    (StatusCode::OK, Json(json!({ "name": name })))
 }
 
 async fn delete_persona(State(_state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {

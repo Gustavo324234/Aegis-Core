@@ -165,7 +165,7 @@ impl SyscallExecutor {
                 args_json,
             } => {
                 let pm = self.plugin_manager.read().await;
-                let result = pm
+                match pm
                     .execute_plugin(
                         tenant_id,
                         &plugin_name,
@@ -173,11 +173,16 @@ impl SyscallExecutor {
                         pcb.session_key.as_deref(),
                     )
                     .await
-                    .map_err(|e: crate::plugins::PluginError| {
-                        SyscallError::PluginError(e.to_string())
-                    })?;
-
-                Ok(format!("[SYSTEM_RESULT: {}]", result))
+                {
+                    Ok(result) => Ok(format!("[SYSTEM_RESULT: {}]", result)),
+                    // CORE-253: mensaje legible cuando el plugin no está instalado.
+                    Err(crate::plugins::PluginError::FunctionNotFound(_)) => Ok(format!(
+                        "El plugin '{}' no está instalado o no está activo en este tenant. \
+                         Podés activarlo desde Configuración → Plugins.",
+                        plugin_name
+                    )),
+                    Err(e) => Err(SyscallError::PluginError(e.to_string())),
+                }
             }
             Syscall::ReadFile { uri } => {
                 // Validación y Ensamblaje vía VCM
@@ -1471,7 +1476,7 @@ mod tests {
         };
 
         let res = executor.execute(&pcb, syscall).await;
-        assert!(matches!(res, Err(SyscallError::PluginError(_))));
+        assert!(matches!(res, Ok(msg) if msg.contains("no está instalado")));
         Ok(())
     }
 

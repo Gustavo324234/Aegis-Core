@@ -53,8 +53,8 @@ function BenchScore({ scores, syncedAt }: { scores?: ModelTaskScores | null; syn
 
     let colorClass: string;
     if (rounded <= 2) colorClass = 'bg-red-500';
-    else if (rounded <= 3) colorClass = 'bg-yellow-500';
-    else if (rounded <= 4) colorClass = 'bg-green-400';
+    else if (rounded <= 3.5) colorClass = 'bg-yellow-500';
+    else if (rounded <= 4.5) colorClass = 'bg-green-400';
     else colorClass = 'bg-green-500';
 
     const tooltipText = syncedAt

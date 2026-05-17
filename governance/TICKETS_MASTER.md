@@ -1,251 +1,101 @@
 # Aegis Core — TICKETS MASTER
 
-Este archivo es la fuente única de verdad para el estado de todos los tickets del proyecto.
-
 ## 🚀 Epics
 
 | ID | Título | Estado | Progreso |
 |---|---|---|---|
-| EPIC 41 | UX & Onboarding | En Curso | 80% |
-| EPIC 42 | Vision Realignment & Autonomy | En Curso | 45% |
+| EPIC 41 | UX & Onboarding | ✅ Completa | 95% |
+| EPIC 42 | Vision Realignment & Autonomy | 🚧 In Progress | 45% |
 | EPIC 43 | Hierarchical Multi-Agent Orchestration | ✅ Completa | 100% |
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 | EPIC 46 | Public Launch | ✅ Completa | 100% |
-| EPIC 47 | Agent Protocol v2 | 🔀 Absorbido por EPIC 49 | — |
-| EPIC 48 | Shell Observability: Chat feedback + Dashboard real | 📥 Planned | 0% |
-| EPIC 49 | Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up | 🚧 In Progress | 60% |
-| EPIC 51 | Model Intelligence: PinchBench Scores + Ollama Cloud | 🚧 In Progress | 40% |
+| EPIC 51 | Model Intelligence: PinchBench + Ollama Cloud + CMR v2 | 🚧 In Progress | 70% |
+| EPIC 52 | Voice Quality | 🚧 In Progress | 50% |
+| EPIC 53 | Stabilization: Agent Loop, Observability & Infrastructure | 🚧 In Progress | 20% |
 
 ---
 
-## 🎫 Tickets
-
-### EPIC 41 — UX & Onboarding
+## EPIC 51 — Model Intelligence
 
 | ID | Tipo | Título | Estado | Prioridad |
 |---|---|---|---|---|
-| CORE-145 | feat | Conversational Onboarding (Name/Persona) | ✅ Done | Crítica |
-| CORE-146 | feat | Remote Access via Cloudflare Tunnel + QR | ✅ Done | Alta |
-| CORE-147 | fix | Hardened Tunnel & TLS Removal | ✅ Done | Media |
-| CORE-148 | fix | Natural Conversational Tone (Prompt) | 🚧 In Progress | Alta |
-| CORE-149 | feat | Neuronal Memory (L3) & Semantic Retrieval | ✅ Done | Crítica |
+| CORE-290 | chore | `tools/update_models.py` — script sincronización | ✅ Done | Alta |
+| CORE-291 | chore | `models.yaml` — scores y costos reales | ✅ Done | Alta |
+| CORE-292 | feat | Kernel: provider `ollama_cloud` | ✅ Done | Alta |
+| CORE-293 | feat | `models.yaml` — modelos Ollama Cloud | 📥 Todo | Media |
+| CORE-294 | feat | Shell: CatalogViewer — columna Benchmark + badges | ✅ Done | Alta |
+| CORE-295 | fix | SirenRouter: fallback a perfil admin (voz metálica) | ✅ Done | Crítica |
+| CORE-297 | fix | `enginePresets.ts` — ollama_cloud en modal Link Provider | ✅ Done | Crítica |
+| CORE-298 | feat | Kernel: CatalogSyncer — sync modelos free OpenRouter | ✅ Done | Alta |
+| CORE-299 | feat | Kernel: `model_override` en PCB y WS chat | ✅ Done | Crítica |
+| CORE-300 | feat | Shell: selector de modelo en barra del chat | ✅ Done | Crítica |
+| CORE-301 | feat | CMR v2: scoring contextual + latencia real | ✅ Done | Alta |
+| CORE-302 | fix | Shell: mutear mic durante TTS (feedback loop) | ✅ Done | Crítica |
 
 ---
 
-### EPIC 42 — Vision Realignment & Autonomy
+## EPIC 52 — Voice Quality
 
 | ID | Tipo | Título | Estado | Prioridad |
 |---|---|---|---|---|
-| CORE-150 | feat | Sandbox de Scripts (Maker Capability) | 📥 Todo | Crítica |
-| CORE-151 | feat | Integración de Contexto de Proyecto (Git/VCM) | 🚧 In Progress | Alta |
-| CORE-152 | feat | Plugins de Dominios (Ledger & Chronos) | ✅ Done | Media |
-| CORE-153 | feat | Dashboard Dinámico & Kanban UI | ✅ Done | Alta |
-| CORE-154 | feat | Orquestación de Sub-Agentes especializados | ✅ Done | Baja |
-| CORE-212 | fix | Shell: provider gemini en KeyManager + visibilidad de modelos en CatalogViewer | ✅ Done | Crítica |
+| CORE-295 | fix | SirenRouter: fallback a perfil admin para tenants sin config | ✅ Done | Crítica |
+| CORE-295-p2 | fix | Shell: preservar stt_provider al guardar config de voz | ✅ Done | Alta |
+| CORE-302 | fix | Shell: mutear mic durante reproducción TTS | ✅ Done | Crítica |
 
 ---
 
-### EPIC 43 — Hierarchical Multi-Agent Orchestration ✅
+## EPIC 53 — Stabilization: Agent Loop, Observability & Infrastructure
+
+### Fase 1 — Agent Loop (Crítico)
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-155 | feat | AgentNode, AgentRole, AgentState — Tipos Base | ✅ Done | Crítica | Kernel Engineer |
-| CORE-156 | feat | AgentTree — Estructura en Memoria y Operaciones | ✅ Done | Crítica | Kernel Engineer |
-| CORE-157 | feat | AgentMessage — Protocolo de Comunicación Inter-Agente | ✅ Done | Crítica | Kernel Engineer |
-| CORE-158 | feat | AgentOrchestrator — Ciclo de Vida y Coordinación | ✅ Done | Crítica | Kernel Engineer |
-| CORE-159 | feat | ProjectRegistry — Gestión de Proyectos y Supervisores Raíz | ✅ Done | Alta | Kernel Engineer |
-| CORE-160 | feat | PCB Extension — campo agent_id en ProcessControlBlock | ✅ Done | Alta | Kernel Engineer |
-| CORE-161 | feat | DagNode Extension — campo agent_id en DagNode | ✅ Done | Alta | Kernel Engineer |
-| CORE-162 | feat | SYS_AGENT_SPAWN — Spawn Dinámico desde Syscall | ✅ Done | Alta | Kernel Engineer |
-| CORE-163 | feat | HTTP Routes /api/agents/* — Árbol y Estado | ✅ Done | Media | Kernel Engineer |
-| CORE-165 | feat | Model-per-Agent — CMR integration con TaskType por AgentNode | ✅ Done | Alta | Kernel Engineer |
-| CORE-166 | feat | AgentTreeWidget — Árbol de Agentes en Dashboard del Tenant | ✅ Done | Alta | Shell Engineer |
-
----
-
-### EPIC 44 — Developer Workspace ✅
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-167 | feat | workspace_config — Tabla SQLCipher y Endpoint de Configuración | ✅ Done | Crítica | Kernel Engineer |
-| CORE-168 | feat | TerminalExecutor — Ejecución de Comandos con Streaming | ✅ Done | Crítica | Kernel Engineer |
-| CORE-169 | feat | SYS_EXEC — Syscall de Terminal para Agentes | ✅ Done | Alta | Kernel Engineer |
-| CORE-170 | feat | FileSystemBridge — Endpoints /api/fs/tree y /api/fs/file | ✅ Done | Alta | Kernel Engineer |
-| CORE-171 | feat | GitHubBridge — Identidad del Bot, Branch, Commit, Push y PR | ✅ Done | Crítica | Kernel Engineer |
-| CORE-172 | feat | SYS_GIT_* — Syscalls Git para Agentes | ✅ Done | Alta | Kernel Engineer |
-| CORE-173 | feat | PR Manager — Ciclo de Vida de PRs con Polling de CI | ✅ Done | Crítica | Kernel Engineer |
-| CORE-174 | feat | Auto-fix CI — Proceso Cognitivo Disparado por Fallo de CI | ✅ Done | Alta | Kernel Engineer |
-| CORE-175 | feat | Eventos WebSocket — terminal_output, pr_update, pr_merged, git_push, ci_fix_attempt | ✅ Done | Crítica | Kernel Engineer |
-| CORE-176 | feat | TerminalPanel — UI de Terminal en Dashboard del Tenant | ✅ Done | Alta | Shell Engineer |
-| CORE-177 | feat | CodeViewer — Árbol de Archivos y Contenido en Dashboard | ✅ Done | Alta | Shell Engineer |
-| CORE-178 | feat | GitTimeline — Branches, Commits y PRs en Dashboard | ✅ Done | Alta | Shell Engineer |
-| CORE-179 | feat | PRManagerPanel — Lista de PRs con Controles Auto/Manual | ✅ Done | Alta | Shell Engineer |
-| CORE-180 | feat | WorkspaceSettings — Configuración de Token, Repo y Opciones | ✅ Done | Alta | Shell Engineer |
-
----
-
-### EPIC 45 — Cognitive Agent Architecture ✅
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-190 | feat | AgentRole, AgentNode, AgentState, AgentId — tipos base | ✅ Done | Crítica | Kernel Engineer |
-| CORE-191 | feat | AgentTree — estructura n-ary con serialize/restore | ✅ Done | Crítica | Kernel Engineer |
-| CORE-192 | feat | AgentMessage — Dispatch, Report, Query, QueryReply | ✅ Done | Crítica | Kernel Engineer |
-| CORE-193 | feat | AgentOrchestrator — ciclo de vida, routing, persist, restore | ✅ Done | Crítica | Kernel Engineer |
-| CORE-194 | feat | ProjectRegistry — CRUD + SQLite + serialize/restore árbol | ✅ Done | Crítica | Kernel Engineer |
-| CORE-195 | feat | PCB Extension — agent_id + task_type override | ✅ Done | Alta | Kernel Engineer |
-| CORE-196 | feat | ContextBudget — presupuesto de tokens por AgentNode | ✅ Done | Alta | Kernel Engineer |
-| CORE-197 | feat | InstructionLoader — agent/*.md en runtime + state summary | ✅ Done | Alta | Kernel Engineer |
-| CORE-198 | feat | SYS_AGENT_SPAWN — syscall con task_type opcional | ✅ Done | Alta | Kernel Engineer |
-| CORE-199 | feat | SYS_AGENT_QUERY — syscall de query descendente | ✅ Done | Alta | Kernel Engineer |
-| CORE-200 | feat | AgentEvent stream — WebSocket ws/agents/{tenant_id} | ✅ Done | Alta | Kernel Engineer |
-| CORE-201 | feat | Chat Agent context limiter — ventana deslizante + resumen | ✅ Done | Alta | Kernel Engineer |
-| CORE-202 | feat | AgentActivityPanel — indicador colapsable en ChatTerminal | ✅ Done | Alta | Shell Engineer |
-| CORE-203 | feat | AgentTreeView + ProjectList — panel en Dashboard | ✅ Done | Media | Shell Engineer |
-| CORE-204 | feat | useAegisStore — agentTree + activeProjects + connectAgentStream | ✅ Done | Alta | Shell Engineer |
-| CORE-205 | feat | Archivos agent/*.md — instrucciones por rol | ✅ Done | Alta | Arquitecto IA |
-| CORE-206 | feat | AgentPersistence — agent_tree.json + agent_contexts/*.md | ✅ Done | Alta | Kernel Engineer |
-| CORE-207 | feat | State Summary Generator — trigger al cerrar sesión | ✅ Done | Alta | Kernel Engineer |
-| CORE-208 | feat | CMR per-agent — task_type al CMR por AgentNode | ✅ Done | Alta | Kernel Engineer |
-| CORE-209 | fix | Montar /ws/agents en build_router y agregar GET /api/agents/projects | ✅ Done | Crítica | Kernel Engineer |
-| CORE-210 | fix | Chat Agent: fallback cuando no hay proyecto activo | ✅ Done | Alta | Kernel Engineer |
-| CORE-211 | fix | Shell: graceful errors en fetchActiveProjects y connectAgentStream | ✅ Done | Alta | Shell Engineer |
-
----
-
-### EPIC 46 — Public Launch ✅
-
-| ID | Tipo | Título | Estado | Prioridad | Responsable |
-|---|---|---|---|---|---|
-| CORE-214 | docs | CODE_OF_CONDUCT.md | ✅ Done | Alta | Arquitecto IA |
-| CORE-215 | docs | SECURITY.md — política de reporte de vulnerabilidades | ✅ Done | Alta | Arquitecto IA |
-| CORE-216 | docs | CHANGELOG.md — historial de versiones público | ✅ Done | Media | Arquitecto IA |
-| CORE-217 | docs | Issue template: Bug Report | ✅ Done | Alta | Arquitecto IA |
-| CORE-218 | docs | Issue template: Feature Request | ✅ Done | Media | Arquitecto IA |
-| CORE-219 | ops | GitHub Sponsors + FUNDING.yml + sponsor page | ✅ Done | Alta | Tavo |
-| CORE-220 | ops | Release — gestionado por release-please | ✅ Done | Crítica | Automático |
-| CORE-221 | ops | Topics del repo | ✅ Done | Media | Tavo |
-| CORE-222 | ops | Social preview image | ✅ Done | Media | Tavo |
-| CORE-223 | docs | .github/CODEOWNERS | ✅ Done | Media | Arquitecto IA |
-| CORE-224 | chore | Limpiar directorios temporales | 📥 Todo | Baja | Tavo |
-| CORE-225 | chore | License field en Cargo.toml → MIT | 📥 Todo | Alta | Kernel Engineer |
-
----
-
-### EPIC 48 — Shell Observability: Chat feedback + Dashboard real
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-244 | fix | HAL Runner: StatusUpdate en path de error | ✅ Done | Crítica | Kernel Engineer |
-| CORE-248 | feat | Chat: indicador de estado enriquecido (modelo, provider, error amigable, timeout) | ✅ Done | Crítica | Shell Engineer |
-| CORE-252 | feat | Dashboard: header con nombre real del tenant y estado del sistema real | 📥 Todo | Alta | Shell Engineer |
-| CORE-249 | feat | Dashboard: reemplazar MOCK_TICKETS con Kanban real del tenant | 📥 Todo | Alta | Shell Engineer |
-| CORE-250 | feat | Dashboard: FinancialWidget con datos reales (API Cost) | 📥 Todo | Media | Shell Engineer |
-| CORE-251 | feat | Dashboard: Chronos widget honesto (sin eventos ficticios) | 📥 Todo | Media | Shell Engineer |
-| CORE-253 | fix | Kernel: SYS_CALL_PLUGIN con plugin no encontrado devuelve error legible al usuario | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-256 | feat | Admin: tab Sistema — gestión del servicio (start/stop/restart/status) desde la UI | 📥 Todo | Alta | Shell Engineer + Kernel Engineer |
-| CORE-257 | fix | Kernel: Tunnel Manager — no reintentar si cloudflared no está instalado | 📥 Todo | Media | Kernel Engineer |
-
----
-
-### EPIC 49 — Cognitive Loop: Memoria, ReAct y Comunicación Bottom-Up
-
-**Fase 1 — Memoria Conversacional**
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-259 | feat | CloudProxyDriver: historial Vec<ChatMessage> en lugar de String | ✅ Done | Crítica | Kernel Engineer |
-| CORE-260 | feat | PCB: acumular historial de mensajes + SessionHistoryCache | ✅ Done | Crítica | Kernel Engineer |
-
-**Fase 2 — Bucle ReAct Interno**
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-261 | feat | CognitiveHAL: bucle ReAct — tool call → resultado → LLM | ✅ Done | Crítica | Kernel Engineer |
 | CORE-262 | feat | AgentOrchestrator: inferencia LLM real en run_agent_loop | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-263 | feat | Herramienta ask_user + estado WaitingUser | 📥 Todo | Alta | Kernel Engineer |
 
-**Fase 3 — Comunicación Bottom-Up**
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-263 | feat | Herramienta ask_user + estado WaitingUser + enrutamiento Chat Agent | 📥 Todo | Alta | Kernel Engineer |
-
----
-
-### EPIC 51 — Model Intelligence: PinchBench Scores + Ollama Cloud
+### Fase 2 — Shell Observability
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-290 | chore | `tools/update_models.py` — script de sincronización de modelos y scores | ✅ Done | Alta | Arquitecto IA |
-| CORE-291 | chore | `models.yaml` — actualizar scores y costos con datos reales (primera ejecución) | ✅ Done | Alta | Arquitecto IA |
-| CORE-292 | feat | Kernel: provider `ollama_cloud` — URL remota + allowlist SSRF | 📥 Todo | Alta | Kernel Engineer |
-| CORE-293 | feat | `models.yaml` — agregar modelos Ollama Cloud (`is_local: false`) | 📥 Todo | Media | Arquitecto IA |
-| CORE-294 | feat | Shell: CatalogViewer — columna Benchmark score + badge Ollama Cloud | 📥 Todo | Alta | Shell Engineer |
+| CORE-252 | feat | Dashboard: header con nombre real del tenant | 📥 Todo | Alta | Shell Engineer |
+| CORE-249 | feat | Dashboard: Kanban real del tenant | 📥 Todo | Alta | Shell Engineer |
+| CORE-253 | fix | Kernel: SYS_CALL_PLUGIN error legible | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-256 | feat | Admin: tab Sistema — gestión del servicio | 📥 Todo | Alta | Shell + Kernel |
+| CORE-250 | feat | Dashboard: FinancialWidget datos reales | 📥 Todo | Media | Shell Engineer |
+| CORE-251 | feat | Dashboard: Chronos widget honesto | 📥 Todo | Media | Shell Engineer |
+| CORE-257 | fix | Kernel: Tunnel Manager sin cloudflared | 📥 Todo | Media | Kernel Engineer |
 
----
-
-### Bugs pre-lanzamiento — Multi-Agent Pipeline (Kernel)
-
-| ID | Tipo | Título | Estado | Prioridad | Asignado a |
-|---|---|---|---|---|---|
-| CORE-226 | fix | Kernel: Chat Agent carga chat_agent.md via InstructionLoader | ✅ Done | Crítica | Kernel Engineer |
-| CORE-227 | fix | Kernel: SPAWN_INSTRUCTIONS unificado al formato SYS_AGENT_SPAWN | ✅ Done | Crítica | Kernel Engineer |
-| CORE-228 | fix | Kernel: SyscallExecutor wired con AgentOrchestrator | ✅ Done | Crítica | Kernel Engineer |
-| CORE-229 | fix | Installer: agents config se despliega en producción | ✅ Done | Alta | DevOps Engineer |
-
----
-
-### Bugs pre-lanzamiento — Shell / UX
+### Fase 3 — UX & Providers
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-230 | fix | Shell: Dashboard crashea al montar y dispara AegisErrorBoundary ("Session Error") | ✅ Done | Crítica | Shell Engineer |
-| CORE-231 | fix | Shell: Micrófono falla silenciosamente en HTTP — falta feedback al usuario | ✅ Done | Crítica | Shell Engineer |
-| CORE-232 | fix | Shell: IP vs Cloudflare producen chats separados — falta aviso y pre-fill de login | ✅ Done | Alta | Shell Engineer |
-| CORE-233 | feat | Shell: Settings del tenant — simplificar y unificar configuración en 4 tabs | ✅ Done | Alta | Shell Engineer |
+| CORE-247 | feat | Historial de chat persistente entre sesiones | 📥 Todo | Crítica | Kernel + Shell |
+| CORE-245 | feat | Admin: toggle habilitar/deshabilitar provider | 📥 Todo | Alta | Shell Engineer |
+| CORE-246 | feat | Tenant: modelos disponibles por provider | 📥 Todo | Alta | Shell Engineer |
 
----
-
-### Mejoras UX — Panel de providers y chat
+### Fase 4 — Model Intelligence
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-245 | feat | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | 📥 Todo | Alta | Shell Engineer |
-| CORE-246 | feat | Tenant: visualización de modelos disponibles por provider en tab Motor | 📥 Todo | Alta | Shell Engineer |
-| CORE-247 | feat | Historial de chat persistente: cargar al conectar, unificar IP y Cloudflare | 📥 Todo | Crítica | Kernel Engineer + Shell Engineer |
+| CORE-293 | feat | `models.yaml` — modelos Ollama Cloud | 📥 Todo | Media | Arquitecto IA |
 
----
-
-### Infraestructura Windows + CLI
+### Fase 5 — Infraestructura
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-254 | feat | CI/CD: installer Windows PowerShell + install.ps1 | ✅ Done | Alta | DevOps Engineer |
-| CORE-255 | fix | Installer: registro robusto del servicio Windows + opción -Repair | 📥 Todo | Crítica | DevOps Engineer |
-| CORE-258 | feat | CLI: ank-cli multiplataforma — Windows + Linux + CI + installers | 📥 Todo | Alta | Kernel Engineer |
+| CORE-255 | fix | Installer: registro robusto servicio Windows | 📥 Todo | Crítica | DevOps Engineer |
+| CORE-258 | feat | CLI: ank-cli multiplataforma | 📥 Todo | Alta | Kernel Engineer |
 
----
+### Fase 6 — Deuda técnica
 
-### Bugs de infraestructura
-
-| ID | Tipo | Título | Estado | Prioridad | Responsable |
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| OPS-001 | ops | Re-registrar API keys Gemini/OpenRouter en DB via UI tras reinicio | 📥 Todo | Crítica | Tavo (manual) |
+| CORE-225 | chore | License field en Cargo.toml → MIT | 📥 Todo | Alta | Kernel Engineer |
+| CORE-213 | fix | Kernel: loguear error en key_pool.load() | 📥 Todo | Media | Kernel Engineer |
+| CORE-224 | chore | Limpiar directorios temporales | 📥 Todo | Baja | Tavo |
+| OPS-001 | ops | Re-registrar API keys tras reinicio | 📥 Todo | Crítica | Tavo |
 
 ---
 
-### Deuda técnica pendiente
-
-| ID | Tipo | Título | Estado | Prioridad |
-|---|---|---|---|---|
-| CORE-213 | fix | Kernel: loguear error en key_pool.load() al arranque | 📥 Todo | Media |
-
----
-
-*Leyenda:*
-- 📥 **Todo:** Pendiente de inicio.
-- 🚧 **In Progress:** En desarrollo activo.
-- ✅ **Done:** Terminado y verificado.
-- ❌ **Blocked:** Detenido por dependencias.
-- 🔀 **Absorbido:** Consolidado en otro epic.
+*Leyenda: 📥 Todo · 🚧 In Progress · ✅ Done · ❌ Blocked*

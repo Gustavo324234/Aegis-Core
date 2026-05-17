@@ -183,7 +183,9 @@ pub(crate) async fn run_server() -> Result<()> {
     let key_pool = Arc::new(ank_core::router::key_pool::KeyPool::new(
         Arc::clone(&persistence) as Arc<dyn StatePersistor>,
     ));
-    let _ = key_pool.load().await;
+    if let Err(e) = key_pool.load().await {
+        tracing::error!("CORE-213: key_pool.load() falló al iniciar — las claves de API no están disponibles: {}", e);
+    }
 
     let router = Arc::new(RwLock::new(CognitiveRouter::new(
         catalog.clone(),
@@ -499,6 +501,19 @@ pub(crate) async fn run_server() -> Result<()> {
     {
         let tunnel_url_state = Arc::clone(&state.tunnel_url);
         tokio::spawn(async move {
+            // CORE-257: verificar que cloudflared está instalado antes de entrar al loop.
+            // Si no está, logear una sola vez y salir sin reintentar.
+            let cloudflared_present = std::process::Command::new("cloudflared")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            if !cloudflared_present {
+                info!("TunnelManager: cloudflared not installed — tunnel disabled");
+                return;
+            }
+
             loop {
                 info!("Tunnel Manager: Starting cloudflared...");
                 match run_tunnel_and_monitor(8000, Arc::clone(&tunnel_url_state)).await {

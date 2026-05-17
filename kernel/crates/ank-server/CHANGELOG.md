@@ -16,6 +16,34 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## [0.1.65](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.64...ank-server-v0.1.65) (2026-05-14)
+
+
+### Features
+
+* **ui:** CORE-300 add model selector to chat input bar ([#271](https://github.com/Gustavo324234/Aegis-Core/issues/271)) ([c0e3090](https://github.com/Gustavo324234/Aegis-Core/commit/c0e309015c3456807bd6e57376bb20cba580e45f))
+
+## [0.1.62](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.61...ank-server-v0.1.62) (2026-05-13)
+
+
+### Bug Fixes
+
+* **ank-core:** CORE-257 TunnelManager — skip retry loop if cloudflared binary not found ([#258](https://github.com/Gustavo324234/Aegis-Core/issues/258)) ([5d446da](https://github.com/Gustavo324234/Aegis-Core/commit/5d446da2fd4a51617f483cd82ad9132f172cb476))
+
 ## [0.1.58](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.57...ank-server-v0.1.58) (2026-05-08)
 
 

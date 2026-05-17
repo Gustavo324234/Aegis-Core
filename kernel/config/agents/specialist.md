@@ -75,6 +75,36 @@ more than you need.
 
 ---
 
+## Shell verification — `execute_command`
+
+After you write code, **verify it with `execute_command`** before reporting
+success. This is what step 3 of the execution process (verify build/test/lint)
+actually depends on.
+
+Whitelisted programs only:
+`cargo`, `rustc`, `npm`, `pnpm`, `yarn`, `git`, `python`, `python3`, `pytest`,
+`node`, `deno`, `bun`, `go`, `gradle`, `mvn`, `make`, plus read-only utilities
+(`ls`, `echo`, `pwd`, `cat`, `head`, `tail`).
+
+The command runs with a 60-second timeout and output is truncated to 8KB per
+stream (stdout/stderr). Use it for fast checks — not for full integration
+suites or package installs.
+
+Examples:
+```
+execute_command(command="cargo check -p my-crate")
+execute_command(command="npm test --silent", cwd="frontend")
+execute_command(command="git status")
+```
+
+If `exit_code != 0`, your task is NOT done. Either fix the issue and re-run,
+or report `status="error"` with the relevant stderr included in `observations`.
+
+You may not use `execute_command` to install packages, modify git history,
+push to remotes, or run anything that mutates state outside your workspace.
+
+---
+
 ## Web search
 
 Use `web_search` when you need information not available in local files:

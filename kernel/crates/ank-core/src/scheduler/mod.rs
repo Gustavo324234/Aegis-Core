@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tracing::{error, info, instrument, warn};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ModelPreference {
     LocalOnly,
     CloudOnly,
@@ -367,7 +367,18 @@ impl CognitiveScheduler {
                         pcb.state = ProcessState::Completed;
                     }
 
-                    let _ = self.persistence.save_pcb(pcb).await;
+                    // CORE-FIX: antes este Result se descartaba con `let _ = ...`.
+                    // Si la persistencia falla acá, un supervisor puede quedar
+                    // marcado WaitingWorkers en memoria pero perdido en disco —
+                    // tras un reinicio el árbol queda inconsistente.
+                    if let Err(e) = self.persistence.save_pcb(pcb).await {
+                        warn!(
+                            pid = %pid,
+                            error = %e,
+                            "scheduler: failed to persist PCB on ProcessCompleted; state \
+                             change is only in-memory"
+                        );
+                    }
                     (
                         pcb.parent_pid.clone(),
                         pcb.process_name.clone(),
@@ -542,7 +553,14 @@ impl CognitiveScheduler {
     }
 
     async fn reconcile(&mut self) -> anyhow::Result<()> {
-        let max_concurrency = 4; // CORE-154: Permitir hasta 4 agentes paralelos
+        // CORE-FIX: era hardcoded en 4 sin justificación ni manera de tunearlo.
+        // Permitimos override por env var; el default sigue siendo 4 para no
+        // cambiar el comportamiento en deployments existentes.
+        let max_concurrency: usize = std::env::var("AEGIS_SCHEDULER_MAX_CONCURRENCY")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|n: &usize| *n > 0)
+            .unwrap_or(4);
 
         while self.current_running.len() < max_concurrency && !self.ready_queue.is_empty() {
             if let Some(PcbByPriority(pcb)) = self.ready_queue.pop() {

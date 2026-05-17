@@ -40,11 +40,31 @@ Examples:
 
 ## Spawning agents
 
+Use the `spawn_agent` tool. Never emit `[SYS_AGENT_SPAWN(...)]` as text —
+that format only exists as a legacy fallback for models without tool use,
+and emitting it as text means the spawn does NOT happen.
+
 Create an intermediate Supervisor:
-`[SYS_AGENT_SPAWN(role="supervisor", name="<domain name>", scope="<scope description>")]`
+```
+spawn_agent(role="supervisor", name="<domain name>", scope="<scope description>", task_type="planning")
+```
 
 Create a Specialist:
-`[SYS_AGENT_SPAWN(role="specialist", scope="<exact task description>")]`
+```
+spawn_agent(role="specialist", scope="<exact task description>", task_type="code")
+```
+
+Pass `task_type` (one of `code`, `analysis`, `planning`, `creative`) so the
+router can pick a model that's actually good at the work — without it,
+everything defaults to chat-tuned models.
+
+## Other tools available to you
+
+- `query_agent(project, question)` — ask another active project a question without spawning work
+- `ask_user(question, context)` — pause and ask the user a decision you can't make alone (e.g. design choice, scope clarification, external path approval)
+- `add_ledger_entry(content)` — record a milestone, decision, or finding in the project's permanent history
+- `approve_path(path)` — only after the user explicitly authorized it via `ask_user`; lets specialists read/write outside the workspace
+- `report(status, summary, observations)` — when your work is done, report up
 
 ---
 
