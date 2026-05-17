@@ -106,8 +106,10 @@ interface AegisState {
     sttApiKey: string;
     currentView: 'chat' | 'dashboard' | 'agents' | 'agent_thread';
     activeAgentId: string | null;
-    inputMode: 'text' | 'audio' | 'conversation';
+    inputMode: 'text' | 'audio' | 'conversation' | 'wakeword';
     voiceEnabled: boolean;
+    agentName: string | null;
+    isWakewordListening: boolean;
 
     // CORE-204 — agent stream state
     agentTree: AgentNodeSummary[];
@@ -121,7 +123,10 @@ interface AegisState {
     fetchActiveProjects: () => Promise<void>;
 
     setHydrated: (val: boolean) => void;
-    setInputMode: (mode: 'text' | 'audio' | 'conversation') => void;
+    setInputMode: (mode: 'text' | 'audio' | 'conversation' | 'wakeword') => void;
+    fetchAgentName: () => Promise<void>;
+    startWakewordListener: () => void;
+    stopWakewordListener: () => void;
     setVoiceEnabled: (val: boolean) => void;
     setCurrentView: (view: 'chat' | 'dashboard' | 'agents' | 'agent_thread') => void;
     setActiveAgentId: (agentId: string | null) => void;
@@ -130,7 +135,7 @@ interface AegisState {
     fetchSirenConfig: () => Promise<void>;
     connect: (tenantId: string, sessionKey: string) => Promise<void>;
     disconnect: () => void;
-    sendMessage: (prompt: string) => void;
+    sendMessage: (prompt: string, modelOverride?: string | null) => void;
     appendToken: (msgId: string, token: string, type: MessageType) => void;
     setStatus: (status: SystemStatus) => void;
     clearHistory: () => void;
@@ -159,6 +164,7 @@ interface AegisAudioRefs {
     _aegis_audio_stream?: MediaStream;
     _aegis_audio_ctx?: AudioContext;
     _aegis_audio_node?: ScriptProcessorNode;
+    _aegis_audio_gain?: GainNode;
 }
 
 interface WindowWithWebkit extends Window {
@@ -215,6 +221,8 @@ export const useAegisStore = create<AegisState>()(
             activeAgentId: null,
             inputMode: 'text',
             voiceEnabled: false,
+            agentName: null,
+            isWakewordListening: false,
 
             // CORE-204 — initial agent stream values
             agentTree: [],
@@ -226,7 +234,15 @@ export const useAegisStore = create<AegisState>()(
             setHydrated: (val) => set({ _hydrated: val }),
             setCurrentView: (view) => set({ currentView: view }),
             setActiveAgentId: (agentId) => set({ activeAgentId: agentId }),
-            setInputMode: (mode) => set({ inputMode: mode }),
+            setInputMode: (mode) => {
+                const prev = get().inputMode;
+                if (prev === 'wakeword') get().stopWakewordListener();
+                if (prev !== 'text') get().stopSirenStream();
+                set({ inputMode: mode });
+                if (mode === 'wakeword') {
+                    get().fetchAgentName().then(() => get().startWakewordListener());
+                }
+            },
             setVoiceEnabled: (val) => set({ voiceEnabled: val }),
             setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
             setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
@@ -493,24 +509,21 @@ export const useAegisStore = create<AegisState>()(
                                         }
                                     }
                                     // CORE-184: reactivar mic en modo conversación tras terminar el TTS
-                                    if (get().inputMode === 'conversation') {
+                                    if (get().inputMode === 'conversation' || get().inputMode === 'wakeword') {
                                         const scheduleReactivation = () => {
                                             const ctx = ttsPlayer.getAudioContext();
-                                            if (ctx) {
-                                                const remaining = (ttsPlayer.getNextStartTime() - ctx.currentTime) * 1000;
-                                                const delay = Math.max(300, remaining + 200);
-                                                setTimeout(() => {
-                                                    if (get().inputMode === 'conversation' && !get().isRecording) {
-                                                        get().restartMicForConversation().catch(console.error);
-                                                    }
-                                                }, delay);
-                                            } else {
-                                                setTimeout(() => {
-                                                    if (get().inputMode === 'conversation' && !get().isRecording) {
-                                                        get().restartMicForConversation().catch(console.error);
-                                                    }
-                                                }, 500);
-                                            }
+                                            const remaining = ctx
+                                                ? Math.max(0, (ttsPlayer.getNextStartTime() - ctx.currentTime) * 1000)
+                                                : 0;
+                                            const delay = Math.max(300, remaining + 200);
+                                            setTimeout(() => {
+                                                const mode = get().inputMode;
+                                                if (mode === 'conversation' && !get().isRecording) {
+                                                    get().restartMicForConversation().catch(console.error);
+                                                } else if (mode === 'wakeword' && !get().isRecording) {
+                                                    get().startWakewordListener();
+                                                }
+                                            }, delay);
                                         };
                                         scheduleReactivation();
                                     }
@@ -519,16 +532,71 @@ export const useAegisStore = create<AegisState>()(
                             break;
                         }
                         case 'error': {
-                            const errData = data as string;
-                            set({ status: 'error', lastError: errData || 'Unknown Kernel Panic' });
-                            if (errData === 'PASSWORD_MUST_CHANGE') {
+                            // CORE-FIX: backend now emits one of two shapes for `error`:
+                            //   legacy: data = "AUTH_FAILURE: Access Denied" (string)
+                            //   new:    data = { code, message, detail }    (object)
+                            // Normalise here so we accept both without losing the specific
+                            // user-facing message for categorised errors (auth_failed,
+                            // scheduler_unavailable, model_override_unknown, etc.).
+                            const structured = (typeof data === 'object' && data !== null)
+                                ? data as { code?: string; message?: string; detail?: string }
+                                : null;
+                            const legacy = (typeof data === 'string') ? data : null;
+                            const code = structured?.code ?? '';
+                            const message = structured?.message ?? legacy ?? 'Unknown Kernel Panic';
+
+                            set({ status: 'error', lastError: message });
+
+                            const isAuthFailure =
+                                code === 'auth_failed' ||
+                                (legacy?.includes('AUTH_FAILURE: Access Denied') ?? false);
+                            const isPasswordReset =
+                                code === 'password_must_change' ||
+                                legacy === 'PASSWORD_MUST_CHANGE';
+
+                            if (isPasswordReset) {
                                 set({ needsPasswordReset: true });
-                            } else if (errData?.includes('AUTH_FAILURE: Access Denied')) {
+                            } else if (isAuthFailure) {
                                 const sock = get().socket;
                                 if (sock) sock.close();
                                 set({ socket: null, status: 'error' });
                             } else {
-                                get().addSystemMessage('No pude procesar tu mensaje. Intentá de nuevo en unos segundos.');
+                                // Surface the actual message when we have one — falling back
+                                // to the generic "intentá de nuevo" only for unknown errors.
+                                get().addSystemMessage(
+                                    message !== 'Unknown Kernel Panic'
+                                        ? message
+                                        : 'No pude procesar tu mensaje. Intentá de nuevo en unos segundos.'
+                                );
+                            }
+                            break;
+                        }
+
+                        case 'model_selected': {
+                            // CORE-FIX: backend announces which model is about to answer
+                            // so the UI can show a badge. We piggy-back on lastRoutingInfo
+                            // (the existing routing display) and synthesise the missing
+                            // task_type / latency_ms fields — they get overwritten by
+                            // the real routing_info event when the model finishes.
+                            const meta = data as { model_id?: string; provider?: string };
+                            if (meta?.model_id) {
+                                get().setLastRoutingInfo({
+                                    model_id: meta.model_id,
+                                    provider: meta.provider ?? 'unknown',
+                                    task_type: get().lastRoutingInfo?.task_type ?? 'chat',
+                                    latency_ms: 0,
+                                });
+                            }
+                            break;
+                        }
+
+                        case 'warning': {
+                            // CORE-FIX: non-fatal warnings from the kernel (e.g. VCM context
+                            // assembly failure, fallback model swap). Show them as system
+                            // messages so the user knows the response is degraded.
+                            const w = data as { category?: string; message?: string };
+                            if (w?.message) {
+                                get().addSystemMessage(`⚠ ${w.message}`);
                             }
                             break;
                         }
@@ -658,7 +726,7 @@ export const useAegisStore = create<AegisState>()(
 
             disconnect: () => get().socket?.close(),
 
-            sendMessage: (prompt) => {
+            sendMessage: (prompt, modelOverride) => {
                 const { socket, messages } = get();
                 if (!socket || socket.readyState !== WebSocket.OPEN) return;
                 ttsPlayer.initialize();
@@ -668,7 +736,9 @@ export const useAegisStore = create<AegisState>()(
                     : '';
                 const finalPrompt = musicContext + prompt;
                 set({ messages: [...messages, { id: `user-${Date.now()}`, role: 'user', content: prompt, type: 'text', timestamp: Date.now() }] });
-                socket.send(JSON.stringify({ prompt: finalPrompt, task_type: get().taskType }));
+                const payload: Record<string, unknown> = { prompt: finalPrompt, task_type: get().taskType };
+                if (modelOverride) payload.model_override = modelOverride;
+                socket.send(JSON.stringify(payload));
             },
 
             appendToken: (pid, token, type) => {
@@ -781,7 +851,11 @@ export const useAegisStore = create<AegisState>()(
                     const analyser = ctx.createAnalyser();
                     analyser.fftSize = 256;
                     analyser.smoothingTimeConstant = 0.2;
+                    // CORE-302: GainNode para mute durante TTS — analyser va a source directo (VAD sin filtrar)
+                    const gainNode = ctx.createGain();
+                    gainNode.gain.value = 1;
                     source.connect(analyser);
+                    source.connect(gainNode);
                     let silenceStart = Date.now();
                     const SILENCE_THRESHOLD = 5;
                     const MAX_SILENCE_MS = 1500;
@@ -804,6 +878,7 @@ export const useAegisStore = create<AegisState>()(
                                     delete (window as Window & AegisAudioRefs)._aegis_audio_stream;
                                     delete (window as Window & AegisAudioRefs)._aegis_audio_node;
                                     delete (window as Window & AegisAudioRefs)._aegis_audio_ctx;
+                                    delete (window as Window & AegisAudioRefs)._aegis_audio_gain;
                                 } else {
                                     get().stopSirenStream();
                                 }
@@ -821,6 +896,9 @@ export const useAegisStore = create<AegisState>()(
                         if (msg.event === 'siren_event') {
                             const sirenEvent = msg.data as Record<string, unknown>;
                             if (sirenEvent.tts_audio_chunk) {
+                                // CORE-302: mute mic durante TTS para evitar feedback loop
+                                const gainRef = (window as Window & AegisAudioRefs)._aegis_audio_gain;
+                                if (gainRef) gainRef.gain.setTargetAtTime(0, gainRef.context.currentTime, 0.01);
                                 try { ttsPlayer.playChunk(sirenEvent.tts_audio_chunk as string, (sirenEvent.sample_rate as number) || 22050); }
                                 catch (e) { console.error('TTS Playback error:', e); }
                             }
@@ -852,6 +930,7 @@ export const useAegisStore = create<AegisState>()(
                                             audioRefs._aegis_audio_ctx.close();
                                             delete audioRefs._aegis_audio_ctx;
                                         }
+                                        delete audioRefs._aegis_audio_gain;
                                     }
                                 } catch (e) { console.error('Failed to parse STT_DONE payload', e); set({ status: 'idle' }); }
                             } else if (sirenEvent.event_type === 'STT_ERROR') set({ status: 'error' });
@@ -876,13 +955,102 @@ export const useAegisStore = create<AegisState>()(
                         }
                         sirenWs.send(pcmBuffer.buffer);
                     };
-                    source.connect(scriptNode);
+                    gainNode.connect(scriptNode);
                     scriptNode.connect(ctx.destination);
                     const audioRefs = window as Window & AegisAudioRefs;
                     audioRefs._aegis_audio_stream = stream;
                     audioRefs._aegis_audio_ctx = ctx;
                     audioRefs._aegis_audio_node = scriptNode;
+                    audioRefs._aegis_audio_gain = gainNode;
                 } catch (error) { console.error('🎤 Siren Capture Error:', error); set({ isRecording: false }); throw error; }
+            },
+
+            fetchAgentName: async () => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return;
+                try {
+                    const res = await fetch('/api/persona/name', {
+                        headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey }
+                    });
+                    if (res.ok) {
+                        const data = await res.json() as { name?: string };
+                        set({ agentName: data.name || null });
+                    }
+                } catch { /* silencio */ }
+            },
+
+            startWakewordListener: () => {
+                const { agentName, inputMode, isRecording } = get();
+                if (inputMode !== 'wakeword' || isRecording || !agentName) return;
+
+                const SpeechRecognitionCtor =
+                    window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SpeechRecognitionCtor) return;
+
+                const recognition = new SpeechRecognitionCtor();
+                recognition.continuous = true;
+                recognition.interimResults = true;
+                recognition.maxAlternatives = 2;
+
+                recognition.onresult = (event: SpeechRecognitionEvent) => {
+                    const { agentName: name, inputMode: mode, isRecording: rec } = get();
+                    if (mode !== 'wakeword' || rec || !name) return;
+
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        for (let j = 0; j < event.results[i].length; j++) {
+                            const transcript = event.results[i][j].transcript.toLowerCase().trim();
+                            const nameLower = name.toLowerCase();
+                            const idx = transcript.indexOf(nameLower);
+                            if (idx === -1) continue;
+
+                            // Texto después del nombre → comando incluido
+                            const command = transcript.slice(idx + nameLower.length).trim();
+                            recognition.stop();
+                            delete (window as unknown as Record<string, unknown>)._aegis_wakeword_recognition;
+                            set({ isWakewordListening: false });
+
+                            if (command.length > 2) {
+                                // Comando en la misma utterance — enviar directo
+                                get().sendMessage(command);
+                            } else {
+                                // Solo el nombre — abrir mic para el comando
+                                get().startSirenStream().catch(console.error);
+                            }
+                            return;
+                        }
+                    }
+                };
+
+                recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+                    if (event.error === 'aborted' || event.error === 'no-speech') return;
+                    setTimeout(() => {
+                        if (get().inputMode === 'wakeword' && !get().isRecording) {
+                            get().startWakewordListener();
+                        }
+                    }, 2000);
+                };
+
+                recognition.onend = () => {
+                    const { inputMode: mode, isRecording: rec } = get();
+                    if (mode === 'wakeword' && !rec) {
+                        try { recognition.start(); }
+                        catch { get().startWakewordListener(); }
+                    }
+                };
+
+                recognition.start();
+                set({ isWakewordListening: true });
+                (window as unknown as Record<string, unknown>)._aegis_wakeword_recognition = recognition;
+            },
+
+            stopWakewordListener: () => {
+                const rec = (window as unknown as Record<string, unknown>)
+                    ._aegis_wakeword_recognition as SpeechRecognition | undefined;
+                if (rec) {
+                    try { rec.stop(); } catch { /* ya detenido */ }
+                    delete (window as unknown as Record<string, unknown>)._aegis_wakeword_recognition;
+                }
+                set({ isWakewordListening: false });
             },
 
             stopSirenStream: () => {
@@ -914,6 +1082,10 @@ export const useAegisStore = create<AegisState>()(
                 if (audioRefs._aegis_audio_ctx) {
                     audioRefs._aegis_audio_ctx.close();
                     delete audioRefs._aegis_audio_ctx;
+                }
+                if (audioRefs._aegis_audio_gain) {
+                    audioRefs._aegis_audio_gain.disconnect();
+                    delete audioRefs._aegis_audio_gain;
                 }
                 set({ isRecording: false });
             },
@@ -964,7 +1136,11 @@ export const useAegisStore = create<AegisState>()(
                     const analyser = ctx.createAnalyser();
                     analyser.fftSize = 256;
                     analyser.smoothingTimeConstant = 0.2;
+                    // CORE-302: GainNode para mute durante TTS — analyser va a source directo (VAD sin filtrar)
+                    const gainNode = ctx.createGain();
+                    gainNode.gain.value = 1;
                     source.connect(analyser);
+                    source.connect(gainNode);
 
                     let silenceStart = Date.now();
                     const SILENCE_THRESHOLD = 5;
@@ -988,6 +1164,7 @@ export const useAegisStore = create<AegisState>()(
                                 delete (window as Window & AegisAudioRefs)._aegis_audio_stream;
                                 delete (window as Window & AegisAudioRefs)._aegis_audio_node;
                                 delete (window as Window & AegisAudioRefs)._aegis_audio_ctx;
+                                delete (window as Window & AegisAudioRefs)._aegis_audio_gain;
                                 return;
                             }
                         } else {
@@ -1007,13 +1184,14 @@ export const useAegisStore = create<AegisState>()(
                         sirenSocket.send(pcmBuffer.buffer);
                     };
 
-                    source.connect(scriptNode);
+                    gainNode.connect(scriptNode);
                     scriptNode.connect(ctx.destination);
 
                     const audioRefs = window as Window & AegisAudioRefs;
                     audioRefs._aegis_audio_stream = stream;
                     audioRefs._aegis_audio_ctx = ctx;
                     audioRefs._aegis_audio_node = scriptNode;
+                    audioRefs._aegis_audio_gain = gainNode;
 
                     set({ isRecording: true, status: 'listening' });
                     requestAnimationFrame(checkSilence);

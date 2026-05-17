@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, Volume2, VolumeX } from 'lucide-react';
+import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, Volume2, VolumeX, ChevronDown, Check } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
 import { AgentBadge } from './AgentBadge';
 import { InputModeSelector } from './InputModeSelector';
@@ -19,6 +19,13 @@ import { AgentActivityPanel } from './AgentActivityPanel';
 
 function cn(...inputs: ClassValue[]) {
     return twMerge(clsx(inputs));
+}
+
+interface CatalogModel {
+    model_id: string;
+    provider: string;
+    display_name?: string;
+    cost_input_per_mtok: number;
 }
 
 const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
@@ -92,13 +99,19 @@ const ChatTerminal: React.FC = () => {
     const { messages, sendMessage, status, isRecording, sttAvailable, startSirenStream, stopSirenStream, tenantId, sessionKey, addSystemMessage, logout, fetchSirenConfig, inputMode, lastRoutingInfo, voiceEnabled, setVoiceEnabled } = useAegisStore();
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const modelPickerRef = useRef<HTMLDivElement>(null);
     const isAtBottom = useRef(true);
     const thinkingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const processingBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [input, setInput] = useState('');
+    const [showProcessingBanner, setShowProcessingBanner] = useState(false);
     const [voiceError, setVoiceError] = useState<string | null>(null);
     const [isUploading, setIsUploading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showQR, setShowQR] = useState(false);
+    const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+    const [availableModels, setAvailableModels] = useState<CatalogModel[]>([]);
+    const [showModelPicker, setShowModelPicker] = useState(false);
 
     const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
         if (scrollRef.current) {
@@ -116,26 +129,64 @@ const ChatTerminal: React.FC = () => {
     useEffect(() => { if (isAtBottom.current) scrollToBottom('smooth'); }, [messages]);
     useEffect(() => { if (tenantId && sessionKey) fetchSirenConfig(); }, [tenantId, sessionKey, fetchSirenConfig]);
     useEffect(() => {
-        if (status !== 'thinking' && thinkingTimeoutRef.current) {
-            clearTimeout(thinkingTimeoutRef.current);
-            thinkingTimeoutRef.current = null;
+        if (status !== 'thinking') {
+            if (thinkingTimeoutRef.current) {
+                clearTimeout(thinkingTimeoutRef.current);
+                thinkingTimeoutRef.current = null;
+            }
+            if (processingBannerTimeoutRef.current) {
+                clearTimeout(processingBannerTimeoutRef.current);
+                processingBannerTimeoutRef.current = null;
+            }
+            setShowProcessingBanner(false);
         }
     }, [status]);
 
+    useEffect(() => {
+        if (!tenantId || !sessionKey) return;
+        fetch('/api/catalog/models', {
+            headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey },
+        })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => { if (data?.models) setAvailableModels(data.models); })
+            .catch(() => {});
+    }, [tenantId, sessionKey]);
+
+    useEffect(() => {
+        if (!showModelPicker) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+                setShowModelPicker(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showModelPicker]);
+
     const handleSend = () => {
         if (!input.trim()) return;
-        sendMessage(input);
+        sendMessage(input, selectedModelId);
         setInput('');
         setTimeout(() => { isAtBottom.current = true; scrollToBottom('auto'); }, 10);
 
         if (thinkingTimeoutRef.current) clearTimeout(thinkingTimeoutRef.current);
+        if (processingBannerTimeoutRef.current) clearTimeout(processingBannerTimeoutRef.current);
+        setShowProcessingBanner(false);
+
+        processingBannerTimeoutRef.current = setTimeout(() => {
+            if (useAegisStore.getState().status === 'thinking') {
+                setShowProcessingBanner(true);
+            }
+            processingBannerTimeoutRef.current = null;
+        }, 5_000);
+
         thinkingTimeoutRef.current = setTimeout(() => {
             if (useAegisStore.getState().status === 'thinking') {
                 useAegisStore.getState().addSystemMessage('El motor tardó demasiado en responder. Podés intentar de nuevo.');
                 useAegisStore.getState().setStatus('idle');
             }
             thinkingTimeoutRef.current = null;
-        }, 30_000);
+        }, 120_000);
     };
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -268,8 +319,8 @@ const ChatTerminal: React.FC = () => {
                 {/* Agent Activity — CORE-202 */}
                 <AgentActivityPanel />
 
-                {/* CORE-248: banner de estado enriquecido durante inferencia */}
-                {status === 'thinking' && (
+                {/* CORE-248/299: banner de estado enriquecido — aparece tras 5s de espera */}
+                {status === 'thinking' && showProcessingBanner && (
                     <motion.div
                         initial={{ opacity: 0, y: 4 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -345,6 +396,74 @@ const ChatTerminal: React.FC = () => {
                                     }
                                 </button>
                             )}
+                            {/* CORE-300: model selector */}
+                            <div className="relative shrink-0" ref={modelPickerRef}>
+                                <button
+                                    onClick={() => setShowModelPicker(v => !v)}
+                                    className={cn(
+                                        "flex items-center gap-1 px-2 py-1.5 rounded-lg transition-all text-[10px] font-mono max-w-[160px]",
+                                        selectedModelId
+                                            ? "bg-aegis-cyan/10 text-aegis-cyan border border-aegis-cyan/20"
+                                            : "bg-white/5 text-white/40 hover:text-aegis-cyan hover:bg-aegis-cyan/10"
+                                    )}
+                                    title="Seleccionar modelo"
+                                >
+                                    <span className="truncate">
+                                        {selectedModelId
+                                            ? (availableModels.find(m => m.model_id === selectedModelId)?.display_name
+                                                || selectedModelId.split('/').slice(-1)[0])
+                                            : '⚡ Auto'}
+                                    </span>
+                                    <ChevronDown className="w-3 h-3 flex-shrink-0 opacity-60" />
+                                </button>
+                                {showModelPicker && (
+                                    <div className="absolute bottom-full right-0 mb-2 w-64 bg-[#0d1117] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50">
+                                        <div className="max-h-72 overflow-y-auto">
+                                            <button
+                                                onClick={() => { setSelectedModelId(null); setShowModelPicker(false); }}
+                                                className="w-full flex items-center justify-between px-3 py-2.5 text-[10px] font-mono hover:bg-white/5 transition-colors"
+                                            >
+                                                <span className="text-aegis-cyan font-bold">⚡ Auto (CMR)</span>
+                                                {selectedModelId === null && <Check className="w-3 h-3 text-aegis-cyan" />}
+                                            </button>
+                                            {availableModels.length > 0 && (
+                                                <>
+                                                    <div className="border-t border-white/10" />
+                                                    {Object.entries(
+                                                        availableModels.reduce<Record<string, CatalogModel[]>>((acc, m) => {
+                                                            (acc[m.provider] = acc[m.provider] || []).push(m);
+                                                            return acc;
+                                                        }, {})
+                                                    ).map(([provider, providerModels]) => (
+                                                        <div key={provider}>
+                                                            <div className="px-3 py-1.5 text-[9px] font-mono text-white/30 uppercase tracking-widest bg-white/2">
+                                                                {provider}
+                                                            </div>
+                                                            {providerModels.map(m => (
+                                                                <button
+                                                                    key={m.model_id}
+                                                                    onClick={() => { setSelectedModelId(m.model_id); setShowModelPicker(false); }}
+                                                                    className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono hover:bg-white/5 transition-colors"
+                                                                >
+                                                                    <span className="text-white/70 truncate flex-1 text-left">
+                                                                        {m.display_name || m.model_id.split('/').slice(-1)[0] || m.model_id}
+                                                                        {m.cost_input_per_mtok === 0 && (
+                                                                            <span className="ml-1 text-green-400/60">(free)</span>
+                                                                        )}
+                                                                    </span>
+                                                                    {selectedModelId === m.model_id && (
+                                                                        <Check className="w-3 h-3 text-aegis-cyan flex-shrink-0 ml-1" />
+                                                                    )}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    ))}
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                             <button onClick={() => setShowSettings(true)} className="p-2 rounded-lg bg-white/5 text-white/40 hover:text-aegis-cyan hover:bg-aegis-cyan/10 transition-all" title="Settings">
                                 <Settings className="w-5 h-5" />
                             </button>

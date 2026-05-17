@@ -35,6 +35,8 @@ pub struct AgentNodeSummary {
     pub last_report: Option<String>,
     /// true si el proveedor del agente no soporta tool use (CORE-237).
     pub degraded: bool,
+    /// Tenant dueño de este agente — para filtrado cross-tenant (CORE-300).
+    pub tenant_id: String,
 }
 
 /// CORE-287: Convierte un nombre de proyecto en un ID de filesystem válido.
@@ -163,7 +165,7 @@ impl AgentOrchestrator {
 
     async fn create_project_supervisor(
         &self,
-        _tenant_id: &str,
+        tenant_id: &str,
         project_id: &ProjectId,
         description: &str,
     ) -> anyhow::Result<AgentId> {
@@ -182,22 +184,23 @@ impl AgentOrchestrator {
             None,
             system_prompt,
             TaskType::Planning,
-        );
+        )
+        .with_tenant(tenant_id);
         node.context_budget = budget.max_tokens;
 
         let agent_id = node.agent_id;
-        let (tx, _rx) = mpsc::channel::<AgentMessage>(32);
-
         {
             let mut tree = self.tree.write().await;
             tree.insert(node)?;
         }
+
+        // Crear canal y publicar tx antes de spawnear el loop (await async-safe).
+        let (tx, rx) = mpsc::channel::<AgentMessage>(32);
         {
             let mut ch = self.channels.write().await;
             ch.insert(agent_id, tx);
         }
-
-        self.spawn_loop(agent_id, None);
+        self.spawn_loop(agent_id, rx, None);
 
         info!(
             project = %project_id,
@@ -250,6 +253,10 @@ impl AgentOrchestrator {
 
             let snapshot = restored_tree.serialize()?;
             for mut node in snapshot.nodes {
+                // CORE-300: propagar tenant_id en nodos restaurados sin él (backward compat).
+                if node.tenant_id.is_empty() {
+                    node.tenant_id = tenant_id.to_string();
+                }
                 let is_project_supervisor =
                     matches!(node.role, AgentRole::ProjectSupervisor { .. });
 
@@ -274,10 +281,6 @@ impl AgentOrchestrator {
                 }
 
                 let agent_id = node.agent_id;
-                let _parent_tx = node.parent_id.and_then(|_pid| {
-                    // Se asignará al crear el canal — se pasa None por ahora
-                    None::<mpsc::Sender<AgentMessage>>
-                });
                 tree.nodes_mut_raw().insert(agent_id, node);
                 if matches!(
                     tree.get(&agent_id).map(|n| &n.role),
@@ -288,21 +291,46 @@ impl AgentOrchestrator {
             }
         }
 
-        // Crear canales y loops para todos los nodos restaurados
-        let agent_ids: Vec<AgentId> = {
+        // CORE-FIX: Antes este bloque solo creaba canales descartando `_rx` y NO
+        // arrancaba los loops, así que los nodos restaurados quedaban mudos. Peor:
+        // también descartaba `parent_tx` (ver bloque comentado de líneas previas),
+        // dejando huérfanos a los hijos restaurados — sus Reports caían al vacío.
+        //
+        // Ahora recorremos el árbol en BFS desde el root, así cuando spawneamos
+        // cada nodo el canal de su padre ya está en `self.channels` y podemos
+        // resolver el parent_tx correcto.
+        let bfs_order: Vec<AgentId> = {
             let tree = self.tree.read().await;
-            tree.descendants(&root_id)
-                .iter()
-                .map(|n| n.agent_id)
-                .chain(std::iter::once(root_id))
-                .collect()
+            let mut order = vec![root_id];
+            let mut stack: Vec<AgentId> = vec![root_id];
+            while let Some(current) = stack.pop() {
+                let children: Vec<AgentId> =
+                    tree.children(&current).iter().map(|n| n.agent_id).collect();
+                for child_id in children {
+                    order.push(child_id);
+                    stack.push(child_id);
+                }
+            }
+            order
         };
 
-        for agent_id in agent_ids {
-            let (tx, _rx) = mpsc::channel::<AgentMessage>(32);
-            let mut ch = self.channels.write().await;
-            ch.insert(agent_id, tx);
-            // Los loops se crean bajo demanda al recibir el primer Dispatch
+        for agent_id in bfs_order {
+            let parent_id = {
+                let tree = self.tree.read().await;
+                tree.get(&agent_id).and_then(|n| n.parent_id)
+            };
+            let parent_tx = match parent_id {
+                Some(pid) => self.channels.read().await.get(&pid).cloned(),
+                None => None,
+            };
+            // Crear canal y publicar tx antes de spawnear — así el siguiente
+            // hijo en el BFS puede encontrar su parent_tx.
+            let (tx, rx) = mpsc::channel::<AgentMessage>(32);
+            {
+                let mut ch = self.channels.write().await;
+                ch.insert(agent_id, tx);
+            }
+            self.spawn_loop(agent_id, rx, parent_tx);
         }
 
         info!(
@@ -336,18 +364,25 @@ impl AgentOrchestrator {
             loader.build_system_prompt(&role, &project_id, system_prompt_hint.as_deref())
         };
 
+        // CORE-300: heredar tenant_id del nodo padre para propagar aislamiento.
+        let parent_tenant_id = {
+            let tree = self.tree.read().await;
+            tree.get(&parent_id)
+                .map(|n| n.tenant_id.clone())
+                .unwrap_or_default()
+        };
+
         let mut node = crate::agents::node::AgentNode::new(
             role,
             project_id.clone(),
             Some(parent_id),
             system_prompt,
             task_type,
-        );
+        )
+        .with_tenant(&parent_tenant_id);
         node.context_budget = budget.max_tokens;
 
         let agent_id = node.agent_id;
-        let (tx, _rx) = mpsc::channel::<AgentMessage>(32);
-
         {
             let mut tree = self.tree.write().await;
             tree.insert(node)?;
@@ -358,12 +393,13 @@ impl AgentOrchestrator {
             ch.get(&parent_id).cloned()
         };
 
+        // Crear canal y publicar tx antes de spawnear el loop.
+        let (tx, rx) = mpsc::channel::<AgentMessage>(32);
         {
             let mut ch = self.channels.write().await;
             ch.insert(agent_id, tx);
         }
-
-        self.spawn_loop(agent_id, parent_tx);
+        self.spawn_loop(agent_id, rx, parent_tx);
 
         info!(
             parent = %parent_id,
@@ -592,8 +628,15 @@ impl AgentOrchestrator {
 
                 // CORE-281: Deduplicación — si ya existe un ProjectSupervisor activo
                 // para este proyecto, retornar su ID sin crear uno nuevo.
+                // CORE-300: filtrar también por tenant_id del caller.
                 if matches!(role, AgentRole::ProjectSupervisor { .. }) {
                     let project_name = name.as_deref().unwrap_or(&scope).to_string();
+                    let caller_tenant_id = {
+                        let tree = self.tree.read().await;
+                        tree.get(&caller_id)
+                            .map(|n| n.tenant_id.clone())
+                            .unwrap_or_default()
+                    };
                     let existing_id = {
                         let tree = self.tree.read().await;
                         tree.all_nodes()
@@ -601,6 +644,7 @@ impl AgentOrchestrator {
                             .find(|n| {
                                 if let AgentRole::ProjectSupervisor { name: n_name, .. } = &n.role {
                                     n_name.to_lowercase() == project_name.to_lowercase()
+                                        && n.tenant_id == caller_tenant_id
                                         && !matches!(
                                             n.state,
                                             AgentState::Complete | AgentState::Failed { .. }
@@ -891,9 +935,19 @@ impl AgentOrchestrator {
     // --- UI / snapshot ---
 
     pub async fn tree_snapshot(&self) -> Vec<AgentNodeSummary> {
+        self.tree_snapshot_filtered(None).await
+    }
+
+    /// CORE-300: Retorna solo los nodos del tenant indicado — aislamiento cross-tenant.
+    pub async fn tree_snapshot_for_tenant(&self, tenant_id: &str) -> Vec<AgentNodeSummary> {
+        self.tree_snapshot_filtered(Some(tenant_id)).await
+    }
+
+    async fn tree_snapshot_filtered(&self, tenant_filter: Option<&str>) -> Vec<AgentNodeSummary> {
         let tree = self.tree.read().await;
         tree.all_nodes()
             .iter()
+            .filter(|n| tenant_filter.map(|t| n.tenant_id == t).unwrap_or(true))
             .map(|n| {
                 let degraded_suffix = if n.is_degraded { " [degraded]" } else { "" };
                 let (role_label, task_type_str) = match &n.role {
@@ -929,6 +983,7 @@ impl AgentOrchestrator {
                     is_restored: n.is_restored,
                     last_report: n.last_report.clone(),
                     degraded: n.is_degraded,
+                    tenant_id: n.tenant_id.clone(),
                 }
             })
             .collect()
@@ -947,20 +1002,24 @@ impl AgentOrchestrator {
         Ok(())
     }
 
-    fn spawn_loop(&self, agent_id: AgentId, parent_tx: Option<mpsc::Sender<AgentMessage>>) {
+    /// Lanza el run loop del agente. El caller debe haber insertado ya el `tx`
+    /// del canal en `self.channels` y pasarnos el `rx` correspondiente.
+    ///
+    /// CORE-FIX: La versión anterior usaba `try_write` con fallback silencioso
+    /// dentro de la función, lo que bajo contención perdía el insert y dejaba
+    /// al agente sin canal. Ahora la responsabilidad de publicar el canal queda
+    /// en el caller (que ya está en contexto async y puede usar `write().await`
+    /// sin perder la inserción).
+    fn spawn_loop(
+        &self,
+        agent_id: AgentId,
+        rx: mpsc::Receiver<AgentMessage>,
+        parent_tx: Option<mpsc::Sender<AgentMessage>>,
+    ) {
         let tree_ref = Arc::clone(&self.tree);
         let router_ref = Arc::clone(&self.router);
         let channels_ref = Arc::clone(&self.channels);
         let hal_ref = Arc::clone(&self.hal);
-
-        // CORE-286: Crear siempre un par fresco — el tx viejo quedaba huérfano.
-        // Insertar ANTES de spawn para eliminar la race condition.
-        let (tx, rx) = mpsc::channel::<AgentMessage>(32);
-        {
-            if let Ok(mut ch) = channels_ref.try_write() {
-                ch.insert(agent_id, tx);
-            }
-        }
 
         tokio::spawn(async move {
             Self::run_agent_loop(
@@ -1176,13 +1235,27 @@ impl AgentOrchestrator {
 
                     let response = collect_task.await.unwrap_or_default();
 
-                    {
+                    // CORE-FIX: Si el LLM llamó la tool `report` con status=error|blocked,
+                    // el handler en chal::execute_tool_call_internal ya invocó
+                    // orchestrator.handle_tool_call(Report{...}), que setea el state
+                    // (Complete/Failed) y el last_report en el nodo. NO sobrescribir.
+                    // Solo asumimos Complete en el happy path (LLM terminó sin tool report).
+                    let (final_state, terminal_report) = {
                         let mut t = tree.write().await;
                         if let Some(n) = t.get_mut(&agent_id) {
-                            n.set_state(AgentState::Complete);
-                            n.set_last_report(response.clone());
+                            let already_terminal =
+                                matches!(n.state, AgentState::Complete | AgentState::Failed { .. });
+                            if !already_terminal {
+                                n.set_state(AgentState::Complete);
+                            }
+                            if n.last_report.is_none() && !response.is_empty() {
+                                n.set_last_report(response.clone());
+                            }
+                            (n.state.clone(), n.last_report.clone().unwrap_or_default())
+                        } else {
+                            (AgentState::Complete, response.clone())
                         }
-                    }
+                    };
 
                     // CORE-268: emitir SupervisorCompleted para supervisores
                     {
@@ -1204,11 +1277,21 @@ impl AgentOrchestrator {
                                 orch.emit_event(AgentEvent::SupervisorCompleted {
                                     agent_id,
                                     project_name,
-                                    summary: response.clone(),
+                                    summary: terminal_report.clone(),
                                 });
                             }
                         }
                     }
+
+                    // Map AgentState → ReportStatus para que el padre se entere
+                    // si el hijo falló (antes era siempre Success aunque la tool
+                    // report dijera "blocked" o "error" — bug que ocultaba fallas).
+                    let report_status = match &final_state {
+                        AgentState::Failed { reason } => ReportStatus::Failure {
+                            reason: reason.clone(),
+                        },
+                        _ => ReportStatus::Success,
+                    };
 
                     if let Some(ref ptx) = parent_tx {
                         let report = AgentMessage::Report {
@@ -1216,19 +1299,31 @@ impl AgentOrchestrator {
                             result: AgentResult {
                                 agent_id,
                                 role_description: role_label.clone(),
-                                summary: response,
+                                summary: terminal_report,
                                 artifacts: Vec::new(),
                                 metadata: serde_json::json!({ "model_used": model_id_for_meta }),
                             },
-                            status: ReportStatus::Success,
+                            status: report_status,
                         };
                         if let Err(e) = ptx.send(report).await {
                             error!("[{}] Failed to report to parent: {}", role_label, e);
                         }
                     } else {
-                        // CORE-288: ProjectSupervisor (sin padre) termina loop después de Complete
-                        channels.write().await.remove(&agent_id);
-                        break;
+                        // CORE-FIX: ProjectSupervisor (sin padre) queda Idle esperando
+                        // nuevos Dispatch del ChatAgent. Antes eliminábamos el canal y
+                        // rompíamos el loop, dejando al supervisor inutilizable y
+                        // obligando al ChatAgent a respawnear (con el costo del restore).
+                        {
+                            let mut t = tree.write().await;
+                            if let Some(n) = t.get_mut(&agent_id) {
+                                if matches!(n.state, AgentState::Complete) {
+                                    n.set_state(AgentState::Idle);
+                                }
+                            }
+                        }
+                        // Permitir que una nueva tanda de hijos dispare síntesis otra vez.
+                        synthesis_done = false;
+                        // No `break` — el loop sigue esperando mensajes (rx.recv).
                     }
                 }
 

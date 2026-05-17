@@ -252,7 +252,18 @@ impl PrManager {
             tenant_id: tenant_id.to_string(),
             payload,
         };
-        let _ = self.ws_tx.send(event);
+        // CORE-FIX: antes el Result se ignoraba con `let _ = ...`. Si el
+        // broadcast no tiene receivers (todos los WS del tenant desconectados)
+        // o está lleno, los eventos PR se perdían silenciosamente y nadie se
+        // enteraba de que la UI estaba ciega. broadcast::send retorna
+        // SendError(value) cuando no hay receivers — eso es esperable y solo
+        // lo logueamos en debug; cualquier otro fallo va a warn.
+        if let Err(broadcast::error::SendError(_)) = self.ws_tx.send(event) {
+            tracing::debug!(
+                tenant = %tenant_id,
+                "pr_manager: no active WS receivers for workspace event"
+            );
+        }
     }
 
     // ── Polling loop ──────────────────────────────────────────────────────

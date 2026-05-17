@@ -186,6 +186,12 @@ impl ModelCatalog {
     pub async fn all_entries(&self) -> Vec<ModelEntry> {
         self.entries.read().await.clone()
     }
+
+    /// Appends a single entry to the catalog if it doesn't already exist.
+    pub async fn add_entry(&self, entry: ModelEntry) {
+        let mut entries = self.entries.write().await;
+        entries.push(entry);
+    }
 }
 
 #[cfg(test)]

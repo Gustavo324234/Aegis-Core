@@ -1,3 +1,6 @@
+// release-please trigger: PR #277 squash landed with a non-Conventional
+// title so release-please skipped it. This anchor associates the new
+// Conventional commit with the ank-http package path.
 pub mod citadel;
 pub mod config;
 pub mod error;

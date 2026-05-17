@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod discovery;
 pub mod key_pool;
 pub mod rate_tracker;
 pub mod siren;
@@ -12,8 +13,17 @@ use crate::scheduler::ModelPreference;
 pub use catalog::{ModelCatalog, ModelEntry, ToolUseSupport};
 pub use key_pool::KeyPool;
 pub use rate_tracker::ModelUsageTracker;
+use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::info;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
+use tracing::{info, warn};
+
+/// CORE-FIX (B4): TTL of the sticky-routing cache. Within this window, the
+/// same (tenant, task_type, model_pref) triple reuses the previous decision
+/// to keep conversations on a consistent model. Long enough to span a typical
+/// reply turn-around, short enough that price/rate-limit changes catch up.
+const STICKY_DECISION_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct RoutingDecision {
@@ -34,10 +44,23 @@ pub struct FallbackDecision {
     pub api_key: String,
 }
 
+/// Key for the sticky-routing cache. The triple identifies the conversation
+/// intent — same tenant, same task class, same hardware preference.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StickyKey {
+    tenant_id: String,
+    task_type: TaskType,
+    model_pref: ModelPreference,
+}
+
 pub struct CognitiveRouter {
     catalog: Arc<ModelCatalog>,
     key_pool: Arc<KeyPool>,
     tracker: Arc<ModelUsageTracker>,
+    /// CORE-FIX (B4): cache of the last routing decision per conversation
+    /// intent. Keeps consecutive turns on the same model so the persona/style
+    /// stays consistent. Invalidated on failure (see `invalidate_sticky`).
+    sticky: Arc<RwLock<HashMap<StickyKey, (Instant, RoutingDecision)>>>,
 }
 
 impl CognitiveRouter {
@@ -46,6 +69,7 @@ impl CognitiveRouter {
             catalog,
             key_pool,
             tracker: Arc::new(ModelUsageTracker::new()),
+            sticky: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -97,42 +121,136 @@ impl CognitiveRouter {
         let model_pref = pcb.model_pref;
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
+        // CORE-FIX (B4): If we have a recent sticky decision for this exact
+        // intent and no model_override was forced, reuse it. Keeps a
+        // conversation on the same model across turns instead of letting
+        // the CMR flip between Claude / GPT / Gemini mid-chat.
+        if pcb.model_override.is_none() {
+            let sticky_key = StickyKey {
+                tenant_id: tenant_id.to_string(),
+                task_type,
+                model_pref,
+            };
+            let cached = {
+                let sticky = self.sticky.read().await;
+                sticky.get(&sticky_key).cloned()
+            };
+            if let Some((stamped_at, decision)) = cached {
+                if stamped_at.elapsed() < STICKY_DECISION_TTL {
+                    // Re-validate the model is still healthy before reusing.
+                    if !self
+                        .tracker
+                        .is_provider_circuit_open(&decision.provider)
+                        .await
+                    {
+                        info!(
+                            model = %decision.model_id,
+                            age_ms = stamped_at.elapsed().as_millis() as u64,
+                            "CMR: sticky-routing cache hit — reusing previous decision"
+                        );
+                        return Ok(decision);
+                    }
+                }
+                // Expired or unhealthy — drop the entry.
+                self.sticky.write().await.remove(&sticky_key);
+            }
+        }
+
+        // CORE-299: Si el PCB tiene un model_override, bypassear el CMR y resolver directo.
+        if let Some(ref model_id) = pcb.model_override {
+            if let Some(entry) = self.catalog.find(model_id).await {
+                let key = self.resolve_key(&entry, tenant_id).await.ok_or_else(|| {
+                    SystemError::HardwareFailure(format!(
+                        "No key available for model_override '{}'",
+                        model_id
+                    ))
+                })?;
+                return Ok(RoutingDecision {
+                    model_id: bare_model_id(&entry.model_id, &entry.provider),
+                    provider: entry.provider.clone(),
+                    api_url: key.api_url.clone().unwrap_or_else(|| entry_api_url(&entry)),
+                    api_key: key.api_key.clone(),
+                    key_id: Some(key.key_id.clone()),
+                    fallback_chain: vec![],
+                });
+            }
+            warn!(
+                "model_override '{}' not found in catalog, falling back to CMR",
+                model_id
+            );
+        }
+
         // Step 1: Get candidates from catalog
         let all_candidates = self.catalog.get_candidates(task_type).await;
 
-        // Step 2: Filter by model preference
-        let filtered: Vec<ModelEntry> = all_candidates
-            .into_iter()
-            .filter(|e| match model_pref {
-                ModelPreference::LocalOnly => e.is_local,
-                ModelPreference::CloudOnly => !e.is_local,
-                ModelPreference::HybridSmart => true,
-            })
-            .collect();
+        // Step 2: Filter by model preference.
+        // CORE-FIX: If LocalOnly produces no candidates (Ollama not running, no local
+        // model registered, etc.), fall back to HybridSmart instead of hard-failing.
+        // Hard-failing leaves the user staring at "no model available" even when cloud
+        // keys are configured — silently misleading. The downgrade is logged at WARN.
+        let (filtered, effective_pref): (Vec<ModelEntry>, ModelPreference) = {
+            let primary: Vec<ModelEntry> = all_candidates
+                .iter()
+                .filter(|e| match model_pref {
+                    ModelPreference::LocalOnly => e.is_local,
+                    ModelPreference::CloudOnly => !e.is_local,
+                    ModelPreference::HybridSmart => true,
+                })
+                .cloned()
+                .collect();
+
+            if primary.is_empty() && matches!(model_pref, ModelPreference::LocalOnly) {
+                warn!(
+                    "LocalOnly preference has no candidates for task_type={:?} \
+                     — falling back to HybridSmart so the request can still complete",
+                    task_type
+                );
+                (all_candidates, ModelPreference::HybridSmart)
+            } else {
+                (primary, model_pref)
+            }
+        };
 
         if filtered.is_empty() {
             return Err(SystemError::ModelNotFound(format!(
                 "No models available for task_type={:?} with model_pref={:?}",
-                task_type, model_pref
+                task_type, effective_pref
             )));
         }
 
-        // Step 3: Filter by key availability
+        // Step 3: Filter by key availability AND circuit breaker.
+        // CORE-FIX (B3): if a provider has 3+ failures in the last 30s, skip
+        // all its models — better to fall through to another provider than
+        // keep banging on the broken one.
         let mut available: Vec<ModelEntry> = Vec::new();
+        let mut skipped_by_breaker: Vec<String> = Vec::new();
         for entry in filtered {
             let has_key = self
                 .key_pool
                 .has_key_for_model(&entry.provider, &entry.model_id)
                 .await
                 || entry.is_local;
-            if has_key {
-                available.push(entry);
+            if !has_key {
+                continue;
             }
+            if self.tracker.is_provider_circuit_open(&entry.provider).await {
+                skipped_by_breaker.push(entry.model_id.clone());
+                continue;
+            }
+            available.push(entry);
+        }
+
+        if !skipped_by_breaker.is_empty() {
+            warn!(
+                skipped = ?skipped_by_breaker,
+                "CMR: skipped models whose provider has open circuit (3+ recent failures)"
+            );
         }
 
         if available.is_empty() {
             return Err(SystemError::HardwareFailure(
-                "No available keys for any candidate model".to_string(),
+                "No available keys for any candidate model (or all providers have open circuit)"
+                    .to_string(),
             ));
         }
 
@@ -143,10 +261,17 @@ impl CognitiveRouter {
             .iter()
             .map(|e| e.cost_input_per_mtok + e.cost_output_per_mtok)
             .fold(0.0_f64, f64::max);
-        let max_latency = available
-            .iter()
-            .map(|e| e.avg_latency_ms.unwrap_or(1500) as f64)
-            .fold(0.0_f64, f64::max);
+        let max_latency = {
+            let mut ml = 0.0_f64;
+            for e in &available {
+                let obs = self.tracker.observed_latency_ms(&e.model_id).await;
+                let lat = obs.unwrap_or(e.avg_latency_ms.unwrap_or(2000)) as f64;
+                if lat > ml {
+                    ml = lat;
+                }
+            }
+            ml
+        };
 
         // For each candidate: if no paid key exists, apply free-tier capacity factor.
         // Models at capacity (factor == 0.0) are hard-excluded; approaching limit
@@ -172,7 +297,14 @@ impl CognitiveRouter {
                 continue;
             }
 
-            let base = self.compute_score(&entry, task_type, max_cost, max_latency);
+            let ctx = ScoreCtx {
+                prompt: &pcb.memory_pointers.l1_instruction,
+                max_cost,
+                max_latency,
+                observed_latency: self.tracker.observed_latency_ms(&entry.model_id).await,
+                recent_errors: self.tracker.recent_errors(&entry.model_id).await,
+            };
+            let base = self.compute_score(&entry, task_type, &ctx);
             // Soft penalty: multiply by sqrt(capacity) so a model at 50% headroom
             // scores ~70% of its base, still competitive but deprioritised.
             scored.push((base * capacity.sqrt(), entry));
@@ -214,14 +346,36 @@ impl CognitiveRouter {
             .collect();
 
         let api_model_id = bare_model_id(&primary.model_id, &primary.provider);
+
+        // CORE-FIX (D1): Structured log with the top-3 scoring breakdown so we
+        // can answer "why did the router pick X over Y?" after the fact. Without
+        // this the only signal is the chosen model — which makes the CMR a
+        // black box when its decisions surprise us.
+        let top_breakdown: Vec<(String, f64)> = scored
+            .iter()
+            .take(3)
+            .map(|(score, e)| (e.model_id.clone(), (*score * 1000.0).round() / 1000.0))
+            .collect();
+        let fallback_ids: Vec<String> = scored
+            .iter()
+            .skip(1)
+            .take(2)
+            .map(|(_, e)| e.model_id.clone())
+            .collect();
         info!(
             catalog_id = %primary.model_id,
             api_model_id = %api_model_id,
             provider = %primary.provider,
-            "CognitiveRouter: resolved model for API request"
+            task_type = ?task_type,
+            model_pref = ?effective_pref,
+            tenant = %tenant_id,
+            candidates_considered = scored.len(),
+            top3 = ?top_breakdown,
+            fallback_chain = ?fallback_ids,
+            "CognitiveRouter: routing decision"
         );
 
-        Ok(RoutingDecision {
+        let decision = RoutingDecision {
             model_id: api_model_id,
             provider: primary.provider.clone(),
             api_url: primary_key
@@ -231,18 +385,55 @@ impl CognitiveRouter {
             api_key: primary_key.api_key.clone(),
             key_id: Some(primary_key.key_id.clone()),
             fallback_chain,
-        })
+        };
+
+        // CORE-FIX (B4): cache this decision for the next turn from the same tenant.
+        // Skipped for model_override flows (those bypass the CMR entirely).
+        if pcb.model_override.is_none() {
+            let sticky_key = StickyKey {
+                tenant_id: tenant_id.to_string(),
+                task_type,
+                model_pref: effective_pref,
+            };
+            self.sticky
+                .write()
+                .await
+                .insert(sticky_key, (Instant::now(), decision.clone()));
+        }
+
+        Ok(decision)
     }
 
-    fn compute_score(
-        &self,
-        entry: &ModelEntry,
-        task_type: TaskType,
-        max_cost: f64,
-        max_latency: f64,
-    ) -> f64 {
-        let quality = entry.score_for(task_type) as f64 / 5.0;
+    /// CORE-FIX (B4): Drop the sticky cache entry for this tenant so the next
+    /// `decide()` call re-evaluates from scratch. Call this when the previously
+    /// chosen model fails so we don't pin the conversation to a broken model.
+    pub async fn invalidate_sticky(&self, tenant_id: &str) {
+        let mut sticky = self.sticky.write().await;
+        sticky.retain(|k, _| k.tenant_id != tenant_id);
+    }
 
+    pub fn tracker_ref(&self) -> &Arc<ModelUsageTracker> {
+        &self.tracker
+    }
+
+    pub fn catalog_ref(&self) -> Arc<ModelCatalog> {
+        self.catalog.clone()
+    }
+
+    fn compute_score(&self, entry: &ModelEntry, task_type: TaskType, ctx: &ScoreCtx<'_>) -> f64 {
+        let (prompt, max_cost, max_latency, observed_latency, recent_errors) = (
+            ctx.prompt,
+            ctx.max_cost,
+            ctx.max_latency,
+            ctx.observed_latency,
+            ctx.recent_errors,
+        );
+        // ── 1. Quality (40%) ─────────────────────────────────────────
+        let base_quality = entry.score_for(task_type) as f64 / 5.0;
+        let content_boost = detect_content_type(prompt, task_type);
+        let quality = (base_quality * (1.0 + content_boost)).min(1.0);
+
+        // ── 2. Cost (25%) ────────────────────────────────────────────
         let total_cost = entry.cost_input_per_mtok + entry.cost_output_per_mtok;
         let cost_inv = if max_cost > 0.0 {
             1.0 - (total_cost / max_cost)
@@ -250,14 +441,32 @@ impl CognitiveRouter {
             1.0
         };
 
-        let latency = entry.avg_latency_ms.unwrap_or(1500) as f64;
+        // ── 3. Speed (20%) ───────────────────────────────────────────
+        let effective_latency =
+            observed_latency.unwrap_or(entry.avg_latency_ms.unwrap_or(2000)) as f64;
         let speed_inv = if max_latency > 0.0 {
-            1.0 - (latency / max_latency)
+            1.0 - (effective_latency / max_latency).min(1.0)
         } else {
             1.0
         };
 
-        quality * 0.40 + 1.0_f64 * 0.30 + cost_inv * 0.20 + speed_inv * 0.10
+        // ── 4. Context fit (15%) ─────────────────────────────────────
+        let estimated_tokens = (prompt.len() / 4).max(1);
+        let context_fit = if entry.context_window as usize > estimated_tokens * 4 {
+            1.0
+        } else if entry.context_window as usize > estimated_tokens * 2 {
+            0.7
+        } else if entry.context_window as usize > estimated_tokens {
+            0.3
+        } else {
+            0.0
+        };
+
+        // ── 5. Error penalty ─────────────────────────────────────────
+        let error_penalty = (recent_errors as f64 * 0.10).min(0.30);
+
+        let raw = quality * 0.40 + cost_inv * 0.25 + speed_inv * 0.20 + context_fit * 0.15;
+        (raw * (1.0 - error_penalty)).max(0.0)
     }
 
     /// Busca una entrada en el catálogo por model_id (CORE-237).
@@ -308,6 +517,80 @@ impl CognitiveRouter {
             .get_available_key(&entry.provider, &entry.model_id, tenant_id)
             .await
     }
+}
+
+struct ScoreCtx<'a> {
+    prompt: &'a str,
+    max_cost: f64,
+    max_latency: f64,
+    observed_latency: Option<u32>,
+    recent_errors: u32,
+}
+
+/// Analyses the prompt with lexical signals and returns a boost (0.0–0.30)
+/// when the detected content type matches the declared task_type.
+fn detect_content_type(prompt: &str, task_type: TaskType) -> f64 {
+    let lower = prompt.to_lowercase();
+
+    let code_signals = [
+        "```",
+        "fn ",
+        "def ",
+        "function ",
+        "import ",
+        "class ",
+        "let ",
+        "const ",
+        "var ",
+        "=>",
+        "{}",
+    ];
+    let code_score: f64 = code_signals.iter().filter(|s| lower.contains(*s)).count() as f64
+        / code_signals.len() as f64;
+
+    let analysis_signals = [
+        "analiza",
+        "analyze",
+        "compare",
+        "compara",
+        "diferencia",
+        "¿por qué",
+        "why",
+        "explica",
+        "explain",
+        "cuál es mejor",
+    ];
+    let analysis_score: f64 = analysis_signals
+        .iter()
+        .filter(|s| lower.contains(*s))
+        .count() as f64
+        / analysis_signals.len() as f64;
+
+    let planning_signals = [
+        "plan",
+        "roadmap",
+        "pasos",
+        "steps",
+        "cómo hacer",
+        "how to",
+        "estrategia",
+        "strategy",
+        "prioridad",
+    ];
+    let planning_score: f64 = planning_signals
+        .iter()
+        .filter(|s| lower.contains(*s))
+        .count() as f64
+        / planning_signals.len() as f64;
+
+    let boost = match task_type {
+        TaskType::Code => code_score,
+        TaskType::Analysis => analysis_score,
+        TaskType::Planning => planning_score,
+        _ => 0.0,
+    };
+
+    (boost * 0.30_f64).min(0.30)
 }
 
 /// Returns the model ID as expected by the provider's native API.
@@ -379,6 +662,23 @@ mod tests {
             Ok(None)
         }
         async fn update_voice_profile(&self, _profile: VoiceProfile) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn save_voice_fingerprint(
+            &self,
+            _tenant_id: &str,
+            _fingerprint: &[f32],
+            _threshold: f32,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn get_voice_fingerprint(
+            &self,
+            _tenant_id: &str,
+        ) -> anyhow::Result<Option<(Vec<f32>, f32)>> {
+            Ok(None)
+        }
+        async fn delete_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }
