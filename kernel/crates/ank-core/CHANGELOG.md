@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.58](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.57...ank-core-v0.1.58) (2026-05-17)
+
+
+### Bug Fixes
+
+* **core:** CORE-300 tenant isolation in agent tree — partition by tenant_id ([#284](https://github.com/Gustavo324234/Aegis-Core/issues/284)) ([f8741ad](https://github.com/Gustavo324234/Aegis-Core/commit/f8741ad68ca9ecdc54c386aa8ee467434ec8dd42))
+
 ## [0.1.57](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.56...ank-core-v0.1.57) (2026-05-17)
 
 
