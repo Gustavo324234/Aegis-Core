@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.20.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.19.2...shell-ui-v1.20.0) (2026-05-17)
+
+
+### Features
+
+* **ui:** CORE-245 admin provider toggle — enable/disable without deleting ([#290](https://github.com/Gustavo324234/Aegis-Core/issues/290)) ([e68c0fd](https://github.com/Gustavo324234/Aegis-Core/commit/e68c0fde43e2d8253d53b30db718cfabb7fbedb5))
+
+
+### Bug Fixes
+
+* **ui:** CORE-299 align chat timeout with ReAct loop — 120s + progressive loading indicator ([#287](https://github.com/Gustavo324234/Aegis-Core/issues/287)) ([ecd6f6a](https://github.com/Gustavo324234/Aegis-Core/commit/ecd6f6a512a2747c40e3c07365c484f53d9348c3))
+* **ui:** CORE-301 AgentTreeWidget — differentiate empty vs error state, retry with backoff ([#289](https://github.com/Gustavo324234/Aegis-Core/issues/289)) ([deb8909](https://github.com/Gustavo324234/Aegis-Core/commit/deb8909e2aca6e9b00cb7e7ca284081b57b63f4e))
+
 ## [1.19.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.19.1...shell-ui-v1.19.2) (2026-05-17)
 
 
