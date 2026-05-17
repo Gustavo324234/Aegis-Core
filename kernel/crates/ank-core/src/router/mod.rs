@@ -12,8 +12,17 @@ use crate::scheduler::ModelPreference;
 pub use catalog::{ModelCatalog, ModelEntry, ToolUseSupport};
 pub use key_pool::KeyPool;
 pub use rate_tracker::ModelUsageTracker;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+/// CORE-FIX (B4): TTL of the sticky-routing cache. Within this window, the
+/// same (tenant, task_type, model_pref) triple reuses the previous decision
+/// to keep conversations on a consistent model. Long enough to span a typical
+/// reply turn-around, short enough that price/rate-limit changes catch up.
+const STICKY_DECISION_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct RoutingDecision {
@@ -34,10 +43,23 @@ pub struct FallbackDecision {
     pub api_key: String,
 }
 
+/// Key for the sticky-routing cache. The triple identifies the conversation
+/// intent — same tenant, same task class, same hardware preference.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StickyKey {
+    tenant_id: String,
+    task_type: TaskType,
+    model_pref: ModelPreference,
+}
+
 pub struct CognitiveRouter {
     catalog: Arc<ModelCatalog>,
     key_pool: Arc<KeyPool>,
     tracker: Arc<ModelUsageTracker>,
+    /// CORE-FIX (B4): cache of the last routing decision per conversation
+    /// intent. Keeps consecutive turns on the same model so the persona/style
+    /// stays consistent. Invalidated on failure (see `invalidate_sticky`).
+    sticky: Arc<RwLock<HashMap<StickyKey, (Instant, RoutingDecision)>>>,
 }
 
 impl CognitiveRouter {
@@ -46,6 +68,7 @@ impl CognitiveRouter {
             catalog,
             key_pool,
             tracker: Arc::new(ModelUsageTracker::new()),
+            sticky: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -97,6 +120,41 @@ impl CognitiveRouter {
         let model_pref = pcb.model_pref;
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
+        // CORE-FIX (B4): If we have a recent sticky decision for this exact
+        // intent and no model_override was forced, reuse it. Keeps a
+        // conversation on the same model across turns instead of letting
+        // the CMR flip between Claude / GPT / Gemini mid-chat.
+        if pcb.model_override.is_none() {
+            let sticky_key = StickyKey {
+                tenant_id: tenant_id.to_string(),
+                task_type,
+                model_pref,
+            };
+            let cached = {
+                let sticky = self.sticky.read().await;
+                sticky.get(&sticky_key).cloned()
+            };
+            if let Some((stamped_at, decision)) = cached {
+                if stamped_at.elapsed() < STICKY_DECISION_TTL {
+                    // Re-validate the model is still healthy before reusing.
+                    if !self
+                        .tracker
+                        .is_provider_circuit_open(&decision.provider)
+                        .await
+                    {
+                        info!(
+                            model = %decision.model_id,
+                            age_ms = stamped_at.elapsed().as_millis() as u64,
+                            "CMR: sticky-routing cache hit — reusing previous decision"
+                        );
+                        return Ok(decision);
+                    }
+                }
+                // Expired or unhealthy — drop the entry.
+                self.sticky.write().await.remove(&sticky_key);
+            }
+        }
+
         // CORE-299: Si el PCB tiene un model_override, bypassear el CMR y resolver directo.
         if let Some(ref model_id) = pcb.model_override {
             if let Some(entry) = self.catalog.find(model_id).await {
@@ -124,39 +182,74 @@ impl CognitiveRouter {
         // Step 1: Get candidates from catalog
         let all_candidates = self.catalog.get_candidates(task_type).await;
 
-        // Step 2: Filter by model preference
-        let filtered: Vec<ModelEntry> = all_candidates
-            .into_iter()
-            .filter(|e| match model_pref {
-                ModelPreference::LocalOnly => e.is_local,
-                ModelPreference::CloudOnly => !e.is_local,
-                ModelPreference::HybridSmart => true,
-            })
-            .collect();
+        // Step 2: Filter by model preference.
+        // CORE-FIX: If LocalOnly produces no candidates (Ollama not running, no local
+        // model registered, etc.), fall back to HybridSmart instead of hard-failing.
+        // Hard-failing leaves the user staring at "no model available" even when cloud
+        // keys are configured — silently misleading. The downgrade is logged at WARN.
+        let (filtered, effective_pref): (Vec<ModelEntry>, ModelPreference) = {
+            let primary: Vec<ModelEntry> = all_candidates
+                .iter()
+                .filter(|e| match model_pref {
+                    ModelPreference::LocalOnly => e.is_local,
+                    ModelPreference::CloudOnly => !e.is_local,
+                    ModelPreference::HybridSmart => true,
+                })
+                .cloned()
+                .collect();
+
+            if primary.is_empty() && matches!(model_pref, ModelPreference::LocalOnly) {
+                warn!(
+                    "LocalOnly preference has no candidates for task_type={:?} \
+                     — falling back to HybridSmart so the request can still complete",
+                    task_type
+                );
+                (all_candidates, ModelPreference::HybridSmart)
+            } else {
+                (primary, model_pref)
+            }
+        };
 
         if filtered.is_empty() {
             return Err(SystemError::ModelNotFound(format!(
                 "No models available for task_type={:?} with model_pref={:?}",
-                task_type, model_pref
+                task_type, effective_pref
             )));
         }
 
-        // Step 3: Filter by key availability
+        // Step 3: Filter by key availability AND circuit breaker.
+        // CORE-FIX (B3): if a provider has 3+ failures in the last 30s, skip
+        // all its models — better to fall through to another provider than
+        // keep banging on the broken one.
         let mut available: Vec<ModelEntry> = Vec::new();
+        let mut skipped_by_breaker: Vec<String> = Vec::new();
         for entry in filtered {
             let has_key = self
                 .key_pool
                 .has_key_for_model(&entry.provider, &entry.model_id)
                 .await
                 || entry.is_local;
-            if has_key {
-                available.push(entry);
+            if !has_key {
+                continue;
             }
+            if self.tracker.is_provider_circuit_open(&entry.provider).await {
+                skipped_by_breaker.push(entry.model_id.clone());
+                continue;
+            }
+            available.push(entry);
+        }
+
+        if !skipped_by_breaker.is_empty() {
+            warn!(
+                skipped = ?skipped_by_breaker,
+                "CMR: skipped models whose provider has open circuit (3+ recent failures)"
+            );
         }
 
         if available.is_empty() {
             return Err(SystemError::HardwareFailure(
-                "No available keys for any candidate model".to_string(),
+                "No available keys for any candidate model (or all providers have open circuit)"
+                    .to_string(),
             ));
         }
 
@@ -252,14 +345,36 @@ impl CognitiveRouter {
             .collect();
 
         let api_model_id = bare_model_id(&primary.model_id, &primary.provider);
+
+        // CORE-FIX (D1): Structured log with the top-3 scoring breakdown so we
+        // can answer "why did the router pick X over Y?" after the fact. Without
+        // this the only signal is the chosen model — which makes the CMR a
+        // black box when its decisions surprise us.
+        let top_breakdown: Vec<(String, f64)> = scored
+            .iter()
+            .take(3)
+            .map(|(score, e)| (e.model_id.clone(), (*score * 1000.0).round() / 1000.0))
+            .collect();
+        let fallback_ids: Vec<String> = scored
+            .iter()
+            .skip(1)
+            .take(2)
+            .map(|(_, e)| e.model_id.clone())
+            .collect();
         info!(
             catalog_id = %primary.model_id,
             api_model_id = %api_model_id,
             provider = %primary.provider,
-            "CognitiveRouter: resolved model for API request"
+            task_type = ?task_type,
+            model_pref = ?effective_pref,
+            tenant = %tenant_id,
+            candidates_considered = scored.len(),
+            top3 = ?top_breakdown,
+            fallback_chain = ?fallback_ids,
+            "CognitiveRouter: routing decision"
         );
 
-        Ok(RoutingDecision {
+        let decision = RoutingDecision {
             model_id: api_model_id,
             provider: primary.provider.clone(),
             api_url: primary_key
@@ -269,7 +384,31 @@ impl CognitiveRouter {
             api_key: primary_key.api_key.clone(),
             key_id: Some(primary_key.key_id.clone()),
             fallback_chain,
-        })
+        };
+
+        // CORE-FIX (B4): cache this decision for the next turn from the same tenant.
+        // Skipped for model_override flows (those bypass the CMR entirely).
+        if pcb.model_override.is_none() {
+            let sticky_key = StickyKey {
+                tenant_id: tenant_id.to_string(),
+                task_type,
+                model_pref: effective_pref,
+            };
+            self.sticky
+                .write()
+                .await
+                .insert(sticky_key, (Instant::now(), decision.clone()));
+        }
+
+        Ok(decision)
+    }
+
+    /// CORE-FIX (B4): Drop the sticky cache entry for this tenant so the next
+    /// `decide()` call re-evaluates from scratch. Call this when the previously
+    /// chosen model fails so we don't pin the conversation to a broken model.
+    pub async fn invalidate_sticky(&self, tenant_id: &str) {
+        let mut sticky = self.sticky.write().await;
+        sticky.retain(|k, _| k.tenant_id != tenant_id);
     }
 
     pub fn tracker_ref(&self) -> &Arc<ModelUsageTracker> {

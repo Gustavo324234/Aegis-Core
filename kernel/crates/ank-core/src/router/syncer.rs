@@ -69,7 +69,27 @@ impl CatalogSyncer {
     }
 
     async fn sync_once(&self) -> anyhow::Result<()> {
-        // Only sync if we have an OpenRouter key
+        // Sync non-OpenRouter provider models (ollama, custom, etc.) from global key pool.
+        // This ensures their models survive restarts and appear in the catalog immediately.
+        let global_keys = self.key_pool.list_global_keys().await;
+        for key in &global_keys {
+            if key.provider == "openrouter" {
+                continue;
+            }
+            if let Some(models) = &key.active_models {
+                if !models.is_empty() {
+                    let n = register_provider_models(&key.provider, models, &self.catalog).await;
+                    if n > 0 {
+                        info!(
+                            "CatalogSyncer: registered {} models from {} key pool entry",
+                            n, key.provider
+                        );
+                    }
+                }
+            }
+        }
+
+        // Only sync OpenRouter catalog if we have an OpenRouter key
         if !self.key_pool.has_openrouter_key().await {
             return Ok(());
         }
@@ -171,6 +191,74 @@ impl CatalogSyncer {
         self.catalog.replace_all(current).await;
         Ok(())
     }
+}
+
+/// Register models declared in `active_models` of a non-OpenRouter provider key
+/// (e.g. ollama, custom, lmstudio) into the catalog so CognitiveRouter can route
+/// to them. Called both on key registration and during startup sync so that
+/// Ollama/custom model entries survive server restarts.
+/// Returns the number of new entries added.
+pub async fn register_provider_models(
+    provider: &str,
+    models: &[String],
+    catalog: &Arc<ModelCatalog>,
+) -> usize {
+    let mut added = 0usize;
+    for raw in models {
+        let model_id = raw.trim();
+        if model_id.is_empty() {
+            continue;
+        }
+        if catalog.find(model_id).await.is_some() {
+            continue;
+        }
+        let is_large = ["70b", "671b", "405b", "72b", "32b", "34b"]
+            .iter()
+            .any(|tag| model_id.contains(tag));
+        let scores = if is_large {
+            TaskScores {
+                chat: 5,
+                coding: 5,
+                planning: 5,
+                analysis: 5,
+                summarization: 4,
+                extraction: 5,
+            }
+        } else {
+            TaskScores {
+                chat: 3,
+                coding: 3,
+                planning: 3,
+                analysis: 3,
+                summarization: 3,
+                extraction: 3,
+            }
+        };
+        catalog
+            .add_entry(ModelEntry {
+                model_id: model_id.to_string(),
+                provider: provider.to_string(),
+                display_name: format!("{} ({})", model_id, provider),
+                context_window: 32_768,
+                cost_input_per_mtok: 0.0,
+                cost_output_per_mtok: 0.0,
+                supports_tools: true,
+                supports_json_mode: true,
+                tool_use_support: ToolUseSupport::Unknown,
+                is_local: false,
+                avg_latency_ms: Some(3000),
+                free_tier_rpm: None,
+                free_tier_rpd: None,
+                task_scores: scores,
+            })
+            .await;
+        info!(
+            "Catalog: registered {} model '{}' from key pool",
+            provider, model_id
+        );
+        added += 1;
+    }
+    added
 }
 
 /// Fetches the OpenRouter model list with the given key, filters to free-tier

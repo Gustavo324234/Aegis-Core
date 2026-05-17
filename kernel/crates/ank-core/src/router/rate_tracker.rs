@@ -12,6 +12,29 @@ pub struct ModelUsageTracker {
     daily_counts: Arc<RwLock<HashMap<String, (u32, NaiveDate)>>>,
     latency_samples: Arc<RwLock<HashMap<String, VecDeque<u32>>>>,
     error_window: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
+    /// CORE-FIX: per-model success/failure counts since process start.
+    /// Reset never — accumulated over the lifetime of the router.
+    outcomes: Arc<RwLock<HashMap<String, ModelOutcomes>>>,
+    /// CORE-FIX: circuit breaker — recent failures per provider (not per model).
+    /// If a provider as a whole is failing, no point trying its individual models.
+    provider_failures: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ModelOutcomes {
+    pub successes: u64,
+    pub failures: u64,
+}
+
+impl ModelOutcomes {
+    pub fn success_rate(&self) -> Option<f64> {
+        let total = self.successes + self.failures;
+        if total == 0 {
+            None
+        } else {
+            Some(self.successes as f64 / total as f64)
+        }
+    }
 }
 
 impl Default for ModelUsageTracker {
@@ -27,6 +50,8 @@ impl ModelUsageTracker {
             daily_counts: Arc::new(RwLock::new(HashMap::new())),
             latency_samples: Arc::new(RwLock::new(HashMap::new())),
             error_window: Arc::new(RwLock::new(HashMap::new())),
+            outcomes: Arc::new(RwLock::new(HashMap::new())),
+            provider_failures: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -150,5 +175,63 @@ impl ModelUsageTracker {
             queue.pop_front();
         }
         queue.len() as u32
+    }
+
+    // ─── CORE-FIX: D2 — per-model success/failure outcome tracking ───────
+
+    /// Increment the success counter for a model.
+    pub async fn record_success(&self, model_id: &str) {
+        let mut map = self.outcomes.write().await;
+        map.entry(model_id.to_string()).or_default().successes += 1;
+    }
+
+    /// Increment the failure counter for a model and tally a provider-level
+    /// failure for the circuit breaker.
+    pub async fn record_failure(&self, model_id: &str, provider: &str) {
+        {
+            let mut map = self.outcomes.write().await;
+            map.entry(model_id.to_string()).or_default().failures += 1;
+        }
+        // Also count this against the provider — feeds the circuit breaker.
+        let now = Instant::now();
+        let mut pf = self.provider_failures.write().await;
+        let queue = pf.entry(provider.to_string()).or_default();
+        // Keep only last 30s of failures.
+        let cutoff = now - Duration::from_secs(30);
+        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+            queue.pop_front();
+        }
+        queue.push_back(now);
+    }
+
+    /// Snapshot of outcomes for a model. None if no requests recorded yet.
+    pub async fn outcomes_for(&self, model_id: &str) -> Option<ModelOutcomes> {
+        self.outcomes.read().await.get(model_id).copied()
+    }
+
+    /// Full snapshot of all model outcomes — for /stats or telemetry endpoints.
+    pub async fn all_outcomes(&self) -> HashMap<String, ModelOutcomes> {
+        self.outcomes.read().await.clone()
+    }
+
+    // ─── CORE-FIX: B3 — circuit breaker per provider ─────────────────────
+
+    /// Number of failures recorded for `provider` in the last 30 seconds.
+    pub async fn provider_failures_recent(&self, provider: &str) -> u32 {
+        let now = Instant::now();
+        let cutoff = now - Duration::from_secs(30);
+        let mut map = self.provider_failures.write().await;
+        let queue = map.entry(provider.to_string()).or_default();
+        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+            queue.pop_front();
+        }
+        queue.len() as u32
+    }
+
+    /// Circuit is "open" (i.e. skip this provider) if it has accumulated
+    /// 3 or more failures in the last 30 seconds. Closes automatically
+    /// once the window slides past.
+    pub async fn is_provider_circuit_open(&self, provider: &str) -> bool {
+        self.provider_failures_recent(provider).await >= 3
     }
 }

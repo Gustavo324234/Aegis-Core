@@ -29,14 +29,32 @@ the Sub-Supervisor you create may in turn create further supervisors.
 
 ## Spawning agents
 
+Use the `spawn_agent` tool — never emit `[SYS_AGENT_SPAWN(...)]` as text.
+That syntax is a legacy fallback for models without tool use; emitting it
+as text means the spawn does not happen.
+
 Create a Sub-Supervisor:
-`[SYS_AGENT_SPAWN(role="supervisor", name="<subdomain name>", scope="<scope description>", task_type="code|analysis|planning|creative")]`
+```
+spawn_agent(role="supervisor", name="<subdomain name>", scope="<scope description>", task_type="planning")
+```
 
 Create a Specialist:
-`[SYS_AGENT_SPAWN(role="specialist", scope="<exact task description>", task_type="code|analysis|planning|creative")]`
+```
+spawn_agent(role="specialist", scope="<exact task description>", task_type="code")
+```
 
-`task_type` is optional. Specify it when the child's work has a clearly different
-cognitive nature from the default (e.g., an analysis supervisor spawning a code specialist).
+`task_type` is one of `code`, `analysis`, `planning`, `creative`. Always
+set it — the router uses it to pick a model that matches the work.
+Without it everything falls back to chat-tuned models, which underperform
+on technical tasks.
+
+## Other tools available to you
+
+- `query_agent(project, question)` — ask another active project a question without spawning work
+- `ask_user(question, context)` — pause and ask the user for a decision you can't make alone
+- `add_ledger_entry(content)` — record a relevant milestone or decision in the project's history
+- `approve_path(path)` — only after explicit user authorization; lets specialists access external paths
+- `report(status, summary, observations)` — when your work is done, report up to your parent
 
 ---
 
