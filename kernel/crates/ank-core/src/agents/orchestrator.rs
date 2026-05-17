@@ -35,6 +35,8 @@ pub struct AgentNodeSummary {
     pub last_report: Option<String>,
     /// true si el proveedor del agente no soporta tool use (CORE-237).
     pub degraded: bool,
+    /// Tenant dueño de este agente — para filtrado cross-tenant (CORE-300).
+    pub tenant_id: String,
 }
 
 /// CORE-287: Convierte un nombre de proyecto en un ID de filesystem válido.
@@ -163,7 +165,7 @@ impl AgentOrchestrator {
 
     async fn create_project_supervisor(
         &self,
-        _tenant_id: &str,
+        tenant_id: &str,
         project_id: &ProjectId,
         description: &str,
     ) -> anyhow::Result<AgentId> {
@@ -182,7 +184,8 @@ impl AgentOrchestrator {
             None,
             system_prompt,
             TaskType::Planning,
-        );
+        )
+        .with_tenant(tenant_id);
         node.context_budget = budget.max_tokens;
 
         let agent_id = node.agent_id;
@@ -250,6 +253,10 @@ impl AgentOrchestrator {
 
             let snapshot = restored_tree.serialize()?;
             for mut node in snapshot.nodes {
+                // CORE-300: propagar tenant_id en nodos restaurados sin él (backward compat).
+                if node.tenant_id.is_empty() {
+                    node.tenant_id = tenant_id.to_string();
+                }
                 let is_project_supervisor =
                     matches!(node.role, AgentRole::ProjectSupervisor { .. });
 
@@ -357,13 +364,22 @@ impl AgentOrchestrator {
             loader.build_system_prompt(&role, &project_id, system_prompt_hint.as_deref())
         };
 
+        // CORE-300: heredar tenant_id del nodo padre para propagar aislamiento.
+        let parent_tenant_id = {
+            let tree = self.tree.read().await;
+            tree.get(&parent_id)
+                .map(|n| n.tenant_id.clone())
+                .unwrap_or_default()
+        };
+
         let mut node = crate::agents::node::AgentNode::new(
             role,
             project_id.clone(),
             Some(parent_id),
             system_prompt,
             task_type,
-        );
+        )
+        .with_tenant(&parent_tenant_id);
         node.context_budget = budget.max_tokens;
 
         let agent_id = node.agent_id;
@@ -612,8 +628,15 @@ impl AgentOrchestrator {
 
                 // CORE-281: Deduplicación — si ya existe un ProjectSupervisor activo
                 // para este proyecto, retornar su ID sin crear uno nuevo.
+                // CORE-300: filtrar también por tenant_id del caller.
                 if matches!(role, AgentRole::ProjectSupervisor { .. }) {
                     let project_name = name.as_deref().unwrap_or(&scope).to_string();
+                    let caller_tenant_id = {
+                        let tree = self.tree.read().await;
+                        tree.get(&caller_id)
+                            .map(|n| n.tenant_id.clone())
+                            .unwrap_or_default()
+                    };
                     let existing_id = {
                         let tree = self.tree.read().await;
                         tree.all_nodes()
@@ -621,6 +644,7 @@ impl AgentOrchestrator {
                             .find(|n| {
                                 if let AgentRole::ProjectSupervisor { name: n_name, .. } = &n.role {
                                     n_name.to_lowercase() == project_name.to_lowercase()
+                                        && n.tenant_id == caller_tenant_id
                                         && !matches!(
                                             n.state,
                                             AgentState::Complete | AgentState::Failed { .. }
@@ -911,9 +935,19 @@ impl AgentOrchestrator {
     // --- UI / snapshot ---
 
     pub async fn tree_snapshot(&self) -> Vec<AgentNodeSummary> {
+        self.tree_snapshot_filtered(None).await
+    }
+
+    /// CORE-300: Retorna solo los nodos del tenant indicado — aislamiento cross-tenant.
+    pub async fn tree_snapshot_for_tenant(&self, tenant_id: &str) -> Vec<AgentNodeSummary> {
+        self.tree_snapshot_filtered(Some(tenant_id)).await
+    }
+
+    async fn tree_snapshot_filtered(&self, tenant_filter: Option<&str>) -> Vec<AgentNodeSummary> {
         let tree = self.tree.read().await;
         tree.all_nodes()
             .iter()
+            .filter(|n| tenant_filter.map(|t| n.tenant_id == t).unwrap_or(true))
             .map(|n| {
                 let degraded_suffix = if n.is_degraded { " [degraded]" } else { "" };
                 let (role_label, task_type_str) = match &n.role {
@@ -949,6 +983,7 @@ impl AgentOrchestrator {
                     is_restored: n.is_restored,
                     last_report: n.last_report.clone(),
                     degraded: n.is_degraded,
+                    tenant_id: n.tenant_id.clone(),
                 }
             })
             .collect()
