@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.20.0...shell-ui-v1.20.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* smoke-test readiness — Gemini tool shape, modern model scores, Anthropic preset, UI errors ([#297](https://github.com/Gustavo324234/Aegis-Core/issues/297)) ([0451fb8](https://github.com/Gustavo324234/Aegis-Core/commit/0451fb871a49a8af993c89eb8b6d2180af8e0c4c))
+
 ## [1.20.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.19.2...shell-ui-v1.20.0) (2026-05-17)
 
 
