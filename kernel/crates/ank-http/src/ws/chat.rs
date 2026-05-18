@@ -822,7 +822,8 @@ fn extract_name_from_phrase(prompt: &str) -> Option<String> {
     if tokens.len() <= 3
         && tokens.iter().all(|t| {
             t.len() <= 20
-                && t.chars().all(|c| c.is_alphabetic() || matches!(c, '\'' | '-' | '.'))
+                && t.chars()
+                    .all(|c| c.is_alphabetic() || matches!(c, '\'' | '-' | '.'))
         })
     {
         return sanitise_name_token(trimmed);
@@ -852,7 +853,10 @@ fn sanitise_name_token(raw: &str) -> Option<String> {
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {
-                Some(first) => first.to_uppercase().chain(chars.flat_map(|c| c.to_lowercase())).collect::<String>(),
+                Some(first) => first
+                    .to_uppercase()
+                    .chain(chars.flat_map(|c| c.to_lowercase()))
+                    .collect::<String>(),
                 None => String::new(),
             }
         })
@@ -920,7 +924,6 @@ async fn send_onboarding_message(socket: &mut WebSocket, text: &str) {
         .await;
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,7 +931,10 @@ mod tests {
     #[test]
     fn extract_name_single_token() {
         assert_eq!(extract_name_from_phrase("Aegis"), Some("Aegis".to_string()));
-        assert_eq!(extract_name_from_phrase("  aegis  "), Some("Aegis".to_string()));
+        assert_eq!(
+            extract_name_from_phrase("  aegis  "),
+            Some("Aegis".to_string())
+        );
         assert_eq!(extract_name_from_phrase("MARIA"), Some("Maria".to_string()));
     }
 

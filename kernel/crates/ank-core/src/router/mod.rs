@@ -530,10 +530,8 @@ impl CognitiveRouter {
             _ => (0.40, 0.25, 0.20, 0.15),
         };
 
-        let raw = quality * w_quality
-            + cost_inv * w_cost
-            + speed_inv * w_speed
-            + context_fit * w_fit;
+        let raw =
+            quality * w_quality + cost_inv * w_cost + speed_inv * w_speed + context_fit * w_fit;
         (raw * (1.0 - error_penalty) * (1.0 - oversize_penalty)).max(0.0)
     }
 
