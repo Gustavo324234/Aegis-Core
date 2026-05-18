@@ -114,6 +114,42 @@ pub async fn fetch_provider_models(
     }
 }
 
+/// Normalises a user-supplied `api_url` to the API base prefix where `/models`
+/// can be appended. The UI's "engine presets" point at the chat-completions
+/// endpoint (e.g. `https://api.openai.com/v1/chat/completions`) for routing
+/// LLM calls, but the `/models` listing endpoint lives on the API root
+/// (`https://api.openai.com/v1/models`). Without this strip we end up requesting
+/// `…/chat/completions/models`, which every provider returns as 404.
+///
+/// Also strips Gemini's `/openai` shim (`/v1beta/openai/chat/completions`) so
+/// the listing call hits the native `/v1beta/models?key=…` route.
+fn strip_to_api_base(url: &str) -> String {
+    let mut s = url.trim_end_matches('/').to_string();
+
+    // Drop the chat-completion suffix in any form.
+    // Order matters: longer/more-specific suffixes must come FIRST so that
+    // `/v1/messages` strips to `https://api.anthropic.com` (caller appends
+    // `/v1/models`), not to `https://api.anthropic.com/v1` (would double up).
+    for suffix in [
+        "/v1/messages",     // Anthropic native (long form)
+        "/chat/completions",
+        "/messages",        // Anthropic native (short form, defensive)
+    ] {
+        if let Some(stripped) = s.strip_suffix(suffix) {
+            s = stripped.trim_end_matches('/').to_string();
+            break;
+        }
+    }
+
+    // Gemini OpenAI-compat: drop the trailing /openai so we can hit the native
+    // /v1beta/models?key=… listing endpoint.
+    if let Some(stripped) = s.strip_suffix("/openai") {
+        s = stripped.trim_end_matches('/').to_string();
+    }
+
+    s
+}
+
 /// OpenAI-compatible `GET {base}/models` with `Authorization: Bearer <key>`.
 /// Response shape: `{ "data": [ { "id": "...", ... }, ... ] }`.
 async fn fetch_openai_compatible(
@@ -121,8 +157,9 @@ async fn fetch_openai_compatible(
     base_url: &str,
     api_key: &str,
 ) -> anyhow::Result<Vec<DiscoveredModel>> {
-    // Tolerate trailing slash on user-provided URLs.
-    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    // Tolerate trailing slash + chat-completion suffix on user-provided URLs.
+    let base = strip_to_api_base(base_url);
+    let url = format!("{}/models", base);
     let resp = client
         .get(&url)
         .bearer_auth(api_key)
@@ -184,8 +221,14 @@ async fn fetch_gemini(
     api_url: Option<&str>,
     api_key: &str,
 ) -> anyhow::Result<Vec<DiscoveredModel>> {
-    let base = api_url.unwrap_or("https://generativelanguage.googleapis.com/v1beta");
-    let url = format!("{}/models?key={}", base.trim_end_matches('/'), api_key);
+    // Normalise whatever the caller passed (often the chat-completions URL
+    // like `/v1beta/openai/chat/completions`) into the native API base
+    // (`/v1beta`) where /models lives.
+    let base = match api_url {
+        Some(u) => strip_to_api_base(u),
+        None => "https://generativelanguage.googleapis.com/v1beta".to_string(),
+    };
+    let url = format!("{}/models?key={}", base, api_key);
     let resp = client
         .get(&url)
         .send()
@@ -233,8 +276,13 @@ async fn fetch_anthropic(
     api_url: Option<&str>,
     api_key: &str,
 ) -> anyhow::Result<Vec<DiscoveredModel>> {
-    let base = api_url.unwrap_or("https://api.anthropic.com");
-    let url = format!("{}/v1/models", base.trim_end_matches('/'));
+    // Strip /v1/messages (the chat endpoint) so the user can paste their
+    // chat URL into the modal and we still hit /v1/models.
+    let base = match api_url {
+        Some(u) => strip_to_api_base(u),
+        None => "https://api.anthropic.com".to_string(),
+    };
+    let url = format!("{}/v1/models", base);
     let resp = client
         .get(&url)
         .header("x-api-key", api_key)
@@ -345,5 +393,58 @@ mod tests {
         let v = fetch_provider_models("qwen", None, "fake-key").await;
         assert!(v.is_ok(), "unsupported provider should not error");
         assert!(v.unwrap().is_empty());
+    }
+
+    /// CORE-FIX: regression — UI passes the chat-completions URL from the
+    /// engine presets, but the /models endpoint lives on the API root.
+    /// Without strip_to_api_base, every discovery hit a 404 like
+    /// `…/chat/completions/models?key=…`.
+    #[test]
+    fn strip_to_api_base_normalises_every_provider_preset() {
+        // The exact strings from shell/ui/src/constants/enginePresets.ts
+        // plus a few common variants the user might paste manually.
+        let cases = &[
+            (
+                "https://api.openai.com/v1/chat/completions",
+                "https://api.openai.com/v1",
+            ),
+            (
+                "https://api.groq.com/openai/v1/chat/completions",
+                "https://api.groq.com/openai/v1",
+            ),
+            (
+                "https://openrouter.ai/api/v1/chat/completions",
+                "https://openrouter.ai/api/v1",
+            ),
+            (
+                "https://api.mistral.ai/v1/chat/completions",
+                "https://api.mistral.ai/v1",
+            ),
+            (
+                "https://api.deepseek.com/v1/chat/completions",
+                "https://api.deepseek.com/v1",
+            ),
+            (
+                "https://api.x.ai/v1/chat/completions",
+                "https://api.x.ai/v1",
+            ),
+            (
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                "https://generativelanguage.googleapis.com/v1beta",
+            ),
+            // Anthropic native — strips /v1/messages so /v1/models lands clean.
+            ("https://api.anthropic.com/v1/messages", "https://api.anthropic.com"),
+            // Already-clean base URLs should be left alone.
+            ("https://api.openai.com/v1", "https://api.openai.com/v1"),
+            ("https://api.openai.com/v1/", "https://api.openai.com/v1"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                strip_to_api_base(input),
+                *expected,
+                "strip_to_api_base({:?})",
+                input
+            );
+        }
     }
 }
