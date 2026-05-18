@@ -66,6 +66,35 @@ pub fn infer_task_type(prompt: &str) -> TaskType {
         "python",
         "rust",
         "golang",
+        // CORE-FIX: smoke test had "clones este repositorio" classified as
+        // Chat. Add vocabulary for repo / git operations and build/test verbs.
+        "clone",
+        "clonar",
+        "clones",
+        "clona",
+        "cloná",
+        "repo",
+        "repositorio",
+        "repository",
+        "github",
+        "gitlab",
+        "bitbucket",
+        "git ",
+        "branch",
+        "commit",
+        "merge",
+        "pull request",
+        "build",
+        "buildea",
+        "test ",
+        "testea",
+        "testeá",
+        "unit test",
+        "integration test",
+        "debug",
+        "debugea",
+        "debugeá",
+        "trace",
     ];
     let analysis_signals: &[&str] = &[
         "analiza",
@@ -84,6 +113,18 @@ pub fn infer_task_type(prompt: &str) -> TaskType {
         "trade-off",
         "tradeoff",
         "pros y contras",
+        // CORE-FIX: "what is X / how does X work" patterns.
+        "qué hace",
+        "que hace",
+        "what does",
+        "how does",
+        "como funciona",
+        "cómo funciona",
+        "describe",
+        "describí",
+        "resumí",
+        "summarise",
+        "summarize",
     ];
     let planning_signals: &[&str] = &[
         "plan",
@@ -104,6 +145,23 @@ pub fn infer_task_type(prompt: &str) -> TaskType {
         "arquitectura",
         "architecture",
         "decide entre",
+        // CORE-FIX: "let's work on / project / next step" patterns and the
+        // common "necesito que / ayudame" framings users actually type.
+        "trabajemos",
+        "trabajar con",
+        "trabajar en",
+        "let's work",
+        "vamos a trabajar",
+        "proyecto",
+        "project ",
+        "ayudame con",
+        "ayudame a",
+        "necesito que",
+        "podés ayudarme",
+        "qué sigue",
+        "próximo paso",
+        "siguiente paso",
+        "next step",
     ];
     let creative_signals: &[&str] = &[
         "escribime",
@@ -446,6 +504,48 @@ mod tests {
         assert_eq!(infer_task_type("hola"), TaskType::Chat);
         assert_eq!(infer_task_type("qué hora es"), TaskType::Chat);
         assert_eq!(infer_task_type(""), TaskType::Chat);
+    }
+
+    /// CORE-FIX: the smoke test caught these specific phrases classifying as
+    /// Chat when they should have been a real task type. Lock them in.
+    /// (Note: "clones este repositorio" has many code signals — clone, repo,
+    /// repositorio, github — so Code is the correct call; the user is asking
+    /// for a git operation. The follow-up "¿cómo va el estado del proyecto?"
+    /// IS planning and tests that case.)
+    #[test]
+    fn test_infer_task_type_smoke_test_regressions() {
+        // git clone request → Code (clone IS a code/git verb).
+        assert_eq!(
+            infer_task_type(
+                "necesito que clones este repositorio y trabajemos con el: \
+                 https://github.com/Gustavo324234/Aegis-Core"
+            ),
+            TaskType::Code,
+            "git clone phrase must be Code, not Chat"
+        );
+        // Asking about project status → planning (current state of project).
+        assert_eq!(
+            infer_task_type("¿Cómo va el estado del proyecto?"),
+            TaskType::Planning,
+            "project status questions must be Planning, not Chat"
+        );
+        // "Necesito que" requests without code/git verbs → planning.
+        assert_eq!(
+            infer_task_type("necesito que me ayudes con esto"),
+            TaskType::Planning
+        );
+        // Generic "describe X" → analysis.
+        assert_eq!(
+            infer_task_type("describe cómo funciona el router"),
+            TaskType::Analysis
+        );
+        // Build / test verbs → code.
+        assert_eq!(
+            infer_task_type("buildea el proyecto y corré los tests"),
+            TaskType::Code
+        );
+        // Sanity: short conversational stays Chat.
+        assert_eq!(infer_task_type("dale, gracias!"), TaskType::Chat);
     }
 
     #[test]

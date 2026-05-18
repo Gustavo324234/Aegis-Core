@@ -496,34 +496,75 @@ export const useAegisStore = create<AegisState>()(
                                 const su = payload.status_update as { state: string };
                                 if (su.state === 'STATE_COMPLETED') {
                                     set({ status: 'idle', activePid: null });
-                                    // CORE-278: leer respuesta en voz alta si voiceEnabled está activo
-                                    if (get().voiceEnabled && typeof window !== 'undefined' && window.speechSynthesis) {
-                                        const messages = get().messages;
-                                        const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
-                                        if (lastAssistant?.content) {
-                                            const utterance = new SpeechSynthesisUtterance(lastAssistant.content);
-                                            utterance.lang = detectLanguage(lastAssistant.content);
-                                            utterance.rate = 1.0;
-                                            window.speechSynthesis.cancel();
-                                            window.speechSynthesis.speak(utterance);
+
+                                    // CORE-FIX: feedback loop fix. Previously, when voiceEnabled was on,
+                                    // we (a) spoke the response via browser TTS (window.speechSynthesis),
+                                    // and (b) reactivated the mic after a fixed-ish delay computed from
+                                    // ttsPlayer.getNextStartTime() — but that is the AEGIS cloud TTS,
+                                    // NOT the browser TTS. So the mic came back ON while the browser was
+                                    // still mid-sentence, the STT transcribed the assistant's own words,
+                                    // and the kernel got self-replies like "ya soy Hola Te llamaré aegis".
+                                    //
+                                    // Now: gate the mic reactivation on the actual `onend` event of the
+                                    // browser utterance. If voice is OFF (or there's nothing to speak),
+                                    // the old delay-based path runs as before. We also `cancel()` the
+                                    // synthesis if the next user message arrives so we don't pile up.
+                                    const reactivateMic = () => {
+                                        const mode = get().inputMode;
+                                        if (mode === 'conversation' && !get().isRecording) {
+                                            get().restartMicForConversation().catch(console.error);
+                                        } else if (mode === 'wakeword' && !get().isRecording) {
+                                            get().startWakewordListener();
                                         }
-                                    }
-                                    // CORE-184: reactivar mic en modo conversación tras terminar el TTS
-                                    if (get().inputMode === 'conversation' || get().inputMode === 'wakeword') {
+                                    };
+
+                                    const messages = get().messages;
+                                    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+                                    const speakingViaBrowserTts =
+                                        get().voiceEnabled
+                                        && typeof window !== 'undefined'
+                                        && !!window.speechSynthesis
+                                        && !!lastAssistant?.content;
+
+                                    if (speakingViaBrowserTts && lastAssistant?.content) {
+                                        const utterance = new SpeechSynthesisUtterance(lastAssistant.content);
+                                        utterance.lang = detectLanguage(lastAssistant.content);
+                                        utterance.rate = 1.0;
+                                        // Only reactivate mic AFTER the TTS finishes speaking. Both `end`
+                                        // and `error` mean "we're not making sound anymore", so we listen
+                                        // to both.
+                                        let micReactivated = false;
+                                        const handleTtsDone = () => {
+                                            if (micReactivated) return;
+                                            micReactivated = true;
+                                            const mode = get().inputMode;
+                                            if (mode === 'conversation' || mode === 'wakeword') {
+                                                // Tiny extra grace period to let the audio device settle.
+                                                setTimeout(reactivateMic, 250);
+                                            }
+                                        };
+                                        utterance.onend = handleTtsDone;
+                                        utterance.onerror = handleTtsDone;
+                                        // Safety net: if the browser never fires onend (some engines drop
+                                        // it on long text), give up after speech_length * 60 wpm + 5s.
+                                        const safetyMs = Math.min(
+                                            60_000,
+                                            (lastAssistant.content.split(/\s+/).length / 2.5) * 1000 + 5_000,
+                                        );
+                                        setTimeout(handleTtsDone, safetyMs);
+
+                                        window.speechSynthesis.cancel();
+                                        window.speechSynthesis.speak(utterance);
+                                    } else if (get().inputMode === 'conversation' || get().inputMode === 'wakeword') {
+                                        // CORE-184 legacy path: no browser TTS in play, fall back to the
+                                        // ttsPlayer-based delay (server-side TTS).
                                         const scheduleReactivation = () => {
                                             const ctx = ttsPlayer.getAudioContext();
                                             const remaining = ctx
                                                 ? Math.max(0, (ttsPlayer.getNextStartTime() - ctx.currentTime) * 1000)
                                                 : 0;
                                             const delay = Math.max(300, remaining + 200);
-                                            setTimeout(() => {
-                                                const mode = get().inputMode;
-                                                if (mode === 'conversation' && !get().isRecording) {
-                                                    get().restartMicForConversation().catch(console.error);
-                                                } else if (mode === 'wakeword' && !get().isRecording) {
-                                                    get().startWakewordListener();
-                                                }
-                                            }, delay);
+                                            setTimeout(reactivateMic, delay);
                                         };
                                         scheduleReactivation();
                                     }
