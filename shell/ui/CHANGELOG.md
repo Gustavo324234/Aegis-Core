@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.20.1...shell-ui-v1.20.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* smoke-test bugs — onboarding parser, meta-token leak, voice echo, scoring, vocab ([#301](https://github.com/Gustavo324234/Aegis-Core/issues/301)) ([560f0f9](https://github.com/Gustavo324234/Aegis-Core/commit/560f0f97d59bf2103a0462cb87ec78786853846e))
+
 ## [1.20.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.20.0...shell-ui-v1.20.1) (2026-05-18)
 
 

@@ -36,6 +36,13 @@
 
 
 
+## [0.1.73](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.72...ank-server-v0.1.73) (2026-05-18)
+
+
+### Bug Fixes
+
+* smoke-test bugs — onboarding parser, meta-token leak, voice echo, scoring, vocab ([#301](https://github.com/Gustavo324234/Aegis-Core/issues/301)) ([560f0f9](https://github.com/Gustavo324234/Aegis-Core/commit/560f0f97d59bf2103a0462cb87ec78786853846e))
+
 ## [0.1.65](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.64...ank-server-v0.1.65) (2026-05-14)
 
 
