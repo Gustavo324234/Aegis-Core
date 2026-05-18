@@ -219,9 +219,24 @@ function New-AegisEnvFile {
             $line
         }
 
+        # Release builds added by PR #277 refuse to start without an explicit
+        # plugin signer key. Backfill the insecure-mode flag if neither it
+        # nor AEGIS_PLUGIN_ROOT_KEY is present, so the upgrade doesn't break
+        # running deployments. Mirrors the install.sh upgrade-path fix.
+        # The line is appended to $newLines (not the file directly) so it
+        # survives the Set-Content rewrite below.
+        $hasPluginKey = $lines | Where-Object {
+            $_ -match "^(AEGIS_PLUGIN_ROOT_KEY|AEGIS_ALLOW_INSECURE_PLUGINS)="
+        }
+        if (-not $hasPluginKey) {
+            $newLines += "AEGIS_ALLOW_INSECURE_PLUGINS=1"
+            Write-OK "Backfilled AEGIS_ALLOW_INSECURE_PLUGINS=1 (required by release builds since PR #277)."
+            $changed = $true
+        }
+
         if ($changed) {
             Set-Content -Path $envPath -Value $newLines -Encoding UTF8
-            Write-OK "aegis.env normalizado (forward slashes + quoting)."
+            Write-OK "aegis.env actualizado (path normalization + plugin-key backfill)."
         }
         return
     }
@@ -238,6 +253,12 @@ UI_DIST_PATH=$(Format-EnvPath "$InstallDir\ui")
 AEGIS_MODEL_PROFILE=cloud
 DEFAULT_MODEL_PREF=CloudOnly
 RUST_LOG=info
+# Release builds refuse to start without an explicit AEGIS_PLUGIN_ROOT_KEY
+# (hex-encoded ed25519 public key, >=32 bytes). Until a key-generation
+# command ships, opt into the unsigned-plugin mode so the installer's
+# first boot doesn't fail. To harden later: generate a real keypair, set
+# AEGIS_PLUGIN_ROOT_KEY=<hex>, and remove the line below.
+AEGIS_ALLOW_INSECURE_PLUGINS=1
 "@
 
     Set-Content -Path $envPath -Value $envContent -Encoding UTF8
