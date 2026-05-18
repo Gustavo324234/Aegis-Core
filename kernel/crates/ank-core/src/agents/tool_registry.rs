@@ -94,30 +94,33 @@ impl ToolRegistry {
     }
 
     /// Serializa una ToolDefinition al formato del proveedor.
-    pub fn serialize(def: &ToolDefinition, provider: &ProviderKind) -> Value {
-        match provider {
-            ProviderKind::Anthropic => json!({
+    ///
+    /// CORE-FIX: every provider Aegis currently talks to is reached through
+    /// an OpenAI-compatible chat-completions endpoint:
+    ///   - OpenAI / Groq / xAI / DeepSeek / Mistral / Qwen → native OpenAI compat
+    ///   - OpenRouter → OpenAI compat (handles all underlying providers)
+    ///   - Gemini → Google's `/v1beta/openai/chat/completions` (OpenAI compat)
+    ///   - Anthropic → reached via OpenRouter (OpenAI compat)
+    ///   - Ollama / Ollama Cloud → OpenAI compat
+    ///
+    /// So they all want the same OpenAI tool shape. The previous code branched
+    /// to `functionDeclarations` for Gemini (native shape) and `input_schema`
+    /// for Anthropic (native shape), but neither path is ever the upstream we
+    /// actually hit — every Gemini tool call was being 400'd because the body
+    /// shape didn't match the URL.
+    ///
+    /// If CloudProxyDriver ever grows native Anthropic / native Gemini
+    /// support, branch here on a future `ProviderKind::AnthropicNative` /
+    /// `GeminiNative` variant.
+    pub fn serialize(def: &ToolDefinition, _provider: &ProviderKind) -> Value {
+        json!({
+            "type": "function",
+            "function": {
                 "name": def.name,
                 "description": def.description,
-                "input_schema": def.parameters,
-            }),
-            ProviderKind::Gemini => json!({
-                "functionDeclarations": [{
-                    "name": def.name,
-                    "description": def.description,
-                    "parameters": def.parameters,
-                }]
-            }),
-            // OpenAI / Groq / xAI / OpenRouter / Ollama / Mistral / DeepSeek / Qwen
-            _ => json!({
-                "type": "function",
-                "function": {
-                    "name": def.name,
-                    "description": def.description,
-                    "parameters": def.parameters,
-                }
-            }),
-        }
+                "parameters": def.parameters,
+            }
+        })
     }
 
     // --- Definiciones de las tres herramientas del protocolo ---
@@ -460,9 +463,15 @@ mod tests {
             scope: "leer archivo".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Anthropic);
-        // CORE-FIX: Specialist tiene 6 tools (report + 3 filesystem + execute_command + web_search)
+        // CORE-FIX: Specialist tiene 6 tools (report + 3 filesystem + execute_command + web_search).
+        // Names are now read from t["function"]["name"] because the serializer
+        // emits OpenAI shape for every provider (we go through OpenAI-compat
+        // endpoints for all of them, including Anthropic via OpenRouter).
         assert_eq!(tools.len(), 6);
-        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap())
+            .collect();
         assert!(names.contains(&"report"));
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_file"));
@@ -515,31 +524,47 @@ mod tests {
     }
 
     #[test]
-    fn test_anthropic_format() {
+    fn test_anthropic_uses_openai_shape() {
+        // CORE-FIX: Anthropic is reached via OpenRouter (OpenAI-compat), so
+        // the tool shape must be OpenAI's `{ type, function: { name, ... } }`,
+        // NOT the native `{ name, description, input_schema }`. Previously
+        // this test asserted the native shape and the codepath actually used
+        // the native shape too — both were wrong relative to the URL.
         let role = AgentRole::Specialist {
             scope: "test".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Anthropic);
-        // All tools in Anthropic format use input_schema
         assert!(
-            tools.iter().all(|t| t.get("input_schema").is_some()),
-            "Anthropic format must use input_schema"
+            tools.iter().all(|t| t["type"].as_str() == Some("function")),
+            "OpenAI shape requires top-level type=function"
         );
         assert!(
-            tools.iter().all(|t| t.get("function").is_none()),
-            "Anthropic format must not use function wrapper"
+            tools.iter().all(|t| t["function"]["name"].is_string()),
+            "OpenAI shape requires function.name"
         );
     }
 
     #[test]
-    fn test_gemini_format() {
+    fn test_gemini_uses_openai_shape() {
+        // CORE-FIX: Gemini is reached via /v1beta/openai/chat/completions, so
+        // it expects OpenAI tools, not Google's native `functionDeclarations`.
+        // The previous code sent functionDeclarations and the upstream
+        // returned 400 on every tool call.
         let role = AgentRole::Specialist {
             scope: "test".into(),
         };
         let tools = ToolRegistry::tools_for(&role, &ProviderKind::Gemini);
         assert!(
-            tools[0].get("functionDeclarations").is_some(),
-            "Gemini format must use functionDeclarations"
+            tools.iter().all(|t| t["type"].as_str() == Some("function")),
+            "Gemini OpenAI-compat shape requires top-level type=function"
+        );
+        assert!(
+            tools.iter().all(|t| t["function"]["name"].is_string()),
+            "Gemini OpenAI-compat shape requires function.name"
+        );
+        assert!(
+            tools.iter().all(|t| t.get("functionDeclarations").is_none()),
+            "Gemini OpenAI-compat must NOT use Google's native functionDeclarations"
         );
     }
 

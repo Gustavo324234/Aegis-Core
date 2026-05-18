@@ -334,7 +334,32 @@ pub async fn sync_openrouter_free_models(
 
 fn infer_task_scores(model_id: &str) -> TaskScores {
     let id_lower = model_id.to_lowercase();
-    let is_strong = id_lower.contains("claude") || id_lower.contains("gpt-4");
+    // CORE-FIX: recognise the current generation of frontier models. The old
+    // heuristic only matched "claude" and "gpt-4", so anything coming through
+    // discovery — Gemini 2.5/3.x, DeepSeek R, Llama 4, Qwen3, … — fell to
+    // score 3 across the board and lost the CMR ranking to bundled defaults.
+    // That was the root cause of "I added a Gemini key but gemini-2.5-pro
+    // never gets picked".
+    //
+    // The check is fuzzy on purpose so the next obvious version (gemini-3,
+    // claude-5, gpt-5, …) keeps scoring strong without another patch.
+    let is_strong = id_lower.contains("claude")           // Claude 3+, 4+, etc.
+        || id_lower.contains("gpt-4")                     // GPT-4, 4o, 4.1
+        || id_lower.contains("gpt-5")                     // future GPT-5
+        || id_lower.contains("/o3")                       // OpenAI o3 (reasoning)
+        || id_lower.starts_with("o3")
+        || id_lower.contains("/o4")
+        || id_lower.starts_with("o4")
+        || id_lower.contains("gemini-2.5")
+        || id_lower.contains("gemini-3")                  // 3.x preview families
+        || id_lower.contains("grok-3")
+        || id_lower.contains("grok-4")
+        || id_lower.contains("deepseek-r")                // R1, R2 reasoning
+        || id_lower.contains("deepseek-v3")
+        || id_lower.contains("qwen3")
+        || id_lower.contains("qwen-2.5")
+        || id_lower.contains("llama-4")
+        || id_lower.contains("llama-3.3");
     if is_strong {
         TaskScores {
             chat: 5,
@@ -438,5 +463,30 @@ mod tests {
     fn test_infer_task_scores_small() {
         let scores = infer_task_scores("meta-llama/llama-3.1-8b-instruct");
         assert_eq!(scores.coding, 3);
+    }
+
+    #[test]
+    fn test_infer_task_scores_modern_gemini() {
+        // CORE-FIX: gemini-2.5/3.x must score 5 — they're frontier models.
+        // The old heuristic missed them and they ranked equal to llama-3.1-8b.
+        for id in &[
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-3.1-pro-preview",
+        ] {
+            let scores = infer_task_scores(id);
+            assert_eq!(scores.coding, 5, "{} should score 5 for coding", id);
+            assert_eq!(scores.analysis, 5, "{} should score 5 for analysis", id);
+        }
+    }
+
+    #[test]
+    fn test_infer_task_scores_modern_reasoning() {
+        for id in &["openai/o3-mini", "deepseek/deepseek-r1", "x-ai/grok-4-fast"] {
+            let scores = infer_task_scores(id);
+            assert_eq!(scores.coding, 5, "{} should score 5 for coding", id);
+        }
     }
 }
