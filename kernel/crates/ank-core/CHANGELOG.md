@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.61](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.60...ank-core-v0.1.61) (2026-05-18)
+
+
+### Features
+
+* end-to-end provider flow ready for smoke test (discovery, normalization, cooldown) ([#299](https://github.com/Gustavo324234/Aegis-Core/issues/299)) ([75d1ec7](https://github.com/Gustavo324234/Aegis-Core/commit/75d1ec7dcd8fee98b71d65784b004f1f9fe0d889))
+
 ## [0.1.60](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.59...ank-core-v0.1.60) (2026-05-18)
 
 

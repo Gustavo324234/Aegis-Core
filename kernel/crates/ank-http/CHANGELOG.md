@@ -18,6 +18,13 @@
 
 
 
+## [0.1.68](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.67...ank-http-v0.1.68) (2026-05-18)
+
+
+### Features
+
+* end-to-end provider flow ready for smoke test (discovery, normalization, cooldown) ([#299](https://github.com/Gustavo324234/Aegis-Core/issues/299)) ([75d1ec7](https://github.com/Gustavo324234/Aegis-Core/commit/75d1ec7dcd8fee98b71d65784b004f1f9fe0d889))
+
 ## [0.1.67](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.66...ank-http-v0.1.67) (2026-05-18)
 
 
