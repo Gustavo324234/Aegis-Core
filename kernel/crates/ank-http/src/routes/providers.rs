@@ -1,4 +1,5 @@
 use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
+use ank_core::router::discovery::fetch_provider_models;
 use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -19,23 +20,9 @@ pub struct ProviderModelsResponse {
     pub models: Vec<String>,
 }
 
-const ANTHROPIC_MODELS: &[&str] = &[
-    "claude-opus-4-5",
-    "claude-sonnet-4-5",
-    "claude-haiku-4-5-20251001",
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-haiku-20241022",
-    "claude-3-opus-20240229",
-];
-
-const GEMINI_MODELS: &[&str] = &[
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-pro",
-    "gemini-1.5-flash",
-];
-
 /// Allowlist de hosts permitidos para requests HTTP salientes.
+/// Aplica a custom URLs que el operador pueda configurar; los hosts canónicos
+/// que `fetch_provider_models` resuelve por sí solo siempre son seguros.
 const ALLOWED_API_HOSTS: &[&str] = &[
     "api.openai.com",
     "api.anthropic.com",
@@ -43,6 +30,9 @@ const ALLOWED_API_HOSTS: &[&str] = &[
     "openrouter.ai",
     "generativelanguage.googleapis.com",
     "api.together.xyz",
+    "api.mistral.ai",
+    "api.deepseek.com",
+    "api.x.ai",
     "localhost",
     "127.0.0.1",
     "ollama.com",
@@ -70,106 +60,45 @@ fn validate_api_url(url: &str) -> Result<(), AegisHttpError> {
     }
 }
 
+/// Lists the models a provider's API key has access to.
+///
+/// CORE-FIX: previously this endpoint had `GEMINI_MODELS` and `ANTHROPIC_MODELS`
+/// as hardcoded constants, so the UI showed stale model lists that drifted
+/// every time a provider shipped a new model (Gemini 2.5/3.x, Claude Sonnet 4.6,
+/// etc. were invisible). Now we delegate to `ank_core::router::discovery::
+/// fetch_provider_models`, which actually hits each provider's `/models`
+/// endpoint with the supplied key.
+///
+/// The response shape stays `{ "models": ["id1", "id2", ...] }` so the existing
+/// `ProvidersTab.tsx` UI keeps working unchanged. The richer
+/// `{model_id, display_name, context_window, supports_tools}` shape is
+/// available via the newer `/api/router/keys/probe-models` endpoint when the
+/// UI is ready to consume it.
 async fn list_provider_models(
     State(_state): State<AppState>,
     _auth: CitadelAuthenticated,
     Json(req): Json<ProviderModelsRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let mut models = Vec::new();
+    // Only validate when the operator passed a non-empty custom URL — the
+    // canonical defaults built into discovery.rs are trusted and don't need to
+    // be re-validated against the allowlist.
+    let api_url = if req.api_url.trim().is_empty() {
+        None
+    } else {
+        validate_api_url(&req.api_url)?;
+        Some(req.api_url.as_str())
+    };
 
-    match req.provider.as_str() {
-        "anthropic" => {
-            models = ANTHROPIC_MODELS.iter().map(|s| s.to_string()).collect();
-        }
-        "gemini" => {
-            models = GEMINI_MODELS.iter().map(|s| s.to_string()).collect();
-        }
-        "ollama" => {
-            let client = reqwest::Client::new();
-            let res = client
-                .get("http://localhost:11434/api/tags")
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await
-                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+    let discovered = fetch_provider_models(&req.provider, api_url, &req.api_key)
+        .await
+        .map_err(|e| {
+            AegisHttpError::BadGateway(format!(
+                "Provider '{}' did not return a model list: {}",
+                req.provider, e
+            ))
+        })?;
 
-            let data: Value = res
-                .json()
-                .await
-                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-            if let Some(list) = data.get("models").and_then(|m| m.as_array()) {
-                for m in list {
-                    if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
-                        models.push(name.to_string());
-                    }
-                }
-            }
-        }
-        "ollama_cloud" => {
-            validate_api_url("https://ollama.com/api/tags")?;
-            let client = reqwest::Client::new();
-            let res = client
-                .get("https://ollama.com/api/tags")
-                .header("Authorization", format!("Bearer {}", req.api_key))
-                .timeout(std::time::Duration::from_secs(10))
-                .send()
-                .await
-                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-
-            let data: Value = res
-                .json()
-                .await
-                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-            if let Some(list) = data.get("models").and_then(|m| m.as_array()) {
-                for m in list {
-                    if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
-                        models.push(name.to_string());
-                    }
-                }
-            }
-        }
-        _ => {
-            validate_api_url(&req.api_url)?;
-
-            let client = reqwest::Client::new();
-            let mut base_url = req
-                .api_url
-                .split("/chat/completions")
-                .next()
-                .unwrap_or(&req.api_url)
-                .to_string();
-
-            let models_url = if base_url.ends_with("/v1") {
-                format!("{}/models", base_url)
-            } else {
-                if base_url.ends_with('/') {
-                    base_url.pop();
-                }
-                format!("{}/v1/models", base_url)
-            };
-
-            let res = client
-                .get(&models_url)
-                .header("Authorization", format!("Bearer {}", req.api_key))
-                .timeout(std::time::Duration::from_secs(10))
-                .send()
-                .await
-                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-
-            let data: Value = res
-                .json()
-                .await
-                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-            if let Some(list) = data.get("data").and_then(|d| d.as_array()) {
-                for m in list {
-                    if let Some(id) = m.get("id").and_then(|i| i.as_str()) {
-                        models.push(id.to_string());
-                    }
-                }
-            }
-        }
-    }
-
+    let mut models: Vec<String> = discovered.into_iter().map(|m| m.model_id).collect();
     models.sort();
     Ok(Json(json!({ "models": models })))
 }

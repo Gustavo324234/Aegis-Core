@@ -8,9 +8,16 @@ export const PROVIDER_PRESETS = {
   },
   anthropic: {
     label: "Anthropic",
-    url: "https://api.anthropic.com/v1/messages",
-    model: "claude-sonnet-4-5",
-    keyLink: "https://console.anthropic.com/settings/keys",
+    // CORE-FIX: route Anthropic through OpenRouter's OpenAI-compat endpoint.
+    // The backend CloudProxyDriver only speaks OpenAI-compat shape; it does
+    // NOT know how to talk to api.anthropic.com/v1/messages (different
+    // request format). Bundled models.yaml already routes anthropic/* via
+    // OpenRouter — this preset now matches that. The user pastes their
+    // Anthropic key into OpenRouter's "Anthropic" provider settings (or
+    // uses an OpenRouter key directly).
+    url: "https://openrouter.ai/api/v1/chat/completions",
+    model: "anthropic/claude-sonnet-4-6",
+    keyLink: "https://openrouter.ai/keys",
     provider: "anthropic"
   },
   groq: {
@@ -51,7 +58,11 @@ export const PROVIDER_PRESETS = {
   gemini: {
     label: "Gemini",
     url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    model: "gemini-2.0-flash",
+    // CORE-FIX: default is gemini-2.5-flash. The previous default
+    // (gemini-2.0-flash) was already a generation behind, and discovery now
+    // pulls the real list from Google so the user picks the actual model.
+    // This default is only used when discovery hasn't returned yet.
+    model: "gemini-2.5-flash",
     keyLink: "https://aistudio.google.com/app/apikey",
     provider: "gemini"
   },

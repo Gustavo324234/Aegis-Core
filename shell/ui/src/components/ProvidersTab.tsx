@@ -220,12 +220,34 @@ const ProviderModal: React.FC<{
             });
             if (res.ok) {
                 const data = await res.json();
-                setModels(data.models);
-                if (!isEdit) setSelectedModels(data.models); 
+                // CORE-FIX: defensive — the backend should always return
+                // `models: string[]`, but if the upstream returns an empty
+                // body or an unexpected shape we don't want the modal to
+                // crash. Empty array means "no models available for this key"
+                // and the user can still proceed (selectedModels can be set
+                // manually) or back out.
+                const models = Array.isArray(data.models) ? data.models : [];
+                setModels(models);
+                if (!isEdit) setSelectedModels(models);
                 setStep('models');
+                if (models.length === 0) {
+                    setVerifyError(t('no_models_returned'));
+                }
             } else {
-                const errData = await res.json();
-                setVerifyError(errData.detail || t('invalid_api_key_error'));
+                // CORE-FIX: the backend returns either { error: "..." } (the
+                // standard AegisHttpError shape) or { detail: "..." } (older
+                // handlers). Show whichever has content, falling back to the
+                // generic message. Status 502 (BadGateway) typically means
+                // the provider rejected the key — surface that distinction.
+                let errMessage = '';
+                try {
+                    const errData = await res.json();
+                    errMessage = errData.error || errData.detail || '';
+                } catch {
+                    /* response had no JSON body */
+                }
+                const prefix = res.status === 502 ? `${t('provider_rejected_key')}: ` : '';
+                setVerifyError(prefix + (errMessage || t('invalid_api_key_error')));
             }
         } catch (err) {
             setVerifyError(t('provider_connection_error'));
