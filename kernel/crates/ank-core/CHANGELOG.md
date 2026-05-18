@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.60](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.59...ank-core-v0.1.60) (2026-05-18)
+
+
+### Bug Fixes
+
+* smoke-test readiness — Gemini tool shape, modern model scores, Anthropic preset, UI errors ([#297](https://github.com/Gustavo324234/Aegis-Core/issues/297)) ([0451fb8](https://github.com/Gustavo324234/Aegis-Core/commit/0451fb871a49a8af993c89eb8b6d2180af8e0c4c))
+
 ## [0.1.59](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.58...ank-core-v0.1.59) (2026-05-17)
 
 
