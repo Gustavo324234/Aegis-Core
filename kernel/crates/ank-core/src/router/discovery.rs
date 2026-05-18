@@ -133,9 +133,9 @@ fn strip_to_api_base(url: &str) -> String {
     // `/v1/messages` strips to `https://api.anthropic.com` (caller appends
     // `/v1/models`), not to `https://api.anthropic.com/v1` (would double up).
     for suffix in [
-        "/v1/messages",     // Anthropic native (long form)
+        "/v1/messages", // Anthropic native (long form)
         "/chat/completions",
-        "/messages",        // Anthropic native (short form, defensive)
+        "/messages", // Anthropic native (short form, defensive)
     ] {
         if let Some(stripped) = s.strip_suffix(suffix) {
             s = stripped.trim_end_matches('/').to_string();
@@ -435,7 +435,10 @@ mod tests {
                 "https://generativelanguage.googleapis.com/v1beta",
             ),
             // Anthropic native — strips /v1/messages so /v1/models lands clean.
-            ("https://api.anthropic.com/v1/messages", "https://api.anthropic.com"),
+            (
+                "https://api.anthropic.com/v1/messages",
+                "https://api.anthropic.com",
+            ),
             // Already-clean base URLs should be left alone.
             ("https://api.openai.com/v1", "https://api.openai.com/v1"),
             ("https://api.openai.com/v1/", "https://api.openai.com/v1"),
