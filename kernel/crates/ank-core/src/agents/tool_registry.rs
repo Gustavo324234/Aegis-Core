@@ -563,7 +563,9 @@ mod tests {
             "Gemini OpenAI-compat shape requires function.name"
         );
         assert!(
-            tools.iter().all(|t| t.get("functionDeclarations").is_none()),
+            tools
+                .iter()
+                .all(|t| t.get("functionDeclarations").is_none()),
             "Gemini OpenAI-compat must NOT use Google's native functionDeclarations"
         );
     }
