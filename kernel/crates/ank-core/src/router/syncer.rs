@@ -203,6 +203,12 @@ pub async fn register_provider_models(
     models: &[String],
     catalog: &Arc<ModelCatalog>,
 ) -> usize {
+    // CORE-FIX: canonicalise the provider id so the entries we add to the
+    // catalog match what `decide()` / `entry_api_url()` / `ProviderKind`
+    // expect downstream. Without this, a key registered as "google" would
+    // produce ModelEntry rows the router can't route to (it looks up
+    // "gemini").
+    let provider = crate::router::normalize_provider_id(provider);
     let mut added = 0usize;
     for raw in models {
         let model_id = raw.trim();

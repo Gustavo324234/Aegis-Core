@@ -182,9 +182,13 @@ async fn add_global_key(
         }
     };
 
+    // CORE-FIX: normalise provider id BEFORE persisting. The key, the catalog
+    // entries it produces, and the router lookups all key off the same string;
+    // if the UI submits "google" and we save "google" but catalog stores
+    // "gemini", routing silently fails to find the key on chat.
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
-        provider: req.provider,
+        provider: ank_core::router::normalize_provider_id(&req.provider),
         api_key,
         api_url: req.api_url,
         label: req.label,
@@ -343,7 +347,7 @@ async fn add_tenant_key(
 
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
-        provider: req.provider,
+        provider: ank_core::router::normalize_provider_id(&req.provider),
         api_key,
         api_url: req.api_url,
         label: req.label,
@@ -559,7 +563,7 @@ async fn update_global_key(
 
     let entry = ApiKeyEntry {
         key_id: id,
-        provider: req.provider,
+        provider: ank_core::router::normalize_provider_id(&req.provider),
         api_key,
         api_url: req.api_url,
         label: req.label,
@@ -638,7 +642,7 @@ async fn update_tenant_key(
 
     let entry = ApiKeyEntry {
         key_id: id,
-        provider: req.provider,
+        provider: ank_core::router::normalize_provider_id(&req.provider),
         api_key,
         api_url: req.api_url,
         label: req.label,
@@ -756,9 +760,12 @@ async fn probe_models(
             })?
     };
 
-    match fetch_provider_models(&req.provider, req.api_url.as_deref(), &api_key).await {
+    // Normalise so the response echoes the canonical id the catalog uses,
+    // not whatever spelling the UI happened to send.
+    let canonical_provider = ank_core::router::normalize_provider_id(&req.provider);
+    match fetch_provider_models(&canonical_provider, req.api_url.as_deref(), &api_key).await {
         Ok(models) => Ok(Json(ProbeModelsResponse {
-            provider: req.provider,
+            provider: canonical_provider,
             models,
         })),
         Err(e) => {

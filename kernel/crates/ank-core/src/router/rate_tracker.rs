@@ -234,4 +234,26 @@ impl ModelUsageTracker {
     pub async fn is_provider_circuit_open(&self, provider: &str) -> bool {
         self.provider_failures_recent(provider).await >= 3
     }
+
+    /// CORE-FIX (inspired by OpenClaw's per-profile cooldown tracking):
+    /// returns the number of seconds until this provider's circuit closes
+    /// (i.e. its oldest failure slides out of the 30s window), or None if
+    /// the circuit is currently closed (provider is OK to try).
+    ///
+    /// The UI uses this to render "retry in Ns" countdowns instead of just
+    /// showing the user a generic "all models exhausted" error.
+    pub async fn provider_cooldown_remaining_secs(&self, provider: &str) -> Option<u64> {
+        let pf = self.provider_failures.read().await;
+        let queue = pf.get(provider)?;
+        let oldest = *queue.front()?;
+        // Cooldown closes when the oldest failure ages past the 30s window.
+        let now = Instant::now();
+        let window = Duration::from_secs(30);
+        let age = now.duration_since(oldest);
+        if age >= window {
+            None
+        } else {
+            Some((window - age).as_secs().max(1))
+        }
+    }
 }

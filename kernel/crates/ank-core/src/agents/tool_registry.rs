@@ -19,7 +19,12 @@ pub enum ProviderKind {
 
 impl ProviderKind {
     pub fn from_string(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+        // CORE-FIX: normalise aliases ("google" → "gemini", "claude" →
+        // "anthropic", "grok" → "xai", case + punctuation variants) so the
+        // tool serializer doesn't silently default to OpenAI when the caller
+        // happens to spell the provider differently from this match.
+        let normalised = crate::router::normalize_provider_id(s);
+        match normalised.as_str() {
             "anthropic" => Self::Anthropic,
             "openai" => Self::OpenAI,
             "groq" => Self::Groq,
@@ -31,7 +36,14 @@ impl ProviderKind {
             "mistral" => Self::Mistral,
             "deepseek" => Self::DeepSeek,
             "qwen" => Self::Qwen,
-            _ => Self::OpenAI,
+            _ => {
+                tracing::warn!(
+                    provider = s,
+                    normalised = %normalised,
+                    "ProviderKind::from_string: unknown provider, defaulting to OpenAI"
+                );
+                Self::OpenAI
+            }
         }
     }
 }
