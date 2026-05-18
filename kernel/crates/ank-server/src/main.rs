@@ -301,11 +301,30 @@ pub(crate) async fn run_server() -> Result<()> {
                             while let Some(item) = interceptor.next_item().await {
                                 match item {
                                     ank_core::syscalls::StreamItem::Token(token) => {
+                                        // CORE-FIX: meta-tokens emitted by the HAL
+                                        // (__MODEL_SELECTED__, __WARNING__) are control
+                                        // events, NOT model output. The WS handler
+                                        // intercepts them before showing them to the
+                                        // user, but if we let them through here they
+                                        // (a) get aggregated into `full_output` and
+                                        //     end up persisted in chat_history.log,
+                                        // (b) become the entire `ProcessCompleted.output`
+                                        //     when the model returns 0 content tokens
+                                        //     (the exact symptom from the smoke test
+                                        //      with cogito-2.1:671b).
+                                        // Forward them as Output events so the WS
+                                        // handler can fan them out as `model_selected`
+                                        // / `warning` events, but DO NOT count them
+                                        // as tokens and DO NOT add them to full_output.
+                                        let is_meta = token.starts_with("__MODEL_SELECTED__")
+                                            || token.starts_with("__WARNING__");
+                                        if !is_meta {
+                                            tokens_emitted += 1;
+                                            full_output.push_str(&token);
+                                        }
                                         // CORE-261: __TOOL_CALL__ tokens ya son consumidos
                                         // internamente por el bucle ReAct del HAL — el servidor
                                         // recibe solo texto limpio de text_rx.
-                                        tokens_emitted += 1;
-                                        full_output.push_str(&token);
                                         let _ = event_tx.send(ank_proto::v1::TaskEvent {
                                             pid: pid.clone(),
                                             timestamp: None,
@@ -360,6 +379,31 @@ pub(crate) async fn run_server() -> Result<()> {
                                         }
                                     }
                                 }
+                            }
+
+                            // CORE-FIX: warn loudly when the stream completed
+                            // without any actual content tokens. This is the
+                            // smoke-test "model not responding" symptom — a 200
+                            // OK from the upstream but zero usable output. We
+                            // log empty/short output so the operator can tell
+                            // upstream silently broke vs. the user really sent
+                            // an empty request.
+                            if tokens_emitted == 0 {
+                                tracing::warn!(
+                                    pid = %pid,
+                                    duration_ms = started_at.elapsed().as_millis() as u64,
+                                    "model returned 0 content tokens — upstream likely returned \
+                                     a 200 with empty body or an unsupported response shape. \
+                                     Check provider/model compatibility."
+                                );
+                            } else if full_output.trim().is_empty() {
+                                tracing::warn!(
+                                    pid = %pid,
+                                    tokens_emitted,
+                                    "stream emitted {} tokens but final output is empty after trim \
+                                     — all tokens were meta-tokens (__MODEL_SELECTED__ / __WARNING__)",
+                                    tokens_emitted
+                                );
                             }
 
                             // Telemetry & Finalization

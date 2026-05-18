@@ -310,7 +310,29 @@ async fn handle_chat(
             match onboarding_step.as_deref() {
                 // ── STEP 1: El usuario está respondiendo con el nombre ──
                 Some("awaiting_name") => {
-                    let name = prompt.trim().to_string();
+                    // CORE-FIX: parse the user's reply instead of dumping the
+                    // whole phrase into the name field. Before this, saying
+                    // "hola! te llamare Aegis" stored "hola! te llamare Aegis"
+                    // as the assistant's name, producing "Ya soy hola! te
+                    // llamare Aegis, tu asistente..." in step 2.
+                    let parsed = extract_name_from_phrase(&prompt);
+                    let (name, needs_clarification) = match parsed {
+                        Some(n) => (n, false),
+                        None => (prompt.trim().to_string(), true),
+                    };
+
+                    if needs_clarification {
+                        // Couldn't extract a clear name — ask again instead of
+                        // persisting garbage. Don't advance the step.
+                        let _ = append_to_chat_history(&tenant_id, "USER", &prompt).await;
+                        let clarify = "No te entendí bien 🙂 ¿Podés decirme \
+                                       solo el nombre que querés que use? \
+                                       Por ejemplo: \"Aegis\" o \"llamame Lucía\".";
+                        send_onboarding_message(&mut socket, clarify).await;
+                        let _ = append_to_chat_history(&tenant_id, "ASSISTANT", clarify).await;
+                        continue;
+                    }
+
                     if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
                         let _ = db.set_onboarding_name(&name);
                         let _ = db.set_onboarding_step("awaiting_style");
@@ -732,6 +754,113 @@ async fn append_to_chat_history(tenant_id: &str, role: &str, text: &str) -> anyh
     Ok(())
 }
 
+/// CORE-FIX: extract the assistant's name out of a free-form reply during
+/// the onboarding "awaiting_name" step. The user often writes a phrase like
+/// "hola! te llamare Aegis" instead of just "Aegis", and the previous code
+/// stored the whole phrase as the name.
+///
+/// Strategy (in order of precedence):
+/// 1. Common pattern: "te llamare X", "te llamo X", "tu nombre es X",
+///    "llamate X", "llamame X" → extract X (one or two tokens after).
+/// 2. If the reply is a single token (1-30 chars, mostly letters) → that IS the name.
+/// 3. If the reply is 2-3 short tokens looking like a name (each ≤ 20 chars,
+///    alphabetic + accents) → join them.
+/// 4. Otherwise → None (caller asks for clarification).
+fn extract_name_from_phrase(prompt: &str) -> Option<String> {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // 1. Pattern-match common "tell me your name" phrasings.
+    let lower = trimmed.to_lowercase();
+    let patterns = [
+        "te llamare ",
+        "te llamaré ",
+        "te llamo ",
+        "tu nombre es ",
+        "tu nombre será ",
+        "tu nombre va a ser ",
+        "llamate ",
+        "llámate ",
+        "llamame ",
+        "llámame ",
+        "te voy a llamar ",
+        "vas a ser ",
+        "te llamaras ",
+        "te llamarás ",
+        "me llamas ",
+        "your name is ",
+        "call you ",
+        "i'll call you ",
+        "name is ",
+    ];
+    for pat in &patterns {
+        if let Some(idx) = lower.find(pat) {
+            // Take what's after the pattern, trim, and grab up to the first
+            // sentence-ending punctuation (so we don't pull in "Aegis. Es muy lindo").
+            let after = &trimmed[idx + pat.len()..];
+            let candidate = after
+                .split(['.', ',', '!', '?', '\n', ';', ':'])
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_end_matches(|c: char| !c.is_alphanumeric());
+            if let Some(name) = sanitise_name_token(candidate) {
+                return Some(name);
+            }
+        }
+    }
+
+    // 2. Single token → that's the name.
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    if tokens.len() == 1 {
+        return sanitise_name_token(tokens[0]);
+    }
+
+    // 3. 2-3 short alphabetic tokens → join as "First Middle Last".
+    if tokens.len() <= 3
+        && tokens.iter().all(|t| {
+            t.len() <= 20
+                && t.chars().all(|c| c.is_alphabetic() || matches!(c, '\'' | '-' | '.'))
+        })
+    {
+        return sanitise_name_token(trimmed);
+    }
+
+    None
+}
+
+/// Trims and lightly validates a candidate name. Returns the title-cased
+/// version when it looks reasonable, None otherwise. Refuses obvious garbage
+/// like punctuation-only strings or things longer than 30 chars.
+fn sanitise_name_token(raw: &str) -> Option<String> {
+    let clean: String = raw
+        .trim()
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .to_string();
+    if clean.is_empty() || clean.len() > 30 {
+        return None;
+    }
+    // Must contain at least one alphabetic character.
+    if !clean.chars().any(|c| c.is_alphabetic()) {
+        return None;
+    }
+    // Title-case each whitespace-separated word.
+    let titled: String = clean
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars.flat_map(|c| c.to_lowercase())).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(titled)
+}
+
 /// Convierte la elección del usuario en una instrucción de Persona.
 /// Si no coincide con ninguna opción, usa el texto libre directamente.
 fn map_style_to_description(input: &str) -> String {
@@ -789,4 +918,75 @@ async fn send_onboarding_message(socket: &mut WebSocket, text: &str) {
             .to_string(),
         ))
         .await;
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_name_single_token() {
+        assert_eq!(extract_name_from_phrase("Aegis"), Some("Aegis".to_string()));
+        assert_eq!(extract_name_from_phrase("  aegis  "), Some("Aegis".to_string()));
+        assert_eq!(extract_name_from_phrase("MARIA"), Some("Maria".to_string()));
+    }
+
+    #[test]
+    fn extract_name_from_te_llamare_phrase() {
+        // The exact failure from the smoke test: "hola! te llamare Aegis"
+        // used to persist as the entire string. Now must extract "Aegis".
+        assert_eq!(
+            extract_name_from_phrase("hola! te llamare Aegis"),
+            Some("Aegis".to_string())
+        );
+        assert_eq!(
+            extract_name_from_phrase("Te llamaré Lucía"),
+            Some("Lucía".to_string())
+        );
+        assert_eq!(
+            extract_name_from_phrase("llamame Eve"),
+            Some("Eve".to_string())
+        );
+        assert_eq!(
+            extract_name_from_phrase("tu nombre es Pepe"),
+            Some("Pepe".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_name_strips_trailing_punctuation() {
+        assert_eq!(
+            extract_name_from_phrase("te llamo Aegis."),
+            Some("Aegis".to_string())
+        );
+        assert_eq!(
+            extract_name_from_phrase("Tu nombre es Lucía, espero que te guste"),
+            Some("Lucía".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_name_two_word_name() {
+        assert_eq!(
+            extract_name_from_phrase("María José"),
+            Some("María José".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_name_rejects_garbage() {
+        // Long rambling input with no clear name pattern → caller asks again
+        assert_eq!(extract_name_from_phrase("ehh no se decime vos"), None);
+        assert_eq!(extract_name_from_phrase(""), None);
+        assert_eq!(extract_name_from_phrase("..."), None);
+        assert_eq!(extract_name_from_phrase("123"), None);
+    }
+
+    #[test]
+    fn sanitise_name_drops_too_long() {
+        // 31 chars → reject
+        let long = "AbcdefghijklmnopqrstuvwxyzAbcde";
+        assert_eq!(sanitise_name_token(long), None);
+    }
 }

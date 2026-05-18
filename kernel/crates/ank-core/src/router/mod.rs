@@ -489,8 +489,52 @@ impl CognitiveRouter {
         // ── 5. Error penalty ─────────────────────────────────────────
         let error_penalty = (recent_errors as f64 * 0.10).min(0.30);
 
-        let raw = quality * 0.40 + cost_inv * 0.25 + speed_inv * 0.20 + context_fit * 0.15;
-        (raw * (1.0 - error_penalty)).max(0.0)
+        // ── 6. Oversize penalty for chat-trivial prompts ─────────────
+        // CORE-FIX: for short, conversational prompts, route to a fast
+        // model — not the most powerful one. Without this penalty the
+        // scorer happily picked cogito-2.1:671b or deepseek-v3.1:671b
+        // for "hola" because their cost_inv was 1.0 (free via
+        // ollama_cloud) and their quality was 5/5.
+        //
+        // A model is "oversize" when its id advertises ≥120B parameters
+        // (heuristic: contains "671b" / "405b" / "120b" / "180b" /
+        // "236b" etc.) AND the task is plain Chat AND the prompt is
+        // short (< 400 chars). In that case we knock the score down
+        // 30% — the lighter Gemini/Claude Flash tier wins instead.
+        let oversize_penalty = {
+            let lower_id = entry.model_id.to_lowercase();
+            let is_giant = ["671b", "405b", "236b", "180b", "120b", "70b"]
+                .iter()
+                .any(|tag| lower_id.contains(tag));
+            let is_chat_trivial = matches!(task_type, TaskType::Chat) && prompt.len() < 400;
+            if is_giant && is_chat_trivial {
+                0.30
+            } else {
+                0.0
+            }
+        };
+
+        // ── 7. Task-aware weights ────────────────────────────────────
+        // CORE-FIX: previously the formula was fixed (quality 40 / cost
+        // 25 / speed 20 / fit 15). For Chat that gave cost too much
+        // pull and rewarded free-but-massive models. Re-weight per
+        // task so:
+        //   - Chat        → fast + cheap matter more than peak quality
+        //   - Code/Plan   → quality dominates, cost matters less
+        //   - Analysis    → quality dominates
+        //   - others      → original balanced weights
+        let (w_quality, w_cost, w_speed, w_fit) = match task_type {
+            TaskType::Chat => (0.30, 0.20, 0.35, 0.15),
+            TaskType::Code | TaskType::Planning => (0.55, 0.15, 0.15, 0.15),
+            TaskType::Analysis => (0.55, 0.15, 0.15, 0.15),
+            _ => (0.40, 0.25, 0.20, 0.15),
+        };
+
+        let raw = quality * w_quality
+            + cost_inv * w_cost
+            + speed_inv * w_speed
+            + context_fit * w_fit;
+        (raw * (1.0 - error_penalty) * (1.0 - oversize_penalty)).max(0.0)
     }
 
     /// Busca una entrada en el catálogo por model_id (CORE-237).
