@@ -224,6 +224,10 @@ impl CognitiveRouter {
         // keep banging on the broken one.
         let mut available: Vec<ModelEntry> = Vec::new();
         let mut skipped_by_breaker: Vec<String> = Vec::new();
+        // CORE-FIX: track which providers we skipped so we can surface a
+        // "retry in Ns" countdown if everything ends up gated.
+        let mut providers_in_cooldown: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for entry in filtered {
             let has_key = self
                 .key_pool
@@ -235,6 +239,7 @@ impl CognitiveRouter {
             }
             if self.tracker.is_provider_circuit_open(&entry.provider).await {
                 skipped_by_breaker.push(entry.model_id.clone());
+                providers_in_cooldown.insert(entry.provider.clone());
                 continue;
             }
             available.push(entry);
@@ -248,10 +253,29 @@ impl CognitiveRouter {
         }
 
         if available.is_empty() {
-            return Err(SystemError::HardwareFailure(
-                "No available keys for any candidate model (or all providers have open circuit)"
-                    .to_string(),
-            ));
+            // CORE-FIX (inspired by OpenClaw's per-profile cooldown tracking):
+            // if everything got gated, surface the soonest cooldown expiry so
+            // the WS layer can render a "retry in Ns" countdown instead of a
+            // generic error.
+            let mut soonest: Option<u64> = None;
+            for provider in &providers_in_cooldown {
+                if let Some(secs) = self
+                    .tracker
+                    .provider_cooldown_remaining_secs(provider)
+                    .await
+                {
+                    soonest = Some(soonest.map_or(secs, |cur| cur.min(secs)));
+                }
+            }
+
+            let msg = match soonest {
+                Some(secs) => format!(
+                    "No available keys for any candidate model. Provider cooldown active — retry in {}s.",
+                    secs
+                ),
+                None => "No available keys for any candidate model.".to_string(),
+            };
+            return Err(SystemError::HardwareFailure(msg));
         }
 
         // Step 4: Compute global max cost and latency for fair normalization,
@@ -527,6 +551,58 @@ struct ScoreCtx<'a> {
     recent_errors: u32,
 }
 
+/// Canonicalises a provider identifier so downstream matches (catalog lookups,
+/// key pool, ToolRegistry, discovery, circuit breaker) never silently disagree
+/// on casing, punctuation, or branding aliases.
+///
+/// Inspired by OpenClaw's `normalizeProviderId` helper. Aegis previously hit
+/// real bugs from this: `"gemini"` vs `"google"` matched different code paths,
+/// and `"openai"` vs `"OPENAI"` failed sticky-cache lookups silently.
+///
+/// Always returns lowercase, no punctuation/whitespace, and maps common
+/// aliases to a single canonical id:
+/// - `"google"`, `"google ai"`, `"googleai"`, `"google-ai-studio"` → `"gemini"`
+/// - `"claude"` → `"anthropic"`
+/// - `"open-router"`, `"open_router"` → `"openrouter"`
+/// - `"grok"` → `"xai"`
+/// - `"ollama-cloud"`, `"ollamacloud"` → `"ollama_cloud"`
+///
+/// Anything else falls through as lowercased-with-stripped-punctuation.
+pub fn normalize_provider_id(raw: &str) -> String {
+    let lowered = raw.trim().to_lowercase();
+    let stripped: String = lowered
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .collect();
+    match stripped.as_str() {
+        // Gemini family
+        "google" | "googleai" | "googleaistudio" | "gemini" | "gemininative" => {
+            "gemini".to_string()
+        }
+        // Anthropic — accept Claude branding
+        "anthropic" | "claude" => "anthropic".to_string(),
+        // OpenAI
+        "openai" | "gpt" => "openai".to_string(),
+        // OpenRouter
+        "openrouter" => "openrouter".to_string(),
+        // xAI (also referred to as Grok)
+        "xai" | "grok" => "xai".to_string(),
+        // Ollama variants
+        "ollama" => "ollama".to_string(),
+        "ollamacloud" => "ollama_cloud".to_string(),
+        // Mistral
+        "mistral" | "mistralai" => "mistral".to_string(),
+        // DeepSeek
+        "deepseek" => "deepseek".to_string(),
+        // Groq / Qwen — no aliases, just normalised casing
+        "groq" => "groq".to_string(),
+        "qwen" => "qwen".to_string(),
+        // Unknown — return the stripped lowercase form so downstream behaves
+        // consistently for whatever the user typed.
+        _ => stripped,
+    }
+}
+
 /// Analyses the prompt with lexical signals and returns a boost (0.0–0.30)
 /// when the detected content type matches the declared task_type.
 fn detect_content_type(prompt: &str, task_type: TaskType) -> f64 {
@@ -753,5 +829,46 @@ mod tests {
         let result = router.decide(&pcb).await;
         assert!(result.is_err(), "Should fail with no keys configured");
         Ok(())
+    }
+
+    /// CORE-FIX: provider id aliases must canonicalise so catalog / key pool /
+    /// tool registry / discovery all agree on the same string.
+    #[test]
+    fn test_normalize_provider_id_canonical() {
+        // exact already-canonical
+        assert_eq!(normalize_provider_id("openai"), "openai");
+        assert_eq!(normalize_provider_id("anthropic"), "anthropic");
+        assert_eq!(normalize_provider_id("gemini"), "gemini");
+    }
+
+    #[test]
+    fn test_normalize_provider_id_case_and_punctuation() {
+        assert_eq!(normalize_provider_id("OpenAI"), "openai");
+        assert_eq!(normalize_provider_id("OPENAI"), "openai");
+        assert_eq!(normalize_provider_id("open-router"), "openrouter");
+        assert_eq!(normalize_provider_id("open_router"), "openrouter");
+        assert_eq!(normalize_provider_id("  ollama-cloud  "), "ollama_cloud");
+    }
+
+    #[test]
+    fn test_normalize_provider_id_aliases() {
+        // Google AI → Gemini family
+        assert_eq!(normalize_provider_id("google"), "gemini");
+        assert_eq!(normalize_provider_id("Google AI"), "gemini");
+        assert_eq!(normalize_provider_id("google-ai-studio"), "gemini");
+        // Claude branding → Anthropic
+        assert_eq!(normalize_provider_id("claude"), "anthropic");
+        // Grok → xAI
+        assert_eq!(normalize_provider_id("grok"), "xai");
+        // Mistral aliases
+        assert_eq!(normalize_provider_id("mistralai"), "mistral");
+    }
+
+    #[test]
+    fn test_normalize_provider_id_unknown_returns_stripped() {
+        // Unknown providers fall through as lowercased + punctuation-stripped
+        // so downstream still gets a consistent string.
+        assert_eq!(normalize_provider_id("Foo-Bar"), "foobar");
+        assert_eq!(normalize_provider_id("CUSTOM"), "custom");
     }
 }

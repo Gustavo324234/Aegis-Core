@@ -49,13 +49,15 @@ pub async fn fetch_provider_models(
     api_url: Option<&str>,
     api_key: &str,
 ) -> anyhow::Result<Vec<DiscoveredModel>> {
-    let provider_lc = provider.to_lowercase();
+    // CORE-FIX: normalise before matching. Avoids "google" vs "gemini" vs
+    // "Google AI" all being treated as distinct unsupported providers.
+    let provider_lc = crate::router::normalize_provider_id(provider);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()?;
 
     match provider_lc.as_str() {
-        "gemini" | "google" => fetch_gemini(&client, api_url, api_key).await,
+        "gemini" => fetch_gemini(&client, api_url, api_key).await,
         "openai" => {
             fetch_openai_compatible(
                 &client,
