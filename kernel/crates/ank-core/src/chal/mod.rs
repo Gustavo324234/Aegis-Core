@@ -270,9 +270,8 @@ mod summarise_tests {
 
     #[test]
     fn detects_401() {
-        let e = SystemError::HardwareFailure(
-            "Cloud API Error 401 Unauthorized: unauthorized".into(),
-        );
+        let e =
+            SystemError::HardwareFailure("Cloud API Error 401 Unauthorized: unauthorized".into());
         assert!(summarise_provider_failure(&e).contains("401"));
     }
 
@@ -742,8 +741,7 @@ impl CognitiveHAL {
                             "reason": summary,
                             "message": msg,
                         });
-                        let _ = text_tx
-                            .send(Ok(format!("__WARNING__{}", wpayload)));
+                        let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                         return Err(primary_err);
                     }
 
@@ -838,8 +836,7 @@ impl CognitiveHAL {
                                 "reason": summary,
                                 "message": msg,
                             });
-                            let _ = text_tx
-                                .send(Ok(format!("__WARNING__{}", wpayload)));
+                            let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                             return Err(primary_err);
                         }
                     }
