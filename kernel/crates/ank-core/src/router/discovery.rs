@@ -136,6 +136,7 @@ fn strip_to_api_base(url: &str) -> String {
         "/v1/messages", // Anthropic native (long form)
         "/chat/completions",
         "/messages", // Anthropic native (short form, defensive)
+        "/api/chat", // Ollama native chat endpoint (cloud + local)
     ] {
         if let Some(stripped) = s.strip_suffix(suffix) {
             s = stripped.trim_end_matches('/').to_string();
@@ -150,6 +151,24 @@ fn strip_to_api_base(url: &str) -> String {
     }
 
     s
+}
+
+/// CORE-FIX: extract just `scheme://host[:port]` from any URL the user pasted.
+/// Ollama's tags endpoint is always at `/api/tags` relative to the host, so
+/// we ignore whatever path the user typed (e.g. `https://ollama.com/api/chat`
+/// or `https://ollama.com/v1/chat/completions`) and rebuild from the origin.
+/// Falls back to a trimmed-trailing-slash string if URL parsing fails.
+fn url_origin(url: &str) -> String {
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        let scheme = parsed.scheme();
+        if let Some(host) = parsed.host_str() {
+            if let Some(port) = parsed.port() {
+                return format!("{}://{}:{}", scheme, host, port);
+            }
+            return format!("{}://{}", scheme, host);
+        }
+    }
+    url.trim_end_matches('/').to_string()
 }
 
 /// OpenAI-compatible `GET {base}/models` with `Authorization: Bearer <key>`.
@@ -324,13 +343,22 @@ async fn fetch_ollama(
     api_key: &str,
     is_cloud: bool,
 ) -> anyhow::Result<Vec<DiscoveredModel>> {
-    let base = api_url.map(|s| s.to_string()).unwrap_or_else(|| {
-        if is_cloud {
-            "https://ollama.com".to_string()
-        } else {
-            "http://localhost:11434".to_string()
-        }
-    });
+    // CORE-FIX: Ollama's `/api/tags` endpoint lives at the host root. The
+    // UI usually configures the chat URL (e.g. `https://ollama.com/api/chat`)
+    // and we used to append `/api/tags` to it verbatim, producing the
+    // infamous 404 at `https://ollama.com/api/chat/api/tags` (smoke test
+    // reproducer). Reduce whatever the user gave us to scheme+host+port so
+    // discovery works no matter which endpoint they pasted.
+    let base = api_url
+        .map(url_origin)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if is_cloud {
+                "https://ollama.com".to_string()
+            } else {
+                "http://localhost:11434".to_string()
+            }
+        });
     let url = format!("{}/api/tags", base.trim_end_matches('/'));
 
     let mut req = client.get(&url);
@@ -439,6 +467,9 @@ mod tests {
                 "https://api.anthropic.com/v1/messages",
                 "https://api.anthropic.com",
             ),
+            // Ollama Cloud native: strip /api/chat so the caller can rebuild
+            // `…/api/tags` for discovery.
+            ("https://ollama.com/api/chat", "https://ollama.com"),
             // Already-clean base URLs should be left alone.
             ("https://api.openai.com/v1", "https://api.openai.com/v1"),
             ("https://api.openai.com/v1/", "https://api.openai.com/v1"),
@@ -451,5 +482,40 @@ mod tests {
                 input
             );
         }
+    }
+
+    /// CORE-FIX: regression for the smoke-test 404 the user hit when
+    /// verifying Ollama Cloud — the UI sent `https://ollama.com/api/chat`
+    /// and we appended `/api/tags` to it verbatim, producing the
+    /// nonsensical `https://ollama.com/api/chat/api/tags`. url_origin
+    /// reduces any input to scheme+host[:port] so discovery works no
+    /// matter which path the user pasted.
+    #[test]
+    fn url_origin_collapses_to_scheme_host_port() {
+        let cases = &[
+            ("https://ollama.com/api/chat", "https://ollama.com"),
+            (
+                "https://ollama.com/v1/chat/completions",
+                "https://ollama.com",
+            ),
+            ("https://ollama.com/", "https://ollama.com"),
+            ("https://ollama.com", "https://ollama.com"),
+            ("http://localhost:11434/api/tags", "http://localhost:11434"),
+            (
+                "http://192.168.1.10:11434/api/chat/",
+                "http://192.168.1.10:11434",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(url_origin(input), *expected, "url_origin({:?})", input);
+        }
+    }
+
+    /// Anything we can't parse should pass through (trimmed) — never panic
+    /// or empty-string the caller's input out from under them.
+    #[test]
+    fn url_origin_falls_back_for_unparseable_input() {
+        assert_eq!(url_origin("not a url"), "not a url");
+        assert_eq!(url_origin(""), "");
     }
 }

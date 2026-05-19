@@ -1,11 +1,9 @@
 // #![cfg(feature = "local_llm")]
 
 use crate::chal::{
-    DriverStatus, ExecutionError, GenerateStreamResult, Grammar, InferenceDriver, SystemError,
+    ChatMessage, DriverStatus, GenerateStreamResult, Grammar, InferenceDriver, SystemError,
 };
 use async_trait::async_trait;
-use std::pin::Pin;
-use tokio_stream::Stream;
 use tracing::info;
 
 /// --- COGNITIVE NATIVE DRIVER (LLAMA-CPP-2) ---
@@ -29,7 +27,7 @@ impl LlamaNativeDriver {
 impl InferenceDriver for LlamaNativeDriver {
     async fn generate_stream(
         &self,
-        _prompt: String,
+        _messages: Vec<ChatMessage>,
         _grammar: Option<Grammar>,
         _tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult {

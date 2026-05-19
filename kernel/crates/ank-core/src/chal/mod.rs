@@ -552,7 +552,7 @@ impl CognitiveHAL {
                 .await
             {
                 Ok(s) => s,
-                Err(primary_err) if iteration == 0 && !decision.fallback_chain.is_empty() => {
+                Err(primary_err) if iteration == 0 => {
                     let tracker = self.router_ref.read().await.clone();
                     if let Some(r) = &tracker {
                         r.read()
@@ -565,11 +565,104 @@ impl CognitiveHAL {
                         pid = %pid,
                         primary = %active_model_id,
                         error = %primary_err,
-                        "primary model failed on first call — trying fallback chain"
+                        "primary model failed on first call — trying key rotation then fallback chain"
                     );
 
                     let mut recovered: Option<_> = None;
+
+                    // CORE-FIX: rotate to another key for the SAME (provider,
+                    // model) before switching to a different model. The
+                    // 429-rate-limited callback inside the cloud driver has
+                    // already marked the failing key, so the next call to
+                    // `get_available_key` will give us a different one if the
+                    // user configured multiple keys (e.g. several Gemini API
+                    // keys). This is the difference between "your Gemini
+                    // quota ran out, here's a Groq response" and "your Gemini
+                    // quota ran out, here's a response from your other
+                    // Gemini key".
+                    if let Some(r) = &tracker {
+                        let kp = r.read().await.key_pool_ref();
+                        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                        let mut tried: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
+                        if let Some(ref kid) = decision.key_id {
+                            tried.insert(kid.clone());
+                        }
+                        for attempt in 0..3u32 {
+                            let alt = match kp
+                                .get_available_key(&active_provider, &active_model_id, tenant_id)
+                                .await
+                            {
+                                Some(k) if !tried.contains(&k.key_id) => k,
+                                _ => break,
+                            };
+                            tried.insert(alt.key_id.clone());
+                            let alt_url = alt
+                                .api_url
+                                .clone()
+                                .unwrap_or_else(|| decision.api_url.clone());
+                            let alt_driver = CloudProxyDriver::new_with_callback(
+                                Arc::clone(&self.http_client),
+                                alt_url,
+                                alt.api_key.clone(),
+                                active_model_id.clone(),
+                                Some(alt.key_id.clone()),
+                                on_rate_limited.clone(),
+                            );
+                            match alt_driver
+                                .generate_stream(messages.clone(), None, tools.clone())
+                                .await
+                            {
+                                Ok(s) => {
+                                    let wpayload = serde_json::json!({
+                                        "category": "key_rotated",
+                                        "provider": active_provider,
+                                        "attempt": attempt + 1,
+                                        "message": format!(
+                                            "La key primaria de {} se agotó; \
+                                             cambié a otra del mismo proveedor.",
+                                            active_provider
+                                        ),
+                                    });
+                                    let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                    driver = alt_driver;
+                                    recovered = Some(s);
+                                    break;
+                                }
+                                Err(e) => {
+                                    r.read()
+                                        .await
+                                        .tracker_ref()
+                                        .record_failure(&active_model_id, &active_provider)
+                                        .await;
+                                    warn!(
+                                        pid = %pid,
+                                        provider = %active_provider,
+                                        key_id = %alt.key_id,
+                                        attempt = attempt + 1,
+                                        error = %e,
+                                        "alternate key also failed; trying next"
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // If rotation didn't help AND we have no fallback chain,
+                    // bubble the original error up — preserves the old
+                    // behaviour for the "single model, single key" case.
+                    if recovered.is_none() && decision.fallback_chain.is_empty() {
+                        if let Some(r) = &tracker {
+                            let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                            r.read().await.invalidate_sticky(tenant_id).await;
+                        }
+                        return Err(primary_err);
+                    }
+
                     for fb in &decision.fallback_chain {
+                        if recovered.is_some() {
+                            break;
+                        }
                         let fb_driver = CloudProxyDriver::new_with_callback(
                             Arc::clone(&self.http_client),
                             fb.api_url.clone(),
@@ -686,6 +779,371 @@ impl CognitiveHAL {
                     Err(e) => {
                         let _ = text_tx.send(Err(e));
                     }
+                }
+            }
+
+            // CORE-FIX (A): the smoke test caught cogito-2.1:671b on ollama_cloud
+            // returning 200 OK with zero content tokens. The old code treated
+            // that as `finished = true` because tool_calls is empty — the user
+            // got a ProcessCompleted with output:"" and no visible response.
+            // Now we detect the empty case on the FIRST iteration and walk
+            // the fallback chain just like we do on a hard HTTP failure.
+            let stream_was_empty =
+                iteration == 0 && assistant_text.is_empty() && tool_calls.is_empty();
+
+            if stream_was_empty {
+                if let Some(r) = self.router_ref.read().await.clone() {
+                    let tr = r.read().await;
+                    tr.tracker_ref()
+                        .record_empty_response(&active_model_id)
+                        .await;
+                    tr.tracker_ref()
+                        .record_failure(&active_model_id, &active_provider)
+                        .await;
+                }
+                warn!(
+                    pid = %pid,
+                    model = %active_model_id,
+                    "primary returned 0 content tokens — trying key rotation then fallback chain"
+                );
+
+                let mut recovered = false;
+
+                // CORE-FIX: same key-rotation logic as the 429 path. If the
+                // current key gave us an empty stream, try other keys of the
+                // SAME (provider, model) before switching models. Unlike 429
+                // we can't mark the key globally rate-limited (empty isn't a
+                // rate-limit), so we use the excluding-lookup helper to skip
+                // keys we've already tried within this turn.
+                if let Some(r) = self.router_ref.read().await.clone() {
+                    let kp = r.read().await.key_pool_ref();
+                    let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                    let mut tried: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    if let Some(ref kid) = decision.key_id {
+                        tried.insert(kid.clone());
+                    }
+                    for attempt in 0..3u32 {
+                        let alt = match kp
+                            .get_available_key_excluding(
+                                &active_provider,
+                                &active_model_id,
+                                tenant_id,
+                                &tried,
+                            )
+                            .await
+                        {
+                            Some(k) => k,
+                            None => break,
+                        };
+                        tried.insert(alt.key_id.clone());
+                        let alt_url = alt
+                            .api_url
+                            .clone()
+                            .unwrap_or_else(|| decision.api_url.clone());
+                        let alt_driver = CloudProxyDriver::new_with_callback(
+                            Arc::clone(&self.http_client),
+                            alt_url,
+                            alt.api_key.clone(),
+                            active_model_id.clone(),
+                            Some(alt.key_id.clone()),
+                            on_rate_limited.clone(),
+                        );
+                        match alt_driver
+                            .generate_stream(messages.clone(), None, tools.clone())
+                            .await
+                        {
+                            Ok(s) => {
+                                tokio::pin!(s);
+                                let mut alt_text = String::new();
+                                let mut alt_tool_calls: Vec<ToolCallRecord> = Vec::new();
+                                while let Some(tr) = s.next().await {
+                                    match tr {
+                                        Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                                            let json_str = token
+                                                .strip_prefix("__TOOL_CALL__")
+                                                .unwrap_or_default();
+                                            if let Ok(tc) =
+                                                serde_json::from_str::<DriverToolCallPayload>(
+                                                    json_str,
+                                                )
+                                            {
+                                                alt_tool_calls.push(ToolCallRecord {
+                                                    id: tc.id,
+                                                    type_: "function".to_string(),
+                                                    function: FunctionCallRecord {
+                                                        name: tc.name,
+                                                        arguments: tc.arguments.to_string(),
+                                                    },
+                                                });
+                                            }
+                                        }
+                                        Ok(text) => {
+                                            alt_text.push_str(&text);
+                                            let _ = text_tx.send(Ok(text));
+                                        }
+                                        Err(e) => {
+                                            let _ = text_tx.send(Err(e));
+                                        }
+                                    }
+                                }
+                                if !alt_text.is_empty() || !alt_tool_calls.is_empty() {
+                                    let wpayload = serde_json::json!({
+                                        "category": "key_rotated",
+                                        "provider": active_provider,
+                                        "attempt": attempt + 1,
+                                        "message": format!(
+                                            "El modelo no respondió con la \
+                                             primera key; cambié a otra del \
+                                             mismo proveedor ({}).",
+                                            active_provider
+                                        ),
+                                    });
+                                    let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                    driver = alt_driver;
+                                    assistant_text = alt_text;
+                                    tool_calls = alt_tool_calls;
+                                    recovered = true;
+                                    break;
+                                } else {
+                                    // Alt key also empty — record + try next.
+                                    if let Some(r2) = self.router_ref.read().await.clone() {
+                                        let tr2 = r2.read().await;
+                                        tr2.tracker_ref()
+                                            .record_empty_response(&active_model_id)
+                                            .await;
+                                    }
+                                    warn!(
+                                        pid = %pid,
+                                        provider = %active_provider,
+                                        key_id = %alt.key_id,
+                                        attempt = attempt + 1,
+                                        "alternate key also returned empty stream"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                if let Some(r2) = self.router_ref.read().await.clone() {
+                                    r2.read()
+                                        .await
+                                        .tracker_ref()
+                                        .record_failure(&active_model_id, &active_provider)
+                                        .await;
+                                }
+                                warn!(
+                                    pid = %pid,
+                                    provider = %active_provider,
+                                    key_id = %alt.key_id,
+                                    attempt = attempt + 1,
+                                    error = %e,
+                                    "alternate key failed with HTTP error"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if recovered {
+                    // Key rotation produced a response — skip the
+                    // model-level fallback chain entirely.
+                    if tool_calls.is_empty() {
+                        finished = true;
+                        break;
+                    }
+                    // Otherwise let the ReAct loop continue normally
+                    // (it'll inject the tool result on the next iteration).
+                    messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: if assistant_text.is_empty() {
+                            None
+                        } else {
+                            Some(assistant_text.clone())
+                        },
+                        tool_calls: Some(tool_calls.clone()),
+                        ..Default::default()
+                    });
+                    for tc in &tool_calls {
+                        let result = self.execute_tool_call_internal(tc, pid, pcb).await;
+                        messages.push(ChatMessage {
+                            role: ChatRole::Tool,
+                            content: Some(result),
+                            tool_call_id: Some(tc.id.clone()),
+                            name: Some(tc.function.name.clone()),
+                            ..Default::default()
+                        });
+                    }
+                    continue;
+                }
+
+                for fb in &decision.fallback_chain {
+                    let fb_driver = CloudProxyDriver::new_with_callback(
+                        Arc::clone(&self.http_client),
+                        fb.api_url.clone(),
+                        fb.api_key.clone(),
+                        fb.model_id.clone(),
+                        None,
+                        on_rate_limited.clone(),
+                    );
+                    match fb_driver
+                        .generate_stream(messages.clone(), None, tools.clone())
+                        .await
+                    {
+                        Ok(s) => {
+                            tokio::pin!(s);
+                            let mut fb_text = String::new();
+                            let mut fb_tool_calls: Vec<ToolCallRecord> = Vec::new();
+                            while let Some(tr) = s.next().await {
+                                match tr {
+                                    Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                                        let json_str =
+                                            token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
+                                        if let Ok(tc) =
+                                            serde_json::from_str::<DriverToolCallPayload>(json_str)
+                                        {
+                                            fb_tool_calls.push(ToolCallRecord {
+                                                id: tc.id,
+                                                type_: "function".to_string(),
+                                                function: FunctionCallRecord {
+                                                    name: tc.name,
+                                                    arguments: tc.arguments.to_string(),
+                                                },
+                                            });
+                                        }
+                                    }
+                                    Ok(text) => {
+                                        fb_text.push_str(&text);
+                                        let _ = text_tx.send(Ok(text));
+                                    }
+                                    Err(e) => {
+                                        let _ = text_tx.send(Err(e));
+                                    }
+                                }
+                            }
+                            if !fb_text.is_empty() || !fb_tool_calls.is_empty() {
+                                active_model_id = fb.model_id.clone();
+                                active_provider = fb.provider.clone();
+                                driver = fb_driver;
+                                send_model_event(&text_tx, &active_model_id, &active_provider);
+                                let wpayload = serde_json::json!({
+                                    "category": "model_fallback",
+                                    "message": format!(
+                                        "El modelo primario no respondió; cambiamos a {}.",
+                                        fb.model_id
+                                    )
+                                });
+                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                assistant_text = fb_text;
+                                tool_calls = fb_tool_calls;
+                                recovered = true;
+                                break;
+                            } else {
+                                // Fallback also returned empty. Record and try next.
+                                if let Some(r) = self.router_ref.read().await.clone() {
+                                    let tr = r.read().await;
+                                    tr.tracker_ref().record_empty_response(&fb.model_id).await;
+                                    tr.tracker_ref()
+                                        .record_failure(&fb.model_id, &fb.provider)
+                                        .await;
+                                }
+                                warn!(
+                                    pid = %pid,
+                                    fallback = %fb.model_id,
+                                    "fallback also returned empty"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(r) = self.router_ref.read().await.clone() {
+                                r.read()
+                                    .await
+                                    .tracker_ref()
+                                    .record_failure(&fb.model_id, &fb.provider)
+                                    .await;
+                            }
+                            warn!(
+                                pid = %pid,
+                                fallback = %fb.model_id,
+                                error = %e,
+                                "fallback model also failed (HTTP error)"
+                            );
+                        }
+                    }
+                }
+
+                if !recovered {
+                    // CORE-FIX (B): emit a user-visible message before bailing,
+                    // so the chat doesn't show a silent empty response. We try
+                    // to compute the longest cooldown across the providers we
+                    // just exhausted, so the UI can render a meaningful retry
+                    // hint instead of a generic "try again later".
+                    let mut max_cooldown: u64 = 0;
+                    if let Some(r) = self.router_ref.read().await.clone() {
+                        let tr = r.read().await;
+                        let tracker = tr.tracker_ref();
+                        if let Some(s) = tracker
+                            .provider_cooldown_remaining_secs(&active_provider)
+                            .await
+                        {
+                            max_cooldown = max_cooldown.max(s);
+                        }
+                        for fb in &decision.fallback_chain {
+                            if let Some(s) =
+                                tracker.provider_cooldown_remaining_secs(&fb.provider).await
+                            {
+                                max_cooldown = max_cooldown.max(s);
+                            }
+                        }
+                        // Invalidate sticky so next request re-evaluates from scratch.
+                        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                        tr.invalidate_sticky(tenant_id).await;
+                    }
+
+                    let msg = if max_cooldown > 0 {
+                        format!(
+                            "No tengo modelos disponibles ahora. Probaron \
+                             {} y todos los respaldos sin éxito. Reintentá \
+                             en ~{}s o configurá un proveedor distinto.",
+                            active_model_id, max_cooldown
+                        )
+                    } else if decision.fallback_chain.is_empty() {
+                        format!(
+                            "El modelo '{}' no devolvió respuesta y no hay \
+                             modelos de respaldo configurados. Revisá tu \
+                             selección de proveedor o agregá una alternativa.",
+                            active_model_id
+                        )
+                    } else {
+                        format!(
+                            "No tengo modelos disponibles ahora. El modelo \
+                             '{}' y todos sus respaldos fallaron. Reintentá \
+                             en unos segundos.",
+                            active_model_id
+                        )
+                    };
+
+                    // Visible to the user as assistant text.
+                    let _ = text_tx.send(Ok(msg.clone()));
+                    // Also surface as a structured warning event for the UI.
+                    let wpayload = serde_json::json!({
+                        "category": "all_models_failed",
+                        "primary_model": active_model_id,
+                        "primary_provider": active_provider,
+                        "cooldown_secs": max_cooldown,
+                        "message": msg.clone(),
+                    });
+                    let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+
+                    // Mark the turn as finished cleanly — we already gave the
+                    // user a response via text_tx. Returning Err here would
+                    // just turn into a Payload::Error after we already
+                    // streamed text, which confuses the WS handler.
+                    // (assistant_text is irrelevant past this point: the
+                    // streamed message is what reaches the user, and we
+                    // break out of the ReAct loop immediately.)
+                    drop(msg); // mark used so clippy is happy
+                    tool_calls.clear();
+                    finished = true;
+                    break;
                 }
             }
 

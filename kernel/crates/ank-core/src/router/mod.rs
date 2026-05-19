@@ -242,6 +242,16 @@ impl CognitiveRouter {
                 providers_in_cooldown.insert(entry.provider.clone());
                 continue;
             }
+            // CORE-FIX (D): per-model circuit. The provider may be perfectly
+            // healthy overall (e.g. ollama_cloud responds for gpt-oss:120b)
+            // but a specific model on it keeps returning HTTP 200 with zero
+            // content (cogito-2.1:671b from the smoke test). Skip just that
+            // model so the router promotes a sibling instead of falling
+            // through to a different provider.
+            if self.tracker.is_model_circuit_open(&entry.model_id).await {
+                skipped_by_breaker.push(entry.model_id.clone());
+                continue;
+            }
             available.push(entry);
         }
 
@@ -357,17 +367,37 @@ impl CognitiveRouter {
             self.tracker.record_request(&primary.model_id).await;
         }
 
-        let fallback_chain: Vec<FallbackDecision> = scored
-            .iter()
-            .skip(1)
-            .take(2)
-            .map(|(_, entry)| FallbackDecision {
+        // CORE-FIX (C): each fallback must use a key resolved for ITS provider.
+        // The previous version reused `primary_key.api_key` for every fallback,
+        // which produced 401 Unauthorized any time the fallback was on a
+        // different provider than the primary (e.g. OpenAI primary → Anthropic
+        // fallback was sending the OpenAI token to Anthropic's endpoint).
+        // Skip fallbacks for which no key is available rather than including
+        // a guaranteed-401 entry that would just waste a round trip.
+        let mut fallback_chain: Vec<FallbackDecision> = Vec::new();
+        for (_, entry) in scored.iter().skip(1).take(2) {
+            let fb_key = match self.resolve_key(entry, tenant_id).await {
+                Some(k) => k,
+                None => {
+                    warn!(
+                        provider = %entry.provider,
+                        model = %entry.model_id,
+                        "skipping fallback: no api key available for provider"
+                    );
+                    continue;
+                }
+            };
+            let api_url = fb_key
+                .api_url
+                .clone()
+                .unwrap_or_else(|| entry_api_url(entry));
+            fallback_chain.push(FallbackDecision {
                 model_id: bare_model_id(&entry.model_id, &entry.provider),
                 provider: entry.provider.clone(),
-                api_url: entry_api_url(entry),
-                api_key: primary_key.api_key.clone(),
-            })
-            .collect();
+                api_url,
+                api_key: fb_key.api_key.clone(),
+            });
+        }
 
         let api_model_id = bare_model_id(&primary.model_id, &primary.provider);
 
@@ -442,6 +472,15 @@ impl CognitiveRouter {
 
     pub fn catalog_ref(&self) -> Arc<ModelCatalog> {
         self.catalog.clone()
+    }
+
+    /// CORE-FIX: expose the underlying key pool so the chal layer can request
+    /// a fresh key for the same (provider, model) after one gets marked as
+    /// rate-limited. Used to rotate Gemini keys when the first one returns
+    /// RESOURCE_EXHAUSTED instead of immediately failing over to a different
+    /// model.
+    pub fn key_pool_ref(&self) -> Arc<KeyPool> {
+        Arc::clone(&self.key_pool)
     }
 
     fn compute_score(&self, entry: &ModelEntry, task_type: TaskType, ctx: &ScoreCtx<'_>) -> f64 {
@@ -732,8 +771,12 @@ fn entry_api_url(entry: &ModelEntry) -> String {
         // Compatible OpenAI — requiere key propia
         "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
         "groq" => "https://api.groq.com/openai/v1/chat/completions".to_string(),
+        // CORE-FIX: both Ollama local and cloud use the OpenAI-compat shim at
+        // /v1/chat/completions because the cloud driver speaks OpenAI's SSE
+        // format. The native /api/chat endpoint returns NDJSON without the
+        // `data: ` prefix and our parser silently produces 0 tokens.
         "ollama" => "http://localhost:11434/v1/chat/completions".to_string(),
-        "ollama_cloud" => "https://ollama.com/api/chat".to_string(),
+        "ollama_cloud" => "https://ollama.com/v1/chat/completions".to_string(),
         // Compatible OpenAI via OpenRouter — requiere key de OpenRouter
         "anthropic" | "deepseek" | "mistral" | "qwen" => {
             "https://openrouter.ai/api/v1/chat/completions".to_string()

@@ -208,6 +208,66 @@ impl KeyPool {
         counter.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// CORE-FIX: like `get_available_key` but skips any key whose `key_id` is
+    /// in `exclude_ids`. Used by the chal layer to rotate through alternate
+    /// keys when the previous one returned an empty stream — empty responses
+    /// don't (and shouldn't) mark the key globally rate-limited, so we need
+    /// a way to ask for "any *other* available key" within a single request
+    /// without polluting the global state.
+    pub async fn get_available_key_excluding(
+        &self,
+        provider: &str,
+        model_id: &str,
+        tenant_id: &str,
+        exclude_ids: &std::collections::HashSet<String>,
+    ) -> Option<ApiKeyEntry> {
+        let model_matches = |k: &&ApiKeyEntry| -> bool {
+            k.provider == provider
+                && k.is_available()
+                && !exclude_ids.contains(&k.key_id)
+                && k.active_models
+                    .as_ref()
+                    .map(|m| m.iter().any(|s| model_id_matches(model_id, s)))
+                    .unwrap_or(true)
+        };
+
+        let tenant_keys = self.tenant_keys.read().await;
+        let global_keys = self.global_keys.read().await;
+
+        let tenant = tenant_keys
+            .get(tenant_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+
+        // Priority order: tenant-free, global-free, tenant-paid, global-paid
+        let buckets: [Vec<&ApiKeyEntry>; 4] = [
+            tenant
+                .iter()
+                .filter(|k| k.is_free_tier && model_matches(k))
+                .collect(),
+            global_keys
+                .iter()
+                .filter(|k| k.is_free_tier && model_matches(k))
+                .collect(),
+            tenant
+                .iter()
+                .filter(|k| !k.is_free_tier && model_matches(k))
+                .collect(),
+            global_keys
+                .iter()
+                .filter(|k| !k.is_free_tier && model_matches(k))
+                .collect(),
+        ];
+
+        for bucket in &buckets {
+            if !bucket.is_empty() {
+                let idx = self.next_rr_index(provider).await;
+                return Some(bucket[idx % bucket.len()].clone());
+            }
+        }
+        None
+    }
+
     pub async fn mark_rate_limited(&self, key_id: &str, until: DateTime<Utc>) {
         {
             let mut global = self.global_keys.write().await;
