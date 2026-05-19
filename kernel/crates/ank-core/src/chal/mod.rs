@@ -820,10 +820,211 @@ impl CognitiveHAL {
                 warn!(
                     pid = %pid,
                     model = %active_model_id,
-                    "primary returned 0 content tokens — attempting fallback chain"
+                    "primary returned 0 content tokens — trying key rotation then fallback chain"
                 );
 
                 let mut recovered = false;
+
+                // CORE-FIX: same key-rotation logic as the 429 path. If the
+                // current key gave us an empty stream, try other keys of the
+                // SAME (provider, model) before switching models. Unlike 429
+                // we can't mark the key globally rate-limited (empty isn't a
+                // rate-limit), so we use the excluding-lookup helper to skip
+                // keys we've already tried within this turn.
+                if let Some(r) = self.router_ref.read().await.clone() {
+                    let kp = r.read().await.key_pool_ref();
+                    let tenant_id =
+                        pcb.tenant_id.as_deref().unwrap_or("default");
+                    let mut tried: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    if let Some(ref kid) = decision.key_id {
+                        tried.insert(kid.clone());
+                    }
+                    for attempt in 0..3u32 {
+                        let alt = match kp
+                            .get_available_key_excluding(
+                                &active_provider,
+                                &active_model_id,
+                                tenant_id,
+                                &tried,
+                            )
+                            .await
+                        {
+                            Some(k) => k,
+                            None => break,
+                        };
+                        tried.insert(alt.key_id.clone());
+                        let alt_url = alt
+                            .api_url
+                            .clone()
+                            .unwrap_or_else(|| decision.api_url.clone());
+                        let alt_driver = CloudProxyDriver::new_with_callback(
+                            Arc::clone(&self.http_client),
+                            alt_url,
+                            alt.api_key.clone(),
+                            active_model_id.clone(),
+                            Some(alt.key_id.clone()),
+                            on_rate_limited.clone(),
+                        );
+                        match alt_driver
+                            .generate_stream(
+                                messages.clone(),
+                                None,
+                                tools.clone(),
+                            )
+                            .await
+                        {
+                            Ok(s) => {
+                                tokio::pin!(s);
+                                let mut alt_text = String::new();
+                                let mut alt_tool_calls: Vec<ToolCallRecord> =
+                                    Vec::new();
+                                while let Some(tr) = s.next().await {
+                                    match tr {
+                                        Ok(token)
+                                            if token
+                                                .starts_with("__TOOL_CALL__") =>
+                                        {
+                                            let json_str = token
+                                                .strip_prefix("__TOOL_CALL__")
+                                                .unwrap_or_default();
+                                            if let Ok(tc) = serde_json::from_str::<
+                                                DriverToolCallPayload,
+                                            >(
+                                                json_str
+                                            ) {
+                                                alt_tool_calls.push(
+                                                    ToolCallRecord {
+                                                        id: tc.id,
+                                                        type_: "function"
+                                                            .to_string(),
+                                                        function:
+                                                            FunctionCallRecord {
+                                                                name: tc.name,
+                                                                arguments: tc
+                                                                    .arguments
+                                                                    .to_string(),
+                                                            },
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        Ok(text) => {
+                                            alt_text.push_str(&text);
+                                            let _ = text_tx.send(Ok(text));
+                                        }
+                                        Err(e) => {
+                                            let _ = text_tx.send(Err(e));
+                                        }
+                                    }
+                                }
+                                if !alt_text.is_empty()
+                                    || !alt_tool_calls.is_empty()
+                                {
+                                    let wpayload = serde_json::json!({
+                                        "category": "key_rotated",
+                                        "provider": active_provider,
+                                        "attempt": attempt + 1,
+                                        "message": format!(
+                                            "El modelo no respondió con la \
+                                             primera key; cambié a otra del \
+                                             mismo proveedor ({}).",
+                                            active_provider
+                                        ),
+                                    });
+                                    let _ = text_tx.send(Ok(format!(
+                                        "__WARNING__{}",
+                                        wpayload
+                                    )));
+                                    driver = alt_driver;
+                                    assistant_text = alt_text;
+                                    tool_calls = alt_tool_calls;
+                                    recovered = true;
+                                    break;
+                                } else {
+                                    // Alt key also empty — record + try next.
+                                    if let Some(r2) = self
+                                        .router_ref
+                                        .read()
+                                        .await
+                                        .clone()
+                                    {
+                                        let tr2 = r2.read().await;
+                                        tr2.tracker_ref()
+                                            .record_empty_response(
+                                                &active_model_id,
+                                            )
+                                            .await;
+                                    }
+                                    warn!(
+                                        pid = %pid,
+                                        provider = %active_provider,
+                                        key_id = %alt.key_id,
+                                        attempt = attempt + 1,
+                                        "alternate key also returned empty stream"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                if let Some(r2) =
+                                    self.router_ref.read().await.clone()
+                                {
+                                    r2.read()
+                                        .await
+                                        .tracker_ref()
+                                        .record_failure(
+                                            &active_model_id,
+                                            &active_provider,
+                                        )
+                                        .await;
+                                }
+                                warn!(
+                                    pid = %pid,
+                                    provider = %active_provider,
+                                    key_id = %alt.key_id,
+                                    attempt = attempt + 1,
+                                    error = %e,
+                                    "alternate key failed with HTTP error"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if recovered {
+                    // Key rotation produced a response — skip the
+                    // model-level fallback chain entirely.
+                    if tool_calls.is_empty() {
+                        finished = true;
+                        break;
+                    }
+                    // Otherwise let the ReAct loop continue normally
+                    // (it'll inject the tool result on the next iteration).
+                    messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: if assistant_text.is_empty() {
+                            None
+                        } else {
+                            Some(assistant_text.clone())
+                        },
+                        tool_calls: Some(tool_calls.clone()),
+                        ..Default::default()
+                    });
+                    for tc in &tool_calls {
+                        let result = self
+                            .execute_tool_call_internal(tc, pid, pcb)
+                            .await;
+                        messages.push(ChatMessage {
+                            role: ChatRole::Tool,
+                            content: Some(result),
+                            tool_call_id: Some(tc.id.clone()),
+                            name: Some(tc.function.name.clone()),
+                            ..Default::default()
+                        });
+                    }
+                    continue;
+                }
+
                 for fb in &decision.fallback_chain {
                     let fb_driver = CloudProxyDriver::new_with_callback(
                         Arc::clone(&self.http_client),
