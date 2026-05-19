@@ -771,8 +771,12 @@ fn entry_api_url(entry: &ModelEntry) -> String {
         // Compatible OpenAI — requiere key propia
         "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
         "groq" => "https://api.groq.com/openai/v1/chat/completions".to_string(),
+        // CORE-FIX: both Ollama local and cloud use the OpenAI-compat shim at
+        // /v1/chat/completions because the cloud driver speaks OpenAI's SSE
+        // format. The native /api/chat endpoint returns NDJSON without the
+        // `data: ` prefix and our parser silently produces 0 tokens.
         "ollama" => "http://localhost:11434/v1/chat/completions".to_string(),
-        "ollama_cloud" => "https://ollama.com/api/chat".to_string(),
+        "ollama_cloud" => "https://ollama.com/v1/chat/completions".to_string(),
         // Compatible OpenAI via OpenRouter — requiere key de OpenRouter
         "anthropic" | "deepseek" | "mistral" | "qwen" => {
             "https://openrouter.ai/api/v1/chat/completions".to_string()

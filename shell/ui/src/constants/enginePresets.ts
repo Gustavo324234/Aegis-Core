@@ -42,15 +42,22 @@ export const PROVIDER_PRESETS = {
     provider: "openrouter"
   },
   ollama: {
+    // CORE-FIX: switched to /v1/chat/completions (OpenAI-compat shim) because
+    // the cloud driver speaks OpenAI's SSE format. The native /api/chat
+    // endpoint returns NDJSON without the `data: ` prefix, so the streaming
+    // parser silently produced 0 tokens — the exact "model returned empty"
+    // symptom from the smoke test with cogito-2.1:671b.
     label: "Ollama",
-    url: "http://localhost:11434/api/chat",
+    url: "http://localhost:11434/v1/chat/completions",
     model: "llama3.2",
     keyLink: null,
     provider: "ollama"
   },
   ollama_cloud: {
+    // CORE-FIX: same as Ollama local — point at the OpenAI-compat endpoint
+    // (Ollama Cloud serves it at /v1) so streaming responses parse correctly.
     label: "Ollama Cloud",
-    url: "https://ollama.com/api/chat",
+    url: "https://ollama.com/v1/chat/completions",
     model: "llama3.3:70b-cloud",
     keyLink: "https://ollama.com/settings/api-keys",
     provider: "ollama_cloud"
