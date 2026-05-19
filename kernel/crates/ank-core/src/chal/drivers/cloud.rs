@@ -70,6 +70,65 @@ impl CloudProxyDriver {
         RETRYABLE_STATUS_CODES.contains(&status.as_u16())
     }
 
+    /// CORE-FIX (E): parses a Gemini / Google AI Studio error body looking for
+    /// the standardised `RESOURCE_EXHAUSTED` shape and lifts the structured
+    /// `retryDelay` value out of `details[]`. Returns
+    ///   - `Some((friendly_message, retry_delay_secs))` when it recognises the
+    ///     shape (Gemini free-tier quota exhausted), or
+    ///   - `None` for any other body, in which case the caller should fall
+    ///     back to its generic "API Error N: <body>" formatting.
+    ///
+    /// Example body Gemini returns:
+    /// ```json
+    /// {
+    ///   "error": {
+    ///     "code": 429,
+    ///     "status": "RESOURCE_EXHAUSTED",
+    ///     "message": "You exceeded your current quota...",
+    ///     "details": [
+    ///       { "@type": "type.googleapis.com/google.rpc.QuotaFailure", ... },
+    ///       { "@type": "type.googleapis.com/google.rpc.RetryInfo",
+    ///         "retryDelay": "23s" }
+    ///     ]
+    ///   }
+    /// }
+    /// ```
+    fn parse_gemini_quota_error(body: &str) -> Option<(String, u64)> {
+        let v: serde_json::Value = serde_json::from_str(body).ok()?;
+        let err = v.get("error")?;
+        let status = err.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        let code = err.get("code").and_then(|c| c.as_u64()).unwrap_or(0);
+        if status != "RESOURCE_EXHAUSTED" && code != 429 {
+            return None;
+        }
+        let details = err.get("details").and_then(|d| d.as_array());
+        let mut retry_secs: u64 = 0;
+        if let Some(details) = details {
+            for d in details {
+                let ty = d.get("@type").and_then(|t| t.as_str()).unwrap_or("");
+                if ty.ends_with("RetryInfo") {
+                    if let Some(delay) = d.get("retryDelay").and_then(|s| s.as_str()) {
+                        // Format is like "23s" or "1.5s". Parse leading number.
+                        let trimmed = delay.trim_end_matches('s');
+                        if let Ok(f) = trimmed.parse::<f64>() {
+                            retry_secs = f.ceil() as u64;
+                        }
+                    }
+                }
+            }
+        }
+        // Sane default: if no retryDelay extracted, give the user *some* hint.
+        if retry_secs == 0 {
+            retry_secs = 60;
+        }
+        let msg = format!(
+            "Tu plan free de Gemini se agotó. Reintentá en ~{}s o agregá \
+             billing en Google AI Studio para subir el límite.",
+            retry_secs
+        );
+        Some((msg, retry_secs))
+    }
+
     /// CORE-FIX (B2): Anthropic supports prompt caching via a `cache_control`
     /// marker on a content block. The marker has to live INSIDE the content
     /// (not as a top-level field), which means the message's `content` field
@@ -156,6 +215,18 @@ impl CloudProxyDriver {
                             status = %status,
                             "Retryable error received"
                         );
+                        // CORE-FIX (E): if this is a Gemini quota error, no
+                        // amount of retrying inside the 30s window will help —
+                        // bail out with the friendly message immediately
+                        // instead of waiting MAX_RETRIES * 1s of pointless
+                        // exponential backoff first.
+                        if status.as_u16() == 429 {
+                            if let Some((msg, _)) =
+                                Self::parse_gemini_quota_error(&text)
+                            {
+                                return Err(SystemError::HardwareFailure(msg));
+                            }
+                        }
                         last_error = Some(SystemError::HardwareFailure(format!(
                             "API Error {}: {}",
                             status, text
@@ -164,14 +235,36 @@ impl CloudProxyDriver {
                     }
 
                     if status.as_u16() == 429 {
+                        // CORE-FIX (E): peek at the body to honour Gemini's
+                        // structured `retryDelay` instead of always using 60s.
+                        // We have to consume the response to read the body, so
+                        // we return early with a tailored HardwareFailure
+                        // carrying the friendly message — this is fine because
+                        // 429 is non-retryable at this point (already past
+                        // MAX_RETRIES) and the caller will surface the message
+                        // to the user.
+                        let body = response.text().await.unwrap_or_default();
+                        let (delay_secs, user_msg) =
+                            match Self::parse_gemini_quota_error(&body) {
+                                Some((msg, secs)) => (secs, Some(msg)),
+                                None => (60u64, None),
+                            };
                         if let Some(cb) = &self.on_rate_limited {
-                            let until = chrono::Utc::now() + chrono::Duration::seconds(60);
+                            let until = chrono::Utc::now()
+                                + chrono::Duration::seconds(delay_secs as i64);
                             cb(until);
                             tracing::warn!(
                                 model = %self.model_id,
-                                "CORE-267: 429 recibido — key marcada como rate-limited por 60s"
+                                cooldown_secs = delay_secs,
+                                "CORE-267 + CORE-FIX (E): 429 recibido — key marcada como rate-limited"
                             );
                         }
+                        return Err(SystemError::HardwareFailure(
+                            user_msg.unwrap_or_else(|| format!(
+                                "API Error {}: {}",
+                                status, body
+                            )),
+                        ));
                     }
 
                     return Ok(response);
@@ -461,5 +554,66 @@ impl InferenceDriver for CloudProxyDriver {
     async fn load_model(&mut self, model_id: &str) -> Result<(), SystemError> {
         self.model_id = model_id.to_string();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_gemini_quota_error_extracts_retry_delay() {
+        let body = r#"{
+            "error": {
+                "code": 429,
+                "status": "RESOURCE_EXHAUSTED",
+                "message": "Quota exceeded",
+                "details": [
+                    {"@type": "type.googleapis.com/google.rpc.QuotaFailure"},
+                    {"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                     "retryDelay": "23s"}
+                ]
+            }
+        }"#;
+        let (msg, secs) = CloudProxyDriver::parse_gemini_quota_error(body)
+            .expect("should recognise Gemini quota shape");
+        assert_eq!(secs, 23);
+        assert!(msg.contains("Gemini"));
+        assert!(msg.contains("23"));
+    }
+
+    #[test]
+    fn parse_gemini_quota_error_defaults_when_no_retry_info() {
+        let body = r#"{
+            "error": { "code": 429, "status": "RESOURCE_EXHAUSTED",
+                       "message": "quota exhausted" }
+        }"#;
+        let (_, secs) = CloudProxyDriver::parse_gemini_quota_error(body)
+            .expect("recognised by status alone");
+        assert_eq!(secs, 60);
+    }
+
+    #[test]
+    fn parse_gemini_quota_error_returns_none_for_unrelated_body() {
+        assert!(CloudProxyDriver::parse_gemini_quota_error("not json").is_none());
+        assert!(CloudProxyDriver::parse_gemini_quota_error(
+            r#"{"error":{"code":401,"status":"UNAUTHENTICATED"}}"#
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn parse_gemini_quota_error_handles_fractional_seconds() {
+        let body = r#"{
+            "error": {
+                "code": 429, "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                     "retryDelay": "1.7s"}
+                ]
+            }
+        }"#;
+        let (_, secs) = CloudProxyDriver::parse_gemini_quota_error(body).unwrap();
+        assert_eq!(secs, 2); // ceil(1.7) = 2
     }
 }

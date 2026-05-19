@@ -18,6 +18,11 @@ pub struct ModelUsageTracker {
     /// CORE-FIX: circuit breaker — recent failures per provider (not per model).
     /// If a provider as a whole is failing, no point trying its individual models.
     provider_failures: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
+    /// CORE-FIX (D): per-model "returned 200 OK but zero content tokens" tracker.
+    /// Some providers (notably ollama_cloud serving 671B models) silently return
+    /// nothing instead of erroring; we treat that as an implicit failure and
+    /// trip a per-model circuit so the router stops picking that model.
+    empty_responses: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -52,6 +57,7 @@ impl ModelUsageTracker {
             error_window: Arc::new(RwLock::new(HashMap::new())),
             outcomes: Arc::new(RwLock::new(HashMap::new())),
             provider_failures: Arc::new(RwLock::new(HashMap::new())),
+            empty_responses: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -249,6 +255,69 @@ impl ModelUsageTracker {
         // Cooldown closes when the oldest failure ages past the 30s window.
         let now = Instant::now();
         let window = Duration::from_secs(30);
+        let age = now.duration_since(oldest);
+        if age >= window {
+            None
+        } else {
+            Some((window - age).as_secs().max(1))
+        }
+    }
+
+    // ─── CORE-FIX (D): per-model "silent failure" circuit ────────────────
+    //
+    // Some providers (ollama_cloud is the worst offender at the moment)
+    // happily reply HTTP 200 with an empty content stream when their
+    // model is overloaded, mis-configured, or doesn't actually exist.
+    // The chal layer treats that as an implicit failure and walks the
+    // fallback chain — but if we let the router keep picking that same
+    // model on the next request, every chat starts with a stuttered
+    // fallback. These methods give us a per-model circuit breaker
+    // independent of the provider-level one.
+
+    /// Record that a model returned 200 OK with zero content tokens.
+    /// Kept in a 5-minute sliding window.
+    pub async fn record_empty_response(&self, model_id: &str) {
+        let now = Instant::now();
+        let mut map = self.empty_responses.write().await;
+        let queue = map.entry(model_id.to_string()).or_default();
+        let cutoff = now - Duration::from_secs(300);
+        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+            queue.pop_front();
+        }
+        queue.push_back(now);
+    }
+
+    /// Number of empty-response events for this model in the last 5 minutes.
+    pub async fn empty_responses_recent(&self, model_id: &str) -> u32 {
+        let now = Instant::now();
+        let cutoff = now - Duration::from_secs(300);
+        let mut map = self.empty_responses.write().await;
+        let queue = map.entry(model_id.to_string()).or_default();
+        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+            queue.pop_front();
+        }
+        queue.len() as u32
+    }
+
+    /// Circuit is "open" (i.e. skip this model in routing) once it has
+    /// returned an empty stream twice within the last 5 minutes. The
+    /// circuit auto-closes as those events age out of the window.
+    pub async fn is_model_circuit_open(&self, model_id: &str) -> bool {
+        self.empty_responses_recent(model_id).await >= 2
+    }
+
+    /// Seconds remaining until this model's circuit closes (oldest empty
+    /// response slides out of the 5min window). `None` when the circuit
+    /// is currently closed.
+    pub async fn model_cooldown_remaining_secs(&self, model_id: &str) -> Option<u64> {
+        let map = self.empty_responses.read().await;
+        let queue = map.get(model_id)?;
+        if queue.len() < 2 {
+            return None;
+        }
+        let oldest = *queue.front()?;
+        let now = Instant::now();
+        let window = Duration::from_secs(300);
         let age = now.duration_since(oldest);
         if age >= window {
             None

@@ -689,6 +689,221 @@ impl CognitiveHAL {
                 }
             }
 
+            // CORE-FIX (A): the smoke test caught cogito-2.1:671b on ollama_cloud
+            // returning 200 OK with zero content tokens. The old code treated
+            // that as `finished = true` because tool_calls is empty — the user
+            // got a ProcessCompleted with output:"" and no visible response.
+            // Now we detect the empty case on the FIRST iteration and walk
+            // the fallback chain just like we do on a hard HTTP failure.
+            let stream_was_empty =
+                iteration == 0 && assistant_text.is_empty() && tool_calls.is_empty();
+
+            if stream_was_empty {
+                if let Some(r) = self.router_ref.read().await.clone() {
+                    let tr = r.read().await;
+                    tr.tracker_ref()
+                        .record_empty_response(&active_model_id)
+                        .await;
+                    tr.tracker_ref()
+                        .record_failure(&active_model_id, &active_provider)
+                        .await;
+                }
+                warn!(
+                    pid = %pid,
+                    model = %active_model_id,
+                    "primary returned 0 content tokens — attempting fallback chain"
+                );
+
+                let mut recovered = false;
+                for fb in &decision.fallback_chain {
+                    let fb_driver = CloudProxyDriver::new_with_callback(
+                        Arc::clone(&self.http_client),
+                        fb.api_url.clone(),
+                        fb.api_key.clone(),
+                        fb.model_id.clone(),
+                        None,
+                        on_rate_limited.clone(),
+                    );
+                    match fb_driver
+                        .generate_stream(messages.clone(), None, tools.clone())
+                        .await
+                    {
+                        Ok(s) => {
+                            tokio::pin!(s);
+                            let mut fb_text = String::new();
+                            let mut fb_tool_calls: Vec<ToolCallRecord> = Vec::new();
+                            while let Some(tr) = s.next().await {
+                                match tr {
+                                    Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                                        let json_str = token
+                                            .strip_prefix("__TOOL_CALL__")
+                                            .unwrap_or_default();
+                                        if let Ok(tc) = serde_json::from_str::<
+                                            DriverToolCallPayload,
+                                        >(
+                                            json_str
+                                        ) {
+                                            fb_tool_calls.push(ToolCallRecord {
+                                                id: tc.id,
+                                                type_: "function".to_string(),
+                                                function: FunctionCallRecord {
+                                                    name: tc.name,
+                                                    arguments: tc.arguments.to_string(),
+                                                },
+                                            });
+                                        }
+                                    }
+                                    Ok(text) => {
+                                        fb_text.push_str(&text);
+                                        let _ = text_tx.send(Ok(text));
+                                    }
+                                    Err(e) => {
+                                        let _ = text_tx.send(Err(e));
+                                    }
+                                }
+                            }
+                            if !fb_text.is_empty() || !fb_tool_calls.is_empty() {
+                                active_model_id = fb.model_id.clone();
+                                active_provider = fb.provider.clone();
+                                driver = fb_driver;
+                                send_model_event(
+                                    &text_tx,
+                                    &active_model_id,
+                                    &active_provider,
+                                );
+                                let wpayload = serde_json::json!({
+                                    "category": "model_fallback",
+                                    "message": format!(
+                                        "El modelo primario no respondió; cambiamos a {}.",
+                                        fb.model_id
+                                    )
+                                });
+                                let _ = text_tx
+                                    .send(Ok(format!("__WARNING__{}", wpayload)));
+                                assistant_text = fb_text;
+                                tool_calls = fb_tool_calls;
+                                recovered = true;
+                                break;
+                            } else {
+                                // Fallback also returned empty. Record and try next.
+                                if let Some(r) =
+                                    self.router_ref.read().await.clone()
+                                {
+                                    let tr = r.read().await;
+                                    tr.tracker_ref()
+                                        .record_empty_response(&fb.model_id)
+                                        .await;
+                                    tr.tracker_ref()
+                                        .record_failure(&fb.model_id, &fb.provider)
+                                        .await;
+                                }
+                                warn!(
+                                    pid = %pid,
+                                    fallback = %fb.model_id,
+                                    "fallback also returned empty"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(r) =
+                                self.router_ref.read().await.clone()
+                            {
+                                r.read()
+                                    .await
+                                    .tracker_ref()
+                                    .record_failure(&fb.model_id, &fb.provider)
+                                    .await;
+                            }
+                            warn!(
+                                pid = %pid,
+                                fallback = %fb.model_id,
+                                error = %e,
+                                "fallback model also failed (HTTP error)"
+                            );
+                        }
+                    }
+                }
+
+                if !recovered {
+                    // CORE-FIX (B): emit a user-visible message before bailing,
+                    // so the chat doesn't show a silent empty response. We try
+                    // to compute the longest cooldown across the providers we
+                    // just exhausted, so the UI can render a meaningful retry
+                    // hint instead of a generic "try again later".
+                    let mut max_cooldown: u64 = 0;
+                    if let Some(r) = self.router_ref.read().await.clone() {
+                        let tr = r.read().await;
+                        let tracker = tr.tracker_ref();
+                        if let Some(s) = tracker
+                            .provider_cooldown_remaining_secs(&active_provider)
+                            .await
+                        {
+                            max_cooldown = max_cooldown.max(s);
+                        }
+                        for fb in &decision.fallback_chain {
+                            if let Some(s) = tracker
+                                .provider_cooldown_remaining_secs(&fb.provider)
+                                .await
+                            {
+                                max_cooldown = max_cooldown.max(s);
+                            }
+                        }
+                        // Invalidate sticky so next request re-evaluates from scratch.
+                        let tenant_id =
+                            pcb.tenant_id.as_deref().unwrap_or("default");
+                        tr.invalidate_sticky(tenant_id).await;
+                    }
+
+                    let msg = if max_cooldown > 0 {
+                        format!(
+                            "No tengo modelos disponibles ahora. Probaron \
+                             {} y todos los respaldos sin éxito. Reintentá \
+                             en ~{}s o configurá un proveedor distinto.",
+                            active_model_id, max_cooldown
+                        )
+                    } else if decision.fallback_chain.is_empty() {
+                        format!(
+                            "El modelo '{}' no devolvió respuesta y no hay \
+                             modelos de respaldo configurados. Revisá tu \
+                             selección de proveedor o agregá una alternativa.",
+                            active_model_id
+                        )
+                    } else {
+                        format!(
+                            "No tengo modelos disponibles ahora. El modelo \
+                             '{}' y todos sus respaldos fallaron. Reintentá \
+                             en unos segundos.",
+                            active_model_id
+                        )
+                    };
+
+                    // Visible to the user as assistant text.
+                    let _ = text_tx.send(Ok(msg.clone()));
+                    // Also surface as a structured warning event for the UI.
+                    let wpayload = serde_json::json!({
+                        "category": "all_models_failed",
+                        "primary_model": active_model_id,
+                        "primary_provider": active_provider,
+                        "cooldown_secs": max_cooldown,
+                        "message": msg.clone(),
+                    });
+                    let _ = text_tx
+                        .send(Ok(format!("__WARNING__{}", wpayload)));
+
+                    // Mark the turn as finished cleanly — we already gave the
+                    // user a response via text_tx. Returning Err here would
+                    // just turn into a Payload::Error after we already
+                    // streamed text, which confuses the WS handler.
+                    // (assistant_text is irrelevant past this point: the
+                    // streamed message is what reaches the user, and we
+                    // break out of the ReAct loop immediately.)
+                    drop(msg); // mark used so clippy is happy
+                    tool_calls.clear();
+                    finished = true;
+                    break;
+                }
+            }
+
             if tool_calls.is_empty() {
                 finished = true;
                 break;
