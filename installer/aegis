@@ -98,6 +98,218 @@ cmd_logs() {
     fi
 }
 
+# CORE-FIX: `aegis logs` dumps EVERYTHING the kernel emits, which on a real
+# smoke test means dozens of lines of tokio channel structures, repeated
+# "Secure Enclave initialized", and multi-page Gemini RESOURCE_EXHAUSTED
+# JSON bodies per failure. `aegis trace` keeps only the events you need to
+# follow a model request end-to-end:
+#
+#   T+0.0s [ROUTE]    proc_360b187c → gemini-2.5-pro (gemini) Chat fb=deepseek-v3.2,deepseek-v4-flash
+#   T+0.4s [429]      gemini-2.5-pro key=640c3b9b cooldown=60s
+#   T+1.6s [ROTATE]   alternate key 7937be8d also failed (429)
+#   T+3.5s [FALLBACK] deepseek-v3.2 failed (401)
+#   T+3.7s [EMPTY]    model returned 0 content tokens (6.5s)
+#   T+3.7s [DONE]     proc_360b187c output="" (0 chars)
+#
+# Flags:
+#   -n N             only the last N journalctl lines (default 500)
+#   --pid PID        only events for this proc_xxx id
+#   --since "5m ago" passthrough to journalctl --since
+#   --no-follow      don't tail; print and exit
+cmd_trace() {
+    local n=500
+    local pid_filter=""
+    local since=""
+    local follow=true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -n)         n="$2"; shift 2 ;;
+            --pid)      pid_filter="$2"; shift 2 ;;
+            --since)    since="$2"; shift 2 ;;
+            --no-follow) follow=false; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local follow_flag="-f"
+    [[ "$follow" == "false" ]] && follow_flag=""
+    local since_flag=""
+    [[ -n "$since" ]] && since_flag="--since \"$since\""
+
+    local cmd
+    if [[ "$AEGIS_MODE" == "docker" ]]; then
+        cmd="cd \"$INSTALL_DIR\" && docker compose logs $follow_flag --tail $n $DOCKER_SERVICE"
+    else
+        cmd="sudo journalctl -u $SERVICE_NAME $follow_flag -n $n --no-pager $since_flag"
+    fi
+
+    # The filter uses awk for line-oriented state (so it can skip the multi-line
+    # JSON bodies between an error header and its closing `]`). Stays POSIX so
+    # both mawk (Debian default) and gawk work — no 3-arg match(), no gensub().
+    eval "$cmd" | awk -v pid_filter="$pid_filter" '
+        BEGIN {
+            DIM  = "\033[2m"; BOLD = "\033[1m"
+            RED  = "\033[31m"; YEL = "\033[33m"; GRN = "\033[32m"
+            CYA  = "\033[36m"; MAG = "\033[35m"; RST = "\033[0m"
+            in_json = 0
+            t0 = 0
+        }
+
+        # Extract `key=value` (value is a non-space, non-quote run) using 2-arg
+        # match() so we work on POSIX awk too. Returns "" if missing.
+        function field(line, key,    pat, v) {
+            pat = key "=[^ \t\"]+"
+            if (!match(line, pat)) return ""
+            v = substr(line, RSTART, RLENGTH)
+            sub(key "=", "", v)
+            return v
+        }
+
+        # Extract a bracketed value: fallback_chain=[a, b, c] → "[a, b, c]"
+        function bracketed(line, key,    pat, v) {
+            pat = key "=\\[[^]]*\\]"
+            if (!match(line, pat)) return ""
+            v = substr(line, RSTART, RLENGTH)
+            sub(key "=", "", v)
+            return v
+        }
+
+        # Relative timestamp anchored at first matched event.
+        function rel_ts(line,    secs, parts, n, h, m, s, fr) {
+            if (!match(line, /T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.[0-9]+Z/)) return "T+ ?  "
+            s = substr(line, RSTART + 1, RLENGTH - 2)
+            n = split(s, parts, ":")
+            h = parts[1] + 0; m = parts[2] + 0; fr = parts[3] + 0
+            secs = h * 3600 + m * 60 + fr
+            if (t0 == 0) t0 = secs
+            return sprintf("T+%5.1fs", secs - t0)
+        }
+
+        # Find a proc_xxx token anywhere on the line.
+        function find_pid(line,    p) {
+            if (!match(line, /proc_[a-f0-9]+/)) return ""
+            return substr(line, RSTART, RLENGTH)
+        }
+
+        function pid_ok(line) {
+            if (pid_filter == "") return 1
+            p = find_pid(line)
+            if (p == "") return 1   # no pid on this line — let it through
+            return p == pid_filter
+        }
+
+        # Suppress the multi-line JSON bodies that follow a 429 / quota error.
+        # Header looks like  ...error=Hardware Failure: API Error 429... : [{
+        # and runs until a line that ends with `]`.
+        in_json == 1 {
+            if ($0 ~ /\][[:space:]]*$/) in_json = 0
+            next
+        }
+        /error=Hardware Failure: API Error [0-9]+/ {
+            if ($0 ~ /\[\{[[:space:]]*$/) in_json = 1
+        }
+
+        /CognitiveRouter: routing decision/ {
+            if (!pid_ok($0)) next
+            cat = field($0, "catalog_id"); prov = field($0, "provider")
+            task = field($0, "task_type"); tenant = field($0, "tenant")
+            fb = bracketed($0, "fallback_chain")
+            printf "%s %s[ROUTE]%s    %s → %s%s%s (%s) %s%s%s fb=%s\n",
+                rel_ts($0), CYA, RST, tenant, BOLD, cat, RST, prov, DIM, task, RST, fb
+            next
+        }
+
+        /key marcada como rate-limited/ {
+            if (!pid_ok($0)) next
+            printf "%s %s[429]%s      %s cooldown=%ss\n",
+                rel_ts($0), YEL, RST, field($0, "model"), field($0, "cooldown_secs")
+            next
+        }
+
+        /Cloud API returned error status/ {
+            if (!pid_ok($0)) next
+            st = field($0, "status"); body = field($0, "body")
+            printf "%s %s[ERR]%s      status=%s body=%s\n",
+                rel_ts($0), RED, RST, st, body
+            next
+        }
+
+        /trying key rotation then fallback chain/ {
+            if (!pid_ok($0)) next
+            printf "%s %s[ROTATE]%s   primary=%s failed — trying alt keys + fallback\n",
+                rel_ts($0), MAG, RST, field($0, "primary")
+            next
+        }
+        /alternate key also failed/ {
+            if (!pid_ok($0)) next
+            kid = field($0, "key_id")
+            printf "%s %s[ROTATE]%s   alternate key %s (attempt %s) failed\n",
+                rel_ts($0), MAG, RST, substr(kid, 1, 8), field($0, "attempt")
+            next
+        }
+        /fallback model also failed/ {
+            if (!pid_ok($0)) next
+            printf "%s %s[FALLBACK]%s %s also failed\n",
+                rel_ts($0), MAG, RST, field($0, "fallback")
+            next
+        }
+
+        /CognitiveRouter: routing to model/ {
+            if (!pid_ok($0)) next
+            printf "%s %s[CALL]%s     %s (%s)\n",
+                rel_ts($0), CYA, RST, field($0, "model"), field($0, "provider")
+            next
+        }
+
+        /model returned 0 content tokens/ {
+            if (!pid_ok($0)) next
+            printf "%s %s[EMPTY]%s    upstream returned 0 tokens (%sms)\n",
+                rel_ts($0), RED, RST, field($0, "duration_ms")
+            next
+        }
+
+        /ReAct: tool ejecutado/ {
+            if (!pid_ok($0)) next
+            printf "%s %s[TOOL]%s     %s\n",
+                rel_ts($0), GRN, RST, field($0, "tool")
+            next
+        }
+
+        /ProcessCompleted \{ pid:/ {
+            if (!pid_ok($0)) next
+            pid = find_pid($0)
+            # output:"..." can be empty or contain escaped \n.
+            out = ""; outlen = 0
+            if (match($0, /output: "[^"]*"/)) {
+                out = substr($0, RSTART, RLENGTH)
+                sub(/output: "/, "", out); sub(/"$/, "", out)
+                outlen = length(out)
+                if (outlen > 60) out = substr(out, 1, 60) "..."
+                gsub(/\\n/, " ", out)
+            }
+            if (outlen == 0)
+                printf "%s %s[DONE]%s     %s output=%s(empty)%s\n",
+                    rel_ts($0), RED, RST, pid, RED, RST
+            else
+                printf "%s %s[DONE]%s     %s output=\"%s\" (%d chars)\n",
+                    rel_ts($0), GRN, RST, pid, out, outlen
+            next
+        }
+
+        /ProjectSupervisor created/ {
+            ag = field($0, "agent")
+            printf "%s %s[AGENT+]%s   %s spawned for %s\n",
+                rel_ts($0), CYA, RST, substr(ag, 1, 8), field($0, "project")
+            next
+        }
+        /LLM execution failed/ {
+            printf "%s %s[AGENT!]%s   sub-agent LLM call failed\n",
+                rel_ts($0), RED, RST
+            next
+        }
+    '
+}
+
 cmd_diag() {
     printf '%s================================================================%s\n' "$CYAN" "$NC"
     printf '%s   AEGIS OS - SRE DIAGNOSTIC REPORT%s\n' "$CYAN" "$NC"
@@ -327,6 +539,7 @@ case "${1:-help}" in
     status)    shift; cmd_status "$@" ;;
     diag)      shift; cmd_diag "$@" ;;
     logs)      shift; cmd_logs "$@" ;;
+    trace)     shift; cmd_trace "$@" ;;
     update)    shift; cmd_update "$@" ;;
     tunnel)    shift; cmd_tunnel "$@" ;;
     version)   shift; cmd_version "$@" ;;
@@ -345,6 +558,8 @@ case "${1:-help}" in
         echo "  diag          Run deep diagnostic report"
         echo "  version       Show installed core version"
         echo "  logs [N]      Follow logs (default 100)"
+        echo "  trace [OPTS]  Follow filtered model-routing events only (no JSON walls)"
+        echo "                  -n N | --pid proc_xxx | --since \"5m ago\" | --no-follow"
         echo "  tunnel           Manually start Cloudflare Tunnel"
         echo "  update           Update to latest nightly build (installs cloudflared if missing)"
         echo "  update --stable  Update to latest stable release (installs cloudflared if missing)"

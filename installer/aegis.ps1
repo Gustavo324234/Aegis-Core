@@ -105,6 +105,45 @@ function cmd_logs {
     }
 }
 
+# ── trace ──────────────────────────────────────────────────────────────────────
+# Filtered, one-line-per-event view of the kernel routing path. The Windows
+# event log doesn't carry the structured kernel logs the way journalctl does
+# on Linux, so this just streams ank-server.log if present and applies the
+# same regex filters as the bash version.
+function cmd_trace {
+    param([int]$n = 500, [string]$Pid = "")
+    $logFile = "C:\ProgramData\Aegis\logs\ank-server.log"
+    if (-not (Test-Path $logFile)) {
+        Write-Red "Log file not found at $logFile"
+        Write-Yellow "On Windows the kernel must be configured to write to ank-server.log for trace to work."
+        return
+    }
+    # Patterns we keep (must mirror the awk script in installer/aegis).
+    $keep = @(
+        'CognitiveRouter: routing decision',
+        'CognitiveRouter: routing to model',
+        'key marcada como rate-limited',
+        'Cloud API returned error status',
+        'trying key rotation then fallback chain',
+        'alternate key also failed',
+        'fallback model also failed',
+        'model returned 0 content tokens',
+        'ReAct: tool ejecutado',
+        'ProcessCompleted \{ pid:',
+        'ProjectSupervisor created',
+        'LLM execution failed'
+    ) -join '|'
+    Get-Content $logFile -Tail $n -Wait |
+        Where-Object { $_ -match $keep -and ($Pid -eq "" -or $_ -match $Pid) } |
+        ForEach-Object {
+            if ($_ -match 'key marcada como rate-limited') { Write-Host -ForegroundColor Yellow $_ }
+            elseif ($_ -match 'Cloud API returned error|0 content tokens|LLM execution failed') { Write-Host -ForegroundColor Red $_ }
+            elseif ($_ -match 'rotation|alternate key|fallback model') { Write-Host -ForegroundColor Magenta $_ }
+            elseif ($_ -match 'tool ejecutado|ProjectSupervisor') { Write-Host -ForegroundColor Green $_ }
+            else { Write-Host -ForegroundColor Cyan $_ }
+        }
+}
+
 # ── version ────────────────────────────────────────────────────────────────────
 function cmd_version {
     if (Test-Path $BIN_PATH) {
@@ -287,6 +326,7 @@ function cmd_help {
     Write-Host "  restart            Restart Aegis service"
     Write-Host "  status             Check service and API health"
     Write-Host "  logs [N]           Show last N event log entries (default 100)"
+    Write-Host "  trace [N] [PID]    Filtered model-routing trace (no JSON walls); default 500 lines"
     Write-Host "  version            Show installed version"
     Write-Host "  token              Get setup URL with fresh token"
     Write-Host "  diag               Full diagnostic report"
@@ -303,6 +343,7 @@ switch ($Command.ToLower()) {
     "restart"   { cmd_restart }
     "status"    { cmd_status }
     "logs"      { $n = if ($Arg1 -match '^\d+$') { [int]$Arg1 } else { 100 }; cmd_logs $n }
+    "trace"     { $n = if ($Arg1 -match '^\d+$') { [int]$Arg1 } else { 500 }; cmd_trace -n $n -Pid ($Arg2 ?? "") }
     "version"   { cmd_version }
     "token"     { cmd_token }
     "diag"      { cmd_diag }
