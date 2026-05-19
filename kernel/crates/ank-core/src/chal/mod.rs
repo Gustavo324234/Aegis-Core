@@ -552,7 +552,7 @@ impl CognitiveHAL {
                 .await
             {
                 Ok(s) => s,
-                Err(primary_err) if iteration == 0 && !decision.fallback_chain.is_empty() => {
+                Err(primary_err) if iteration == 0 => {
                     let tracker = self.router_ref.read().await.clone();
                     if let Some(r) = &tracker {
                         r.read()
@@ -565,11 +565,120 @@ impl CognitiveHAL {
                         pid = %pid,
                         primary = %active_model_id,
                         error = %primary_err,
-                        "primary model failed on first call — trying fallback chain"
+                        "primary model failed on first call — trying key rotation then fallback chain"
                     );
 
                     let mut recovered: Option<_> = None;
+
+                    // CORE-FIX: rotate to another key for the SAME (provider,
+                    // model) before switching to a different model. The
+                    // 429-rate-limited callback inside the cloud driver has
+                    // already marked the failing key, so the next call to
+                    // `get_available_key` will give us a different one if the
+                    // user configured multiple keys (e.g. several Gemini API
+                    // keys). This is the difference between "your Gemini
+                    // quota ran out, here's a Groq response" and "your Gemini
+                    // quota ran out, here's a response from your other
+                    // Gemini key".
+                    if let Some(r) = &tracker {
+                        let kp = r.read().await.key_pool_ref();
+                        let tenant_id =
+                            pcb.tenant_id.as_deref().unwrap_or("default");
+                        let mut tried: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
+                        if let Some(ref kid) = decision.key_id {
+                            tried.insert(kid.clone());
+                        }
+                        for attempt in 0..3u32 {
+                            let alt = match kp
+                                .get_available_key(
+                                    &active_provider,
+                                    &active_model_id,
+                                    tenant_id,
+                                )
+                                .await
+                            {
+                                Some(k) if !tried.contains(&k.key_id) => k,
+                                _ => break,
+                            };
+                            tried.insert(alt.key_id.clone());
+                            let alt_url = alt
+                                .api_url
+                                .clone()
+                                .unwrap_or_else(|| decision.api_url.clone());
+                            let alt_driver = CloudProxyDriver::new_with_callback(
+                                Arc::clone(&self.http_client),
+                                alt_url,
+                                alt.api_key.clone(),
+                                active_model_id.clone(),
+                                Some(alt.key_id.clone()),
+                                on_rate_limited.clone(),
+                            );
+                            match alt_driver
+                                .generate_stream(
+                                    messages.clone(),
+                                    None,
+                                    tools.clone(),
+                                )
+                                .await
+                            {
+                                Ok(s) => {
+                                    let wpayload = serde_json::json!({
+                                        "category": "key_rotated",
+                                        "provider": active_provider,
+                                        "attempt": attempt + 1,
+                                        "message": format!(
+                                            "La key primaria de {} se agotó; \
+                                             cambié a otra del mismo proveedor.",
+                                            active_provider
+                                        ),
+                                    });
+                                    let _ = text_tx.send(Ok(format!(
+                                        "__WARNING__{}",
+                                        wpayload
+                                    )));
+                                    driver = alt_driver;
+                                    recovered = Some(s);
+                                    break;
+                                }
+                                Err(e) => {
+                                    r.read()
+                                        .await
+                                        .tracker_ref()
+                                        .record_failure(
+                                            &active_model_id,
+                                            &active_provider,
+                                        )
+                                        .await;
+                                    warn!(
+                                        pid = %pid,
+                                        provider = %active_provider,
+                                        key_id = %alt.key_id,
+                                        attempt = attempt + 1,
+                                        error = %e,
+                                        "alternate key also failed; trying next"
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // If rotation didn't help AND we have no fallback chain,
+                    // bubble the original error up — preserves the old
+                    // behaviour for the "single model, single key" case.
+                    if recovered.is_none() && decision.fallback_chain.is_empty() {
+                        if let Some(r) = &tracker {
+                            let tenant_id =
+                                pcb.tenant_id.as_deref().unwrap_or("default");
+                            r.read().await.invalidate_sticky(tenant_id).await;
+                        }
+                        return Err(primary_err);
+                    }
+
                     for fb in &decision.fallback_chain {
+                        if recovered.is_some() {
+                            break;
+                        }
                         let fb_driver = CloudProxyDriver::new_with_callback(
                             Arc::clone(&self.http_client),
                             fb.api_url.clone(),

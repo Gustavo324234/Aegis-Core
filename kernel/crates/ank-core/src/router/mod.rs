@@ -474,6 +474,15 @@ impl CognitiveRouter {
         self.catalog.clone()
     }
 
+    /// CORE-FIX: expose the underlying key pool so the chal layer can request
+    /// a fresh key for the same (provider, model) after one gets marked as
+    /// rate-limited. Used to rotate Gemini keys when the first one returns
+    /// RESOURCE_EXHAUSTED instead of immediately failing over to a different
+    /// model.
+    pub fn key_pool_ref(&self) -> Arc<KeyPool> {
+        Arc::clone(&self.key_pool)
+    }
+
     fn compute_score(&self, entry: &ModelEntry, task_type: TaskType, ctx: &ScoreCtx<'_>) -> f64 {
         let (prompt, max_cost, max_latency, observed_latency, recent_errors) = (
             ctx.prompt,
