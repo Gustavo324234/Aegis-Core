@@ -229,6 +229,77 @@ fn _assert_hal_is_sync() {
     assert_sync::<CognitiveHAL>();
 }
 
+/// CORE-FIX (B): translate the raw `SystemError` we got from a failed provider
+/// call into a one-sentence user-facing description. The chat layer uses this
+/// to compose "No pude responder con X. <summary>" so the user understands
+/// *why* every model failed instead of seeing silent empty output.
+fn summarise_provider_failure(err: &SystemError) -> String {
+    let s = err.to_string();
+    let lower = s.to_lowercase();
+    if lower.contains("401") || lower.contains("unauthorized") {
+        return "Las API keys configuradas no son válidas o no tienen acceso a \
+                este modelo (HTTP 401)."
+            .to_string();
+    }
+    if lower.contains("429")
+        || lower.contains("resource_exhausted")
+        || lower.contains("quota")
+        || lower.contains("rate")
+    {
+        return "Te quedaste sin cuota gratuita o sos rate-limited (HTTP 429). \
+                Esperá unos segundos o agregá billing al proveedor."
+            .to_string();
+    }
+    if lower.contains("404") {
+        return "El modelo no existe o el endpoint está mal configurado \
+                (HTTP 404)."
+            .to_string();
+    }
+    if lower.contains("timeout") || lower.contains("timed out") {
+        return "El proveedor no respondió a tiempo (timeout).".to_string();
+    }
+    if lower.contains("connection") || lower.contains("dns") {
+        return "No pude alcanzar el endpoint del proveedor (problema de red).".to_string();
+    }
+    "El proveedor devolvió un error desconocido.".to_string()
+}
+
+#[cfg(test)]
+mod summarise_tests {
+    use super::*;
+
+    #[test]
+    fn detects_401() {
+        let e = SystemError::HardwareFailure(
+            "Cloud API Error 401 Unauthorized: unauthorized".into(),
+        );
+        assert!(summarise_provider_failure(&e).contains("401"));
+    }
+
+    #[test]
+    fn detects_429_and_quota() {
+        for body in [
+            "API Error 429 Too Many Requests",
+            "RESOURCE_EXHAUSTED",
+            "rate limit exceeded",
+            "quota exhausted",
+        ] {
+            let e = SystemError::HardwareFailure(body.into());
+            assert!(
+                summarise_provider_failure(&e).contains("429"),
+                "expected 429 summary for {:?}",
+                body
+            );
+        }
+    }
+
+    #[test]
+    fn falls_back_to_unknown() {
+        let e = SystemError::HardwareFailure("something weird happened".into());
+        assert!(summarise_provider_failure(&e).contains("desconocido"));
+    }
+}
+
 impl CognitiveHAL {
     pub fn new(plugin_manager: Arc<RwLock<PluginManager>>) -> Result<Self, SystemError> {
         let http_client = Arc::new(
@@ -649,13 +720,30 @@ impl CognitiveHAL {
                     }
 
                     // If rotation didn't help AND we have no fallback chain,
-                    // bubble the original error up — preserves the old
-                    // behaviour for the "single model, single key" case.
+                    // surface a user-visible message before bubbling the
+                    // original error up — otherwise the chat shows nothing.
                     if recovered.is_none() && decision.fallback_chain.is_empty() {
                         if let Some(r) = &tracker {
                             let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                             r.read().await.invalidate_sticky(tenant_id).await;
                         }
+                        let summary = summarise_provider_failure(&primary_err);
+                        let msg = format!(
+                            "No pude responder con '{}'. {} No tengo modelos \
+                             de respaldo configurados — revisá las API keys \
+                             o agregá otro proveedor.",
+                            active_model_id, summary
+                        );
+                        let _ = text_tx.send(Ok(msg.clone()));
+                        let wpayload = serde_json::json!({
+                            "category": "all_models_failed",
+                            "primary_model": active_model_id,
+                            "primary_provider": active_provider,
+                            "reason": summary,
+                            "message": msg,
+                        });
+                        let _ = text_tx
+                            .send(Ok(format!("__WARNING__{}", wpayload)));
                         return Err(primary_err);
                     }
 
@@ -713,11 +801,45 @@ impl CognitiveHAL {
                         Some(s) => s,
                         None => {
                             // All fallbacks failed too. Invalidate sticky so
-                            // the next request re-evaluates from scratch.
+                            // the next request re-evaluates from scratch, and
+                            // surface a user-visible message — without this
+                            // the chat appears silent on cascading failures
+                            // (smoke-test symptom: Gemini quota exhausted +
+                            // all OpenRouter fallbacks 401).
                             if let Some(r) = &tracker {
                                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                                 r.read().await.invalidate_sticky(tenant_id).await;
                             }
+                            let summary = summarise_provider_failure(&primary_err);
+                            let attempted: Vec<String> = decision
+                                .fallback_chain
+                                .iter()
+                                .map(|f| f.model_id.clone())
+                                .collect();
+                            let msg = format!(
+                                "No tengo modelos disponibles ahora. \
+                                 Probamos '{}' y los respaldos ({}) sin \
+                                 éxito. {} Reintentá en unos segundos o \
+                                 configurá otro proveedor.",
+                                active_model_id,
+                                if attempted.is_empty() {
+                                    "sin respaldos".to_string()
+                                } else {
+                                    attempted.join(", ")
+                                },
+                                summary
+                            );
+                            let _ = text_tx.send(Ok(msg.clone()));
+                            let wpayload = serde_json::json!({
+                                "category": "all_models_failed",
+                                "primary_model": active_model_id,
+                                "primary_provider": active_provider,
+                                "attempted_fallbacks": attempted,
+                                "reason": summary,
+                                "message": msg,
+                            });
+                            let _ = text_tx
+                                .send(Ok(format!("__WARNING__{}", wpayload)));
                             return Err(primary_err);
                         }
                     }
