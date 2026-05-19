@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.63](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.62...ank-core-v0.1.63) (2026-05-19)
+
+
+### Bug Fixes
+
+* **core:** robust model routing — key rotation, ollama protocol, gemini quota ([#303](https://github.com/Gustavo324234/Aegis-Core/issues/303)) ([2fad9d7](https://github.com/Gustavo324234/Aegis-Core/commit/2fad9d7ae29ceb223206720d05dd6f13f70221d2))
+
 ## [0.1.62](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.61...ank-core-v0.1.62) (2026-05-18)
 
 
