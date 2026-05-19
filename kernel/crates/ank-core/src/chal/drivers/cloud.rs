@@ -221,9 +221,7 @@ impl CloudProxyDriver {
                         // instead of waiting MAX_RETRIES * 1s of pointless
                         // exponential backoff first.
                         if status.as_u16() == 429 {
-                            if let Some((msg, _)) =
-                                Self::parse_gemini_quota_error(&text)
-                            {
+                            if let Some((msg, _)) = Self::parse_gemini_quota_error(&text) {
                                 return Err(SystemError::HardwareFailure(msg));
                             }
                         }
@@ -244,14 +242,13 @@ impl CloudProxyDriver {
                         // MAX_RETRIES) and the caller will surface the message
                         // to the user.
                         let body = response.text().await.unwrap_or_default();
-                        let (delay_secs, user_msg) =
-                            match Self::parse_gemini_quota_error(&body) {
-                                Some((msg, secs)) => (secs, Some(msg)),
-                                None => (60u64, None),
-                            };
+                        let (delay_secs, user_msg) = match Self::parse_gemini_quota_error(&body) {
+                            Some((msg, secs)) => (secs, Some(msg)),
+                            None => (60u64, None),
+                        };
                         if let Some(cb) = &self.on_rate_limited {
-                            let until = chrono::Utc::now()
-                                + chrono::Duration::seconds(delay_secs as i64);
+                            let until =
+                                chrono::Utc::now() + chrono::Duration::seconds(delay_secs as i64);
                             cb(until);
                             tracing::warn!(
                                 model = %self.model_id,
@@ -260,10 +257,7 @@ impl CloudProxyDriver {
                             );
                         }
                         return Err(SystemError::HardwareFailure(
-                            user_msg.unwrap_or_else(|| format!(
-                                "API Error {}: {}",
-                                status, body
-                            )),
+                            user_msg.unwrap_or_else(|| format!("API Error {}: {}", status, body)),
                         ));
                     }
 
@@ -588,8 +582,8 @@ mod tests {
             "error": { "code": 429, "status": "RESOURCE_EXHAUSTED",
                        "message": "quota exhausted" }
         }"#;
-        let (_, secs) = CloudProxyDriver::parse_gemini_quota_error(body)
-            .expect("recognised by status alone");
+        let (_, secs) =
+            CloudProxyDriver::parse_gemini_quota_error(body).expect("recognised by status alone");
         assert_eq!(secs, 60);
     }
 

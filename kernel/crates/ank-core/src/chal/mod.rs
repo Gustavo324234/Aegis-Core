@@ -582,8 +582,7 @@ impl CognitiveHAL {
                     // Gemini key".
                     if let Some(r) = &tracker {
                         let kp = r.read().await.key_pool_ref();
-                        let tenant_id =
-                            pcb.tenant_id.as_deref().unwrap_or("default");
+                        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                         let mut tried: std::collections::HashSet<String> =
                             std::collections::HashSet::new();
                         if let Some(ref kid) = decision.key_id {
@@ -591,11 +590,7 @@ impl CognitiveHAL {
                         }
                         for attempt in 0..3u32 {
                             let alt = match kp
-                                .get_available_key(
-                                    &active_provider,
-                                    &active_model_id,
-                                    tenant_id,
-                                )
+                                .get_available_key(&active_provider, &active_model_id, tenant_id)
                                 .await
                             {
                                 Some(k) if !tried.contains(&k.key_id) => k,
@@ -615,11 +610,7 @@ impl CognitiveHAL {
                                 on_rate_limited.clone(),
                             );
                             match alt_driver
-                                .generate_stream(
-                                    messages.clone(),
-                                    None,
-                                    tools.clone(),
-                                )
+                                .generate_stream(messages.clone(), None, tools.clone())
                                 .await
                             {
                                 Ok(s) => {
@@ -633,10 +624,7 @@ impl CognitiveHAL {
                                             active_provider
                                         ),
                                     });
-                                    let _ = text_tx.send(Ok(format!(
-                                        "__WARNING__{}",
-                                        wpayload
-                                    )));
+                                    let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                     driver = alt_driver;
                                     recovered = Some(s);
                                     break;
@@ -645,10 +633,7 @@ impl CognitiveHAL {
                                     r.read()
                                         .await
                                         .tracker_ref()
-                                        .record_failure(
-                                            &active_model_id,
-                                            &active_provider,
-                                        )
+                                        .record_failure(&active_model_id, &active_provider)
                                         .await;
                                     warn!(
                                         pid = %pid,
@@ -668,8 +653,7 @@ impl CognitiveHAL {
                     // behaviour for the "single model, single key" case.
                     if recovered.is_none() && decision.fallback_chain.is_empty() {
                         if let Some(r) = &tracker {
-                            let tenant_id =
-                                pcb.tenant_id.as_deref().unwrap_or("default");
+                            let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                             r.read().await.invalidate_sticky(tenant_id).await;
                         }
                         return Err(primary_err);
@@ -833,8 +817,7 @@ impl CognitiveHAL {
                 // keys we've already tried within this turn.
                 if let Some(r) = self.router_ref.read().await.clone() {
                     let kp = r.read().await.key_pool_ref();
-                    let tenant_id =
-                        pcb.tenant_id.as_deref().unwrap_or("default");
+                    let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                     let mut tried: std::collections::HashSet<String> =
                         std::collections::HashSet::new();
                     if let Some(ref kid) = decision.key_id {
@@ -867,46 +850,32 @@ impl CognitiveHAL {
                             on_rate_limited.clone(),
                         );
                         match alt_driver
-                            .generate_stream(
-                                messages.clone(),
-                                None,
-                                tools.clone(),
-                            )
+                            .generate_stream(messages.clone(), None, tools.clone())
                             .await
                         {
                             Ok(s) => {
                                 tokio::pin!(s);
                                 let mut alt_text = String::new();
-                                let mut alt_tool_calls: Vec<ToolCallRecord> =
-                                    Vec::new();
+                                let mut alt_tool_calls: Vec<ToolCallRecord> = Vec::new();
                                 while let Some(tr) = s.next().await {
                                     match tr {
-                                        Ok(token)
-                                            if token
-                                                .starts_with("__TOOL_CALL__") =>
-                                        {
+                                        Ok(token) if token.starts_with("__TOOL_CALL__") => {
                                             let json_str = token
                                                 .strip_prefix("__TOOL_CALL__")
                                                 .unwrap_or_default();
-                                            if let Ok(tc) = serde_json::from_str::<
-                                                DriverToolCallPayload,
-                                            >(
-                                                json_str
-                                            ) {
-                                                alt_tool_calls.push(
-                                                    ToolCallRecord {
-                                                        id: tc.id,
-                                                        type_: "function"
-                                                            .to_string(),
-                                                        function:
-                                                            FunctionCallRecord {
-                                                                name: tc.name,
-                                                                arguments: tc
-                                                                    .arguments
-                                                                    .to_string(),
-                                                            },
+                                            if let Ok(tc) =
+                                                serde_json::from_str::<DriverToolCallPayload>(
+                                                    json_str,
+                                                )
+                                            {
+                                                alt_tool_calls.push(ToolCallRecord {
+                                                    id: tc.id,
+                                                    type_: "function".to_string(),
+                                                    function: FunctionCallRecord {
+                                                        name: tc.name,
+                                                        arguments: tc.arguments.to_string(),
                                                     },
-                                                );
+                                                });
                                             }
                                         }
                                         Ok(text) => {
@@ -918,9 +887,7 @@ impl CognitiveHAL {
                                         }
                                     }
                                 }
-                                if !alt_text.is_empty()
-                                    || !alt_tool_calls.is_empty()
-                                {
+                                if !alt_text.is_empty() || !alt_tool_calls.is_empty() {
                                     let wpayload = serde_json::json!({
                                         "category": "key_rotated",
                                         "provider": active_provider,
@@ -932,10 +899,7 @@ impl CognitiveHAL {
                                             active_provider
                                         ),
                                     });
-                                    let _ = text_tx.send(Ok(format!(
-                                        "__WARNING__{}",
-                                        wpayload
-                                    )));
+                                    let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                     driver = alt_driver;
                                     assistant_text = alt_text;
                                     tool_calls = alt_tool_calls;
@@ -943,17 +907,10 @@ impl CognitiveHAL {
                                     break;
                                 } else {
                                     // Alt key also empty — record + try next.
-                                    if let Some(r2) = self
-                                        .router_ref
-                                        .read()
-                                        .await
-                                        .clone()
-                                    {
+                                    if let Some(r2) = self.router_ref.read().await.clone() {
                                         let tr2 = r2.read().await;
                                         tr2.tracker_ref()
-                                            .record_empty_response(
-                                                &active_model_id,
-                                            )
+                                            .record_empty_response(&active_model_id)
                                             .await;
                                     }
                                     warn!(
@@ -966,16 +923,11 @@ impl CognitiveHAL {
                                 }
                             }
                             Err(e) => {
-                                if let Some(r2) =
-                                    self.router_ref.read().await.clone()
-                                {
+                                if let Some(r2) = self.router_ref.read().await.clone() {
                                     r2.read()
                                         .await
                                         .tracker_ref()
-                                        .record_failure(
-                                            &active_model_id,
-                                            &active_provider,
-                                        )
+                                        .record_failure(&active_model_id, &active_provider)
                                         .await;
                                 }
                                 warn!(
@@ -1011,9 +963,7 @@ impl CognitiveHAL {
                         ..Default::default()
                     });
                     for tc in &tool_calls {
-                        let result = self
-                            .execute_tool_call_internal(tc, pid, pcb)
-                            .await;
+                        let result = self.execute_tool_call_internal(tc, pid, pcb).await;
                         messages.push(ChatMessage {
                             role: ChatRole::Tool,
                             content: Some(result),
@@ -1045,14 +995,11 @@ impl CognitiveHAL {
                             while let Some(tr) = s.next().await {
                                 match tr {
                                     Ok(token) if token.starts_with("__TOOL_CALL__") => {
-                                        let json_str = token
-                                            .strip_prefix("__TOOL_CALL__")
-                                            .unwrap_or_default();
-                                        if let Ok(tc) = serde_json::from_str::<
-                                            DriverToolCallPayload,
-                                        >(
-                                            json_str
-                                        ) {
+                                        let json_str =
+                                            token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
+                                        if let Ok(tc) =
+                                            serde_json::from_str::<DriverToolCallPayload>(json_str)
+                                        {
                                             fb_tool_calls.push(ToolCallRecord {
                                                 id: tc.id,
                                                 type_: "function".to_string(),
@@ -1076,11 +1023,7 @@ impl CognitiveHAL {
                                 active_model_id = fb.model_id.clone();
                                 active_provider = fb.provider.clone();
                                 driver = fb_driver;
-                                send_model_event(
-                                    &text_tx,
-                                    &active_model_id,
-                                    &active_provider,
-                                );
+                                send_model_event(&text_tx, &active_model_id, &active_provider);
                                 let wpayload = serde_json::json!({
                                     "category": "model_fallback",
                                     "message": format!(
@@ -1088,21 +1031,16 @@ impl CognitiveHAL {
                                         fb.model_id
                                     )
                                 });
-                                let _ = text_tx
-                                    .send(Ok(format!("__WARNING__{}", wpayload)));
+                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                 assistant_text = fb_text;
                                 tool_calls = fb_tool_calls;
                                 recovered = true;
                                 break;
                             } else {
                                 // Fallback also returned empty. Record and try next.
-                                if let Some(r) =
-                                    self.router_ref.read().await.clone()
-                                {
+                                if let Some(r) = self.router_ref.read().await.clone() {
                                     let tr = r.read().await;
-                                    tr.tracker_ref()
-                                        .record_empty_response(&fb.model_id)
-                                        .await;
+                                    tr.tracker_ref().record_empty_response(&fb.model_id).await;
                                     tr.tracker_ref()
                                         .record_failure(&fb.model_id, &fb.provider)
                                         .await;
@@ -1115,9 +1053,7 @@ impl CognitiveHAL {
                             }
                         }
                         Err(e) => {
-                            if let Some(r) =
-                                self.router_ref.read().await.clone()
-                            {
+                            if let Some(r) = self.router_ref.read().await.clone() {
                                 r.read()
                                     .await
                                     .tracker_ref()
@@ -1151,16 +1087,14 @@ impl CognitiveHAL {
                             max_cooldown = max_cooldown.max(s);
                         }
                         for fb in &decision.fallback_chain {
-                            if let Some(s) = tracker
-                                .provider_cooldown_remaining_secs(&fb.provider)
-                                .await
+                            if let Some(s) =
+                                tracker.provider_cooldown_remaining_secs(&fb.provider).await
                             {
                                 max_cooldown = max_cooldown.max(s);
                             }
                         }
                         // Invalidate sticky so next request re-evaluates from scratch.
-                        let tenant_id =
-                            pcb.tenant_id.as_deref().unwrap_or("default");
+                        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                         tr.invalidate_sticky(tenant_id).await;
                     }
 
@@ -1197,8 +1131,7 @@ impl CognitiveHAL {
                         "cooldown_secs": max_cooldown,
                         "message": msg.clone(),
                     });
-                    let _ = text_tx
-                        .send(Ok(format!("__WARNING__{}", wpayload)));
+                    let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
 
                     // Mark the turn as finished cleanly — we already gave the
                     // user a response via text_tx. Returning Err here would

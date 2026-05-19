@@ -135,8 +135,8 @@ fn strip_to_api_base(url: &str) -> String {
     for suffix in [
         "/v1/messages", // Anthropic native (long form)
         "/chat/completions",
-        "/messages",  // Anthropic native (short form, defensive)
-        "/api/chat",  // Ollama native chat endpoint (cloud + local)
+        "/messages", // Anthropic native (short form, defensive)
+        "/api/chat", // Ollama native chat endpoint (cloud + local)
     ] {
         if let Some(stripped) = s.strip_suffix(suffix) {
             s = stripped.trim_end_matches('/').to_string();
@@ -469,10 +469,7 @@ mod tests {
             ),
             // Ollama Cloud native: strip /api/chat so the caller can rebuild
             // `…/api/tags` for discovery.
-            (
-                "https://ollama.com/api/chat",
-                "https://ollama.com",
-            ),
+            ("https://ollama.com/api/chat", "https://ollama.com"),
             // Already-clean base URLs should be left alone.
             ("https://api.openai.com/v1", "https://api.openai.com/v1"),
             ("https://api.openai.com/v1/", "https://api.openai.com/v1"),
@@ -510,12 +507,7 @@ mod tests {
             ),
         ];
         for (input, expected) in cases {
-            assert_eq!(
-                url_origin(input),
-                *expected,
-                "url_origin({:?})",
-                input
-            );
+            assert_eq!(url_origin(input), *expected, "url_origin({:?})", input);
         }
     }
 
