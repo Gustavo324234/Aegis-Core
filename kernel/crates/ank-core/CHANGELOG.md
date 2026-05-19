@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.64](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.63...ank-core-v0.1.64) (2026-05-19)
+
+
+### Bug Fixes
+
+* **core,installer:** silent-failure-proof model routing + aegis trace ([#305](https://github.com/Gustavo324234/Aegis-Core/issues/305)) ([cb10e4e](https://github.com/Gustavo324234/Aegis-Core/commit/cb10e4e7a4110244ab5addecd2033f881f912655))
+
 ## [0.1.63](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.62...ank-core-v0.1.63) (2026-05-19)
 
 
