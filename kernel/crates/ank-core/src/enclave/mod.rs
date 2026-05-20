@@ -77,8 +77,8 @@ impl TenantDB {
     /// read. Returns the live connection on success.
     fn try_open_with_key(path: &str, session_key: &str) -> Result<Connection> {
         use anyhow::Context;
-        let conn = Connection::open(path)
-            .with_context(|| format!("Failed to open database at {path}"))?;
+        let conn =
+            Connection::open(path).with_context(|| format!("Failed to open database at {path}"))?;
 
         // Add busy_timeout to prevent "database is locked" during concurrent access.
         conn.busy_timeout(std::time::Duration::from_secs(5))
@@ -678,7 +678,10 @@ mod tests {
                     .any(|e| e.file_name().to_string_lossy().contains(".locked-"))
             })
             .unwrap_or(false);
-        assert!(had_backup, "unreadable DB should be quarantined, not deleted");
+        assert!(
+            had_backup,
+            "unreadable DB should be quarantined, not deleted"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
         Ok(())

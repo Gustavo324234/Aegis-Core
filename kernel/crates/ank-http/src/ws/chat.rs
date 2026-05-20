@@ -775,6 +775,23 @@ fn extract_name_from_phrase(prompt: &str) -> Option<String> {
     // 1. Pattern-match common "tell me your name" phrasings.
     let lower = trimmed.to_lowercase();
     let patterns = [
+        "mi asistente se llamará ",
+        "mi asistente se llamara ",
+        "mi asistente se llama ",
+        "me gustaría que te llames ",
+        "me gustaria que te llames ",
+        "quiero que te llames ",
+        "quiero que seas ",
+        "te puedes llamar ",
+        "te podes llamar ",
+        "puedes llamarte ",
+        "podes llamarte ",
+        "ponete de nombre ",
+        "ponte de nombre ",
+        "que te llames ",
+        "se llamará ",
+        "se llamara ",
+        "se llama ",
         "te llamare ",
         "te llamaré ",
         "te llamo ",
@@ -790,6 +807,11 @@ fn extract_name_from_phrase(prompt: &str) -> Option<String> {
         "te llamaras ",
         "te llamarás ",
         "me llamas ",
+        "llamarte ",
+        "ponete ",
+        "ponte ",
+        "serás ",
+        "seras ",
         "your name is ",
         "call you ",
         "i'll call you ",
@@ -957,6 +979,22 @@ mod tests {
         assert_eq!(
             extract_name_from_phrase("tu nombre es Pepe"),
             Some("Pepe".to_string())
+        );
+        assert_eq!(
+            extract_name_from_phrase("quiero que te llames Aegis"),
+            Some("Aegis".to_string())
+        );
+        assert_eq!(
+            extract_name_from_phrase("me gustaría que te llames Aegis"),
+            Some("Aegis".to_string())
+        );
+        assert_eq!(
+            extract_name_from_phrase("mi asistente se llamará Aegis"),
+            Some("Aegis".to_string())
+        );
+        assert_eq!(
+            extract_name_from_phrase("te podes llamar Aegis"),
+            Some("Aegis".to_string())
         );
     }
 

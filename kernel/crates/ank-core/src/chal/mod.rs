@@ -1614,12 +1614,10 @@ impl CognitiveHAL {
 
         // Path externo — verificar aprobaciones
         let canonical_str = canonical_clean.to_string_lossy().to_string();
-        let approved = approved_paths
-            .iter()
-            .any(|a| {
-                let approved_clean = Self::strip_unc_prefix(std::path::Path::new(a));
-                canonical_clean.starts_with(&approved_clean)
-            });
+        let approved = approved_paths.iter().any(|a| {
+            let approved_clean = Self::strip_unc_prefix(std::path::Path::new(a));
+            canonical_clean.starts_with(&approved_clean)
+        });
 
         if approved {
             Ok(canonical)
@@ -2797,9 +2795,18 @@ mod tests {
         let p2 = std::path::Path::new(r"\\?\UNC\server\share\foo");
         let p3 = std::path::Path::new(r"C:\foo\bar");
 
-        assert_eq!(CognitiveHAL::strip_unc_prefix(p1), std::path::PathBuf::from(r"C:\foo\bar"));
-        assert_eq!(CognitiveHAL::strip_unc_prefix(p2), std::path::PathBuf::from(r"\\server\share\foo"));
-        assert_eq!(CognitiveHAL::strip_unc_prefix(p3), std::path::PathBuf::from(r"C:\foo\bar"));
+        assert_eq!(
+            CognitiveHAL::strip_unc_prefix(p1),
+            std::path::PathBuf::from(r"C:\foo\bar")
+        );
+        assert_eq!(
+            CognitiveHAL::strip_unc_prefix(p2),
+            std::path::PathBuf::from(r"\\server\share\foo")
+        );
+        assert_eq!(
+            CognitiveHAL::strip_unc_prefix(p3),
+            std::path::PathBuf::from(r"C:\foo\bar")
+        );
     }
 
     #[test]
@@ -2807,17 +2814,17 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let ws_dir = temp_dir.join("aegis_test_ws");
         let _ = std::fs::create_dir_all(&ws_dir);
-        
+
         let existing_sub = ws_dir.join("existing_folder");
         let _ = std::fs::create_dir_all(&existing_sub);
-        
+
         let new_file = "existing_folder/new_file.txt";
-        
+
         let resolved = CognitiveHAL::resolve_path(&ws_dir, new_file, &[]);
         assert!(resolved.is_ok());
         let res_path = resolved.unwrap();
         assert!(res_path.to_string_lossy().contains("new_file.txt"));
-        
+
         let _ = std::fs::remove_dir_all(&ws_dir);
     }
 }
