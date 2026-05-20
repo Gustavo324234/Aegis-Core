@@ -264,6 +264,33 @@ fn summarise_provider_failure(err: &SystemError) -> String {
     "El proveedor devolvió un error desconocido.".to_string()
 }
 
+/// CORE-FIX (F): is this a DETERMINISTIC failure that won't succeed on retry
+/// with the same model? Two cases the smoke test exposed:
+///   - HTTP 401 Unauthorized: the key isn't authorized for this model/provider.
+///   - Gemini 429 with `limit: 0`: the model isn't on the key's tier at all
+///     (e.g. gemini-2.5-pro on the free tier — quota is literally zero, not
+///     "temporarily exhausted"). A normal 429 with retryDelay is NOT permanent.
+///
+/// When true, the caller trips the per-model circuit so the router stops
+/// re-picking a model that can never work and rotates to one that can
+/// (gemini-2.5-flash, gpt-oss:120b, …).
+fn is_permanent_model_failure(err: &SystemError) -> bool {
+    let s = err.to_string();
+    let lower = s.to_lowercase();
+    if lower.contains("401") || lower.contains("unauthorized") {
+        return true;
+    }
+    // Gemini tier-0: the body carries `"limit": 0` (possibly with spaces).
+    // Only treat 429s this way — a 200 with limit:0 makes no sense.
+    if lower.contains("429") || lower.contains("resource_exhausted") {
+        let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+        if compact.contains("\"limit\":0") || compact.contains("limit:0") {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod summarise_tests {
     use super::*;
@@ -296,6 +323,43 @@ mod summarise_tests {
     fn falls_back_to_unknown() {
         let e = SystemError::HardwareFailure("something weird happened".into());
         assert!(summarise_provider_failure(&e).contains("desconocido"));
+    }
+
+    #[test]
+    fn permanent_failure_detects_401() {
+        let e =
+            SystemError::HardwareFailure("Cloud API Error 401 Unauthorized: unauthorized".into());
+        assert!(is_permanent_model_failure(&e));
+    }
+
+    #[test]
+    fn permanent_failure_detects_gemini_tier_zero() {
+        // The real shape from the smoke test: 429 RESOURCE_EXHAUSTED with limit: 0.
+        let e = SystemError::HardwareFailure(
+            "API Error 429 Too Many Requests: { \"error\": { \"code\": 429, \
+             \"message\": \"Quota exceeded ... limit: 0, model: gemini-2.5-pro\", \
+             \"status\": \"RESOURCE_EXHAUSTED\" } }"
+                .into(),
+        );
+        assert!(is_permanent_model_failure(&e));
+    }
+
+    #[test]
+    fn permanent_failure_ignores_transient_429() {
+        // A normal rate limit (limit > 0, has retryDelay) is NOT permanent —
+        // the model works, it's just throttled. Must not trip the model circuit.
+        let e = SystemError::HardwareFailure(
+            "API Error 429 Too Many Requests: Rate limit reached ... \
+             Limit 12000, Used 10797. Please try again in 11.725s"
+                .into(),
+        );
+        assert!(!is_permanent_model_failure(&e));
+    }
+
+    #[test]
+    fn permanent_failure_ignores_plain_500() {
+        let e = SystemError::HardwareFailure("API Error 500 Internal Server Error".into());
+        assert!(!is_permanent_model_failure(&e));
     }
 }
 
@@ -625,11 +689,18 @@ impl CognitiveHAL {
                 Err(primary_err) if iteration == 0 => {
                     let tracker = self.router_ref.read().await.clone();
                     if let Some(r) = &tracker {
-                        r.read()
-                            .await
-                            .tracker_ref()
+                        let tr = r.read().await;
+                        tr.tracker_ref()
                             .record_failure(&active_model_id, &active_provider)
                             .await;
+                        // CORE-FIX (F): a 401 / tier-0 quota is permanent for
+                        // this model — trip its circuit so decide() reranks
+                        // away from it next request instead of re-picking it.
+                        if is_permanent_model_failure(&primary_err) {
+                            tr.tracker_ref()
+                                .record_model_unavailable(&active_model_id)
+                                .await;
+                        }
                     }
                     warn!(
                         pid = %pid,
@@ -779,11 +850,15 @@ impl CognitiveHAL {
                             }
                             Err(e) => {
                                 if let Some(r) = &tracker {
-                                    r.read()
-                                        .await
-                                        .tracker_ref()
+                                    let tr = r.read().await;
+                                    tr.tracker_ref()
                                         .record_failure(&fb.model_id, &fb.provider)
                                         .await;
+                                    if is_permanent_model_failure(&e) {
+                                        tr.tracker_ref()
+                                            .record_model_unavailable(&fb.model_id)
+                                            .await;
+                                    }
                                 }
                                 warn!(
                                     pid = %pid,
@@ -1173,11 +1248,15 @@ impl CognitiveHAL {
                         }
                         Err(e) => {
                             if let Some(r) = self.router_ref.read().await.clone() {
-                                r.read()
-                                    .await
-                                    .tracker_ref()
+                                let tr = r.read().await;
+                                tr.tracker_ref()
                                     .record_failure(&fb.model_id, &fb.provider)
                                     .await;
+                                if is_permanent_model_failure(&e) {
+                                    tr.tracker_ref()
+                                        .record_model_unavailable(&fb.model_id)
+                                        .await;
+                                }
                             }
                             warn!(
                                 pid = %pid,
@@ -1477,6 +1556,19 @@ impl CognitiveHAL {
         }
     }
 
+    fn strip_unc_prefix(path: &std::path::Path) -> std::path::PathBuf {
+        let path_str = path.to_string_lossy();
+        if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+            if let Some(unc_stripped) = stripped.strip_prefix("UNC\\") {
+                std::path::PathBuf::from(format!(r"\\{}", unc_stripped))
+            } else {
+                std::path::PathBuf::from(stripped)
+            }
+        } else {
+            path.to_path_buf()
+        }
+    }
+
     fn resolve_path(
         workspace: &std::path::Path,
         input_path: &str,
@@ -1512,15 +1604,22 @@ impl CognitiveHAL {
         let workspace_canonical = workspace
             .canonicalize()
             .unwrap_or_else(|_| workspace.to_path_buf());
-        if canonical.starts_with(&workspace_canonical) {
+
+        let canonical_clean = Self::strip_unc_prefix(&canonical);
+        let workspace_canonical_clean = Self::strip_unc_prefix(&workspace_canonical);
+
+        if canonical_clean.starts_with(&workspace_canonical_clean) {
             return Ok(canonical);
         }
 
         // Path externo — verificar aprobaciones
-        let canonical_str = canonical.to_string_lossy().to_string();
+        let canonical_str = canonical_clean.to_string_lossy().to_string();
         let approved = approved_paths
             .iter()
-            .any(|a| canonical_str.starts_with(a.as_str()));
+            .any(|a| {
+                let approved_clean = Self::strip_unc_prefix(std::path::Path::new(a));
+                canonical_clean.starts_with(&approved_clean)
+            });
 
         if approved {
             Ok(canonical)
@@ -2690,5 +2789,35 @@ mod tests {
             "El mensaje de usuario debe contener la instrucción"
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_strip_unc_prefix() {
+        let p1 = std::path::Path::new(r"\\?\C:\foo\bar");
+        let p2 = std::path::Path::new(r"\\?\UNC\server\share\foo");
+        let p3 = std::path::Path::new(r"C:\foo\bar");
+
+        assert_eq!(CognitiveHAL::strip_unc_prefix(p1), std::path::PathBuf::from(r"C:\foo\bar"));
+        assert_eq!(CognitiveHAL::strip_unc_prefix(p2), std::path::PathBuf::from(r"\\server\share\foo"));
+        assert_eq!(CognitiveHAL::strip_unc_prefix(p3), std::path::PathBuf::from(r"C:\foo\bar"));
+    }
+
+    #[test]
+    fn test_resolve_path_unc_and_nonexistent() {
+        let temp_dir = std::env::temp_dir();
+        let ws_dir = temp_dir.join("aegis_test_ws");
+        let _ = std::fs::create_dir_all(&ws_dir);
+        
+        let existing_sub = ws_dir.join("existing_folder");
+        let _ = std::fs::create_dir_all(&existing_sub);
+        
+        let new_file = "existing_folder/new_file.txt";
+        
+        let resolved = CognitiveHAL::resolve_path(&ws_dir, new_file, &[]);
+        assert!(resolved.is_ok());
+        let res_path = resolved.unwrap();
+        assert!(res_path.to_string_lossy().contains("new_file.txt"));
+        
+        let _ = std::fs::remove_dir_all(&ws_dir);
     }
 }

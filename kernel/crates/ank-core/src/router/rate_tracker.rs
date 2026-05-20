@@ -23,6 +23,13 @@ pub struct ModelUsageTracker {
     /// nothing instead of erroring; we treat that as an implicit failure and
     /// trip a per-model circuit so the router stops picking that model.
     empty_responses: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
+    /// CORE-FIX (F): per-model HARD-unavailable tracker. Unlike empty_responses
+    /// (transient, needs 2 hits to trip), this trips the circuit on the FIRST
+    /// deterministic failure: HTTP 401 (key/model not authorized) or a Gemini
+    /// 429 with `limit: 0` (the model isn't on the key's tier at all). These
+    /// never succeed on retry, so re-picking the same model every request just
+    /// burns time and keys. One hit → skip the model for 5 minutes.
+    model_unavailable: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -58,6 +65,7 @@ impl ModelUsageTracker {
             outcomes: Arc::new(RwLock::new(HashMap::new())),
             provider_failures: Arc::new(RwLock::new(HashMap::new())),
             empty_responses: Arc::new(RwLock::new(HashMap::new())),
+            model_unavailable: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -299,10 +307,43 @@ impl ModelUsageTracker {
         queue.len() as u32
     }
 
-    /// Circuit is "open" (i.e. skip this model in routing) once it has
-    /// returned an empty stream twice within the last 5 minutes. The
-    /// circuit auto-closes as those events age out of the window.
+    /// CORE-FIX (F): record a deterministic, non-retryable failure for a model
+    /// (HTTP 401, or a Gemini 429 with `limit: 0`). Trips the model circuit on
+    /// the FIRST occurrence — kept in the same 5-minute sliding window.
+    pub async fn record_model_unavailable(&self, model_id: &str) {
+        let now = Instant::now();
+        let mut map = self.model_unavailable.write().await;
+        let queue = map.entry(model_id.to_string()).or_default();
+        let cutoff = now - Duration::from_secs(300);
+        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+            queue.pop_front();
+        }
+        queue.push_back(now);
+    }
+
+    /// Whether this model had a hard-unavailable event in the last 5 minutes.
+    pub async fn model_unavailable_recent(&self, model_id: &str) -> bool {
+        let now = Instant::now();
+        let cutoff = now - Duration::from_secs(300);
+        let mut map = self.model_unavailable.write().await;
+        let queue = map.entry(model_id.to_string()).or_default();
+        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+            queue.pop_front();
+        }
+        !queue.is_empty()
+    }
+
+    /// Circuit is "open" (i.e. skip this model in routing) when EITHER:
+    /// - it returned an empty stream twice within the last 5 minutes
+    ///   (transient/soft failure), OR
+    /// - it had ONE hard-unavailable event (401 / tier-0 quota) in the last
+    ///   5 minutes (deterministic failure — no point retrying).
+    ///
+    /// The circuit auto-closes as those events age out of the window.
     pub async fn is_model_circuit_open(&self, model_id: &str) -> bool {
+        if self.model_unavailable_recent(model_id).await {
+            return true;
+        }
         self.empty_responses_recent(model_id).await >= 2
     }
 
