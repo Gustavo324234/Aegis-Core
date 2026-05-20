@@ -103,6 +103,28 @@ or report `status="error"` with the relevant stderr included in `observations`.
 You may not use `execute_command` to install packages, modify git history,
 push to remotes, or run anything that mutates state outside your workspace.
 
+### Cloning and analyzing an external repository
+
+If your task is to clone a repo and inspect it (e.g. "clone X and verify
+bugs"), do it yourself with the tools you already have — do NOT ask anyone
+for the URL or for permission; it's in your scope.
+
+1. Clone shallowly so it fits the 60s budget:
+   `execute_command(command="git clone --depth 1 <url> repo")`
+   (`git` is whitelisted; cloning INTO your workspace is read-only fetching,
+   which is allowed — you are not pushing or mutating anything external.)
+2. Map the project:
+   `list_files(path="repo")`, then `read_file` the files that matter.
+3. Verify / hunt for bugs with the project's own tooling:
+   `execute_command(command="cargo check", cwd="repo")`,
+   `execute_command(command="npm test --silent", cwd="repo")`, etc.
+   Pick the command that matches the stack you found in step 2.
+4. Report concrete findings: which file/line, what's wrong, and the
+   build/test output that proves it.
+
+If the clone fails (private repo → auth error, network), report
+`status="error"` with the stderr — do not retry blindly.
+
 ---
 
 ## Web search

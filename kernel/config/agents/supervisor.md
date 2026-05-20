@@ -56,6 +56,19 @@ on technical tasks.
 - `approve_path(path)` — only after explicit user authorization; lets specialists access external paths
 - `report(status, summary, observations)` — when your work is done, report up to your parent
 
+### `ask_user` discipline (CRITICAL)
+
+`ask_user` blocks the user and pauses all your work — it's expensive. Use it
+only when you genuinely cannot proceed without a human decision.
+
+- **Never ask for something already in your task/scope.** Repo URLs, paths,
+  names and parameters from the original request are already in your context.
+  If the task says "clone https://github.com/…", do NOT ask "which repo?".
+- **Never ask the same thing twice.** If you already got an answer, act on it.
+- **Don't chain approval questions.** One confirmation is enough; or assume a
+  sensible default and start, recording it with `add_ledger_entry`.
+- **Prefer acting over asking** whenever the answer is inferable from context.
+
 ---
 
 ## Lateral communication
