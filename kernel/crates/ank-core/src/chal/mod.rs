@@ -1360,6 +1360,27 @@ impl CognitiveHAL {
             on_rate_limited,
         );
 
+        // CORE-FIX: resolve the agent's real tenant_id ONCE so the tool
+        // executor's mock PCB points filesystem + execute_command at the
+        // correct workspace (users/<tenant>/workspace). Without this the
+        // mock PCB had no tenant_id and `get_tenant_workspace` fell back to
+        // `users/default/workspace` — so a specialist's `git clone` and every
+        // read_file/list_files ran against the wrong (shared "default")
+        // workspace, breaking the clone-and-verify flow and tenant isolation.
+        let agent_tenant_id: Option<String> = {
+            let orch = self.agent_orchestrator.read().await.clone();
+            match orch {
+                Some(o) => o
+                    .tree
+                    .read()
+                    .await
+                    .get(&agent_id)
+                    .map(|n| n.tenant_id.clone())
+                    .filter(|t| !t.is_empty()),
+                None => None,
+            }
+        };
+
         let mut messages = messages;
         const MAX_ITERATIONS: usize = 10;
 
@@ -1415,6 +1436,9 @@ impl CognitiveHAL {
             let mut mock_pcb =
                 crate::pcb::PCB::new(format!("agent_{}", agent_id), 5, String::new());
             mock_pcb.agent_id = Some(agent_id);
+            // CORE-FIX: carry the real tenant so workspace-scoped tools resolve
+            // to users/<tenant>/workspace instead of users/default.
+            mock_pcb.tenant_id = agent_tenant_id.clone();
 
             for tc in &tool_calls {
                 let result = self
@@ -2185,6 +2209,17 @@ impl CognitiveHAL {
                 }
 
                 let workspace = Self::get_tenant_workspace(pcb);
+                // CORE-FIX: make sure the workspace exists before we try to run
+                // anything in it — otherwise a specialist's first command
+                // (typically `git clone …` on a brand-new tenant) fails at
+                // spawn time with "No such file or directory" because
+                // current_dir() points at a path that was never created.
+                if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
+                    return format!(
+                        "{{\"error\":\"workspace_unavailable\",\"detail\":\"{}\"}}",
+                        e
+                    );
+                }
                 let cwd_arg = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
                 let cwd = match Self::resolve_path(&workspace, cwd_arg, &[]) {
                     Ok(p) if p.is_dir() => p,
