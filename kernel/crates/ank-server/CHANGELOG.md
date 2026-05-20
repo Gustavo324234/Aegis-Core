@@ -40,6 +40,8 @@
 
 
 
+
+
 ## [0.1.73](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.72...ank-server-v0.1.73) (2026-05-18)
 
 

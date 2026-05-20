@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.65](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.64...ank-core-v0.1.65) (2026-05-20)
+
+
+### Bug Fixes
+
+* **router,enclave:** resilient routing + tenant DB recovery after password reset ([#310](https://github.com/Gustavo324234/Aegis-Core/issues/310)) ([e1110e8](https://github.com/Gustavo324234/Aegis-Core/commit/e1110e8ccf1602b90cc97ed6a5c3648071870147))
+
 ## [0.1.64](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.63...ank-core-v0.1.64) (2026-05-19)
 
 
