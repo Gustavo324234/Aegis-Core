@@ -400,8 +400,13 @@ const AdminDashboard: React.FC = () => {
     const { tenantId, sessionKey, logout, adminActiveTab, setAdminActiveTab } = useAegisStore();
     const tabsList = TABS(t);
 
+    // CORE-FIX: h-screen (not min-h-screen) so overflow-y-auto actually creates
+    // an internal scroll container. With min-h-screen the div grew to fit its
+    // content, so it never scrolled and the App root's overflow-hidden clipped
+    // anything past the viewport — which is why the generated password below the
+    // fold was unreachable without zooming out.
     return (
-        <div className="min-h-screen bg-black text-white p-8 overflow-y-auto relative">
+        <div className="h-screen bg-black text-white p-8 overflow-y-auto relative">
             <div className="absolute inset-0 overflow-hidden pointer-events-none">
                 <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-red-500/5 rounded-full blur-[120px]" />
                 <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-aegis-cyan/5 rounded-full blur-[100px]" />

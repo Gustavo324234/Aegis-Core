@@ -1232,11 +1232,24 @@ impl AgentOrchestrator {
                             continue;
                         }
                     }
+                    // CORE-FIX: cap at a char boundary (not byte) and append an
+                    // ellipsis when truncated. The old `[..min(80)]` could panic
+                    // on multi-byte UTF-8 and silently dropped the tail — an
+                    // 80-char task that ended in a repo URL logged without it,
+                    // which led to a misdiagnosis that the URL was being lost in
+                    // dispatch (it wasn't — only the log was truncated).
+                    let preview: String = task_description.chars().take(160).collect();
+                    let suffix = if task_description.chars().count() > 160 {
+                        "…"
+                    } else {
+                        ""
+                    };
                     info!(
                         agent = %agent_id,
-                        "[{}] Dispatch: {}",
+                        "[{}] Dispatch: {}{}",
                         role_label,
-                        &task_description[..task_description.len().min(80)]
+                        preview,
+                        suffix
                     );
 
                     // CORE-208: CMR per-agent — usa task_type + model_preference del nodo
