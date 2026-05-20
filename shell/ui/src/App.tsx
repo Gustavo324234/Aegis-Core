@@ -12,6 +12,7 @@ import EngineSetupWizard from './components/EngineSetupWizard';
 import Dashboard from '@/components/Dashboard';
 import { AgentInboxList } from './components/AgentInboxList';
 import { AgentThread } from './components/AgentThread';
+import { SupervisorQuestionModal } from './components/SupervisorQuestionModal';
 
 
 // SRE-FIX: Error boundary para atrapar crashes de React y mostrar pantalla de recuperación
@@ -206,6 +207,10 @@ function App() {
                         ) : (
                             <Dashboard />
                         )}
+                        {/* CORE-FIX: supervisor questions pop up over ANY view
+                            (chat / agents / dashboard) so the user can answer
+                            inline instead of hunting for the agents thread. */}
+                        <SupervisorQuestionModal />
                         </motion.div>
                     )}
                 </AnimatePresence>
