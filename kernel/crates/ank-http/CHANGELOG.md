@@ -22,6 +22,13 @@
 
 
 
+## [0.1.72](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.71...ank-http-v0.1.72) (2026-05-20)
+
+
+### Bug Fixes
+
+* **router,enclave:** resilient routing + tenant DB recovery after password reset ([#310](https://github.com/Gustavo324234/Aegis-Core/issues/310)) ([e1110e8](https://github.com/Gustavo324234/Aegis-Core/commit/e1110e8ccf1602b90cc97ed6a5c3648071870147))
+
 ## [0.1.69](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.68...ank-http-v0.1.69) (2026-05-18)
 
 
