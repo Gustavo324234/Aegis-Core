@@ -27,31 +27,102 @@ impl TenantDB {
                 .with_context(|| format!("Failed to create directory for tenant {}", tenant_id))?;
         }
 
-        let conn = Connection::open(&db_path)
-            .with_context(|| format!("Failed to open database at {}", db_path))?;
+        // First attempt with the supplied key.
+        match Self::try_open_with_key(&db_path, session_key) {
+            Ok(conn) => {
+                info!(tenant_id = %tenant_id, "Secure Enclave initialized successfully.");
+                let db = Self { connection: conn };
+                db.init_schema()?;
+                Ok(db)
+            }
+            // CORE-FIX (G): the DB exists but the key doesn't match it. This is
+            // the post-password-reset case: `memory.db` was encrypted with the
+            // session_key derived from the OLD password (session_key =
+            // SHA256(password)), but `reset_tenant_password` only updates the
+            // master hash — it can't re-key the tenant DB (the admin doesn't
+            // hold the old password). So every open after a reset fails with
+            // `hmac check failed for pgno=1`, spamming the log AND losing the
+            // tenant's persona/settings.
+            //
+            // The data is already unrecoverable with the current key, so we
+            // back the unreadable file up (never silently delete) and recreate
+            // a fresh DB with the current key. Functionality (persona, kv_store,
+            // approved_paths) is restored; the old ciphertext is preserved at
+            // `memory.db.locked-<ts>` in case the old password resurfaces.
+            Err(e) if Self::is_decryption_error(&e) => {
+                let ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    "CORE-FIX (G): tenant DB won't decrypt with the current session key \
+                     (likely a password reset re-keyed the tenant). Backing up the \
+                     unreadable file to memory.db.locked-{ts} and recreating a fresh DB.",
+                );
+                Self::quarantine_unreadable_db(&db_path, ts);
+                let conn = Self::try_open_with_key(&db_path, session_key).with_context(|| {
+                    format!("Failed to recreate tenant DB after key mismatch for {tenant_id}")
+                })?;
+                info!(tenant_id = %tenant_id, "Secure Enclave re-initialized after key mismatch.");
+                let db = Self { connection: conn };
+                db.init_schema()?;
+                Ok(db)
+            }
+            Err(e) => Err(e),
+        }
+    }
 
-        // Add busy_timeout to prevent "database is locked" during concurrent test access
+    /// Opens the DB at `path`, applies the SQLCipher key and verifies it can be
+    /// read. Returns the live connection on success.
+    fn try_open_with_key(path: &str, session_key: &str) -> Result<Connection> {
+        use anyhow::Context;
+        let conn =
+            Connection::open(path).with_context(|| format!("Failed to open database at {path}"))?;
+
+        // Add busy_timeout to prevent "database is locked" during concurrent access.
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .context("Failed to set busy timeout")?;
 
-        // 1. Configurar la llave de encriptación (SQLCipher)
-        // PRAGMA key requiere ser la primera sentencia y no debe retornar resultados.
+        // PRAGMA key must be the first statement and must not return rows.
         conn.pragma_update(None, "key", session_key)
             .context("Failed to apply PRAGMA key for encryption")?;
 
-        // 2. Verificar la integridad (Si la llave es incorrecta, cualquier consulta fallará aquí)
-        // SQLCipher no valida la llave hasta que se intenta acceder a los datos.
+        // SQLCipher doesn't validate the key until the data is accessed.
         conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
             .context("Decryption failed: invalid session key or corrupted database")?;
 
-        info!(tenant_id = %tenant_id, "Secure Enclave initialized successfully.");
+        Ok(conn)
+    }
 
-        let db = Self { connection: conn };
+    /// True when the error chain looks like a SQLCipher key mismatch
+    /// (SQLITE_NOTADB / "file is not a database" / decryption failure) rather
+    /// than a transient problem like a lock. We only auto-recreate on these.
+    fn is_decryption_error(err: &anyhow::Error) -> bool {
+        let s = format!("{err:#}").to_lowercase();
+        s.contains("not a database")
+            || s.contains("decryption failed")
+            || s.contains("file is encrypted")
+            || s.contains("hmac")
+    }
 
-        // 3. Inicializar esquema básico
-        db.init_schema()?;
-
-        Ok(db)
+    /// Renames the unreadable DB (and its WAL/SHM sidecars) out of the way so a
+    /// fresh one can be created. Never deletes — keeps the ciphertext as a
+    /// `.locked-<ts>` backup the operator can try to recover later.
+    fn quarantine_unreadable_db(db_path: &str, ts: u64) {
+        for suffix in ["", "-wal", "-shm"] {
+            let from = format!("{db_path}{suffix}");
+            if Path::new(&from).exists() {
+                let to = format!("{db_path}.locked-{ts}{suffix}");
+                if let Err(e) = std::fs::rename(&from, &to) {
+                    tracing::error!(
+                        "CORE-FIX (G): could not quarantine {from} → {to}: {e}. \
+                         Removing it so the tenant DB can be recreated."
+                    );
+                    let _ = std::fs::remove_file(&from);
+                }
+            }
+        }
     }
 
     /// Crea las tablas necesarias para el estado del Kernel si no existen.
@@ -556,6 +627,63 @@ mod tests {
         assert_eq!(loaded.unwrap_or_default().len(), 4000);
 
         let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
+        Ok(())
+    }
+
+    /// CORE-FIX (G): opening a tenant DB with a DIFFERENT key (the
+    /// post-password-reset case) must not error forever — it should quarantine
+    /// the unreadable file and recreate a fresh, usable DB with the new key.
+    #[test]
+    fn test_open_with_wrong_key_recreates_db() -> anyhow::Result<()> {
+        let _guard = acquire_test_lock();
+        let tenant_id = format!(
+            "test_rekey_user_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+                .as_millis()
+        );
+
+        // 1. Create + populate with the original (old-password) key.
+        {
+            let db = TenantDB::open(&tenant_id, "old_password_key")?;
+            db.set_persona("Soy Sol, sarcástica y atrevida.")?;
+        }
+
+        // 2. Open with a different (new-password) key — simulates a reset.
+        //    Must succeed (recreated), not error with hmac failure.
+        {
+            let db = TenantDB::open(&tenant_id, "new_password_key")?;
+            // Fresh DB → the old persona is gone (it was unreadable anyway).
+            assert!(
+                db.get_persona()?.is_none(),
+                "recreated DB should start empty"
+            );
+            // And it must be writable/usable with the new key.
+            db.set_persona("Persona nueva")?;
+            assert_eq!(db.get_persona()?.unwrap_or_default(), "Persona nueva");
+        }
+
+        // 3. Re-opening with the new key now works normally (no recreation).
+        {
+            let db = TenantDB::open(&tenant_id, "new_password_key")?;
+            assert_eq!(db.get_persona()?.unwrap_or_default(), "Persona nueva");
+        }
+
+        // The old ciphertext was preserved as a .locked-* backup, not deleted.
+        let dir = format!("./users/{}", tenant_id);
+        let had_backup = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .any(|e| e.file_name().to_string_lossy().contains(".locked-"))
+            })
+            .unwrap_or(false);
+        assert!(
+            had_backup,
+            "unreadable DB should be quarantined, not deleted"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 }

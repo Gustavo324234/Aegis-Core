@@ -61,6 +61,18 @@ pub struct ModelEntry {
     /// Free-tier requests-per-day limit (None = no known limit / paid-only model).
     #[serde(default)]
     pub free_tier_rpd: Option<u32>,
+    /// CORE-FIX (F): whether this model is usable AT ALL on the provider's free
+    /// tier. Some models (e.g. gemini-2.5-pro, gemini-1.5-pro) return HTTP 429
+    /// `RESOURCE_EXHAUSTED` with `limit: 0` for free-tier keys — they simply
+    /// aren't on the free plan. When false and the tenant has only a free-tier
+    /// key for this provider, the router excludes the model up front instead of
+    /// burning a request to discover it can't be used. Defaults to true.
+    #[serde(default = "default_free_tier_eligible")]
+    pub free_tier_eligible: bool,
+}
+
+fn default_free_tier_eligible() -> bool {
+    true
 }
 
 impl ModelEntry {

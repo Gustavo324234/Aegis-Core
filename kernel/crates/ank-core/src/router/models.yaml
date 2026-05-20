@@ -93,6 +93,8 @@
   supports_json_mode: true
   is_local: false
   avg_latency_ms: 3000
+  # CORE-FIX (F): Pro/preview tier — not available on Gemini's free plan.
+  free_tier_eligible: false
   free_tier_rpm: 2
   free_tier_rpd: 50
   task_scores:
@@ -150,6 +152,9 @@
   supports_json_mode: true
   is_local: false
   avg_latency_ms: 2000
+  # CORE-FIX (F): Google's free tier returns `limit: 0` for 2.5-pro — it is a
+  # paid-only model. Free-tier-only tenants must not be routed here.
+  free_tier_eligible: false
   free_tier_rpm: 5
   free_tier_rpd: 100
   task_scores:

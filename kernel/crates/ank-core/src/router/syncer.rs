@@ -183,6 +183,7 @@ impl CatalogSyncer {
                     avg_latency_ms: None,
                     free_tier_rpm: None,
                     free_tier_rpd: None,
+                    free_tier_eligible: true,
                     tool_use_support: crate::router::catalog::ToolUseSupport::Unknown,
                 });
             }
@@ -255,6 +256,7 @@ pub async fn register_provider_models(
                 avg_latency_ms: Some(3000),
                 free_tier_rpm: None,
                 free_tier_rpd: None,
+                free_tier_eligible: true,
                 task_scores: scores,
             })
             .await;
@@ -321,6 +323,7 @@ pub async fn sync_openrouter_free_models(
             avg_latency_ms: Some(2500),
             free_tier_rpm: Some(20),
             free_tier_rpd: Some(200),
+            free_tier_eligible: true,
             task_scores: TaskScores {
                 chat: 3,
                 coding: 3,

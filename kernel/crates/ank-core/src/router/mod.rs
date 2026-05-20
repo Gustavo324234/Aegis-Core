@@ -168,7 +168,10 @@ impl CognitiveRouter {
                 return Ok(RoutingDecision {
                     model_id: bare_model_id(&entry.model_id, &entry.provider),
                     provider: entry.provider.clone(),
-                    api_url: key.api_url.clone().unwrap_or_else(|| entry_api_url(&entry)),
+                    api_url: normalize_chat_api_url(
+                        &entry.provider,
+                        key.api_url.clone().unwrap_or_else(|| entry_api_url(&entry)),
+                    ),
                     api_key: key.api_key.clone(),
                     key_id: Some(key.key_id.clone()),
                     fallback_chain: vec![],
@@ -236,6 +239,23 @@ impl CognitiveRouter {
                 || entry.is_local;
             if !has_key {
                 continue;
+            }
+            // CORE-FIX (F): proactively exclude paid-only models when the
+            // tenant has ONLY a free-tier key for the provider. Without this
+            // the router happily ranks gemini-2.5-pro #1, calls it, and eats a
+            // 429 `limit: 0` every single request (the model isn't on the free
+            // plan). has_paid_key tells us whether a paid key exists; if not
+            // and the model isn't free-tier-eligible, skip it up front so a
+            // free-tier-eligible sibling (gemini-2.5-flash) wins instead.
+            if !entry.free_tier_eligible && !entry.is_local {
+                let has_paid = self
+                    .key_pool
+                    .has_paid_key(&entry.provider, &entry.model_id)
+                    .await;
+                if !has_paid {
+                    skipped_by_breaker.push(entry.model_id.clone());
+                    continue;
+                }
             }
             if self.tracker.is_provider_circuit_open(&entry.provider).await {
                 skipped_by_breaker.push(entry.model_id.clone());
@@ -387,10 +407,13 @@ impl CognitiveRouter {
                     continue;
                 }
             };
-            let api_url = fb_key
-                .api_url
-                .clone()
-                .unwrap_or_else(|| entry_api_url(entry));
+            let api_url = normalize_chat_api_url(
+                &entry.provider,
+                fb_key
+                    .api_url
+                    .clone()
+                    .unwrap_or_else(|| entry_api_url(entry)),
+            );
             fallback_chain.push(FallbackDecision {
                 model_id: bare_model_id(&entry.model_id, &entry.provider),
                 provider: entry.provider.clone(),
@@ -432,10 +455,13 @@ impl CognitiveRouter {
         let decision = RoutingDecision {
             model_id: api_model_id,
             provider: primary.provider.clone(),
-            api_url: primary_key
-                .api_url
-                .clone()
-                .unwrap_or_else(|| entry_api_url(primary)),
+            api_url: normalize_chat_api_url(
+                &primary.provider,
+                primary_key
+                    .api_url
+                    .clone()
+                    .unwrap_or_else(|| entry_api_url(primary)),
+            ),
             api_key: primary_key.api_key.clone(),
             key_id: Some(primary_key.key_id.clone()),
             fallback_chain,
@@ -789,6 +815,60 @@ fn entry_api_url(entry: &ModelEntry) -> String {
         "openrouter" => "https://openrouter.ai/api/v1/chat/completions".to_string(),
         // Fallback seguro
         _ => "https://openrouter.ai/api/v1/chat/completions".to_string(),
+    }
+}
+
+/// CORE-FIX (F): normalise a stored/user-supplied chat URL so it points at the
+/// OpenAI-compatible endpoint the CloudProxyDriver actually speaks.
+///
+/// Tenants who linked Ollama (cloud or local) BEFORE the protocol fix have a
+/// stored `api_url` ending in `/api/chat` — Ollama's *native* NDJSON endpoint.
+/// The driver sends OpenAI-format requests and parses `data: ` SSE, so hitting
+/// `/api/chat` yields 401/400/empty. We rewrite `…/api/chat` →
+/// `…/v1/chat/completions` for ollama providers at decision-build time, which
+/// is non-destructive (the stored key is left untouched; only the request URL
+/// is corrected). No-op for every other provider/URL.
+fn normalize_chat_api_url(provider: &str, url: String) -> String {
+    let p = normalize_provider_id(provider);
+    if p == "ollama" || p == "ollama_cloud" {
+        if let Some(base) = url.strip_suffix("/api/chat") {
+            return format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+        }
+    }
+    url
+}
+
+#[cfg(test)]
+mod normalize_url_tests {
+    use super::normalize_chat_api_url;
+
+    #[test]
+    fn rewrites_ollama_cloud_api_chat() {
+        assert_eq!(
+            normalize_chat_api_url("ollama_cloud", "https://ollama.com/api/chat".into()),
+            "https://ollama.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn rewrites_ollama_local_api_chat() {
+        assert_eq!(
+            normalize_chat_api_url("ollama", "http://localhost:11434/api/chat".into()),
+            "http://localhost:11434/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn leaves_correct_ollama_url_untouched() {
+        let good = "https://ollama.com/v1/chat/completions".to_string();
+        assert_eq!(normalize_chat_api_url("ollama_cloud", good.clone()), good);
+    }
+
+    #[test]
+    fn ignores_non_ollama_providers() {
+        // A different provider that happens to end in /api/chat is left alone.
+        let url = "https://example.com/api/chat".to_string();
+        assert_eq!(normalize_chat_api_url("openai", url.clone()), url);
     }
 }
 
