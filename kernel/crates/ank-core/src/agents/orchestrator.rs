@@ -129,15 +129,28 @@ impl AgentOrchestrator {
         project_description: &str,
     ) -> anyhow::Result<AgentId> {
         // Verificar si ya está activo en memoria
-        {
+        let root_info = {
             let tree = self.tree.read().await;
-            if let Some(root) = tree.project_root(project_id) {
+            tree.project_root(project_id).map(|n| n.agent_id)
+        };
+
+        if let Some(root_id) = root_info {
+            let has_channel = self.channels.read().await.contains_key(&root_id);
+            if has_channel {
                 info!(
                     project = %project_id,
                     "[PROJECT] Already active — reusing agent {}.",
-                    root.agent_id
+                    root_id
                 );
-                return Ok(root.agent_id);
+                return Ok(root_id);
+            } else {
+                info!(
+                    project = %project_id,
+                    "[PROJECT] Active in memory but channel missing (died on disconnect) — reviving tree starting at agent {}.",
+                    root_id
+                );
+                self.revive_in_memory_tree(&root_id).await?;
+                return Ok(root_id);
             }
         }
 
@@ -149,6 +162,70 @@ impl AgentOrchestrator {
         // Primera activación — crear ProjectSupervisor nuevo
         self.create_project_supervisor(tenant_id, project_id, project_description)
             .await
+    }
+
+    /// Revive los canales y loops de ejecución para todos los agentes activos en el árbol in-memory
+    /// que se quedaron huérfanos/sin canal debido a una desconexión de WebSocket.
+    async fn revive_in_memory_tree(&self, root_id: &AgentId) -> anyhow::Result<()> {
+        let bfs_order: Vec<AgentId> = {
+            let tree = self.tree.read().await;
+            let mut order = vec![*root_id];
+            let mut stack: Vec<AgentId> = vec![*root_id];
+            while let Some(current) = stack.pop() {
+                let children: Vec<AgentId> =
+                    tree.children(&current).iter().map(|n| n.agent_id).collect();
+                for child_id in children {
+                    order.push(child_id);
+                    stack.push(child_id);
+                }
+            }
+            order
+        };
+
+        // Resetear los estados de los nodos que no estén completados a Idle para que puedan reanudar ejecución
+        {
+            let mut tree = self.tree.write().await;
+            for id in &bfs_order {
+                if let Some(n) = tree.get_mut(id) {
+                    if n.state != AgentState::Complete {
+                        n.set_state(AgentState::Idle);
+                    }
+                }
+            }
+        }
+
+        for agent_id in bfs_order {
+            let parent_id = {
+                let tree = self.tree.read().await;
+                tree.get(&agent_id).and_then(|n| n.parent_id)
+            };
+            let parent_tx = match parent_id {
+                Some(pid) => self.channels.read().await.get(&pid).cloned(),
+                None => None,
+            };
+
+            // Crear el canal de comunicación
+            let (tx, rx) = mpsc::channel::<AgentMessage>(32);
+            {
+                let mut ch = self.channels.write().await;
+                ch.insert(agent_id, tx);
+            }
+
+            // Crear y registrar el token de cancelación para este agente
+            let cancel_token = tokio_util::sync::CancellationToken::new();
+            self.cancel_tokens
+                .write()
+                .await
+                .insert(agent_id, cancel_token.clone());
+
+            self.spawn_loop(agent_id, rx, parent_tx, cancel_token);
+        }
+
+        info!(
+            root_id = %root_id,
+            "[PROJECT] Revived active memory tree for agent."
+        );
+        Ok(())
     }
 
     /// CORE-243: Alias simplificado para el Chat Agent.
