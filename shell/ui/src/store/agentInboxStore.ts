@@ -25,6 +25,8 @@ interface AgentInboxState {
   markTimedOut: (agentId: string) => void;
   addThreadMessage: (agentId: string, msg: ThreadMessage) => void;
   getByAgentId: (agentId: string) => AgentMessage | undefined;
+  /** First still-pending question across all agents — drives the chat modal. */
+  firstPending: () => AgentMessage | undefined;
 }
 
 export const useAgentInboxStore = create<AgentInboxState>((set, get) => ({
@@ -33,10 +35,19 @@ export const useAgentInboxStore = create<AgentInboxState>((set, get) => ({
 
   addMessage: (msg) =>
     set((state) => {
-      const exists = state.messages.some(
-        (m) => m.agentId === msg.agentId && m.status === 'pending'
+      // CORE-FIX: dedup by (agentId + question), NOT just agentId. The old
+      // logic dropped a supervisor's SECOND question whenever the first was
+      // still marked pending — which is exactly what blocked the user when a
+      // supervisor asked sequentially (Q1 "¿puedo acceder?", then Q2 "¿cuál
+      // es el repo?"). A supervisor only ever has one question in flight at a
+      // time (it blocks on ask_user), so distinct question text = new prompt.
+      const duplicate = state.messages.some(
+        (m) =>
+          m.agentId === msg.agentId &&
+          m.question === msg.question &&
+          m.status === 'pending'
       );
-      if (exists) return state;
+      if (duplicate) return state;
       const thread: ThreadMessage[] = [
         { role: 'supervisor', content: msg.question, timestamp: msg.timestamp },
       ];
@@ -49,9 +60,16 @@ export const useAgentInboxStore = create<AgentInboxState>((set, get) => ({
 
   markAnswered: (agentId) =>
     set((state) => {
-      const updated = state.messages.map((m) =>
-        m.agentId === agentId ? { ...m, status: 'answered' as const } : m
-      );
+      // Only flip the OLDEST pending question for this agent — leaves any
+      // newer queued question intact so the modal can advance to it.
+      let flipped = false;
+      const updated = state.messages.map((m) => {
+        if (!flipped && m.agentId === agentId && m.status === 'pending') {
+          flipped = true;
+          return { ...m, status: 'answered' as const };
+        }
+        return m;
+      });
       return {
         messages: updated,
         pendingCount: updated.filter((m) => m.status === 'pending').length,
@@ -78,4 +96,6 @@ export const useAgentInboxStore = create<AgentInboxState>((set, get) => ({
 
   getByAgentId: (agentId) =>
     get().messages.find((m) => m.agentId === agentId),
+
+  firstPending: () => get().messages.find((m) => m.status === 'pending'),
 }));
