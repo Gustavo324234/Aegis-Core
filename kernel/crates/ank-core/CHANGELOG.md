@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.66](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.65...ank-core-v0.1.66) (2026-05-20)
+
+
+### Bug Fixes
+
+* **agents:** revive active memory tree agents and channels on reconnect ([#312](https://github.com/Gustavo324234/Aegis-Core/issues/312)) ([638bd55](https://github.com/Gustavo324234/Aegis-Core/commit/638bd55c16721f4e664208a7aa8cd2938510f93a))
+
 ## [0.1.65](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.64...ank-core-v0.1.65) (2026-05-20)
 
 
