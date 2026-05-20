@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.20.3...shell-ui-v1.21.0) (2026-05-20)
+
+
+### Features
+
+* **ui:** supervisor questions as a modal in the main chat (+ fix Q2 block) ([#307](https://github.com/Gustavo324234/Aegis-Core/issues/307)) ([7042537](https://github.com/Gustavo324234/Aegis-Core/commit/7042537b9a034405492c8ec522568732ad7e1a08))
+
 ## [1.20.3](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.20.2...shell-ui-v1.20.3) (2026-05-19)
 
 
