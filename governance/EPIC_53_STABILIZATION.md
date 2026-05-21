@@ -22,8 +22,9 @@ Bugs que impiden que el sistema multi-agente funcione correctamente en producci�
 | CORE-262 | AgentOrchestrator: inferencia LLM real en run_agent_loop | Kernel Engineer | Crítica |
 | CORE-297 | chat_agent.md: flujo automático de proyectos y delegación | Arquitecto IA | Crítica |
 | CORE-263 | Herramienta ask_user + estado WaitingUser + enrutamiento Chat Agent | Kernel Engineer | Alta |
+| CORE-303 | Kernel: Defensive Cognitive Loops & Boundary Autocorrection | Kernel Engineer | Crítica |
 
-**Orden de implementación:** CORE-300 → CORE-298 → CORE-262 → CORE-297 → CORE-263
+**Orden de implementación:** CORE-300 → CORE-298 → CORE-262 → CORE-297 → CORE-263 → CORE-303
 
 ---
 
@@ -89,6 +90,7 @@ Dejar el deploy robusto para entornos reales (VPS multi-servicio, Windows, CLI).
 | CORE-224 | Limpiar directorios temporales | Tavo | Baja |
 | CORE-225 | License field en Cargo.toml → MIT | Kernel Engineer | Alta |
 | CORE-213 | Kernel: loguear error en key_pool.load() al arranque | Kernel Engineer | Media |
+| CORE-306 | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | Tavo | Alta |
 | OPS-001 | Re-registrar API keys tras reinicio (workaround manual) | Tavo | Crítica |
 
 ---

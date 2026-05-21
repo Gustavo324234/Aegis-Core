@@ -32,6 +32,7 @@
 | CORE-300 | feat | Shell: selector de modelo en barra del chat | ✅ Done | Crítica |
 | CORE-301 | feat | CMR v2: scoring contextual + latencia real | ✅ Done | Alta |
 | CORE-302 | fix | Shell: mutear mic durante TTS (feedback loop) | ✅ Done | Crítica |
+| CORE-305 | feat | Kernel: Arquitectura de Ruteo Cognitivo Asimétrico (Local-First) | 📥 Todo | Alta |
 
 ---
 
@@ -42,6 +43,7 @@
 | CORE-295 | fix | SirenRouter: fallback a perfil admin para tenants sin config | ✅ Done | Crítica |
 | CORE-295-p2 | fix | Shell: preservar stt_provider al guardar config de voz | ✅ Done | Alta |
 | CORE-302 | fix | Shell: mutear mic durante reproducción TTS | ✅ Done | Crítica |
+| CORE-304 | feat | Voice: Migrar Siren Protocol de WebSockets a WebRTC/WebTransport | 📥 Todo | Alta |
 
 ---
 
@@ -53,6 +55,7 @@
 |---|---|---|---|---|---|
 | CORE-262 | feat | AgentOrchestrator: inferencia LLM real en run_agent_loop | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-263 | feat | Herramienta ask_user + estado WaitingUser | 📥 Todo | Alta | Kernel Engineer |
+| CORE-303 | feat | Kernel: Defensive Cognitive Loops & Boundary Autocorrection | 📥 Todo | Crítica | Kernel Engineer |
 
 ### Fase 2 — Shell Observability
 
@@ -94,6 +97,7 @@
 | CORE-225 | chore | License field en Cargo.toml → MIT | 📥 Todo | Alta | Kernel Engineer |
 | CORE-213 | fix | Kernel: loguear error en key_pool.load() | 📥 Todo | Media | Kernel Engineer |
 | CORE-224 | chore | Limpiar directorios temporales | 📥 Todo | Baja | Tavo |
+| CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | 📥 Todo | Alta | Tavo |
 | OPS-001 | ops | Re-registrar API keys tras reinicio | 📥 Todo | Crítica | Tavo |
 
 ---

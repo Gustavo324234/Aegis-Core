@@ -9,12 +9,14 @@ Versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### In Progress
+- Epic 51: Model Intelligence (PinchBench, Ollama Cloud integration, CMR v2 context scoring)
+- Epic 52: Voice Quality (Siren audio streaming stabilization, feedback muting logic)
+- Epic 53: Stabilization (Agent Loop real LLM execution, real-time dashboard observability, systemd multi-service VPS installation)
 - CORE-148: Natural conversational tone (prompt tuning)
 - CORE-151: Project context integration (Git/VCM)
 
 ### Planned
 - CORE-150: Sandbox scripting — Maker Capability
-- Epic 46: Public launch infrastructure
 
 ---
 
@@ -52,6 +54,7 @@ multi-repo architecture (Aegis-ANK + Aegis-Shell + Aegis-Installer).
 - Epic 43: Hierarchical Multi-Agent Orchestration
 - Epic 44: Developer Workspace
 - Epic 45: Cognitive Agent Architecture
+- Epic 46: Public Launch (docs, community, open source health)
 
 ---
 
