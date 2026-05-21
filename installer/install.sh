@@ -36,6 +36,7 @@ AEGIS_EMAIL=""
 AI_PROVIDER="none"
 AI_API_KEY=""
 AI_MODEL=""
+AEGIS_HTTP_PORT="8000"
 
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
@@ -114,6 +115,48 @@ run_system_audit() {
             warn "Port $port is already in use. This may conflict with Aegis."
         fi
     done
+}
+
+# Picks the HTTP port for Aegis. If the default (8000) is already taken — common
+# on shared servers — prompt for a free one instead of failing to bind. The
+# chosen value is exported and written to the env file as AEGIS_HTTP_PORT, which
+# the ank-server binary now honours.
+port_in_use() {
+    ss -tulpn 2>/dev/null | grep -q ":$1 " || ss -tln 2>/dev/null | grep -q ":$1 "
+}
+
+select_http_port() {
+    AEGIS_HTTP_PORT="8000"
+    if ! port_in_use 8000; then
+        log "HTTP port: 8000 (free)"
+        return
+    fi
+
+    warn "El puerto 8000 ya está en uso por otro servicio."
+    if [ ! -t 0 ]; then
+        AEGIS_HTTP_PORT="8090"
+        if port_in_use "$AEGIS_HTTP_PORT"; then
+            error "Puertos 8000 y ${AEGIS_HTTP_PORT} ocupados. Liberá uno o instalá interactivo para elegir."
+        fi
+        warn "Shell no interactivo → usando puerto ${AEGIS_HTTP_PORT}."
+        return
+    fi
+
+    while true; do
+        read -rp "Elegí un puerto HTTP libre para Aegis [default 8090]: " chosen
+        chosen="${chosen:-8090}"
+        if ! [[ "$chosen" =~ ^[0-9]+$ ]] || [ "$chosen" -lt 1 ] || [ "$chosen" -gt 65535 ]; then
+            echo "  Puerto inválido. Probá de nuevo."
+            continue
+        fi
+        if port_in_use "$chosen"; then
+            echo "  El puerto ${chosen} también está en uso. Probá otro."
+            continue
+        fi
+        AEGIS_HTTP_PORT="$chosen"
+        break
+    done
+    success "HTTP port elegido: ${AEGIS_HTTP_PORT}"
 }
 
 # --- UI Menus ---
@@ -345,13 +388,13 @@ configure_caddy() {
 }
 
 ${domain} {
-    reverse_proxy localhost:8000
+    reverse_proxy localhost:${AEGIS_HTTP_PORT}
 
     @websockets {
         header Connection *Upgrade*
         header Upgrade websocket
     }
-    reverse_proxy @websockets localhost:8000
+    reverse_proxy @websockets localhost:${AEGIS_HTTP_PORT}
 }
 EOF
 
@@ -440,6 +483,7 @@ AEGIS_ROOT_KEY=${root_key}
 AEGIS_DATA_DIR=${DATA_DIR}
 AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
+AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}
 UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
@@ -474,6 +518,7 @@ EOF
         grep -q "AEGIS_DATA_DIR"            "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                     >> "$ENV_FILE"
         grep -q "AEGIS_MODEL_PROFILE"       "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"       >> "$ENV_FILE"
         grep -q "AEGIS_AGENTS_CONFIG_DIR"   "$ENV_FILE" || echo "AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents"   >> "$ENV_FILE"
+        grep -q "AEGIS_HTTP_PORT"           "$ENV_FILE" || echo "AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}"             >> "$ENV_FILE"
         # Backfill on upgrade: release builds added by PR #277 refuse to start
         # without AEGIS_PLUGIN_ROOT_KEY. Preserve the previous "no signature
         # verification" behaviour (the binary used to silently fall back to a
@@ -545,6 +590,7 @@ install_docker() {
         cat > "${INSTALL_ROOT}/.env" <<EOF
 AEGIS_ROOT_KEY=${root_key}
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
+AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
 EOF
@@ -583,15 +629,15 @@ wait_and_show() {
     log "Waiting for Aegis to initialize (max 60s)..."
     local attempts=0
     while [[ $attempts -lt 30 ]]; do
-        if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
+        if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:${AEGIS_HTTP_PORT}/health" 2>/dev/null | grep -q "Online"; then
             break
         fi
         sleep 2
         attempts=$((attempts + 1))
     done
 
-    if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:8000/health" 2>/dev/null | grep -q "Online"; then
-        success "Aegis is UP at ${PROTOCOL}://localhost:8000"
+    if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:${AEGIS_HTTP_PORT}/health" 2>/dev/null | grep -q "Online"; then
+        success "Aegis is UP at ${PROTOCOL}://localhost:${AEGIS_HTTP_PORT}"
 
         local token=""
         if [[ "${INSTALL_MODE}" == "1" ]]; then
@@ -604,7 +650,7 @@ wait_and_show() {
 
         local tunnel_url=""
         local conn_info
-        conn_info=$(curl -s "${PROTOCOL}://localhost:8000/api/system/connection-info" || true)
+        conn_info=$(curl -s "${PROTOCOL}://localhost:${AEGIS_HTTP_PORT}/api/system/connection-info" || true)
         if [[ -n "$conn_info" ]]; then
             tunnel_url=$(echo "$conn_info" | grep -oP '(?<="tunnel_url":")[^"]+')
         fi
@@ -638,12 +684,12 @@ wait_and_show() {
 
         if [[ -n "$token" ]]; then
             echo -e "${CYAN}  Local Setup URL:${NC}"
-            echo -e "  ${GREEN}${PROTOCOL}://${ip}:8000?setup_token=${token}${NC}"
+            echo -e "  ${GREEN}${PROTOCOL}://${ip}:${AEGIS_HTTP_PORT}?setup_token=${token}${NC}"
             echo ""
             echo -e "  Token expires in 30 minutes."
             echo -e "  To regenerate: ${CYAN}sudo aegis token${NC}"
         else
-            echo -e "  Local Access (HTTP): ${CYAN}${PROTOCOL}://${ip}:8000${NC}"
+            echo -e "  Local Access (HTTP): ${CYAN}${PROTOCOL}://${ip}:${AEGIS_HTTP_PORT}${NC}"
             echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
         fi
 
@@ -666,6 +712,7 @@ detect_arch
 show_main_menu
 show_inference_profile_menu
 install_dependencies
+select_http_port
 
 if [[ "$INSTALL_MODE" == "1" ]]; then
     install_native

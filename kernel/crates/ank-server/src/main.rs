@@ -485,7 +485,16 @@ pub(crate) async fn run_server() -> Result<()> {
     }
 
     let mut config = HttpConfig::from_env();
-    config.port = 8000;
+    // HTTP port: honour AEGIS_HTTP_PORT (preferred) or the legacy ANK_HTTP_PORT,
+    // defaulting to 8000. Lets the installer pick a free port when 8000 is
+    // already taken instead of failing to bind. (HttpConfig::from_env defaults
+    // to 3000, so we set it explicitly here.)
+    let http_port: u16 = std::env::var("AEGIS_HTTP_PORT")
+        .or_else(|_| std::env::var("ANK_HTTP_PORT"))
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8000);
+    config.port = http_port;
 
     let auth_rate_limiter = AuthRateLimiter::new(RateLimitConfig::from_env());
 
@@ -534,12 +543,15 @@ pub(crate) async fn run_server() -> Result<()> {
     });
 
     // CORE-147: Log informative message for HTTP + Tunnel
-    info!("🌐 Aegis serving HTTP on port 8000");
-    info!("   For HTTPS access: cloudflared tunnel --url http://localhost:8000");
+    info!("🌐 Aegis serving HTTP on port {}", http_port);
+    info!(
+        "   For HTTPS access: cloudflared tunnel --url http://localhost:{}",
+        http_port
+    );
     info!("   Or run: sudo aegis tunnel");
 
     // 13. Axum Server
-    info!("Starting Axum on port 8000");
+    info!("Starting Axum on port {}", http_port);
 
     // CORE-146: Cloudflare Tunnel Manager
     {
@@ -560,7 +572,7 @@ pub(crate) async fn run_server() -> Result<()> {
 
             loop {
                 info!("Tunnel Manager: Starting cloudflared...");
-                match run_tunnel_and_monitor(8000, Arc::clone(&tunnel_url_state)).await {
+                match run_tunnel_and_monitor(http_port, Arc::clone(&tunnel_url_state)).await {
                     Ok(_) => {
                         warn!("Tunnel Manager: cloudflared exited normally.");
                     }
