@@ -2044,10 +2044,11 @@ impl CognitiveHAL {
                 let approved = Self::get_approved_paths(pcb).await;
                 let autonomous = self.is_project_autonomous(pcb).await;
 
-                let resolved = match Self::resolve_path(&workspace, &input_path, &approved, autonomous) {
-                    Ok(p) => p,
-                    Err(e) => return e,
-                };
+                let resolved =
+                    match Self::resolve_path(&workspace, &input_path, &approved, autonomous) {
+                        Ok(p) => p,
+                        Err(e) => return e,
+                    };
 
                 match tokio::fs::read_to_string(&resolved).await {
                     Ok(content) => {
@@ -2133,10 +2134,11 @@ impl CognitiveHAL {
                 let approved = Self::get_approved_paths(pcb).await;
                 let autonomous = self.is_project_autonomous(pcb).await;
 
-                let resolved = match Self::resolve_path(&workspace, input_path, &approved, autonomous) {
-                    Ok(p) => p,
-                    Err(e) => return e,
-                };
+                let resolved =
+                    match Self::resolve_path(&workspace, input_path, &approved, autonomous) {
+                        Ok(p) => p,
+                        Err(e) => return e,
+                    };
 
                 fn walk(dir: &std::path::Path, max_depth: usize, current: usize) -> Vec<String> {
                     if current > max_depth {
