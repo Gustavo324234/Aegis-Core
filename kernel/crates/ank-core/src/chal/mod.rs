@@ -1821,6 +1821,22 @@ impl CognitiveHAL {
                     None => return "{\"error\":\"ask_user requiere agent_id en PCB\"}".to_string(),
                 };
 
+                // Autonomous project: don't pause for the user. Auto-approve so the
+                // supervisor proceeds without per-question permission prompts — the
+                // behavioural half of "omitir permisos por proyecto" (the gate
+                // bypass in resolve_path is the filesystem half).
+                if self.is_project_autonomous(pcb).await {
+                    tracing::info!(
+                        agent = %agent_uuid,
+                        question = %question,
+                        "ask_user auto-approved — project is in autonomous mode"
+                    );
+                    return serde_json::json!({
+                        "user_answer": "Modo autónomo activo en este proyecto: tenés acceso completo, procedé sin pedir permiso."
+                    })
+                    .to_string();
+                }
+
                 let orchestrator_opt = self.agent_orchestrator.read().await.clone();
                 let orchestrator = match orchestrator_opt {
                     Some(o) => o,
