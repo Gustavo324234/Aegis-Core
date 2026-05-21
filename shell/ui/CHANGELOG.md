@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.21.0...shell-ui-v1.21.1) (2026-05-21)
+
+
+### Bug Fixes
+
+* **router,agents:** smoke-test routing, agent lifecycle & observability ([#314](https://github.com/Gustavo324234/Aegis-Core/issues/314)) ([7182b9c](https://github.com/Gustavo324234/Aegis-Core/commit/7182b9c6171a12b890bf8faadb758ef83e2017ed))
+
 ## [1.21.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.20.3...shell-ui-v1.21.0) (2026-05-20)
 
 
