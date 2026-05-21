@@ -466,6 +466,7 @@ impl TenantDB {
 
 // --- CORE-276: Approved external paths ---
 const APPROVED_PATHS_KEY: &str = "approved_paths";
+const AUTONOMOUS_PROJECTS_KEY: &str = "autonomous_projects";
 
 impl TenantDB {
     /// Returns the list of external paths approved by the user for specialist access.
@@ -498,6 +499,39 @@ impl TenantDB {
         let json = serde_json::to_string(&paths)
             .map_err(|e| anyhow::anyhow!("Failed to serialize approved_paths: {}", e))?;
         self.set_kv(APPROVED_PATHS_KEY, &json)
+    }
+
+    // --- Per-project autonomous mode (skip path-approval gate) ---
+
+    /// Project IDs the user marked as "autonomous". Specialists working in these
+    /// projects skip the external-path approval gate — full filesystem access,
+    /// no per-path prompts. Opt-in, per project.
+    pub fn get_autonomous_projects(&self) -> Result<Vec<String>> {
+        match self.get_kv(AUTONOMOUS_PROJECTS_KEY)? {
+            Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Whether a specific project is in autonomous mode.
+    pub fn is_project_autonomous(&self, project_id: &str) -> bool {
+        self.get_autonomous_projects()
+            .map(|ps| ps.iter().any(|p| p == project_id))
+            .unwrap_or(false)
+    }
+
+    /// Enable or disable autonomous mode for a project. Idempotent.
+    pub fn set_project_autonomous(&self, project_id: &str, enabled: bool) -> Result<()> {
+        let mut projects = self.get_autonomous_projects().unwrap_or_default();
+        let present = projects.iter().any(|p| p == project_id);
+        if enabled && !present {
+            projects.push(project_id.to_string());
+        } else if !enabled && present {
+            projects.retain(|p| p != project_id);
+        }
+        let json = serde_json::to_string(&projects)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize autonomous_projects: {}", e))?;
+        self.set_kv(AUTONOMOUS_PROJECTS_KEY, &json)
     }
 }
 
