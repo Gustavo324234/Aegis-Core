@@ -662,8 +662,14 @@ async fn stream_task_events(
         });
         sender.subscribe()
     };
-    stream_with_receiver(socket, receiver, agent_event_rx, tenant_id, &state.agent_orchestrator)
-        .await;
+    stream_with_receiver(
+        socket,
+        receiver,
+        agent_event_rx,
+        tenant_id,
+        &state.agent_orchestrator,
+    )
+    .await;
 }
 
 async fn stream_with_receiver(

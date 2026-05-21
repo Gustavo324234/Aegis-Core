@@ -459,10 +459,7 @@ impl CognitiveRouter {
             .take(3)
             .map(|(score, e)| (e.model_id.clone(), (*score * 1000.0).round() / 1000.0))
             .collect();
-        let fallback_ids: Vec<String> = fallback_chain
-            .iter()
-            .map(|f| f.model_id.clone())
-            .collect();
+        let fallback_ids: Vec<String> = fallback_chain.iter().map(|f| f.model_id.clone()).collect();
         info!(
             catalog_id = %primary.model_id,
             api_model_id = %api_model_id,
