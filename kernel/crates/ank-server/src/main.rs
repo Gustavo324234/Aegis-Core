@@ -388,6 +388,8 @@ pub(crate) async fn run_server() -> Result<()> {
                             // log empty/short output so the operator can tell
                             // upstream silently broke vs. the user really sent
                             // an empty request.
+                            let output_is_empty =
+                                tokens_emitted == 0 || full_output.trim().is_empty();
                             if tokens_emitted == 0 {
                                 tracing::warn!(
                                     pid = %pid,
@@ -404,6 +406,26 @@ pub(crate) async fn run_server() -> Result<()> {
                                      — all tokens were meta-tokens (__MODEL_SELECTED__ / __WARNING__)",
                                     tokens_emitted
                                 );
+                            }
+
+                            // CORE-FIX (D): an empty/failed turn must never reach the
+                            // user as a silent blank bubble. Emit an Error event so the
+                            // shell surfaces a visible "intentá de nuevo" message and
+                            // flips to the error state, instead of completing with
+                            // output="" (the exact smoke-test symptom: 429 mid-ReAct
+                            // loop → 0 tokens → blank chat). The StatusUpdate below still
+                            // fires afterwards to clear activePid and return UI to idle.
+                            if output_is_empty {
+                                let _ = event_tx.send(ank_proto::v1::TaskEvent {
+                                    pid: pid.clone(),
+                                    timestamp: None,
+                                    payload: Some(ank_proto::v1::task_event::Payload::Error(
+                                        "El modelo no devolvió respuesta (probablemente \
+                                         saturado o con el límite de uso alcanzado). \
+                                         Probá de nuevo en unos segundos."
+                                            .to_string(),
+                                    )),
+                                });
                             }
 
                             // Telemetry & Finalization

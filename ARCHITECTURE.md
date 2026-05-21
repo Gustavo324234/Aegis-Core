@@ -1,7 +1,7 @@
 # Aegis Core — Architecture
 
 > **Version:** 1.1.0
-> **Updated:** 2026-04-25
+> **Updated:** 2026-05-21
 
 ---
 
@@ -134,7 +134,9 @@ aegis-core/
 | Epic 32 | Unificación — binario único Rust (ank-server) | ✅ Done |
 | Epic 42 | Realignment — deuda técnica, auth, OAuth, Router | ✅ Done |
 | Epic 43 | Hierarchical Multi-Agent Orchestration | ✅ Done |
-| Epic 44 | Developer Workspace | ✅ Done |
+| Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) | ✅ Done |
+| Epic 45 | Cognitive Agent Architecture (CAA) | ✅ Done |
+| Epic 46 | Public Launch (docs, community, open source health) | ✅ Done |
 
 ---
 

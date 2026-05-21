@@ -129,6 +129,71 @@ impl CloudProxyDriver {
         Some((msg, retry_secs))
     }
 
+    /// Tries the known provider-specific 429 / quota error shapes. Returns
+    /// `(friendly_message, retry_delay_secs)` when recognised, else `None`.
+    fn parse_quota_error(body: &str) -> Option<(String, u64)> {
+        Self::parse_gemini_quota_error(body).or_else(|| Self::parse_groq_quota_error(body))
+    }
+
+    /// CORE-FIX: parses a Groq (OpenAI-compatible) 429 rate-limit body. Groq
+    /// puts a human-readable hint in `error.message`, e.g.:
+    /// "Rate limit reached for model `llama-3.3-70b-versatile` ... on tokens per
+    ///  minute (TPM): Limit 12000, Used 11336, Requested 3836. Please try again
+    ///  in 15.86s. ...". Returns `(friendly_message, retry_delay_secs)` or
+    /// `None` when it isn't a Groq rate-limit shape.
+    fn parse_groq_quota_error(body: &str) -> Option<(String, u64)> {
+        let v: serde_json::Value = serde_json::from_str(body).ok()?;
+        let err = v.get("error")?;
+        let code = err.get("code").and_then(|c| c.as_str()).unwrap_or("");
+        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        let is_rate_limit = code == "rate_limit_exceeded" || msg.contains("Rate limit");
+        if !is_rate_limit {
+            return None;
+        }
+        let retry_secs = Self::extract_retry_after_secs(msg).unwrap_or(60);
+        let is_tpm = msg.contains("tokens per minute")
+            || err.get("type").and_then(|t| t.as_str()) == Some("tokens");
+        let friendly = if is_tpm {
+            format!(
+                "Alcanzaste el límite de tokens por minuto del modelo (plan free). \
+                 Reintentá en ~{}s o subí el tier del proveedor.",
+                retry_secs
+            )
+        } else {
+            format!(
+                "Alcanzaste el límite de requests del proveedor. Reintentá en ~{}s.",
+                retry_secs
+            )
+        };
+        Some((friendly, retry_secs))
+    }
+
+    /// Extracts the (ceiled) seconds from a "try again in 15.86s" style hint.
+    fn extract_retry_after_secs(msg: &str) -> Option<u64> {
+        let idx = msg.find("try again in ")?;
+        let after = &msg[idx + "try again in ".len()..];
+        let num: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let secs = num.parse::<f64>().ok()?;
+        Some(secs.ceil() as u64)
+    }
+
+    /// Invokes the rate-limit callback (if set) to mark the current key as
+    /// rate-limited until `delay_secs` from now, and logs it.
+    fn mark_rate_limited(&self, delay_secs: u64) {
+        if let Some(cb) = &self.on_rate_limited {
+            let until = chrono::Utc::now() + chrono::Duration::seconds(delay_secs as i64);
+            cb(until);
+            tracing::warn!(
+                model = %self.model_id,
+                cooldown_secs = delay_secs,
+                "CORE-267: 429 recibido — key marcada como rate-limited"
+            );
+        }
+    }
+
     /// CORE-FIX (B2): Anthropic supports prompt caching via a `cache_control`
     /// marker on a content block. The marker has to live INSIDE the content
     /// (not as a top-level field), which means the message's `content` field
@@ -215,13 +280,14 @@ impl CloudProxyDriver {
                             status = %status,
                             "Retryable error received"
                         );
-                        // CORE-FIX (E): if this is a Gemini quota error, no
-                        // amount of retrying inside the 30s window will help —
-                        // bail out with the friendly message immediately
-                        // instead of waiting MAX_RETRIES * 1s of pointless
-                        // exponential backoff first.
+                        // CORE-FIX (E): a 429 with a parseable retry hint (Gemini
+                        // quota / Groq TPM) won't clear by retrying inside the
+                        // cooldown window — mark the key rate-limited and bail
+                        // immediately with the friendly message instead of burning
+                        // MAX_RETRIES * backoff first.
                         if status.as_u16() == 429 {
-                            if let Some((msg, _)) = Self::parse_gemini_quota_error(&text) {
+                            if let Some((msg, secs)) = Self::parse_quota_error(&text) {
+                                self.mark_rate_limited(secs);
                                 return Err(SystemError::HardwareFailure(msg));
                             }
                         }
@@ -233,29 +299,17 @@ impl CloudProxyDriver {
                     }
 
                     if status.as_u16() == 429 {
-                        // CORE-FIX (E): peek at the body to honour Gemini's
-                        // structured `retryDelay` instead of always using 60s.
-                        // We have to consume the response to read the body, so
-                        // we return early with a tailored HardwareFailure
-                        // carrying the friendly message — this is fine because
-                        // 429 is non-retryable at this point (already past
-                        // MAX_RETRIES) and the caller will surface the message
-                        // to the user.
+                        // CORE-FIX (E): peek at the body to honour the provider's
+                        // structured retry hint (Gemini `retryDelay` / Groq "try
+                        // again in Ns") instead of always using 60s. 429 is
+                        // non-retryable at this point (past MAX_RETRIES) so we
+                        // surface the friendly message to the user.
                         let body = response.text().await.unwrap_or_default();
-                        let (delay_secs, user_msg) = match Self::parse_gemini_quota_error(&body) {
+                        let (delay_secs, user_msg) = match Self::parse_quota_error(&body) {
                             Some((msg, secs)) => (secs, Some(msg)),
                             None => (60u64, None),
                         };
-                        if let Some(cb) = &self.on_rate_limited {
-                            let until =
-                                chrono::Utc::now() + chrono::Duration::seconds(delay_secs as i64);
-                            cb(until);
-                            tracing::warn!(
-                                model = %self.model_id,
-                                cooldown_secs = delay_secs,
-                                "CORE-267 + CORE-FIX (E): 429 recibido — key marcada como rate-limited"
-                            );
-                        }
+                        self.mark_rate_limited(delay_secs);
                         return Err(SystemError::HardwareFailure(
                             user_msg.unwrap_or_else(|| format!("API Error {}: {}", status, body)),
                         ));
@@ -609,5 +663,44 @@ mod tests {
         }"#;
         let (_, secs) = CloudProxyDriver::parse_gemini_quota_error(body).unwrap();
         assert_eq!(secs, 2); // ceil(1.7) = 2
+    }
+
+    #[test]
+    fn parse_groq_quota_error_extracts_tpm_retry() {
+        // The exact shape from the smoke test (TPM limit on llama-3.3-70b).
+        let body = r#"{"error":{"message":"Rate limit reached for model `llama-3.3-70b-versatile` in organization `org_x` service tier `on_demand` on tokens per minute (TPM): Limit 12000, Used 11336, Requested 3836. Please try again in 15.86s. Need more tokens?","type":"tokens","code":"rate_limit_exceeded"}}"#;
+        let (msg, secs) = CloudProxyDriver::parse_groq_quota_error(body)
+            .expect("should recognise Groq TPM rate-limit");
+        assert_eq!(secs, 16); // ceil(15.86)
+        assert!(msg.contains("tokens por minuto"));
+    }
+
+    #[test]
+    fn parse_groq_quota_error_none_for_other_body() {
+        assert!(CloudProxyDriver::parse_groq_quota_error("not json").is_none());
+        assert!(CloudProxyDriver::parse_groq_quota_error(
+            r#"{"error":{"message":"invalid api key","code":"invalid_api_key"}}"#
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn parse_quota_error_dispatches_to_both_providers() {
+        let gemini = r#"{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"23s"}]}}"#;
+        assert_eq!(CloudProxyDriver::parse_quota_error(gemini).unwrap().1, 23);
+        let groq = r#"{"error":{"message":"Rate limit reached ... Please try again in 2.1s.","type":"tokens","code":"rate_limit_exceeded"}}"#;
+        assert_eq!(CloudProxyDriver::parse_quota_error(groq).unwrap().1, 3);
+    }
+
+    #[test]
+    fn extract_retry_after_secs_parses_hint() {
+        assert_eq!(
+            CloudProxyDriver::extract_retry_after_secs("Please try again in 15.86s. ok"),
+            Some(16)
+        );
+        assert_eq!(
+            CloudProxyDriver::extract_retry_after_secs("no hint here"),
+            None
+        );
     }
 }

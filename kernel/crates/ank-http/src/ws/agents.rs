@@ -51,8 +51,14 @@ async fn handle_agents_stream(mut socket: WebSocket, tenant_id: String, state: A
             event = event_rx.recv() => {
                 match event {
                     Ok(evt) => {
-                        // Solo enviamos eventos del tenant correcto
-                        if !agent_event_matches_tenant(&evt, &tenant_id) {
+                        // CORE-FIX (security): the AgentEvent broadcast is a single
+                        // global channel — only forward events for THIS tenant,
+                        // resolving the owner via the agent tree.
+                        if !state
+                            .agent_orchestrator
+                            .agent_event_belongs_to_tenant(&evt, &tenant_id)
+                            .await
+                        {
                             continue;
                         }
                         match serde_json::to_string(&evt) {
@@ -84,10 +90,4 @@ async fn handle_agents_stream(mut socket: WebSocket, tenant_id: String, state: A
     }
 
     info!(tenant = %tenant_id, "[AgentWS] Client disconnected.");
-}
-
-fn agent_event_matches_tenant(_evt: &AgentEvent, _tenant_id: &str) -> bool {
-    // Todos los eventos son visibles para el tenant conectado.
-    // En un sistema multi-tenant real se filtraría por project_id → tenant_id.
-    true
 }

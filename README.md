@@ -12,6 +12,8 @@
 
 Aegis is a self-hosted cognitive operating system — a platform where AI agents run as first-class processes, with memory, scheduling, multi-tenancy, and tool execution built into the kernel.
 
+The core mission of Aegis is to be the **ultimate personal assistant that manages a comprehensive ecosystem of specialized agents, acting as the "CIO (Chief Information Officer) of the company of your life."** It is built to be run locally or on a private server, ensuring absolute security (local-first with tenant-encrypted storage) so it can safely hold your personal or corporate data, allowing anyone—from individuals to entire organizations—to have their own private, autonomous assistant.
+
 It is not a chatbot wrapper. It is not a LangChain pipeline. It is a kernel-level runtime for autonomous cognitive workloads.
 
 **Core ideas:**
@@ -182,11 +184,21 @@ Build options:
 
 ```
 aegis-core/
-├── kernel/          Rust kernel — ank-server, ank-core, ank-http, ank-cli
+├── kernel/          Rust kernel
+│   ├── crates/      Modular Rust architecture:
+│   │   ├── ank-server       Main binary entrypoint (Axum + gRPC)
+│   │   ├── ank-core         Cognitive engine — scheduler, VCM, agents, DAG
+│   │   ├── ank-http         HTTP/WebSocket server (Axum) with embedded React UI
+│   │   ├── ank-cli          Administrative CLI
+│   │   ├── ank-mcp          Model Context Protocol client
+│   │   ├── aegis-supervisor Rust-based process manager
+│   │   ├── aegis-sdk        Wasm plugin SDK
+│   │   └── ank-proto        Protobuf contracts & generated Rust code
+│   └── proto/       Protobuf contracts (gRPC & Siren audio protocol)
 ├── shell/ui/        Web interface — React 18 / Vite / TypeScript / Tailwind
-├── app/             Mobile client — React Native / Expo
+├── app/             Mobile client — React Native / Expo (Satellite and Cloud modes)
 ├── installer/       Deployment — install.sh, install.ps1, aegis CLI, systemd service
-├── governance/      Tickets, architecture docs, codex
+├── governance/      Tickets, active epics, architecture docs, codex
 └── distro/          (future) Linux distribution
 ```
 
@@ -201,15 +213,18 @@ aegis-core/
 | Epic 43 | Hierarchical Multi-Agent Orchestration | ✅ Done |
 | Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) | ✅ Done |
 | Epic 45 | Cognitive Agent Architecture | ✅ Done |
+| Epic 46 | Public Launch (docs, community, open source health) | ✅ Done |
 
 ---
 
 ## Roadmap
 
-- [ ] Epic 46 — Public Launch (docs, community, open source health)
+- [ ] Epic 51 — Model Intelligence (PinchBench, Ollama Cloud, CMR v2 context scoring)
+- [ ] Epic 52 — Voice Quality (Siren audio stream stabilization and mic-mute logic)
+- [ ] Epic 53 — Stabilization (Agent Loop real LLM run loop, observability, and infra repairs)
 - [ ] Sandbox scripting (Maker Capability) — CORE-150
 - [ ] Project context integration (Git/VCM) — CORE-151
-- [ ] Mobile app completion
+- [ ] Mobile app completion (Satellite and Cloud modes)
 - [ ] `distro/` — minimal Linux distribution
 
 ---

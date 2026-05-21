@@ -361,7 +361,19 @@ impl CognitiveRouter {
             let base = self.compute_score(&entry, task_type, &ctx);
             // Soft penalty: multiply by sqrt(capacity) so a model at 50% headroom
             // scores ~70% of its base, still competitive but deprioritised.
-            scored.push((base * capacity.sqrt(), entry));
+            let mut adjusted = base * capacity.sqrt();
+            // CORE-FIX (B): multi-step, token-heavy task types (Planning, Code)
+            // burn a free tier's per-minute budget fast — the ReAct loop fires
+            // several calls in quick succession (the smoke test blew Groq's 12k
+            // TPM this way). Deprioritise free-tier models for these so a
+            // paid/local alternative wins when one exists. `has_paid` already
+            // folds in is_local, so !has_paid means a genuine free-tier key; when
+            // ONLY free keys exist every candidate gets the same factor and the
+            // best free model is still chosen.
+            if !has_paid && matches!(task_type, TaskType::Planning | TaskType::Code) {
+                adjusted *= 0.6;
+            }
+            scored.push((adjusted, entry));
         }
 
         if scored.is_empty() {
@@ -394,8 +406,22 @@ impl CognitiveRouter {
         // fallback was sending the OpenAI token to Anthropic's endpoint).
         // Skip fallbacks for which no key is available rather than including
         // a guaranteed-401 entry that would just waste a round trip.
+        // CORE-FIX (A): prefer a fallback on a DIFFERENT provider than the
+        // primary. A provider-wide outage (Gemini returning empty streams, a
+        // Groq TPM 429 storm) otherwise takes down the whole chain, because the
+        // next-best models are usually siblings on the same provider. Stable
+        // partition puts different-provider candidates first while preserving
+        // score order within each group; we then take the first 2 with a key.
+        let primary_provider = primary.provider.clone();
+        let mut fallback_candidates: Vec<&ModelEntry> =
+            scored.iter().skip(1).map(|(_, e)| e).collect();
+        fallback_candidates.sort_by_key(|e| e.provider == primary_provider);
+
         let mut fallback_chain: Vec<FallbackDecision> = Vec::new();
-        for (_, entry) in scored.iter().skip(1).take(2) {
+        for entry in fallback_candidates {
+            if fallback_chain.len() >= 2 {
+                break;
+            }
             let fb_key = match self.resolve_key(entry, tenant_id).await {
                 Some(k) => k,
                 None => {
@@ -433,12 +459,7 @@ impl CognitiveRouter {
             .take(3)
             .map(|(score, e)| (e.model_id.clone(), (*score * 1000.0).round() / 1000.0))
             .collect();
-        let fallback_ids: Vec<String> = scored
-            .iter()
-            .skip(1)
-            .take(2)
-            .map(|(_, e)| e.model_id.clone())
-            .collect();
+        let fallback_ids: Vec<String> = fallback_chain.iter().map(|f| f.model_id.clone()).collect();
         info!(
             catalog_id = %primary.model_id,
             api_model_id = %api_model_id,

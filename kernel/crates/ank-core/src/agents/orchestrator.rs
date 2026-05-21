@@ -629,6 +629,32 @@ impl AgentOrchestrator {
             .collect()
     }
 
+    /// CORE-FIX (security): whether a broadcast `AgentEvent` belongs to
+    /// `tenant_id`, resolved by looking its agent up in the tree. The live
+    /// AgentEvent broadcast is a single global channel shared by every WS
+    /// connection, so without this check one tenant receives another tenant's
+    /// supervisor questions, project names and report summaries. Events that
+    /// can't be attributed to one agent (Restored / TreeSnapshot — not emitted
+    /// on the live channel today) fail closed.
+    pub async fn agent_event_belongs_to_tenant(&self, event: &AgentEvent, tenant_id: &str) -> bool {
+        let agent_id = match event {
+            AgentEvent::Spawned { agent_id, .. }
+            | AgentEvent::StateChanged { agent_id, .. }
+            | AgentEvent::Activity { agent_id, .. }
+            | AgentEvent::Reported { agent_id, .. }
+            | AgentEvent::Pruned { agent_id, .. }
+            | AgentEvent::SupervisorQuestion { agent_id, .. }
+            | AgentEvent::SupervisorResumed { agent_id, .. }
+            | AgentEvent::SupervisorCompleted { agent_id, .. }
+            | AgentEvent::SupervisorTimedOut { agent_id, .. } => agent_id,
+            AgentEvent::Restored { .. } | AgentEvent::TreeSnapshot { .. } => return false,
+        };
+        let tree = self.tree.read().await;
+        tree.get(agent_id)
+            .map(|n| n.tenant_id == tenant_id)
+            .unwrap_or(false)
+    }
+
     /// Entrega la respuesta del usuario al supervisor pausado. Retorna `true` si había
     /// un supervisor esperando, `false` si no hay ninguno registrado para ese agent_id.
     pub async fn answer_user_question(&self, agent_id: AgentId, answer: String) -> bool {

@@ -107,14 +107,18 @@ CI runs format → audit → clippy → test automatically on every PR.
 
 | Directory | Language | Description |
 |---|---|---|
+| `kernel/crates/ank-server/` | Rust | Main binary entrypoint (Axum + gRPC) |
 | `kernel/crates/ank-core/` | Rust | Cognitive engine — scheduler, VCM, agents, DAG |
-| `kernel/crates/ank-http/` | Rust | HTTP/WebSocket server (Axum) |
-| `kernel/crates/ank-server/` | Rust | Main binary entrypoint |
+| `kernel/crates/ank-http/` | Rust | HTTP/WebSocket server (Axum) with embedded React UI |
 | `kernel/crates/ank-cli/` | Rust | Administrative CLI |
+| `kernel/crates/ank-mcp/` | Rust | Model Context Protocol client |
+| `kernel/crates/ank-proto/` | Rust | Protobuf contracts & generated Rust code |
+| `kernel/crates/aegis-supervisor/` | Rust | Process manager |
+| `kernel/crates/aegis-sdk/` | Rust | Wasm plugin SDK |
 | `shell/ui/` | TypeScript/React | Web interface |
 | `app/` | TypeScript/React Native | Mobile client |
-| `installer/` | Bash | Deployment scripts |
-| `governance/` | Markdown | Tickets, architecture, codex |
+| `installer/` | Bash/PowerShell | Deployment scripts and multiplatform installer |
+| `governance/` | Markdown | Tickets, active epics, architecture, codex |
 
 ---
 
