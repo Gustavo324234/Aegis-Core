@@ -732,9 +732,18 @@ export const useAegisStore = create<AegisState>()(
                                     break;
                                 case 'supervisor_completed':
                                     inbox.markAnswered(payload.agent_id);
+                                    // Surface the result in the chat — otherwise the
+                                    // user is left with "te aviso cuando termine" and
+                                    // never learns what happened.
+                                    get().addSystemMessage(
+                                        `✅ ${payload.project_name}: ${payload.summary}`,
+                                    );
                                     break;
                                 case 'supervisor_timed_out':
                                     inbox.markTimedOut(payload.agent_id);
+                                    get().addSystemMessage(
+                                        `⚠️ El supervisor de ${payload.project_name} se pausó: no recibió respuesta a tiempo. Volvé a escribirle para retomar.`,
+                                    );
                                     break;
                                 case 'supervisor_resumed':
                                     break;

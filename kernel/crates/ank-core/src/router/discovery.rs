@@ -376,7 +376,7 @@ async fn fetch_ollama(
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("ollama response has no `models` array"))?;
 
-    Ok(models
+    let listed: Vec<DiscoveredModel> = models
         .iter()
         .filter_map(|m| {
             let name = m["name"].as_str()?.to_string();
@@ -391,7 +391,86 @@ async fn fetch_ollama(
                 supports_tools: None,
             })
         })
-        .collect())
+        .collect();
+
+    // Ollama Cloud's `/api/tags` advertises EVERY model regardless of the key's
+    // subscription tier; calling a gated one returns 403/401. The listing lies,
+    // the completion endpoint tells the truth — so probe each model with a
+    // 1-token request and keep only the ones this key can actually call. Without
+    // this the router routes (and falls back) to models it can't use, which is
+    // exactly the smoke-test failure (deepseek-v3.1:671b → 403/401). Local
+    // Ollama has no gating, so return the full list unprobed.
+    if is_cloud && !api_key.is_empty() {
+        let chat_url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+        return Ok(probe_callable_models(client, &chat_url, api_key, listed).await);
+    }
+
+    Ok(listed)
+}
+
+/// Probe each candidate model with a minimal (1-token) chat completion and
+/// return only the ones the key can actually call. Needed for providers (Ollama
+/// Cloud) whose `/models` listing advertises models that require a paid
+/// subscription — the listing can't be trusted, the completion status can.
+///
+/// Probes run concurrently (bounded) with a short timeout so discovery stays
+/// responsive. A model is pruned ONLY on a definitive "this key can't use it"
+/// status (401/403/404); transient outcomes (5xx, 429, network, timeout) keep
+/// the model so a blip never silently drops a good one from the catalog.
+async fn probe_callable_models(
+    client: &reqwest::Client,
+    chat_url: &str,
+    api_key: &str,
+    models: Vec<DiscoveredModel>,
+) -> Vec<DiscoveredModel> {
+    use futures_util::{stream, StreamExt};
+
+    const PROBE_CONCURRENCY: usize = 6;
+
+    stream::iter(models.into_iter().map(|m| {
+        let client = client.clone();
+        let chat_url = chat_url.to_string();
+        let api_key = api_key.to_string();
+        async move {
+            let body = serde_json::json!({
+                "model": m.model_id,
+                "messages": [{ "role": "user", "content": "hi" }],
+                "max_tokens": 1,
+                "stream": false,
+            });
+            match client
+                .post(&chat_url)
+                .bearer_auth(&api_key)
+                .timeout(Duration::from_secs(20))
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => Some(m),
+                Ok(r) => {
+                    let code = r.status().as_u16();
+                    // 401/403/404 → key/tier can't use this model: prune it.
+                    // Anything else (5xx, 429, …) is transient: keep it.
+                    if matches!(code, 401 | 403 | 404) {
+                        warn!(
+                            model = %m.model_id,
+                            status = code,
+                            "discovery: model not callable with this key — pruning from catalog"
+                        );
+                        None
+                    } else {
+                        Some(m)
+                    }
+                }
+                // Network error / timeout: keep, don't prune on a blip.
+                Err(_) => Some(m),
+            }
+        }
+    }))
+    .buffer_unordered(PROBE_CONCURRENCY)
+    .filter_map(|opt| async move { opt })
+    .collect::<Vec<_>>()
+    .await
 }
 
 #[cfg(test)]

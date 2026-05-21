@@ -191,6 +191,34 @@ async fn handle_chat(
         .set_event_channel((*state.agent_event_tx).clone());
     let mut agent_event_rx = state.agent_event_tx.subscribe();
 
+    // Re-attach: a reconnecting client missed every AgentEvent broadcast while it
+    // was away. Replay the current tree snapshot and any unanswered supervisor
+    // questions so the dashboard repopulates and the question modal re-appears,
+    // instead of leaving the user blind to work that's still running.
+    {
+        let nodes = state
+            .agent_orchestrator
+            .tree_snapshot_for_tenant(&tenant_id)
+            .await;
+        if !nodes.is_empty() {
+            let snapshot = ank_core::agents::event::AgentEvent::TreeSnapshot { nodes };
+            if let Ok(data) = serde_json::to_value(&snapshot) {
+                let frame = json!({ "event": "agent_event", "data": data });
+                let _ = socket.send(Message::Text(frame.to_string())).await;
+            }
+        }
+        for question in state
+            .agent_orchestrator
+            .pending_questions_for_tenant(&tenant_id)
+            .await
+        {
+            if let Ok(data) = serde_json::to_value(&question) {
+                let frame = json!({ "event": "agent_event", "data": data });
+                let _ = socket.send(Message::Text(frame.to_string())).await;
+            }
+        }
+    }
+
     // CORE-279: Ticker de keepalive — ping cada 30s para mantener la conexión viva
     // a través de proxies (Cloudflare, nginx, etc.) que cierran conexiones idle.
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -569,23 +597,17 @@ async fn handle_chat(
         }
     }
 
-    // CORE-FIX (A1): the WebSocket loop exited (client closed, network drop,
-    // or a fatal handler error). Cancel every agent that belongs to this
-    // tenant so background specialists stop burning provider tokens on work
-    // nobody is watching. Without this, agents would idle until the 5-minute
-    // AGENT_IDLE_TIMEOUT — long enough to rack up real cost on a chatty
-    // coding task with Claude Opus / GPT-4o.
-    let cancelled = state
-        .agent_orchestrator
-        .cancel_tenant_agents(&tenant_id)
-        .await;
-    if cancelled > 0 {
-        tracing::info!(
-            tenant = %tenant_id,
-            count = cancelled,
-            "ws/chat: cancelled tenant agents after WS disconnect"
-        );
-    }
+    // Detach, don't cancel. Supervisors are long-running background work that
+    // must survive a socket drop (reconnect, navigation, network blip) so they
+    // can finish and deliver their result to the chat on reconnect. Killing the
+    // whole tenant tree on every disconnect was exactly why supervisors never
+    // showed up in the dashboard and never reported back ("te aviso" → silence).
+    // The AGENT_IDLE_TIMEOUT (now > ask_user's 600s) is the safety net against
+    // genuinely abandoned work: anything that goes idle is reaped there instead.
+    tracing::info!(
+        tenant = %tenant_id,
+        "ws/chat: client disconnected — detaching tenant agents (they keep running)"
+    );
 }
 
 async fn stream_task_events(socket: &mut WebSocket, pid: &str, state: &AppState) {
