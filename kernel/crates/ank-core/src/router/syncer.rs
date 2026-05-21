@@ -86,31 +86,32 @@ impl CatalogSyncer {
             // stored active_models list is authoritative. On discovery failure we
             // fall back to the stored list so a network blip never empties the
             // catalog.
-            let models_to_register: Option<Vec<String>> =
-                if key.provider == "ollama" || key.provider == "ollama_cloud" {
-                    match crate::router::discovery::fetch_provider_models(
-                        &key.provider,
-                        key.api_url.as_deref(),
-                        &key.api_key,
-                    )
-                    .await
-                    {
-                        Ok(discovered) if !discovered.is_empty() => {
-                            Some(discovered.into_iter().map(|d| d.model_id).collect())
-                        }
-                        Ok(_) => key.active_models.clone(),
-                        Err(e) => {
-                            warn!(
-                                provider = %key.provider,
-                                error = %e,
-                                "CatalogSyncer: ollama discovery probe failed — using stored active_models"
-                            );
-                            key.active_models.clone()
-                        }
+            let models_to_register: Option<Vec<String>> = if key.provider == "ollama"
+                || key.provider == "ollama_cloud"
+            {
+                match crate::router::discovery::fetch_provider_models(
+                    &key.provider,
+                    key.api_url.as_deref(),
+                    &key.api_key,
+                )
+                .await
+                {
+                    Ok(discovered) if !discovered.is_empty() => {
+                        Some(discovered.into_iter().map(|d| d.model_id).collect())
                     }
-                } else {
-                    key.active_models.clone()
-                };
+                    Ok(_) => key.active_models.clone(),
+                    Err(e) => {
+                        warn!(
+                            provider = %key.provider,
+                            error = %e,
+                            "CatalogSyncer: ollama discovery probe failed — using stored active_models"
+                        );
+                        key.active_models.clone()
+                    }
+                }
+            } else {
+                key.active_models.clone()
+            };
 
             if let Some(models) = &models_to_register {
                 if !models.is_empty() {
