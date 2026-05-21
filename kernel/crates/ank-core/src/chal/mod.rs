@@ -1580,6 +1580,35 @@ impl CognitiveHAL {
         }
     }
 
+    /// CORE-276 (autonomous mode): whether the project the calling agent belongs
+    /// to is marked autonomous — i.e. the user opted this project into skipping
+    /// the external-path approval gate (full filesystem access, no per-path
+    /// prompts). Resolves the agent's project via the orchestrator tree, then
+    /// checks the tenant enclave. Defaults to false (locked down) on any miss.
+    async fn is_project_autonomous(&self, pcb: &PCB) -> bool {
+        let agent_id = match pcb.agent_id {
+            Some(id) => id,
+            None => return false,
+        };
+        let orchestrator = match self.agent_orchestrator.read().await.clone() {
+            Some(o) => o,
+            None => return false,
+        };
+        let project_id = {
+            let tree = orchestrator.tree.read().await;
+            match tree.get(&agent_id) {
+                Some(node) => node.project_id.clone(),
+                None => return false,
+            }
+        };
+        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+        let session_key = pcb.session_key.as_deref().unwrap_or("");
+        match crate::enclave::TenantDB::open(tenant_id, session_key) {
+            Ok(db) => db.is_project_autonomous(&project_id),
+            Err(_) => false,
+        }
+    }
+
     fn strip_unc_prefix(path: &std::path::Path) -> std::path::PathBuf {
         let path_str = path.to_string_lossy();
         if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
@@ -1597,6 +1626,7 @@ impl CognitiveHAL {
         workspace: &std::path::Path,
         input_path: &str,
         approved_paths: &[String],
+        autonomous: bool,
     ) -> Result<std::path::PathBuf, String> {
         let candidate = if std::path::Path::new(input_path).is_absolute() {
             std::path::PathBuf::from(input_path)
@@ -1633,6 +1663,12 @@ impl CognitiveHAL {
         let workspace_canonical_clean = Self::strip_unc_prefix(&workspace_canonical);
 
         if canonical_clean.starts_with(&workspace_canonical_clean) {
+            return Ok(canonical);
+        }
+
+        // Autonomous project: the user opted this project into full filesystem
+        // access, so external paths are allowed without per-path approval.
+        if autonomous {
             return Ok(canonical);
         }
 
@@ -1784,6 +1820,22 @@ impl CognitiveHAL {
                     Some(id) => id,
                     None => return "{\"error\":\"ask_user requiere agent_id en PCB\"}".to_string(),
                 };
+
+                // Autonomous project: don't pause for the user. Auto-approve so the
+                // supervisor proceeds without per-question permission prompts — the
+                // behavioural half of "omitir permisos por proyecto" (the gate
+                // bypass in resolve_path is the filesystem half).
+                if self.is_project_autonomous(pcb).await {
+                    tracing::info!(
+                        agent = %agent_uuid,
+                        question = %question,
+                        "ask_user auto-approved — project is in autonomous mode"
+                    );
+                    return serde_json::json!({
+                        "user_answer": "Modo autónomo activo en este proyecto: tenés acceso completo, procedé sin pedir permiso."
+                    })
+                    .to_string();
+                }
 
                 let orchestrator_opt = self.agent_orchestrator.read().await.clone();
                 let orchestrator = match orchestrator_opt {
@@ -1990,11 +2042,13 @@ impl CognitiveHAL {
 
                 let workspace = Self::get_tenant_workspace(pcb);
                 let approved = Self::get_approved_paths(pcb).await;
+                let autonomous = self.is_project_autonomous(pcb).await;
 
-                let resolved = match Self::resolve_path(&workspace, &input_path, &approved) {
-                    Ok(p) => p,
-                    Err(e) => return e,
-                };
+                let resolved =
+                    match Self::resolve_path(&workspace, &input_path, &approved, autonomous) {
+                        Ok(p) => p,
+                        Err(e) => return e,
+                    };
 
                 match tokio::fs::read_to_string(&resolved).await {
                     Ok(content) => {
@@ -2026,9 +2080,11 @@ impl CognitiveHAL {
                     .unwrap_or("rewrite");
 
                 let workspace = Self::get_tenant_workspace(pcb);
+                let autonomous = self.is_project_autonomous(pcb).await;
 
-                // write_file solo opera dentro del workspace — nunca en paths externos
-                let resolved = match Self::resolve_path(&workspace, &input_path, &[]) {
+                // write_file stays inside the workspace — unless the project is
+                // autonomous, in which case external writes are allowed too.
+                let resolved = match Self::resolve_path(&workspace, &input_path, &[], autonomous) {
                     Ok(p) => p,
                     Err(_) => {
                         return "{\"error\":\"write_outside_workspace\",\"message\":\"write_file solo puede escribir dentro del workspace del tenant.\"}".to_string();
@@ -2076,11 +2132,13 @@ impl CognitiveHAL {
 
                 let workspace = Self::get_tenant_workspace(pcb);
                 let approved = Self::get_approved_paths(pcb).await;
+                let autonomous = self.is_project_autonomous(pcb).await;
 
-                let resolved = match Self::resolve_path(&workspace, input_path, &approved) {
-                    Ok(p) => p,
-                    Err(e) => return e,
-                };
+                let resolved =
+                    match Self::resolve_path(&workspace, input_path, &approved, autonomous) {
+                        Ok(p) => p,
+                        Err(e) => return e,
+                    };
 
                 fn walk(dir: &std::path::Path, max_depth: usize, current: usize) -> Vec<String> {
                     if current > max_depth {
@@ -2350,7 +2408,7 @@ impl CognitiveHAL {
                     );
                 }
                 let cwd_arg = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
-                let cwd = match Self::resolve_path(&workspace, cwd_arg, &[]) {
+                let cwd = match Self::resolve_path(&workspace, cwd_arg, &[], false) {
                     Ok(p) if p.is_dir() => p,
                     _ => workspace.clone(),
                 };
@@ -2852,7 +2910,7 @@ mod tests {
 
         let new_file = "existing_folder/new_file.txt";
 
-        let resolved = CognitiveHAL::resolve_path(&ws_dir, new_file, &[]);
+        let resolved = CognitiveHAL::resolve_path(&ws_dir, new_file, &[], false);
         assert!(resolved.is_ok());
         let res_path = resolved.unwrap();
         assert!(res_path.to_string_lossy().contains("new_file.txt"));

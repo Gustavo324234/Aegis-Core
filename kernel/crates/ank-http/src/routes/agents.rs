@@ -15,6 +15,11 @@ use serde::{Deserialize, Serialize};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list_projects))
+        .route("/projects/autonomous", get(list_autonomous_projects))
+        .route(
+            "/projects/:project_id/autonomous",
+            post(set_project_autonomous),
+        )
         .route("/tree", get(get_agent_tree))
         .route("/:agent_id", get(get_agent))
         .route("/spawn", post(spawn_agent))
@@ -285,4 +290,40 @@ fn summary_to_dto(s: ank_core::agents::orchestrator::AgentNodeSummary) -> AgentN
         is_restored: s.is_restored,
         last_report: s.last_report,
     }
+}
+
+#[derive(Deserialize)]
+struct SetAutonomousRequest {
+    enabled: bool,
+}
+
+/// GET /api/agents/projects/autonomous — list the project IDs the tenant has put
+/// in autonomous mode (specialists skip the external-path approval gate).
+async fn list_autonomous_projects(
+    State(_state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let projects = db.get_autonomous_projects().unwrap_or_default();
+    Ok(Json(serde_json::json!({ "autonomous_projects": projects })))
+}
+
+/// POST /api/agents/projects/{project_id}/autonomous — enable/disable autonomous
+/// mode for a project. In autonomous mode the project's specialists get full
+/// filesystem access without per-path approval prompts.
+async fn set_project_autonomous(
+    State(_state): State<AppState>,
+    Path(project_id): Path<String>,
+    auth: CitadelAuthenticated,
+    Json(body): Json<SetAutonomousRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    db.set_project_autonomous(&project_id, body.enabled)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({
+        "project_id": project_id,
+        "autonomous": body.enabled,
+    })))
 }
