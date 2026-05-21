@@ -1,5 +1,6 @@
 use crate::{citadel::hash_passphrase, state::AppState};
 use ank_core::{
+    agents::orchestrator::AgentOrchestrator,
     chal::{ChatMessage, ChatRole},
     pcb::{infer_task_type, PCB},
     scheduler::SchedulerEvent,
@@ -248,9 +249,17 @@ async fn handle_chat(
                 // CORE-274: envelope estándar { "event": "agent_event", "data": {...} }
                 match event_result {
                     Ok(event) => {
-                        if let Ok(data) = serde_json::to_value(&event) {
-                            let frame = json!({ "event": "agent_event", "data": data });
-                            let _ = socket.send(Message::Text(frame.to_string())).await;
+                        // CORE-FIX (security): the AgentEvent broadcast is global —
+                        // only forward events that belong to THIS tenant.
+                        if state
+                            .agent_orchestrator
+                            .agent_event_belongs_to_tenant(&event, &tenant_id)
+                            .await
+                        {
+                            if let Ok(data) = serde_json::to_value(&event) {
+                                let frame = json!({ "event": "agent_event", "data": data });
+                                let _ = socket.send(Message::Text(frame.to_string())).await;
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -302,7 +311,8 @@ async fn handle_chat(
                         .to_string(),
                     ))
                     .await;
-                stream_task_events(&mut socket, &pid, &state).await;
+                stream_task_events(&mut socket, &pid, &state, &mut agent_event_rx, &tenant_id)
+                    .await;
             } else {
                 let _ = socket
                     .send(Message::Text(error_event(
@@ -569,8 +579,35 @@ async fn handle_chat(
                 ))
                 .await;
 
-            // Streamear con el receiver ya suscrito antes del dispatch
-            let full_response = stream_with_receiver(&mut socket, receiver).await;
+            // Streamear con el receiver ya suscrito antes del dispatch.
+            // CORE-FIX (C): pasamos el receiver de AgentEvents para que las preguntas
+            // del supervisor (y demás eventos) sigan llegando a la UI mientras el turno
+            // streamea, no solo cuando el handler queda ocioso entre turnos.
+            let full_response = stream_with_receiver(
+                &mut socket,
+                receiver,
+                &mut agent_event_rx,
+                &tenant_id,
+                &state.agent_orchestrator,
+            )
+            .await;
+
+            // CORE-FIX (C): el turno pudo terminar de forma anómala (429 / output vacío)
+            // justo después de que un supervisor preguntara algo. Re-entregamos las
+            // preguntas que sigan pendientes para que el modal aparezca aunque el turno
+            // padre no haya producido salida. El inbox store deduplica por
+            // (agent_id + question), así que una pregunta ya enviada en vivo durante el
+            // stream no se muestra dos veces.
+            for question in state
+                .agent_orchestrator
+                .pending_questions_for_tenant(&tenant_id)
+                .await
+            {
+                if let Ok(data) = serde_json::to_value(&question) {
+                    let frame = json!({ "event": "agent_event", "data": data });
+                    let _ = socket.send(Message::Text(frame.to_string())).await;
+                }
+            }
 
             // Save assistant response to history
             if !full_response.is_empty() {
@@ -610,7 +647,13 @@ async fn handle_chat(
     );
 }
 
-async fn stream_task_events(socket: &mut WebSocket, pid: &str, state: &AppState) {
+async fn stream_task_events(
+    socket: &mut WebSocket,
+    pid: &str,
+    state: &AppState,
+    agent_event_rx: &mut tokio::sync::broadcast::Receiver<ank_core::agents::event::AgentEvent>,
+    tenant_id: &str,
+) {
     let receiver = {
         let mut broker = state.event_broker.write().await;
         let sender = broker.entry(pid.to_string()).or_insert_with(|| {
@@ -619,17 +662,58 @@ async fn stream_task_events(socket: &mut WebSocket, pid: &str, state: &AppState)
         });
         sender.subscribe()
     };
-    stream_with_receiver(socket, receiver).await;
+    stream_with_receiver(socket, receiver, agent_event_rx, tenant_id, &state.agent_orchestrator)
+        .await;
 }
 
 async fn stream_with_receiver(
     socket: &mut WebSocket,
     receiver: tokio::sync::broadcast::Receiver<ank_proto::v1::TaskEvent>,
+    agent_event_rx: &mut tokio::sync::broadcast::Receiver<ank_core::agents::event::AgentEvent>,
+    tenant_id: &str,
+    orchestrator: &AgentOrchestrator,
 ) -> String {
     let mut full_output = String::new();
     let mut stream = BroadcastStream::new(receiver);
 
-    while let Some(Ok(proto_event)) = stream.next().await {
+    loop {
+        let proto_event = tokio::select! {
+            task_next = stream.next() => match task_next {
+                Some(Ok(ev)) => ev,
+                // None (stream closed) or Err (broadcast lag): end streaming,
+                // same semantics as the old `while let Some(Ok(_))`.
+                _ => break,
+            },
+            // CORE-FIX (C): keep forwarding AgentEvents (SupervisorQuestion, tree
+            // updates, …) WHILE a chat turn streams. Before this, agent events were
+            // only drained by the idle select! in handle_chat, so a supervisor that
+            // asked mid-turn stayed invisible until the turn ended — and if the turn
+            // died (429 / empty output), the question was never surfaced to the user.
+            agent_ev = agent_event_rx.recv() => {
+                match agent_ev {
+                    Ok(event) => {
+                        // CORE-FIX (security): filter by tenant — global broadcast.
+                        if orchestrator
+                            .agent_event_belongs_to_tenant(&event, tenant_id)
+                            .await
+                        {
+                            if let Ok(data) = serde_json::to_value(&event) {
+                                let frame = json!({ "event": "agent_event", "data": data });
+                                let _ = socket.send(Message::Text(frame.to_string())).await;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(
+                            "[ChatWS] tenant={} agent_event_rx lagged by {} during stream",
+                            tenant_id, n
+                        );
+                    }
+                    Err(_) => {}
+                }
+                continue;
+            }
+        };
         if let Some(ref payload) = proto_event.payload {
             if let ank_proto::v1::task_event::Payload::Output(ref text) = payload {
                 // CORE-FIX (A2): meta-tokens emitted by the HAL — never reach the user.

@@ -136,7 +136,9 @@ impl CognitiveScheduler {
         }
     }
 
-    #[instrument(skip(self, event_rx), name = "ANK_Scheduler_Loop")]
+    // skip internal_tx: it's an mpsc::Sender whose Debug dumps the entire channel
+    // internals into the span, flooding every scheduler log line.
+    #[instrument(skip(self, event_rx, internal_tx), name = "ANK_Scheduler_Loop")]
     pub async fn start(
         mut self,
         mut event_rx: mpsc::Receiver<SchedulerEvent>,

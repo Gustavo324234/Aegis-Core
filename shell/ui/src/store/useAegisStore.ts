@@ -491,7 +491,16 @@ export const useAegisStore = create<AegisState>()(
                             if (payload.routing_info) get().setLastRoutingInfo(payload.routing_info as RoutingInfo);
                             if (payload.thought) { get().appendToken(payload.pid as string, payload.thought as string, 'thought'); set({ status: 'thinking' }); }
                             else if (payload.output) { get().appendToken(payload.pid as string, payload.output as string, 'text'); set({ status: 'thinking' }); }
-                            else if (payload.error) { get().addSystemMessage('No pude procesar tu mensaje. Intentá de nuevo en unos segundos.'); set({ status: 'error' }); }
+                            else if (payload.error) {
+                                // CORE-FIX (D): surface the kernel's actual error text
+                                // (e.g. "modelo saturado, reintentá en 15s") instead of a
+                                // generic fallback, so the user sees the real reason.
+                                const errText = typeof payload.error === 'string' && payload.error.trim()
+                                    ? (payload.error as string)
+                                    : 'No pude procesar tu mensaje. Intentá de nuevo en unos segundos.';
+                                get().addSystemMessage(errText);
+                                set({ status: 'error' });
+                            }
                             else if (payload.status_update) {
                                 const su = payload.status_update as { state: string };
                                 if (su.state === 'STATE_COMPLETED') {
