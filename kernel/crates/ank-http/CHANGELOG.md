@@ -24,6 +24,13 @@
 
 
 
+## [0.1.75](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.74...ank-http-v0.1.75) (2026-05-21)
+
+
+### Features
+
+* **agents,ui:** per-project autonomous mode + configurable HTTP port ([#316](https://github.com/Gustavo324234/Aegis-Core/issues/316)) ([989a26e](https://github.com/Gustavo324234/Aegis-Core/commit/989a26e4f91ec8c6ee5088b682ed63e8ebfaf7d5))
+
 ## [0.1.74](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.73...ank-http-v0.1.74) (2026-05-21)
 
 
