@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.67](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.66...ank-core-v0.1.67) (2026-05-21)
+
+
+### Bug Fixes
+
+* **router,agents:** smoke-test routing, agent lifecycle & observability ([#314](https://github.com/Gustavo324234/Aegis-Core/issues/314)) ([7182b9c](https://github.com/Gustavo324234/Aegis-Core/commit/7182b9c6171a12b890bf8faadb758ef83e2017ed))
+
 ## [0.1.66](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.65...ank-core-v0.1.66) (2026-05-20)
 
 
