@@ -79,6 +79,11 @@ pub struct AgentOrchestrator {
     pub hal: Arc<crate::chal::CognitiveHAL>,
     /// CORE-263: Canales oneshot para respuestas de usuario a supervisores pausados.
     pending_user_replies: Arc<RwLock<HashMap<AgentId, tokio::sync::oneshot::Sender<String>>>>,
+    /// Preguntas de supervisor que siguen sin responder, indexadas por agente.
+    /// Guardamos el evento `SupervisorQuestion` completo para poder re-enviarlo
+    /// cuando el usuario reconecta el WebSocket (replay) — el broadcast original
+    /// se perdió mientras estaba desconectado.
+    pending_questions: Arc<RwLock<HashMap<AgentId, AgentEvent>>>,
     /// CORE-268: Canal de broadcast para emitir AgentEvents al WebSocket del tenant.
     event_tx: std::sync::RwLock<Option<tokio::sync::broadcast::Sender<AgentEvent>>>,
     /// CORE-FIX (A1): tokens de cancelación por agente. Cuando el usuario cierra
@@ -112,6 +117,7 @@ impl AgentOrchestrator {
             instruction_loader: Arc::new(RwLock::new(loader)),
             hal,
             pending_user_replies: Arc::new(RwLock::new(HashMap::new())),
+            pending_questions: Arc::new(RwLock::new(HashMap::new())),
             event_tx: std::sync::RwLock::new(None),
             cancel_tokens: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -584,9 +590,50 @@ impl AgentOrchestrator {
         self.pending_user_replies.write().await.insert(agent_id, tx);
     }
 
+    /// Recuerda el evento `SupervisorQuestion` de un agente para poder
+    /// re-emitirlo (replay) cuando el usuario reconecte. Se limpia al responder,
+    /// reanudar o expirar la pregunta.
+    pub async fn set_pending_question(&self, agent_id: AgentId, question: AgentEvent) {
+        self.pending_questions
+            .write()
+            .await
+            .insert(agent_id, question);
+    }
+
+    /// Olvida la pregunta pendiente de un agente (respondida / reanudada / expirada).
+    pub async fn clear_pending_question(&self, agent_id: &AgentId) {
+        self.pending_questions.write().await.remove(agent_id);
+    }
+
+    /// Preguntas de supervisor sin responder que pertenecen al tenant dado.
+    /// Usado por el WS de chat para re-mostrar el modal al reconectar.
+    pub async fn pending_questions_for_tenant(&self, tenant_id: &str) -> Vec<AgentEvent> {
+        let pending = self.pending_questions.read().await;
+        if pending.is_empty() {
+            return Vec::new();
+        }
+        let tree = self.tree.read().await;
+        pending
+            .iter()
+            .filter_map(|(agent_id, evt)| {
+                let same_tenant = tree
+                    .get(agent_id)
+                    .map(|n| n.tenant_id == tenant_id)
+                    .unwrap_or(false);
+                if same_tenant {
+                    Some(evt.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Entrega la respuesta del usuario al supervisor pausado. Retorna `true` si había
     /// un supervisor esperando, `false` si no hay ninguno registrado para ese agent_id.
     pub async fn answer_user_question(&self, agent_id: AgentId, answer: String) -> bool {
+        // La pregunta ya no está pendiente — limpiamos el replay store.
+        self.clear_pending_question(&agent_id).await;
         match self.pending_user_replies.write().await.remove(&agent_id) {
             Some(tx) => tx.send(answer).is_ok(),
             None => false,
@@ -1235,7 +1282,11 @@ impl AgentOrchestrator {
             }
         };
 
-        const AGENT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+        // Must exceed ask_user's 600s pause (chal::ask_user) so a supervisor
+        // blocked waiting for the user isn't reaped mid-question. The WaitingUser
+        // guard in the timeout arm below is the primary protection; this margin
+        // is belt-and-suspenders.
+        const AGENT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
         let mut synthesis_done = false; // CORE-288: flag anti-síntesis múltiple
 
         loop {
@@ -1250,6 +1301,20 @@ impl AgentOrchestrator {
                     }
                 }
                 _ = tokio::time::sleep(AGENT_IDLE_TIMEOUT) => {
+                    // Don't reap a supervisor that's blocked on ask_user waiting
+                    // for the user's answer — that pause is legitimate and can
+                    // outlast an idle window. ask_user has its own 600s timeout
+                    // that moves the node back to Running, after which a truly
+                    // idle agent gets reaped on the next pass.
+                    let waiting_user = {
+                        let t = tree.read().await;
+                        t.get(&agent_id)
+                            .map(|n| matches!(n.state, AgentState::WaitingUser))
+                            .unwrap_or(false)
+                    };
+                    if waiting_user {
+                        continue;
+                    }
                     warn!(
                         agent = %agent_id,
                         "[{}] Idle timeout after {}s — self-terminating.",
@@ -1261,7 +1326,7 @@ impl AgentOrchestrator {
                         if let Some(n) = t.get_mut(&agent_id) {
                             if matches!(n.state, AgentState::Idle | AgentState::Running | AgentState::WaitingReport) {
                                 n.set_state(AgentState::Failed {
-                                    reason: "Idle timeout — no messages received in 5 minutes".to_string(),
+                                    reason: "Idle timeout — no activity".to_string(),
                                 });
                             }
                         }

@@ -783,11 +783,20 @@ fn bare_model_id(model_id: &str, provider: &str) -> String {
     match provider {
         // OpenRouter expects the full "org/model" format natively
         "openrouter" => model_id.to_string(),
-        // All other providers: strip the leading "provider/" prefix if present
-        _ => model_id
-            .split_once('/')
-            .map(|(_, bare)| bare.to_string())
-            .unwrap_or_else(|| model_id.to_string()),
+        // All other providers call their own native API, which expects the
+        // model id WITHOUT the synthetic "provider/" prefix. But only strip
+        // the prefix when it actually IS the provider id — some real model ids
+        // contain a slash that the provider expects verbatim (e.g. groq serves
+        // "qwen/qwen3-32b"). Stripping unconditionally turned that into
+        // "qwen3-32b" → 404 model_not_found.
+        _ => match model_id.split_once('/') {
+            Some((prefix, bare))
+                if normalize_provider_id(prefix) == normalize_provider_id(provider) =>
+            {
+                bare.to_string()
+            }
+            _ => model_id.to_string(),
+        },
     }
 }
 
@@ -1035,5 +1044,27 @@ mod tests {
         // so downstream still gets a consistent string.
         assert_eq!(normalize_provider_id("Foo-Bar"), "foobar");
         assert_eq!(normalize_provider_id("CUSTOM"), "custom");
+    }
+
+    #[test]
+    fn test_bare_model_id_strips_only_matching_provider_prefix() {
+        // Synthetic "provider/" prefix is stripped for native APIs.
+        assert_eq!(
+            bare_model_id("gemini/gemini-2.5-pro", "gemini"),
+            "gemini-2.5-pro"
+        );
+        // No prefix → unchanged.
+        assert_eq!(
+            bare_model_id("llama-3.3-70b-versatile", "groq"),
+            "llama-3.3-70b-versatile"
+        );
+        // A slash that is part of the real model id (groq serves "qwen/qwen3-32b")
+        // must survive — the prefix ("qwen") is NOT the provider ("groq").
+        assert_eq!(bare_model_id("qwen/qwen3-32b", "groq"), "qwen/qwen3-32b");
+        // OpenRouter keeps the full "org/model" form.
+        assert_eq!(
+            bare_model_id("anthropic/claude-sonnet-4-6", "openrouter"),
+            "anthropic/claude-sonnet-4-6"
+        );
     }
 }

@@ -326,6 +326,13 @@ impl KeyPool {
         global.iter().map(|k| k.redacted()).collect()
     }
 
+    /// Like `list_global_keys` but WITHOUT redacting `api_key`. Crate-internal
+    /// only — used by the CatalogSyncer to run live discovery probes that need
+    /// real credentials. MUST NOT be exposed through the HTTP layer.
+    pub(crate) async fn list_global_keys_unredacted(&self) -> Vec<ApiKeyEntry> {
+        self.global_keys.read().await.clone()
+    }
+
     pub async fn list_tenant_keys(&self, tenant_id: &str) -> Vec<ApiKeyEntry> {
         let tenants = self.tenant_keys.read().await;
         tenants

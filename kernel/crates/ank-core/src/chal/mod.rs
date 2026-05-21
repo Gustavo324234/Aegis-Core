@@ -280,6 +280,18 @@ fn is_permanent_model_failure(err: &SystemError) -> bool {
     if lower.contains("401") || lower.contains("unauthorized") {
         return true;
     }
+    // HTTP 403 / subscription-gated model: the key authenticates fine but this
+    // specific model isn't on its plan (e.g. Ollama free tier returns 403
+    // "this model requires a subscription, upgrade for access" for the 671B
+    // models, which the /models listing still advertises). Retrying never
+    // helps — pin the model out so the router promotes a callable sibling.
+    if lower.contains("403")
+        || lower.contains("forbidden")
+        || lower.contains("requires a subscription")
+        || lower.contains("upgrade for access")
+    {
+        return true;
+    }
     // Gemini tier-0: the body carries `"limit": 0` (possibly with spaces).
     // Only treat 429s this way — a 200 with limit:0 makes no sense.
     if lower.contains("429") || lower.contains("resource_exhausted") {
@@ -329,6 +341,18 @@ mod summarise_tests {
     fn permanent_failure_detects_401() {
         let e =
             SystemError::HardwareFailure("Cloud API Error 401 Unauthorized: unauthorized".into());
+        assert!(is_permanent_model_failure(&e));
+    }
+
+    #[test]
+    fn permanent_failure_detects_403_subscription() {
+        // Ollama free tier serving a 671B model: key is valid but the model
+        // is subscription-gated. Must be treated as permanent, not retried.
+        let e = SystemError::HardwareFailure(
+            "Cloud API Error 403 Forbidden: {\"error\":\"this model requires a \
+             subscription, upgrade for access: https://ollama.com/upgrade\"}"
+                .into(),
+        );
         assert!(is_permanent_model_failure(&e));
     }
 
@@ -1790,17 +1814,24 @@ impl CognitiveHAL {
                     "CORE-263: supervisor pausado esperando respuesta del usuario"
                 );
 
-                // CORE-268: notificar a la UI que el supervisor necesita respuesta
-                orchestrator.emit_event(crate::agents::event::AgentEvent::SupervisorQuestion {
+                // CORE-268: notificar a la UI que el supervisor necesita respuesta.
+                // Guardamos también el evento para re-enviarlo si el usuario
+                // reconecta el WebSocket mientras el supervisor sigue esperando.
+                let question_event = crate::agents::event::AgentEvent::SupervisorQuestion {
                     agent_id: agent_uuid,
                     project_name: project_name.clone(),
                     question: question.clone(),
                     context: context.clone(),
                     timestamp: chrono::Utc::now(),
-                });
+                };
+                orchestrator
+                    .set_pending_question(agent_uuid, question_event.clone())
+                    .await;
+                orchestrator.emit_event(question_event);
 
                 match tokio::time::timeout(std::time::Duration::from_secs(600), reply_rx).await {
                     Ok(Ok(answer)) => {
+                        orchestrator.clear_pending_question(&agent_uuid).await;
                         {
                             let mut tree = orchestrator.tree.write().await;
                             if let Some(node) = tree.get_mut(&agent_uuid) {
@@ -1815,6 +1846,7 @@ impl CognitiveHAL {
                         format!("{{\"user_answer\": {}}}", serde_json::json!(answer))
                     }
                     _ => {
+                        orchestrator.clear_pending_question(&agent_uuid).await;
                         {
                             let mut tree = orchestrator.tree.write().await;
                             if let Some(node) = tree.get_mut(&agent_uuid) {

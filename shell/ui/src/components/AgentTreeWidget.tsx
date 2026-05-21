@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Building2, Wrench, Zap, Bot, AlertCircle, Loader2 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -8,34 +8,34 @@ function cn(...inputs: ClassValue[]) {
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
-type AgentRole = 'ProjectSupervisor' | 'DomainSupervisor' | 'Specialist';
-type AgentStateKind = 'Idle' | 'Running' | 'WaitingReport' | 'Complete' | 'Failed';
+// Matches the backend contract from GET /api/agents/tree (routes/agents.rs:
+// AgentNodeDto / AgentTreeDto). The tree is reconstructed client-side from
+// parent_id — the backend sends a flat node list, not a nested structure.
 
 interface AgentNodeDto {
     agent_id: string;
-    role: AgentRole;
+    role: string; // display label, e.g. "ProjectSupervisor"
     project_id: string;
-    domain: string;
     parent_id: string | null;
-    children: string[];
-    state: AgentStateKind | string;
+    state: string;
+    model: string;
     task_type: string;
-    created_at: string;
+    is_restored: boolean;
+    last_report: string | null;
 }
 
 interface AgentTreeDto {
     nodes: AgentNodeDto[];
-    roots: string[];
     total_agents: number;
 }
 
 type AgentTreeState =
     | { status: 'connecting' }
-    | { status: 'connected'; agents: AgentTreeDto }
+    | { status: 'connected'; nodes: AgentNodeDto[] }
     | { status: 'empty' }
     | { status: 'error'; message: string };
 
+const POLL_INTERVAL_MS = 3000;
 const MAX_RETRIES = 3;
 
 // ── State config ─────────────────────────────────────────────────────────────
@@ -44,6 +44,7 @@ const STATE_CONFIG: Record<string, { color: string; pulse: boolean; label: strin
     'Idle':          { color: 'text-white/30',   pulse: false, label: 'IDLE' },
     'Running':       { color: 'text-aegis-cyan', pulse: true,  label: 'RUNNING' },
     'WaitingReport': { color: 'text-yellow-400', pulse: true,  label: 'WAITING' },
+    'WaitingUser':   { color: 'text-yellow-400', pulse: true,  label: 'ASKING' },
     'Complete':      { color: 'text-green-400',  pulse: false, label: 'DONE' },
     'Failed':        { color: 'text-red-400',    pulse: false, label: 'FAILED' },
 };
@@ -54,29 +55,31 @@ function getStateConfig(state: string) {
 }
 
 // ── Role icon ────────────────────────────────────────────────────────────────
+// Tolerant matching: role is a free-form display label from the backend
+// (role.display_name()), so we match on substring rather than exact equality.
 
-function RoleIcon({ role }: { role: AgentRole }) {
-    switch (role) {
-        case 'ProjectSupervisor':
-            return <Building2 className="w-4 h-4 text-aegis-cyan shrink-0" />;
-        case 'DomainSupervisor':
-            return <Wrench className="w-4 h-4 text-aegis-purple shrink-0" />;
-        case 'Specialist':
-        default:
-            return <Zap className="w-4 h-4 text-yellow-400 shrink-0" />;
+function RoleIcon({ role }: { role: string }) {
+    const r = role.toLowerCase();
+    if (r.includes('project')) {
+        return <Building2 className="w-4 h-4 text-aegis-cyan shrink-0" />;
     }
+    if (r.includes('domain')) {
+        return <Wrench className="w-4 h-4 text-aegis-purple shrink-0" />;
+    }
+    return <Zap className="w-4 h-4 text-yellow-400 shrink-0" />;
 }
 
 // ── Agent node row ────────────────────────────────────────────────────────────
 
 interface AgentRowProps {
     node: AgentNodeDto;
-    nodeMap: Map<string, AgentNodeDto>;
+    childrenMap: Map<string, AgentNodeDto[]>;
     depth: number;
 }
 
-function AgentRow({ node, nodeMap, depth }: AgentRowProps) {
+function AgentRow({ node, childrenMap, depth }: AgentRowProps) {
     const cfg = getStateConfig(node.state);
+    const children = childrenMap.get(node.agent_id) ?? [];
 
     return (
         <>
@@ -88,8 +91,11 @@ function AgentRow({ node, nodeMap, depth }: AgentRowProps) {
                 style={{ marginLeft: depth > 0 ? `${depth * 24}px` : undefined }}
             >
                 <RoleIcon role={node.role} />
-                <span className="text-xs font-medium text-white/80 flex-1 truncate">
-                    {node.domain}
+                <span className="text-xs font-medium text-white/80 truncate">
+                    {node.role}
+                </span>
+                <span className="text-[9px] font-mono text-white/25 truncate flex-1">
+                    {node.model}
                 </span>
                 <span className="text-[9px] font-mono px-2 py-0.5 rounded bg-white/5 text-white/30 uppercase tracking-widest shrink-0">
                     {node.task_type.replace('Coding', 'CODE').replace('Planning', 'PLAN')}
@@ -105,12 +111,9 @@ function AgentRow({ node, nodeMap, depth }: AgentRowProps) {
                     <span className={cn('text-[9px] font-mono', cfg.color)}>{cfg.label}</span>
                 </div>
             </div>
-            {node.children.map(childId => {
-                const child = nodeMap.get(childId);
-                return child ? (
-                    <AgentRow key={childId} node={child} nodeMap={nodeMap} depth={depth + 1} />
-                ) : null;
-            })}
+            {children.map(child => (
+                <AgentRow key={child.agent_id} node={child} childrenMap={childrenMap} depth={depth + 1} />
+            ))}
         </>
     );
 }
@@ -124,88 +127,78 @@ interface AgentTreeWidgetProps {
 
 const AgentTreeWidget: React.FC<AgentTreeWidgetProps> = ({ tenantId, sessionKey }) => {
     const [treeState, setTreeState] = useState<AgentTreeState>({ status: 'connecting' });
-    const wsRef = useRef<WebSocket | null>(null);
-    const retryCountRef = useRef(0);
-    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const failCountRef = useRef(0);
+    const mountedRef = useRef(true);
 
-    const connect = () => {
+    const fetchTree = useCallback(async () => {
         if (!tenantId || !sessionKey) {
             setTreeState({ status: 'empty' });
             return;
         }
-
-        setTreeState({ status: 'connecting' });
-        const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const ws = new WebSocket(`${protocol}://${window.location.host}/ws/agents/${tenantId}`);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            retryCountRef.current = 0;
-        };
-
-        ws.onmessage = (e) => {
-            try {
-                const tree = JSON.parse(e.data as string) as AgentTreeDto;
-                setTreeState(
-                    tree.total_agents > 0
-                        ? { status: 'connected', agents: tree }
-                        : { status: 'empty' }
-                );
-            } catch {
-                // ignore malformed frames
+        try {
+            const res = await fetch('/api/agents/tree', {
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const tree = (await res.json()) as AgentTreeDto;
+            if (!mountedRef.current) return;
+            failCountRef.current = 0;
+            setTreeState(
+                tree.total_agents > 0
+                    ? { status: 'connected', nodes: tree.nodes }
+                    : { status: 'empty' },
+            );
+        } catch (err) {
+            if (!mountedRef.current) return;
+            failCountRef.current += 1;
+            // Tolerate transient blips; only surface an error after repeated misses.
+            if (failCountRef.current >= MAX_RETRIES) {
+                setTreeState({
+                    status: 'error',
+                    message: err instanceof Error ? err.message : 'No se pudo cargar el árbol de agentes',
+                });
             }
-        };
-
-        ws.onerror = () => {
-            ws.close();
-        };
-
-        ws.onclose = () => {
-            wsRef.current = null;
-            if (retryCountRef.current < MAX_RETRIES) {
-                const delay = 1000 * Math.pow(2, retryCountRef.current);
-                retryCountRef.current++;
-                retryTimerRef.current = setTimeout(connect, delay);
-            } else {
-                setTreeState({ status: 'error', message: 'No se pudo conectar al stream de agentes' });
-            }
-        };
-    };
+        }
+    }, [tenantId, sessionKey]);
 
     const handleRetry = () => {
-        retryCountRef.current = 0;
-        if (retryTimerRef.current) {
-            clearTimeout(retryTimerRef.current);
-            retryTimerRef.current = null;
-        }
-        if (wsRef.current) {
-            wsRef.current.onclose = null;
-            wsRef.current.close();
-            wsRef.current = null;
-        }
-        connect();
+        failCountRef.current = 0;
+        setTreeState({ status: 'connecting' });
+        void fetchTree();
     };
 
     useEffect(() => {
-        connect();
+        mountedRef.current = true;
+        void fetchTree();
+        const timer = setInterval(() => void fetchTree(), POLL_INTERVAL_MS);
         return () => {
-            if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-            if (wsRef.current) {
-                wsRef.current.onclose = null;
-                wsRef.current.close();
-            }
+            mountedRef.current = false;
+            clearInterval(timer);
         };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tenantId, sessionKey]);
+    }, [fetchTree]);
 
-    const { nodeMap, rootNodes } = useMemo(() => {
-        if (treeState.status !== 'connected') return { nodeMap: new Map(), rootNodes: [] };
-        const map = new Map<string, AgentNodeDto>();
-        treeState.agents.nodes.forEach(n => map.set(n.agent_id, n));
-        const roots = treeState.agents.roots
-            .map(id => map.get(id))
-            .filter((n): n is AgentNodeDto => !!n);
-        return { nodeMap: map, rootNodes: roots };
+    const { childrenMap, rootNodes } = useMemo(() => {
+        if (treeState.status !== 'connected') {
+            return { childrenMap: new Map<string, AgentNodeDto[]>(), rootNodes: [] as AgentNodeDto[] };
+        }
+        const ids = new Set(treeState.nodes.map(n => n.agent_id));
+        const cmap = new Map<string, AgentNodeDto[]>();
+        const roots: AgentNodeDto[] = [];
+        for (const n of treeState.nodes) {
+            // A node is a root when it has no parent, or its parent is not part
+            // of this snapshot (orphan → surface it at the top instead of hiding it).
+            if (!n.parent_id || !ids.has(n.parent_id)) {
+                roots.push(n);
+            } else {
+                const siblings = cmap.get(n.parent_id) ?? [];
+                siblings.push(n);
+                cmap.set(n.parent_id, siblings);
+            }
+        }
+        return { childrenMap: cmap, rootNodes: roots };
     }, [treeState]);
 
     if (treeState.status === 'connecting') {
@@ -251,7 +244,7 @@ const AgentTreeWidget: React.FC<AgentTreeWidgetProps> = ({ tenantId, sessionKey 
         <div className="glass p-6 rounded-2xl border border-white/10">
             <div className="flex flex-col gap-1">
                 {rootNodes.map(root => (
-                    <AgentRow key={root.agent_id} node={root} nodeMap={nodeMap} depth={0} />
+                    <AgentRow key={root.agent_id} node={root} childrenMap={childrenMap} depth={0} />
                 ))}
             </div>
         </div>

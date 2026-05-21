@@ -202,6 +202,14 @@ impl ModelUsageTracker {
     /// Increment the failure counter for a model and tally a provider-level
     /// failure for the circuit breaker.
     pub async fn record_failure(&self, model_id: &str, provider: &str) {
+        // A failure is also a scoring signal: feed the per-model error window so
+        // CognitiveRouter::compute_score deprioritises a model that just failed
+        // for the next 5 minutes. Without this the `error_penalty` term was dead
+        // — nothing fed the window — so a rate-limited model (e.g. groq's 12k-TPM
+        // free tier, which a single agent turn blows past) kept winning the top
+        // score and 429-ing again on every fresh turn instead of yielding to a
+        // sibling with headroom.
+        self.record_error(model_id).await;
         {
             let mut map = self.outcomes.write().await;
             map.entry(model_id.to_string()).or_default().failures += 1;
@@ -365,5 +373,37 @@ impl ModelUsageTracker {
         } else {
             Some((window - age).as_secs().max(1))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn record_failure_feeds_error_window_for_scoring() {
+        // The error_penalty in compute_score reads recent_errors(); failures must
+        // populate that window or a rate-limited model never gets deprioritised.
+        let t = ModelUsageTracker::new();
+        assert_eq!(t.recent_errors("groq/llama").await, 0);
+        t.record_failure("groq/llama", "groq").await;
+        t.record_failure("groq/llama", "groq").await;
+        assert_eq!(
+            t.recent_errors("groq/llama").await,
+            2,
+            "failures must feed recent_errors so compute_score penalises a flaky model"
+        );
+        // A different, healthy model is unaffected.
+        assert_eq!(t.recent_errors("gpt-oss:120b").await, 0);
+    }
+
+    #[tokio::test]
+    async fn record_failure_still_trips_provider_circuit() {
+        // Feeding the error window must not break the existing 3-in-30s circuit.
+        let t = ModelUsageTracker::new();
+        for _ in 0..3 {
+            t.record_failure("m", "ollama_cloud").await;
+        }
+        assert!(t.is_provider_circuit_open("ollama_cloud").await);
     }
 }

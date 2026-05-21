@@ -71,12 +71,48 @@ impl CatalogSyncer {
     async fn sync_once(&self) -> anyhow::Result<()> {
         // Sync non-OpenRouter provider models (ollama, custom, etc.) from global key pool.
         // This ensures their models survive restarts and appear in the catalog immediately.
-        let global_keys = self.key_pool.list_global_keys().await;
+        // Unredacted because the Ollama prune path below probes the live API with
+        // real credentials.
+        let global_keys = self.key_pool.list_global_keys_unredacted().await;
         for key in &global_keys {
             if key.provider == "openrouter" {
                 continue;
             }
-            if let Some(models) = &key.active_models {
+
+            // Ollama's /models listing advertises subscription-gated models the
+            // key can't actually call (free tier → 403 on the big models). For
+            // ollama we re-discover with a live callability probe so the catalog
+            // only gets models that return 2xx; for every other provider the
+            // stored active_models list is authoritative. On discovery failure we
+            // fall back to the stored list so a network blip never empties the
+            // catalog.
+            let models_to_register: Option<Vec<String>> =
+                if key.provider == "ollama" || key.provider == "ollama_cloud" {
+                    match crate::router::discovery::fetch_provider_models(
+                        &key.provider,
+                        key.api_url.as_deref(),
+                        &key.api_key,
+                    )
+                    .await
+                    {
+                        Ok(discovered) if !discovered.is_empty() => {
+                            Some(discovered.into_iter().map(|d| d.model_id).collect())
+                        }
+                        Ok(_) => key.active_models.clone(),
+                        Err(e) => {
+                            warn!(
+                                provider = %key.provider,
+                                error = %e,
+                                "CatalogSyncer: ollama discovery probe failed — using stored active_models"
+                            );
+                            key.active_models.clone()
+                        }
+                    }
+                } else {
+                    key.active_models.clone()
+                };
+
+            if let Some(models) = &models_to_register {
                 if !models.is_empty() {
                     let n = register_provider_models(&key.provider, models, &self.catalog).await;
                     if n > 0 {
