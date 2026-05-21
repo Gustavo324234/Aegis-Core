@@ -46,6 +46,13 @@
 
 
 
+## [0.1.80](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.79...ank-server-v0.1.80) (2026-05-21)
+
+
+### Bug Fixes
+
+* **router,agents:** smoke-test hardening — supervisor delivery, tenant isolation, 429 & fallback ([#318](https://github.com/Gustavo324234/Aegis-Core/issues/318)) ([cf7af84](https://github.com/Gustavo324234/Aegis-Core/commit/cf7af842b65f2bdce45a94c921b72c8afe2d3524))
+
 ## [0.1.79](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.78...ank-server-v0.1.79) (2026-05-21)
 
 
