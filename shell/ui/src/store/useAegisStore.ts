@@ -77,6 +77,16 @@ export interface SystemMetrics {
     active_workers: number;
 }
 
+interface CustomWindow extends Window {
+    _aegis_webrtc_peer?: RTCPeerConnection;
+    _aegis_webrtc_dc?: RTCDataChannel;
+    _aegis_audio_stream?: MediaStream;
+    _aegis_audio_ctx?: AudioContext;
+    _aegis_audio_node?: AudioNode;
+    _aegis_audio_gain?: GainNode;
+    _aegis_speech_recognition?: unknown;
+}
+
 interface AegisState {
     messages: Message[];
     status: SystemStatus;
@@ -90,7 +100,7 @@ interface AegisState {
     tenantId: string | null;
     sessionKey: string | null;
     isRecording: boolean;
-    sirenSocket: any | null;
+    sirenSocket: RTCDataChannel | null;
     isEngineConfigured: boolean;
     taskType: TaskTypeValue;
     lastRoutingInfo: RoutingInfo | null;
@@ -920,7 +930,7 @@ export const useAegisStore = create<AegisState>()(
                         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                     });
 
-                    const audioRefs = window as any;
+                    const audioRefs = window as unknown as CustomWindow;
                     audioRefs._aegis_webrtc_peer = peer;
 
                     stream.getTracks().forEach(track => {
@@ -969,7 +979,15 @@ export const useAegisStore = create<AegisState>()(
                     };
 
                     dc.onmessage = (event) => {
-                        const msg = JSON.parse(event.data) as Record<string, any>;
+                        interface SirenEventPayload {
+                            event_type: string;
+                            message: string;
+                        }
+                        interface SirenMessage {
+                            event: string;
+                            data: SirenEventPayload;
+                        }
+                        const msg = JSON.parse(event.data) as SirenMessage;
                         if (msg.event === 'siren_event') {
                             const sirenEvent = msg.data;
                             if (sirenEvent.event_type === 'VAD_START') set({ status: 'listening' });
@@ -985,7 +1003,7 @@ export const useAegisStore = create<AegisState>()(
                                     } else if (get().inputMode === 'conversation') {
                                         set({ isRecording: false });
                                         if (audioRefs._aegis_audio_stream) {
-                                            audioRefs._aegis_audio_stream.getTracks().forEach((track: any) => track.stop());
+                                            audioRefs._aegis_audio_stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
                                             delete audioRefs._aegis_audio_stream;
                                         }
                                         if (audioRefs._aegis_audio_ctx) {
@@ -1176,7 +1194,7 @@ export const useAegisStore = create<AegisState>()(
                 }
                 set({ sirenSocket: null });
 
-                const audioRefs = window as any;
+                const audioRefs = window as unknown as CustomWindow;
                 if (audioRefs._aegis_webrtc_peer) {
                     try {
                         const peer = audioRefs._aegis_webrtc_peer as RTCPeerConnection;
@@ -1196,7 +1214,7 @@ export const useAegisStore = create<AegisState>()(
                 }
 
                 if (audioRefs._aegis_audio_stream) {
-                    audioRefs._aegis_audio_stream.getTracks().forEach((track: any) => track.stop());
+                    audioRefs._aegis_audio_stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
                     delete audioRefs._aegis_audio_stream;
                 }
                 if (audioRefs._aegis_audio_node) {
@@ -1265,7 +1283,7 @@ export const useAegisStore = create<AegisState>()(
                     source.connect(analyser);
                     source.connect(gainNode);
 
-                    const audioRefs = window as any;
+                    const audioRefs = window as unknown as CustomWindow;
                     const peer = audioRefs._aegis_webrtc_peer as RTCPeerConnection | undefined;
                     if (peer) {
                         const newTrack = stream.getAudioTracks()[0];
