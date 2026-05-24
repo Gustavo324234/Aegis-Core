@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, Plus, Key, Terminal, LogOut, Check, Users, Activity, Trash2, RefreshCw, Cpu, HardDrive, Clock, Server, Mic, Sparkles } from 'lucide-react';
+import { Shield, Plus, Key, Terminal, LogOut, Check, Users, Activity, Trash2, RefreshCw, Cpu, HardDrive, Clock, Server, Mic, Sparkles, Globe, Copy, ExternalLink } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 
@@ -268,37 +268,141 @@ interface SystemMetrics {
     loaded_models?: string[];
 }
 
+interface ServiceStatus {
+    status: string;
+    uptime_secs: number;
+    pid: number;
+}
+
+interface ConnectionInfo {
+    local_url: string;
+    tunnel_url: string | null;
+    tunnel_status: string;
+}
+
 const SystemTab: React.FC<{ tenantId: string | null; sessionKey: string | null }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
     const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
+    const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+    const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [isRestarting, setIsRestarting] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const pollData = useCallback(async () => {
+        if (!tenantId || !sessionKey) return;
+        
+        const headers = {
+            'x-citadel-tenant': tenantId,
+            'x-citadel-key': sessionKey
+        };
+
+        // Poll /api/status
+        try {
+            const res = await fetch('/api/status', { headers });
+            if (res.ok) setMetrics(await res.json());
+        } catch (err) {
+            console.error('Status telemetry error:', err);
+        }
+
+        // Poll /api/system/service/status
+        try {
+            const res = await fetch('/api/system/service/status', { headers });
+            if (res.ok) setServiceStatus(await res.json());
+        } catch (err) {
+            console.error('Service status error:', err);
+        }
+
+        // Poll /api/system/connection-info
+        try {
+            const res = await fetch('/api/system/connection-info', { headers });
+            if (res.ok) setConnectionInfo(await res.json());
+        } catch (err) {
+            console.error('Connection info error:', err);
+        }
+    }, [tenantId, sessionKey]);
 
     useEffect(() => {
         if (!tenantId || !sessionKey) return;
-        const poll = async () => {
-            try {
-                const response = await fetch(`/api/status`, {
-                    headers: {
-                        'x-citadel-tenant': tenantId!,
-                        'x-citadel-key': sessionKey!
-                    }
-                });
-                if (response.ok) setMetrics(await response.json());
-            } catch (err) {
-                console.error('Telemetry poll error:', err);
-            } finally {
-                setIsLoading(false);
-            }
-        };
-        poll();
-        const interval = setInterval(poll, 5000);
+        
+        pollData().finally(() => setIsLoading(false));
+        const interval = setInterval(pollData, 10000); // Poll every 10s as per CORE-256 spec
         return () => clearInterval(interval);
-    }, [tenantId, sessionKey]);
+    }, [tenantId, sessionKey, pollData]);
+
+    const handleRestart = async () => {
+        const confirmMsg = t('confirm_restart_server') || '¿Reiniciar el servidor? La sesión actual se cerrará.';
+        if (!window.confirm(confirmMsg)) return;
+
+        setIsRestarting(true);
+        try {
+            await fetch('/api/system/service/restart', {
+                method: 'POST',
+                headers: {
+                    'x-citadel-tenant': tenantId!,
+                    'x-citadel-key': sessionKey!
+                }
+            });
+            
+            // Wait 3 seconds and poll /health
+            setTimeout(pollUntilOnline, 3000);
+        } catch (err) {
+            console.error('Restart command failed:', err);
+            setIsRestarting(false);
+        }
+    };
+
+    const pollUntilOnline = () => {
+        let attempts = 0;
+        const interval = setInterval(async () => {
+            attempts++;
+            try {
+                const response = await fetch('/health');
+                if (response.ok) {
+                    clearInterval(interval);
+                    window.location.reload();
+                }
+            } catch {
+                // Ignore failure while restarting
+            }
+            
+            if (attempts > 30) { // Timeout after ~150 seconds (2.5 mins)
+                clearInterval(interval);
+                setIsRestarting(false);
+                alert(t('restart_timeout') || 'No se pudo verificar el reinicio del servidor. Intentá recargar manualmente.');
+            }
+        }, 5000);
+    };
+
+    const formatUptimeSecs = (total_seconds: number) => {
+        const h = Math.floor(total_seconds / 3600);
+        const m = Math.floor((total_seconds % 3600) / 60);
+        const s = total_seconds % 60;
+        return `${h}h ${m}m ${s}s`;
+    };
+
+    const handleCopyTunnel = () => {
+        if (connectionInfo?.tunnel_url) {
+            navigator.clipboard.writeText(connectionInfo.tunnel_url);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }
+    };
 
     const cpuPercent = metrics?.cpu_load ?? 0;
     const vramUsed = metrics?.vram_allocated_mb ?? 0;
     const vramTotal = metrics?.vram_total_mb ?? 1;
     const vramPercent = vramTotal > 0 ? (vramUsed / vramTotal) * 100 : 0;
+
+    if (isRestarting) {
+        return (
+            <div className="glass p-12 rounded-2xl border border-red-500/20 flex flex-col items-center justify-center gap-6 min-h-[300px]">
+                <RefreshCw className="w-12 h-12 text-red-500 animate-spin" />
+                <h3 className="text-xl font-bold tracking-[0.2em] uppercase text-white">RESTARTING SERVER...</h3>
+                <p className="text-xs font-mono text-white/40 uppercase tracking-widest">Aegis Core is cycling processes. Please wait.</p>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6">
@@ -309,6 +413,50 @@ const SystemTab: React.FC<{ tenantId: string | null; sessionKey: string | null }
                 </div>
             ) : (
                 <>
+                    {/* Server status header card */}
+                    <div className="glass p-8 rounded-2xl border border-white/10 shadow-2xl relative overflow-hidden">
+                        <div className="absolute top-0 right-0 p-4 opacity-5">
+                            <Server className="w-32 h-32 text-aegis-cyan" />
+                        </div>
+                        
+                        <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3">
+                                <Server className="w-6 h-6 text-aegis-cyan" />
+                                <h3 className="text-lg font-bold tracking-widest uppercase">Server Control Center</h3>
+                            </div>
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-500/10 border border-green-500/30 rounded text-[10px] text-green-400 uppercase font-bold tracking-widest">
+                                <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" /> Online
+                            </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 mb-8 text-sm font-mono uppercase tracking-wider">
+                            <div className="bg-black/40 p-4 rounded-xl border border-white/5">
+                                <p className="text-white/40 text-[9px] mb-1">Uptime</p>
+                                <p className="text-white font-bold">{serviceStatus ? formatUptimeSecs(serviceStatus.uptime_secs) : "0h 0m 0s"}</p>
+                            </div>
+                            <div className="bg-black/40 p-4 rounded-xl border border-white/5">
+                                <p className="text-white/40 text-[9px] mb-1">PID</p>
+                                <p className="text-white font-bold">{serviceStatus?.pid ?? "-"}</p>
+                            </div>
+                            <div className="bg-black/40 p-4 rounded-xl border border-white/5">
+                                <p className="text-white/40 text-[9px] mb-1">Version</p>
+                                <p className="text-white font-bold">0.8.1</p>
+                            </div>
+                            <div className="bg-black/40 p-4 rounded-xl border border-white/5">
+                                <p className="text-white/40 text-[9px] mb-1">Platform</p>
+                                <p className="text-white font-bold">{navigator.platform || 'Windows x86_64'}</p>
+                            </div>
+                        </div>
+
+                        <button 
+                            onClick={handleRestart}
+                            className="px-6 py-3 rounded-lg bg-red-500/10 hover:bg-red-500/25 border border-red-500/30 font-mono text-xs font-bold uppercase tracking-widest text-red-400 transition-all hover:shadow-[0_0_20px_rgba(239,68,68,0.1)] flex items-center gap-2"
+                        >
+                            <RefreshCw className="w-3.5 h-3.5" /> Restart Server
+                        </button>
+                    </div>
+
+                    {/* Hardware metrics cards */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         <div className="glass p-6 rounded-2xl border border-white/10">
                             <div className="flex items-center gap-3 mb-4">
@@ -338,6 +486,61 @@ const SystemTab: React.FC<{ tenantId: string | null; sessionKey: string | null }
                             <p className="text-3xl font-bold font-mono text-white">{metrics?.total_processes ?? 0}</p>
                             <p className="text-[10px] font-mono text-white/30 mt-2">Workers: {metrics?.active_workers ?? 0}</p>
                         </div>
+                    </div>
+
+                    {/* Cloudflare Tunnel Status */}
+                    <div className="glass p-6 rounded-2xl border border-white/10 shadow-xl relative overflow-hidden">
+                        <div className="absolute top-0 right-0 p-4 opacity-5">
+                            <Globe className="w-24 h-24 text-aegis-cyan" />
+                        </div>
+                        <div className="flex items-center gap-3 mb-4">
+                            <Globe className="w-5 h-5 text-aegis-cyan" />
+                            <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Cloudflare Tunnel</span>
+                        </div>
+                        
+                        {!connectionInfo ? (
+                            <p className="text-xs font-mono text-white/20 uppercase tracking-widest">Retrieving network profile...</p>
+                        ) : connectionInfo.tunnel_status === 'active' ? (
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-2">
+                                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                                    <span className="text-xs font-mono text-green-400 font-bold uppercase tracking-widest">Tunnel Active</span>
+                                </div>
+                                <p className="text-xs text-white/60 leading-relaxed font-mono">Your Citadel environment is securely exposed and accessible remotely via:</p>
+                                <div className="bg-black/50 p-4 rounded-lg border border-aegis-cyan/30 flex items-center justify-between gap-4 max-w-2xl">
+                                    <p className="text-aegis-cyan font-bold font-mono tracking-wider truncate select-all">{connectionInfo.tunnel_url}</p>
+                                    <button 
+                                        onClick={handleCopyTunnel}
+                                        className="px-3 py-1.5 bg-aegis-cyan/10 hover:bg-aegis-cyan/20 border border-aegis-cyan/30 rounded text-aegis-cyan text-[10px] font-mono uppercase font-bold tracking-widest transition-colors shrink-0 flex items-center gap-1.5"
+                                    >
+                                        <Copy className="w-3.5 h-3.5" /> {copied ? 'Copied' : 'Copy'}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : connectionInfo.tunnel_status === 'connecting' ? (
+                            <div className="flex items-center gap-3">
+                                <RefreshCw className="w-4 h-4 text-aegis-cyan animate-spin" />
+                                <span className="text-xs font-mono text-white/40 uppercase tracking-widest">Connecting tunnel stream...</span>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-2">
+                                    <span className="w-2 h-2 bg-red-500 rounded-full" />
+                                    <span className="text-xs font-mono text-red-400 font-bold uppercase tracking-widest">Inactive — cloudflared not found</span>
+                                </div>
+                                <p className="text-xs text-white/40 leading-relaxed max-w-2xl font-mono uppercase">
+                                    Para habilitar acceso remoto HTTPS seguro desde cualquier lugar, instalá el agente de Cloudflare:
+                                </p>
+                                <a 
+                                    href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-2 text-xs font-mono text-aegis-cyan hover:underline uppercase tracking-wider"
+                                >
+                                    Descargar cloudflared <ExternalLink className="w-3.5 h-3.5" />
+                                </a>
+                            </div>
+                        )}
                     </div>
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -379,7 +582,7 @@ const SystemTab: React.FC<{ tenantId: string | null; sessionKey: string | null }
 
                     <div className="flex items-center gap-2 justify-center text-[9px] font-mono text-white/20 uppercase tracking-[0.2em] mt-8">
                         <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                        Polling each 5s — Real-Time Telemetry Active
+                        Polling each 10s — Real-Time Telemetry Active
                     </div>
                 </>
             )}

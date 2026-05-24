@@ -403,9 +403,29 @@ impl InferenceDriver for CloudProxyDriver {
         grammar: Option<Grammar>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> GenerateStreamResult {
+        let is_local = is_local_network(&self.api_url);
+        let sanitize_forced = env::var("AEGIS_CLOUD_SANITIZE_CONTEXT")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let should_sanitize = !is_local || sanitize_forced;
+
+        let processed_messages = if should_sanitize {
+            messages
+                .into_iter()
+                .map(|mut m| {
+                    if let Some(content) = m.content.take() {
+                        m.content = Some(crate::chal::autocorrect::sanitize_prompt_content(&content));
+                    }
+                    m
+                })
+                .collect()
+        } else {
+            messages
+        };
+
         let mut request_body = ChatCompletionRequest {
             model: self.model_id.clone(),
-            messages,
+            messages: processed_messages,
             stream: true,
             response_format: None,
             tools,
@@ -605,6 +625,49 @@ impl InferenceDriver for CloudProxyDriver {
     }
 }
 
+pub fn is_local_network(api_url: &str) -> bool {
+    let lower = api_url.to_lowercase();
+    if lower.contains("localhost") || lower.contains("127.0.0.1") || lower.contains("[::1]") {
+        return true;
+    }
+    if let Ok(parsed) = reqwest::Url::parse(api_url) {
+        if let Some(host) = parsed.host_str() {
+            let host_lower = host.to_lowercase();
+            if host_lower == "localhost" || host_lower == "127.0.0.1" || host_lower == "::1" {
+                return true;
+            }
+            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                match ip {
+                    std::net::IpAddr::V4(ipv4) => {
+                        let octets = ipv4.octets();
+                        if ipv4.is_loopback()
+                            || octets[0] == 10
+                            || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31)
+                            || (octets[0] == 192 && octets[1] == 168)
+                        {
+                            return true;
+                        }
+                    }
+                    std::net::IpAddr::V6(ipv6) => {
+                        if ipv6.is_loopback() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if lower.contains("://192.168.") || lower.contains("://10.") {
+        return true;
+    }
+    for i in 16..=31 {
+        if lower.contains(&format!("://172.{}.", i)) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,4 +766,19 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn test_is_local_network() {
+        assert!(is_local_network("http://localhost:11434/v1/chat/completions"));
+        assert!(is_local_network("https://127.0.0.1/v1"));
+        assert!(is_local_network("http://[::1]:11434"));
+        assert!(is_local_network("http://192.168.1.50:8000/v1"));
+        assert!(is_local_network("http://10.0.0.5:11434"));
+        assert!(is_local_network("https://172.20.15.4:8080/v1"));
+
+        assert!(!is_local_network("https://api.openai.com/v1"));
+        assert!(!is_local_network("https://openrouter.ai/api/v1"));
+        assert!(!is_local_network("https://generativelanguage.googleapis.com"));
+    }
 }
+

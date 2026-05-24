@@ -122,20 +122,40 @@ impl KeyPool {
             // - l1_instruction = JSON of ApiKeyEntry
             if let Some(rest) = pcb.pid.strip_prefix("keypool:global:") {
                 let _ = rest; // key_id embedded in pid
-                if let Ok(entry) =
-                    serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction)
-                {
-                    global.push(entry);
+                match serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction) {
+                    Ok(entry) => {
+                        global.push(entry);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            pid = %pcb.pid,
+                            "CORE-213: Failed to deserialize global ApiKeyEntry from persisted PCB"
+                        );
+                    }
                 }
             } else if let Some(rest) = pcb.pid.strip_prefix("keypool:tenant:") {
                 let parts: Vec<&str> = rest.splitn(2, ':').collect();
                 if parts.len() == 2 {
                     let tid = parts[0].to_string();
-                    if let Ok(entry) =
-                        serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction)
-                    {
-                        tenants.entry(tid).or_default().push(entry);
+                    match serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction) {
+                        Ok(entry) => {
+                            tenants.entry(tid).or_default().push(entry);
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                pid = %pcb.pid,
+                                tenant_id = %tid,
+                                "CORE-213: Failed to deserialize tenant ApiKeyEntry from persisted PCB"
+                            );
+                        }
                     }
+                } else {
+                    tracing::error!(
+                        pid = %pcb.pid,
+                        "CORE-213: Persisted tenant key PCB has invalid pid format (expected 'keypool:tenant:{{tid}}:{{key_id}}')"
+                    );
                 }
             }
         }
