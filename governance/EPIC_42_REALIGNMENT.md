@@ -22,7 +22,7 @@ Esta Epic tiene como objetivo re-alinear el proyecto Aegis-Core con su visión o
 | ID | Título | Estado | Prioridad |
 |---|---|---|---|
 | [CORE-150](./Tickets/CORE-150.md) | Sandbox de Scripts (Maker Capability) | Terminado | Bloqueante |
-| [CORE-151](./Tickets/CORE-151.md) | Integración de Contexto de Proyecto (Git/VCM) | Pendiente | Alta |
+| [CORE-151](./Tickets/CORE-151.md) | Integración de Contexto de Proyecto (Git/VCM) | Terminado | Alta |
 | [CORE-152](./Tickets/CORE-152.md) | Plugins de Dominios (Ledger & Chronos) | Terminado | Media |
 | [CORE-153](./Tickets/CORE-153.md) | Dashboard Dinámico & Kanban UI | Terminado | Alta |
 | [CORE-154](./Tickets/CORE-154.md) | Orquestación de Sub-Agentes especializados | Pendiente | Baja |
