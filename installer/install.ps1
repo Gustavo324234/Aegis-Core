@@ -23,7 +23,9 @@ param(
     [string]$InstallDir  = "$env:ProgramFiles\Aegis",
     [string]$ReleaseTag  = "nightly",
     [switch]$NoService,
-    [switch]$Silent
+    [switch]$Silent,
+    [switch]$Repair,
+    [int]$Port           = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,6 +88,60 @@ function Format-EnvPath {
     $p = $Path.Replace("\", "/")
     if ($p -match " ") { return "`"$p`"" }
     return $p
+}
+
+function Test-PortInUse {
+    param([int]$p)
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $p)
+        $listener.Start()
+        $listener.Stop()
+        return $false
+    } catch {
+        return $true
+    }
+}
+
+function Select-AegisPort {
+    if ($Port -ne 0) {
+        $script:AEGIS_HTTP_PORT = $Port
+        Write-Step "Puerto HTTP Aegis configurado manualmente: $script:AEGIS_HTTP_PORT"
+        return
+    }
+
+    # If aegis.env already exists, read the port from it to preserve existing config!
+    $envPath = "$DataDir\aegis.env"
+    if (Test-Path $envPath) {
+        $envLines = Get-Content $envPath
+        foreach ($line in $envLines) {
+            if ($line -match "^(?:AEGIS_HTTP_PORT|ANK_HTTP_PORT)=(.*)$") {
+                $script:AEGIS_HTTP_PORT = [int]($matches[1].Trim('"').Trim())
+                Write-Step "Puerto HTTP Aegis detectado de la configuracion existente: $script:AEGIS_HTTP_PORT"
+                return
+            }
+        }
+    }
+
+    if (-not (Test-PortInUse -p 8000)) {
+        $script:AEGIS_HTTP_PORT = 8000
+        Write-Step "Puerto HTTP Aegis: 8000 (libre)"
+        return
+    }
+
+    Write-Warn "El puerto 8000 ya esta en uso por otro servicio."
+    if (-not (Test-PortInUse -p 8080)) {
+        $script:AEGIS_HTTP_PORT = 8080
+        Write-Warn "Usando puerto alternativo: 8080"
+        return
+    }
+
+    if (-not (Test-PortInUse -p 8090)) {
+        $script:AEGIS_HTTP_PORT = 8090
+        Write-Warn "Usando puerto alternativo: 8090"
+        return
+    }
+
+    Write-Fail "Puertos 8000, 8080 y 8090 estan ocupados. Por favor, especifica un puerto libre con el parametro -Port."
 }
 
 function Test-Prerequisites {
@@ -234,6 +290,15 @@ function New-AegisEnvFile {
             $changed = $true
         }
 
+        # Backfill port if missing
+        $hasPort = $lines | Where-Object { $_ -match "^(AEGIS_HTTP_PORT|ANK_HTTP_PORT)=" }
+        if (-not $hasPort) {
+            $newLines += "AEGIS_HTTP_PORT=$AEGIS_HTTP_PORT"
+            $newLines += "ANK_HTTP_PORT=$AEGIS_HTTP_PORT"
+            Write-OK "Backfilled AEGIS_HTTP_PORT/ANK_HTTP_PORT as $AEGIS_HTTP_PORT."
+            $changed = $true
+        }
+
         if ($changed) {
             Set-Content -Path $envPath -Value $newLines -Encoding UTF8
             Write-OK "aegis.env actualizado (path normalization + plugin-key backfill)."
@@ -253,6 +318,8 @@ UI_DIST_PATH=$(Format-EnvPath "$InstallDir\ui")
 AEGIS_MODEL_PROFILE=cloud
 DEFAULT_MODEL_PREF=CloudOnly
 RUST_LOG=info
+AEGIS_HTTP_PORT=$AEGIS_HTTP_PORT
+ANK_HTTP_PORT=$AEGIS_HTTP_PORT
 # Release builds refuse to start without an explicit AEGIS_PLUGIN_ROOT_KEY
 # (hex-encoded ed25519 public key, >=32 bytes). Until a key-generation
 # command ships, opt into the unsigned-plugin mode so the installer's
@@ -317,16 +384,45 @@ function Install-AegisCLI {
     Write-OK "Uso: aegis status / aegis logs / aegis diag / aegis update"
 }
 
+function Set-ServiceEnvironmentFromEnvFile {
+    Write-Step "Escribiendo variables de entorno en el servicio Windows..."
+    $envPath = "$DataDir\aegis.env"
+    if (Test-Path $envPath) {
+        $envLines = [System.Collections.Generic.List[string]]::new()
+        Get-Content $envPath | ForEach-Object {
+            $line = $_.Trim()
+            if ($line -ne "" -and -not $line.StartsWith("#")) {
+                $envLines.Add($line)
+            }
+        }
+        try {
+            $regPath = "SYSTEM\CurrentControlSet\Services\$SERVICE_NAME"
+            $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($regPath, $true)
+            if ($key) {
+                $key.SetValue("Environment", $envLines.ToArray(), [Microsoft.Win32.RegistryValueKind]::MultiString)
+                $key.Close()
+                Write-OK "Variables de entorno persistidas en el registro para el servicio."
+            } else {
+                Write-Warn "No se pudo abrir la clave del Registro del servicio para escribir el bloque de entorno."
+            }
+        } catch {
+            Write-Warn "Error al escribir el bloque de entorno en el Registro: $_"
+        }
+    } else {
+        Write-Warn "No se encontro aegis.env para cargar variables en el servicio."
+    }
+}
+
 function Install-AegisService {
     Write-Step "Configurando servicio de Windows..."
 
     $existing = Get-Service -Name $SERVICE_NAME -ErrorAction SilentlyContinue
 
     if ($existing) {
-        # ── MODO ACTUALIZACION ──────────────────────────────────────────────
+        # ── MODO ACTUALIZACION / REPARACION ─────────────────────────────────
         # ank-server lee aegis.env directamente (CORE-265).
-        # Solo detener, el binario ya fue reemplazado, reiniciar.
-        Write-Step "Actualizacion detectada — reiniciando servicio con nuevo binario..."
+        # Aseguramos que la ruta y configuración estén correctas y persistimos environment.
+        Write-Step "Servicio existente detectado — actualizando y configurando..."
 
         if ($existing.Status -ne 'Stopped') {
             Stop-Service $SERVICE_NAME -Force -ErrorAction SilentlyContinue
@@ -337,11 +433,18 @@ function Install-AegisService {
             }
         }
 
+        # Asegurar tipo de inicio Automatic y ruta binaria correcta
+        $binPath = "`"$InstallDir\$BIN_NAME`" --service"
+        sc.exe config $SERVICE_NAME binPath= $binPath start= auto | Out-Null
+        sc.exe failure $SERVICE_NAME reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+
+        Set-ServiceEnvironmentFromEnvFile
+
         try {
             Start-Service $SERVICE_NAME -ErrorAction Stop
-            Write-OK "Servicio '$SERVICE_NAME' reiniciado con nuevo binario."
+            Write-OK "Servicio '$SERVICE_NAME' iniciado."
         } catch {
-            Write-Warn "El servicio no pudo reiniciarse: $_"
+            Write-Warn "El servicio no pudo iniciarse: $_"
             Write-Host "    Ejecuta: aegis start" -ForegroundColor Cyan
         }
 
@@ -360,6 +463,8 @@ function Install-AegisService {
             -ErrorAction Stop | Out-Null
 
         sc.exe failure $SERVICE_NAME reset= 60 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+
+        Set-ServiceEnvironmentFromEnvFile
 
         try {
             Start-Service $SERVICE_NAME -ErrorAction Stop
@@ -387,7 +492,7 @@ function Add-ToPath {
 function Wait-AndShow {
     Write-Step "Esperando que Aegis inicialice (max 30s)..."
 
-    $url   = "http://localhost:8000/health"
+    $url   = "http://localhost:$AEGIS_HTTP_PORT/health"
     $ready = $false
 
     for ($i = 0; $i -lt 15; $i++) {
@@ -409,8 +514,8 @@ function Wait-AndShow {
                Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.*" } |
                Select-Object -First 1).IPAddress
         Write-Host "  Aegis esta corriendo en:" -ForegroundColor White
-        Write-Host "    http://localhost:8000" -ForegroundColor Cyan
-        if ($ip) { Write-Host "    http://${ip}:8000  (red local)" -ForegroundColor Cyan }
+        Write-Host "    http://localhost:$AEGIS_HTTP_PORT" -ForegroundColor Cyan
+        if ($ip) { Write-Host "    http://${ip}:$AEGIS_HTTP_PORT  (red local)" -ForegroundColor Cyan }
     } else {
         Write-Host "  [!] Aegis no respondio en 30s." -ForegroundColor Yellow
         Write-Host "      Abre una terminal nueva y ejecuta: aegis diag" -ForegroundColor DarkGray
@@ -429,6 +534,37 @@ function Wait-AndShow {
 }
 
 # --- Main ---
+Select-AegisPort
+if ($Repair) {
+    Show-Banner
+    Write-Step "Modo reparacion — reconfigurando y re-registrando servicio..."
+    
+    # Asegurar que el CLI esté en su lugar
+    Install-AegisCLI
+    
+    if (-not $NoService) {
+        Install-AegisService
+    } else {
+        Write-Warn "Modo --NoService: servicio no registrado."
+    }
+    
+    Add-ToPath
+    
+    # Verificar que el servicio quedó corriendo e informar al usuario
+    $svc = Get-Service $SERVICE_NAME -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") {
+        Write-OK "Servicio AegisOS reparado y reiniciado con exito."
+        Wait-AndShow
+    } else {
+        Write-Warn "El servicio no pudo iniciarse automaticamente."
+        Write-Warn "Para iniciarlo manualmente ejecuta (como Administrador):"
+        Write-Host '    powershell -ExecutionPolicy Bypass -File install.ps1 -Repair' -ForegroundColor Cyan
+        Write-Host '    O via web:' -ForegroundColor DarkGray
+        Write-Host '    powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.ps1 | iex" -Repair' -ForegroundColor Cyan
+    }
+    exit 0
+}
+
 Show-Banner
 Test-Prerequisites
 New-AegisDirs
@@ -447,4 +583,13 @@ if (-not $NoService) {
 }
 
 Add-ToPath
+
+# Al final de la instalación, verificar si el inicio automático funcionó
+$svc = Get-Service $SERVICE_NAME -ErrorAction SilentlyContinue
+if (-not $NoService -and $svc -and $svc.Status -ne "Running") {
+    Write-Warn "El servicio AegisOS no pudo iniciarse automaticamente en segundo plano."
+    Write-Warn "Para repararlo e iniciarlo, ejecuta (como Administrador):"
+    Write-Host '    powershell -ExecutionPolicy Bypass -File install.ps1 -Repair' -ForegroundColor Cyan
+}
+
 Wait-AndShow

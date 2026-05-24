@@ -240,16 +240,14 @@ async fn add_global_key(
         (status = 401, description = "Unauthorized")
     ),
     params(
-        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
-        ("x-citadel-key" = String, Header, description = "Admin session key (plaintext)")
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
     )
 )]
 async fn list_global_keys(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    _auth: CitadelAuthenticated,
 ) -> Result<Json<GlobalKeysResponse>, AegisHttpError> {
-    require_master_auth(&state, &headers).await?;
-
     let router = state.router.read().await;
     let raw_keys = router.list_global_keys().await;
     let keys: Vec<RouterKeyResponse> = raw_keys

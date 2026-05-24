@@ -77,6 +77,49 @@ detect_arch() {
 }
 
 # --- System Audit ---
+# Picks the HTTP port for Aegis. If the default (8000) is already taken — common
+# on shared servers — prompt for a free one instead of failing to bind.
+detect_http_port() {
+    local candidate=8000
+    if ss -tulpn 2>/dev/null | grep -q ":${candidate} " || ss -tln 2>/dev/null | grep -q ":${candidate} "; then
+        warn "Puerto ${candidate} en uso."
+        
+        # Non-interactive shell check
+        if [ ! -t 0 ]; then
+            candidate="8080"
+            if ss -tulpn 2>/dev/null | grep -q ":${candidate} " || ss -tln 2>/dev/null | grep -q ":${candidate} "; then
+                candidate="8090"
+                if ss -tulpn 2>/dev/null | grep -q ":${candidate} " || ss -tln 2>/dev/null | grep -q ":${candidate} "; then
+                    error "Puertos 8000, 8080 y 8090 ocupados. Liberá uno o instalá interactivo para elegir."
+                fi
+            fi
+            warn "Shell no interactivo → usando puerto alternativo ${candidate}."
+            AEGIS_HTTP_PORT="$candidate"
+            log "Puerto HTTP Aegis: ${AEGIS_HTTP_PORT}"
+            return
+        fi
+
+        echo ""
+        echo -e "${YELLOW}¿Qué puerto HTTP debe usar Aegis?${NC}"
+        local used_ports
+        used_ports=$(ss -tulpn 2>/dev/null | grep LISTEN | grep -oP ':\K\d+(?= )' | sort -nu | tr '\n' ' ' || true)
+        if [[ -n "$used_ports" ]]; then
+            echo "  Puertos en uso detectados: $used_ports"
+        fi
+        read -rp "Puerto HTTP para Aegis [default: 8080]: " user_port
+        candidate="${user_port:-8080}"
+        
+        # Verify that the candidate is also free
+        while ss -tulpn 2>/dev/null | grep -q ":${candidate} " || ss -tln 2>/dev/null | grep -q ":${candidate} "; do
+            warn "Puerto ${candidate} también en uso."
+            read -rp "Elegí otro puerto: " candidate
+        done
+    fi
+    AEGIS_HTTP_PORT="$candidate"
+    log "Puerto HTTP Aegis: ${AEGIS_HTTP_PORT}"
+}
+
+# --- System Audit ---
 run_system_audit() {
     log "Performing System Audit..."
 
@@ -109,54 +152,8 @@ run_system_audit() {
         echo "CPU Cores: $cpu_cores | RAM: ${ram_gb}GB | Docker: $docker_status | GPU: $nvidia_status"
     fi
 
-    # Port Conflict Check
-    for port in 8000 50051; do
-        if ss -tulpn 2>/dev/null | grep -q ":$port "; then
-            warn "Port $port is already in use. This may conflict with Aegis."
-        fi
-    done
-}
-
-# Picks the HTTP port for Aegis. If the default (8000) is already taken — common
-# on shared servers — prompt for a free one instead of failing to bind. The
-# chosen value is exported and written to the env file as AEGIS_HTTP_PORT, which
-# the ank-server binary now honours.
-port_in_use() {
-    ss -tulpn 2>/dev/null | grep -q ":$1 " || ss -tln 2>/dev/null | grep -q ":$1 "
-}
-
-select_http_port() {
-    AEGIS_HTTP_PORT="8000"
-    if ! port_in_use 8000; then
-        log "HTTP port: 8000 (free)"
-        return
-    fi
-
-    warn "El puerto 8000 ya está en uso por otro servicio."
-    if [ ! -t 0 ]; then
-        AEGIS_HTTP_PORT="8090"
-        if port_in_use "$AEGIS_HTTP_PORT"; then
-            error "Puertos 8000 y ${AEGIS_HTTP_PORT} ocupados. Liberá uno o instalá interactivo para elegir."
-        fi
-        warn "Shell no interactivo → usando puerto ${AEGIS_HTTP_PORT}."
-        return
-    fi
-
-    while true; do
-        read -rp "Elegí un puerto HTTP libre para Aegis [default 8090]: " chosen
-        chosen="${chosen:-8090}"
-        if ! [[ "$chosen" =~ ^[0-9]+$ ]] || [ "$chosen" -lt 1 ] || [ "$chosen" -gt 65535 ]; then
-            echo "  Puerto inválido. Probá de nuevo."
-            continue
-        fi
-        if port_in_use "$chosen"; then
-            echo "  El puerto ${chosen} también está en uso. Probá otro."
-            continue
-        fi
-        AEGIS_HTTP_PORT="$chosen"
-        break
-    done
-    success "HTTP port elegido: ${AEGIS_HTTP_PORT}"
+    # Detect conflict and assign customizable port
+    detect_http_port
 }
 
 # --- UI Menus ---
@@ -211,6 +208,7 @@ show_main_menu() {
         *) SETUP_HTTPS="false" ;;
     esac
 
+    SETUP_CADDY="false"
     if [[ "$SETUP_HTTPS" == "true" ]]; then
         local pub_ip
         pub_ip=$(curl -s ifconfig.me 2>/dev/null || echo 'desconocida')
@@ -222,9 +220,21 @@ show_main_menu() {
         read -rp "¿Cumplís estos requisitos? [s/N]: " ready
         if [[ "$ready" != "s" && "$ready" != "S" ]]; then
             SETUP_HTTPS="false"
+            SETUP_CADDY="false"
         else
             read -rp "Dominio (ej: aegis.midominio.com): " AEGIS_DOMAIN
             read -rp "Email para Let's Encrypt (para notificaciones de renovación): " AEGIS_EMAIL
+            
+            echo ""
+            echo -e "${YELLOW}--- REVERSE PROXY ---${NC}"
+            echo "¿Este servidor ya tiene un reverse proxy (nginx, Caddy, NPM, Traefik)?"
+            echo "  [1] No — Aegis instala y configura Caddy automáticamente"
+            echo "  [2] Sí — Solo expongo Aegis en un puerto interno, yo configuro el proxy"
+            read -rp "Selección [1-2, default 2]: " proxy_choice
+            case "${proxy_choice:-2}" in
+                1) SETUP_CADDY="true" ;;
+                *) SETUP_CADDY="false" ;;
+            esac
         fi
     fi
 
@@ -407,9 +417,9 @@ EOF
 install_native() {
     log "Starting native installation..."
 
-    if [[ "$SETUP_HTTPS" == "true" ]]; then
+    if [[ "$SETUP_HTTPS" == "true" && "$SETUP_CADDY" == "true" ]]; then
         install_caddy
-    else
+    elif [[ "$SETUP_HTTPS" != "true" ]]; then
         install_cloudflared
     fi
 
@@ -484,6 +494,7 @@ AEGIS_DATA_DIR=${DATA_DIR}
 AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}
+ANK_HTTP_PORT=${AEGIS_HTTP_PORT}
 UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
@@ -519,6 +530,7 @@ EOF
         grep -q "AEGIS_MODEL_PROFILE"       "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"       >> "$ENV_FILE"
         grep -q "AEGIS_AGENTS_CONFIG_DIR"   "$ENV_FILE" || echo "AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents"   >> "$ENV_FILE"
         grep -q "AEGIS_HTTP_PORT"           "$ENV_FILE" || echo "AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}"             >> "$ENV_FILE"
+        grep -q "ANK_HTTP_PORT"             "$ENV_FILE" || echo "ANK_HTTP_PORT=${AEGIS_HTTP_PORT}"               >> "$ENV_FILE"
         # Backfill on upgrade: release builds added by PR #277 refuse to start
         # without AEGIS_PLUGIN_ROOT_KEY. Preserve the previous "no signature
         # verification" behaviour (the binary used to silently fall back to a
@@ -671,10 +683,17 @@ wait_and_show() {
         fi
         echo ""
 
-        if [[ "$SETUP_HTTPS" == "true" && -n "$AEGIS_DOMAIN" ]]; then
+        if [[ "$SETUP_HTTPS" == "true" && "$SETUP_CADDY" == "true" && -n "$AEGIS_DOMAIN" ]]; then
             echo -e "${GREEN}  Acceso HTTPS:${NC}"
             echo -e "  ${CYAN}https://${AEGIS_DOMAIN}${NC}"
             echo -e "  Certificado: Let's Encrypt (renovación automática)"
+            echo ""
+        elif [[ "$SETUP_HTTPS" == "true" && "$SETUP_CADDY" == "false" ]]; then
+            echo -e "${GREEN}  Aegis corriendo internamente en: http://localhost:${AEGIS_HTTP_PORT}${NC}"
+            echo -e "  Para exponerlo públicamente, agregá un Proxy Host en tu reverse proxy:"
+            echo -e "    → Forward Hostname: localhost"
+            echo -e "    → Forward Port:     ${AEGIS_HTTP_PORT}"
+            echo -e "    → Websockets:       ${GREEN}habilitado${NC} (requerido para chat y agentes)"
             echo ""
         elif [[ -n "$tunnel_url" ]]; then
             echo -e "${GREEN}  Remote Access (HTTPS):${NC}"
@@ -709,10 +728,10 @@ wait_and_show() {
 # --- Main ---
 check_root
 detect_arch
+run_system_audit
 show_main_menu
 show_inference_profile_menu
 install_dependencies
-select_http_port
 
 if [[ "$INSTALL_MODE" == "1" ]]; then
     install_native

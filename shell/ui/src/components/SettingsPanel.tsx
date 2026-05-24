@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles } from 'lucide-react';
+import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -22,12 +22,6 @@ const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: Rea
     { id: 'voz', label: t('tab_voz'), icon: <Volume2 className="w-4 h-4" /> },
     { id: 'cuenta', label: 'Cuenta', icon: <Globe className="w-4 h-4" /> },
 ];
-
-interface EngineStatus {
-    provider: string;
-    model_name: string;
-    api_url: string;
-}
 
 interface PersonaData {
     prompt: string;
@@ -231,18 +225,21 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
     );
 };
 
+interface GlobalProviderEntry {
+    key_id: string;
+    provider: string;
+    label?: string;
+    is_active: boolean;
+    is_free_tier: boolean;
+    rate_limited_until?: string;
+    active_models?: string[];
+}
+
 const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
     const { lastRoutingInfo, lastError } = useAegisStore();
-    const [provider, setProvider] = useState<ProviderType>('custom');
-    const [apiUrl, setApiUrl] = useState('');
-    const [modelName, setModelName] = useState('');
-    const [apiKey, setApiKey] = useState('');
-    const [showKey, setShowKey] = useState(false);
+    const [globalProviders, setGlobalProviders] = useState<GlobalProviderEntry[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [isSaving, setIsSaving] = useState(false);
-    const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-    const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
 
     const getHeaders = useCallback(() => ({
         'Content-Type': 'application/json',
@@ -251,64 +248,21 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
     }), [tenantId, sessionKey]);
 
     useEffect(() => {
-        const fetchStatus = async () => {
+        const fetchGlobalProviders = async () => {
             try {
-                const res = await fetch('/api/engine/status', { headers: getHeaders() });
+                const res = await fetch('/api/router/keys/global', { headers: getHeaders() });
                 if (res.ok) {
                     const data = await res.json();
-                    setEngineStatus(data);
-                    if (data.provider) {
-                        setProvider(data.provider as ProviderType);
-                        setApiUrl(data.api_url || '');
-                        setModelName(data.model_name || '');
-                    }
+                    setGlobalProviders(data.keys || []);
                 }
             } catch (err) {
-                console.error('Fetch engine status error:', err);
+                console.error('Fetch global providers error:', err);
             } finally {
                 setIsLoading(false);
             }
         };
-        fetchStatus();
+        fetchGlobalProviders();
     }, [getHeaders]);
-
-    const handleProviderChange = (newProvider: ProviderType) => {
-        setProvider(newProvider);
-        if (PROVIDER_PRESETS[newProvider]) {
-            setApiUrl(PROVIDER_PRESETS[newProvider].url);
-            if (PROVIDER_PRESETS[newProvider].model) {
-                setModelName(PROVIDER_PRESETS[newProvider].model);
-            }
-        }
-    };
-
-    const handleSave = async () => {
-        setIsSaving(true);
-        setMessage(null);
-        try {
-            const res = await fetch('/api/engine/configure', {
-                method: 'POST',
-                headers: getHeaders(),
-                body: JSON.stringify({
-                    provider,
-                    api_url: apiUrl,
-                    model_name: modelName,
-                    api_key: apiKey,
-                }),
-            });
-            if (res.ok) {
-                setMessage({ type: 'success', text: t('engine_saved') });
-                setEngineStatus({ provider, model_name: modelName, api_url: apiUrl });
-            } else {
-                const err = await res.json();
-                setMessage({ type: 'error', text: err.detail || t('engine_save_error') });
-            }
-        } catch (err) {
-            setMessage({ type: 'error', text: t('engine_save_error') });
-        } finally {
-            setIsSaving(false);
-        }
-    };
 
     if (isLoading) {
         return (
@@ -328,128 +282,103 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
         return { icon: '⚠️', text: 'Configurado, sin verificar', color: 'text-amber-400' };
     })();
 
+    const getProviderIcon = (prov: string) => {
+        switch (prov) {
+            case 'openai': return <Globe className="w-4 h-4 text-aegis-cyan" />;
+            case 'anthropic': return <Zap className="w-4 h-4 text-amber-400" />;
+            case 'groq': return <Activity className="w-4 h-4 text-green-400" />;
+            case 'grok': return <Box className="w-4 h-4 text-purple-400" />;
+            case 'openrouter': return <Globe className="w-4 h-4 text-blue-400" />;
+            case 'ollama': return <Server className="w-4 h-4 text-emerald-400" />;
+            case 'ollama_cloud': return <Cloud className="w-4 h-4 text-sky-400" />;
+            case 'gemini': return <Shield className="w-4 h-4 text-red-400" />;
+            case 'custom': return <Terminal className="w-4 h-4 text-indigo-400" />;
+            default: return <Cpu className="w-4 h-4 text-white/40" />;
+        }
+    };
+
     return (
         <div className="space-y-6">
-            {engineStatus && (
-                <div className="p-4 bg-aegis-cyan/5 border border-aegis-cyan/20 rounded-xl">
-                    <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest mb-2">
-                        {t('current_engine')}
-                    </p>
-                    <p className="text-sm font-mono text-aegis-cyan">
-                        {engineStatus.provider} / {engineStatus.model_name}
-                    </p>
-                    <p className={`text-[10px] font-mono mt-2 ${engineStatusBadge.color}`}>
-                        {engineStatusBadge.icon} {engineStatusBadge.text}
-                    </p>
+            {/* Active Engine Banner */}
+            <div className="p-4 bg-aegis-cyan/5 border border-aegis-cyan/20 rounded-xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-2 opacity-5">
+                    <Cpu className="w-16 h-16 text-aegis-cyan" />
                 </div>
-            )}
-
-            <div className="p-3 bg-white/5 border border-white/10 rounded-xl">
-                <p className="text-[10px] font-mono text-white/30 leading-relaxed">
-                    Si el administrador configuró un motor global, tu configuración personal lo sobreescribe solo para tu cuenta.
+                <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest mb-2">
+                    {t('current_engine')}
+                </p>
+                <p className="text-sm font-mono text-aegis-cyan font-bold uppercase">
+                    {lastRoutingInfo ? `${lastRoutingInfo.provider} / ${lastRoutingInfo.model_id}` : 'Cognitive Router (CMR v2)'}
+                </p>
+                <p className={`text-[10px] font-mono mt-2 ${engineStatusBadge.color} flex items-center gap-1.5 uppercase`}>
+                    <span>{engineStatusBadge.icon}</span> <span>{engineStatusBadge.text}</span>
                 </p>
             </div>
 
-            <div>
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-3">
-                    {t('select_provider')}
-                </label>
-                <div className="grid grid-cols-4 gap-2">
-                    {(Object.keys(PROVIDER_PRESETS) as ProviderType[]).map((key) => {
-                        const isSelected = provider === key;
-                        return (
-                            <button
-                                key={key}
-                                onClick={() => handleProviderChange(key)}
-                                className={`p-3 rounded-lg border text-center transition-all ${
-                                    isSelected
-                                        ? 'bg-aegis-cyan/20 border-aegis-cyan text-aegis-cyan'
-                                        : 'bg-white/5 border-white/10 text-white/40 hover:text-white hover:border-white/30'
-                                }`}
-                            >
-                                <span className="text-[10px] font-mono uppercase tracking-widest">{key}</span>
-                            </button>
-                        );
-                    })}
+            {/* Global Providers Section */}
+            <div className="space-y-4">
+                <div>
+                    <h3 className="text-xs font-mono font-bold tracking-widest uppercase text-white/80">
+                        Proveedores del Sistema (Global)
+                    </h3>
+                    <p className="text-[9px] font-mono text-white/30 uppercase mt-0.5">
+                        Configurados y optimizados por tu administrador
+                    </p>
+                </div>
+
+                {globalProviders.length === 0 ? (
+                    <div className="p-6 border border-dashed border-white/10 rounded-2xl bg-white/2 text-center text-xs font-mono text-white/30 uppercase tracking-widest">
+                        Sin proveedores globales disponibles
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {globalProviders.map(p => {
+                            const isRateLimited = p.rate_limited_until && new Date(p.rate_limited_until) > new Date();
+                            const presetLabel = PROVIDER_PRESETS[p.provider as ProviderType]?.label ?? p.provider;
+                            return (
+                                <div key={p.key_id} className={`p-4 rounded-xl border bg-white/[0.02] transition-all flex flex-col gap-2 ${p.is_active ? 'border-white/10' : 'border-white/5 opacity-50'}`}>
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className="p-1.5 rounded bg-white/5">{getProviderIcon(p.provider)}</div>
+                                            <span className="text-xs font-mono font-bold uppercase text-white/80">{p.label || presetLabel}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5">
+                                            {isRateLimited && (
+                                                <span className="px-1.5 py-0.5 rounded text-[8px] font-mono uppercase bg-yellow-500/10 border border-yellow-500/30 text-yellow-400">
+                                                    Limited
+                                                </span>
+                                            )}
+                                            <span className={`px-1.5 py-0.5 rounded text-[8px] font-mono uppercase font-bold border ${p.is_active ? 'bg-green-500/10 border-green-500/30 text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+                                                {p.is_active ? 'Activo' : 'Inactivo'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    {p.active_models && p.active_models.length > 0 && (
+                                        <div className="text-[9px] font-mono text-white/30 truncate uppercase tracking-wide">
+                                            Modelos: {p.active_models.slice(0, 3).join(', ')}
+                                            {p.active_models.length > 3 && ` (+${p.active_models.length - 3})`}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+
+                <div className="flex items-start gap-2 p-3 bg-white/5 border border-white/5 rounded-xl text-[9px] font-mono text-white/30 uppercase tracking-widest leading-loose">
+                    <Info className="w-4 h-4 text-aegis-cyan shrink-0 mt-0.5" />
+                    <span>Estos proveedores los gestiona tu administrador. Tu router los consumirá automáticamente.</span>
                 </div>
             </div>
 
-            <div>
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-2">
-                    {t('api_url')}
-                </label>
-                <input
-                    type="url"
-                    value={apiUrl}
-                    onChange={(e) => setApiUrl(e.target.value)}
-                    placeholder="https://api.example.com/v1/chat/completions"
-                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 px-4 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10"
-                />
+            {/* Divider */}
+            <div className="relative flex items-center justify-center py-2">
+                <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-white/10"></div></div>
+                <span className="relative px-4 bg-black text-[9px] font-mono text-white/30 uppercase tracking-widest">o configurá tus propias llaves</span>
             </div>
 
-            <div>
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-2">
-                    {t('model_name')}
-                </label>
-                <input
-                    type="text"
-                    value={modelName}
-                    onChange={(e) => setModelName(e.target.value)}
-                    placeholder="gpt-4o, llama-3.3-70b-versatile, etc."
-                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 px-4 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10"
-                />
-            </div>
-
-            <div>
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-2">
-                    {t('api_key')}
-                </label>
-                <div className="relative">
-                    <input
-                        type={showKey ? 'text' : 'password'}
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder={t('api_key_placeholder')}
-                        className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 px-4 pr-10 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10"
-                    />
-                    <button
-                        type="button"
-                        onClick={() => setShowKey(!showKey)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors"
-                    >
-                        {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                </div>
-            </div>
-
-            {message && (
-                <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className={`p-3 rounded-lg flex items-center gap-2 text-xs font-mono ${
-                        message.type === 'success'
-                            ? 'bg-green-500/10 border border-green-500/30 text-green-400'
-                            : 'bg-red-500/10 border border-red-500/30 text-red-400'
-                    }`}
-                >
-                    {message.type === 'success' && <Check className="w-4 h-4" />}
-                    {message.text}
-                </motion.div>
-            )}
-
-            <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="w-full flex items-center justify-center gap-2 bg-aegis-cyan/20 border border-aegis-cyan/30 rounded-lg py-3 text-[10px] font-bold text-aegis-cyan hover:bg-aegis-cyan/30 transition-colors uppercase tracking-widest disabled:opacity-50"
-            >
-                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                {t('save_engine_config')}
-            </button>
-
-            <div className="pt-4 border-t border-white/10 space-y-3">
-                <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
-                    {t('personal_keys_notice')}
-                </p>
+            {/* Tenant Keys Manager */}
+            <div className="pt-2">
                 <TenantKeyManager tenantId={tenantId} sessionKey={sessionKey} />
             </div>
         </div>

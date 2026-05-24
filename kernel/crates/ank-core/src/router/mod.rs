@@ -186,6 +186,26 @@ impl CognitiveRouter {
         // Step 1: Get candidates from catalog
         let all_candidates = self.catalog.get_candidates(task_type).await;
 
+        // CORE-305: Detect trivial/light tasks and override preference to LocalOnly
+        // to bypass cloud enclaves if healthy local models are available.
+        let mut model_pref = model_pref;
+        if crate::chal::autocorrect::is_light_task(&pcb.memory_pointers.l1_instruction, task_type) {
+            let mut has_healthy_local = false;
+            for entry in &all_candidates {
+                if entry.is_local
+                    && !self.tracker.is_provider_circuit_open(&entry.provider).await
+                    && !self.tracker.is_model_circuit_open(&entry.model_id).await
+                {
+                    has_healthy_local = true;
+                    break;
+                }
+            }
+            if has_healthy_local {
+                info!("CMR: Light task detected — overriding model preference to LocalOnly");
+                model_pref = ModelPreference::LocalOnly;
+            }
+        }
+
         // Step 2: Filter by model preference.
         // CORE-FIX: If LocalOnly produces no candidates (Ollama not running, no local
         // model registered, etc.), fall back to HybridSmart instead of hard-failing.
@@ -618,7 +638,31 @@ impl CognitiveRouter {
 
         let raw =
             quality * w_quality + cost_inv * w_cost + speed_inv * w_speed + context_fit * w_fit;
-        (raw * (1.0 - error_penalty) * (1.0 - oversize_penalty)).max(0.0)
+
+        // CORE-305: Tiny Model Penalty (Asymmetric Offloading)
+        // If a model is local and its ID contains "1b", "2b", or "3b", and either the task
+        // is heavy (Coding, Planning, Analysis) or the prompt is complex (>300 chars),
+        // apply a 90% score penalty.
+        let tiny_penalty_factor = {
+            if entry.is_local {
+                let lower_id = entry.model_id.to_lowercase();
+                let is_tiny = ["1b", "2b", "3b"].iter().any(|tag| lower_id.contains(tag));
+                let is_heavy_task = matches!(
+                    task_type,
+                    TaskType::Code | TaskType::Planning | TaskType::Analysis
+                );
+                let is_complex_prompt = prompt.chars().count() > 300;
+                if is_tiny && (is_heavy_task || is_complex_prompt) {
+                    0.10 // 90% penalty -> keeps 10% of score
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            }
+        };
+
+        (raw * (1.0 - error_penalty) * (1.0 - oversize_penalty) * tiny_penalty_factor).max(0.0)
     }
 
     /// Busca una entrada en el catálogo por model_id (CORE-237).
@@ -978,7 +1022,11 @@ mod tests {
 
         let router = CognitiveRouter::new(catalog, key_pool);
 
-        let mut pcb = PCB::new("test".to_string(), 5, "Hello".to_string());
+        let mut pcb = PCB::new(
+            "test".to_string(),
+            5,
+            "Could you please provide a detailed explanation of the cognitive routing architecture in Aegis Core?".to_string(),
+        );
         pcb.task_type = TaskType::Chat;
         pcb.model_pref = ModelPreference::CloudOnly;
 
@@ -1087,5 +1135,91 @@ mod tests {
             bare_model_id("anthropic/claude-sonnet-4-6", "openrouter"),
             "anthropic/claude-sonnet-4-6"
         );
+    }
+
+    #[tokio::test]
+    async fn test_router_edge_override_for_greetings() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        // Configura clave de cloud para que el cloud sea elegible normalmente
+        key_pool
+            .add_global_key(ApiKeyEntry {
+                key_id: "test-cloud".to_string(),
+                provider: "anthropic".to_string(),
+                api_key: "sk-ant-test".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: false,
+            })
+            .await?;
+
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        // Light chat prompt (hola) -> should override to LocalOnly, returning a local model
+        let mut pcb = PCB::new("test".to_string(), 5, "hola".to_string());
+        pcb.task_type = TaskType::Chat;
+        pcb.model_pref = ModelPreference::CloudOnly; // normally CloudOnly, but gets overridden!
+
+        let decision = router.decide(&pcb).await?;
+        // Should bypass CloudOnly because of light override and return a local model
+        assert_eq!(decision.provider, "ollama");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tiny_model_penalty_on_heavy_tasks() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        // We want to check that llama-3.2-1b-instruct is penalized on heavy tasks compared to plain chat
+        let entry_1b = router
+            .catalog_find("meta-llama/llama-3.2-1b-instruct")
+            .await
+            .unwrap();
+
+        let ctx = ScoreCtx {
+            prompt: "Implement this complex coding task in Rust",
+            max_cost: 0.0,
+            max_latency: 1000.0,
+            observed_latency: None,
+            recent_errors: 0,
+        };
+
+        // 1. Scoring for Chat with short prompt (no penalty)
+        let ctx_light = ScoreCtx {
+            prompt: "hi",
+            max_cost: 0.0,
+            max_latency: 1000.0,
+            observed_latency: None,
+            recent_errors: 0,
+        };
+        let score_light = router.compute_score(&entry_1b, TaskType::Chat, &ctx_light);
+
+        // 2. Scoring for Code (heavy task -> 90% penalty)
+        let score_heavy_task = router.compute_score(&entry_1b, TaskType::Code, &ctx);
+
+        // 3. Scoring for Chat but complex prompt (>300 chars -> 90% penalty)
+        let complex_prompt = "A".repeat(351);
+        let ctx_complex = ScoreCtx {
+            prompt: &complex_prompt,
+            max_cost: 0.0,
+            max_latency: 1000.0,
+            observed_latency: None,
+            recent_errors: 0,
+        };
+        let score_complex_prompt = router.compute_score(&entry_1b, TaskType::Chat, &ctx_complex);
+
+        // Heavy task score and complex prompt score should be dramatically lower (approx 10% or at least < 50%) compared to base quality
+        assert!(score_heavy_task < score_light * 0.5);
+        assert!(score_complex_prompt < score_light * 0.5);
+        Ok(())
     }
 }

@@ -256,6 +256,11 @@ pub async fn register_provider_models(
         if catalog.find(model_id).await.is_some() {
             continue;
         }
+        // Avoid duplicate registration if a prefixed version of the model is already in the catalog.
+        let prefixed_id = format!("{}/{}", provider, model_id);
+        if catalog.find(&prefixed_id).await.is_some() {
+            continue;
+        }
         let is_large = ["70b", "671b", "405b", "72b", "32b", "34b"]
             .iter()
             .any(|tag| model_id.contains(tag));
@@ -307,7 +312,57 @@ pub async fn register_provider_models(
 }
 
 /// Fetches the OpenRouter model list with the given key, filters to free-tier
-/// models (pricing.prompt == "0"), and adds any that are not yet in the catalog.
+/// parses a single OpenRouter model from JSON, returning a ModelEntry if it is free-tier (pricing.prompt <= 0.0).
+pub fn parse_openrouter_free_model(model: &serde_json::Value) -> Option<ModelEntry> {
+    let prompt_price_f64 = model["pricing"]["prompt"]
+        .as_f64()
+        .or_else(|| {
+            model["pricing"]["prompt"]
+                .as_str()
+                .and_then(|s| s.parse::<f64>().ok())
+        })
+        .unwrap_or(1.0);
+
+    if prompt_price_f64 > 0.0 {
+        return None;
+    }
+
+    let model_id = match model["id"].as_str() {
+        Some(id) if !id.is_empty() => id.to_string(),
+        _ => return None,
+    };
+
+    let context = model["context_length"].as_u64().unwrap_or(131_072) as u32;
+    let name = model["name"].as_str().unwrap_or(&model_id).to_string();
+
+    Some(ModelEntry {
+        model_id,
+        provider: "openrouter".to_string(),
+        display_name: format!("{} (free)", name),
+        context_window: context,
+        cost_input_per_mtok: 0.0,
+        cost_output_per_mtok: 0.0,
+        supports_tools: false,
+        supports_json_mode: false,
+        tool_use_support: ToolUseSupport::Unknown,
+        is_local: false,
+        avg_latency_ms: Some(2500),
+        free_tier_rpm: Some(20),
+        free_tier_rpd: Some(200),
+        free_tier_eligible: true,
+        task_scores: TaskScores {
+            chat: 3,
+            coding: 3,
+            planning: 3,
+            analysis: 3,
+            summarization: 3,
+            extraction: 3,
+        },
+    })
+}
+
+/// Fetches the OpenRouter model list with the given key, filters to free-tier
+/// models (pricing.prompt == "0" or 0.0), and adds any that are not yet in the catalog.
 /// Returns the number of new entries added.
 pub async fn sync_openrouter_free_models(
     api_key: &str,
@@ -329,50 +384,13 @@ pub async fn sync_openrouter_free_models(
 
     let mut added = 0usize;
     for model in models {
-        let prompt_price = model["pricing"]["prompt"].as_str().unwrap_or("1");
-        if prompt_price != "0" {
-            continue;
+        if let Some(entry) = parse_openrouter_free_model(model) {
+            if catalog.find(&entry.model_id).await.is_some() {
+                continue;
+            }
+            catalog.add_entry(entry).await;
+            added += 1;
         }
-
-        let model_id = match model["id"].as_str() {
-            Some(id) if !id.is_empty() => id.to_string(),
-            _ => continue,
-        };
-
-        if catalog.find(&model_id).await.is_some() {
-            continue;
-        }
-
-        let context = model["context_length"].as_u64().unwrap_or(131_072) as u32;
-        let name = model["name"].as_str().unwrap_or(&model_id).to_string();
-
-        let entry = ModelEntry {
-            model_id: model_id.clone(),
-            provider: "openrouter".to_string(),
-            display_name: format!("{} (free)", name),
-            context_window: context,
-            cost_input_per_mtok: 0.0,
-            cost_output_per_mtok: 0.0,
-            supports_tools: false,
-            supports_json_mode: false,
-            tool_use_support: ToolUseSupport::Unknown,
-            is_local: false,
-            avg_latency_ms: Some(2500),
-            free_tier_rpm: Some(20),
-            free_tier_rpd: Some(200),
-            free_tier_eligible: true,
-            task_scores: TaskScores {
-                chat: 3,
-                coding: 3,
-                planning: 3,
-                analysis: 3,
-                summarization: 3,
-                extraction: 3,
-            },
-        };
-
-        catalog.add_entry(entry).await;
-        added += 1;
     }
 
     Ok(added)
@@ -498,6 +516,72 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_register_provider_models_skips_prefixed_duplicates() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+
+        // Add a prefixed model to the catalog
+        catalog
+            .add_entry(ModelEntry {
+                model_id: "ollama_cloud/gpt-oss:120b-cloud".to_string(),
+                provider: "ollama_cloud".to_string(),
+                display_name: "GPT-OSS 120B (Ollama Cloud)".to_string(),
+                context_window: 128000,
+                cost_input_per_mtok: 0.8,
+                cost_output_per_mtok: 2.0,
+                supports_tools: true,
+                supports_json_mode: true,
+                tool_use_support: ToolUseSupport::Unknown,
+                is_local: false,
+                avg_latency_ms: Some(1800),
+                free_tier_rpm: None,
+                free_tier_rpd: None,
+                free_tier_eligible: true,
+                task_scores: TaskScores {
+                    chat: 4,
+                    coding: 4,
+                    planning: 4,
+                    analysis: 4,
+                    summarization: 4,
+                    extraction: 4,
+                },
+            })
+            .await;
+
+        let before = catalog.all_entries().await.len();
+
+        // Registering the bare model ID under the same provider
+        let added = register_provider_models(
+            "ollama_cloud",
+            &["gpt-oss:120b-cloud".to_string()],
+            &catalog,
+        )
+        .await;
+
+        let after = catalog.all_entries().await.len();
+
+        assert_eq!(
+            added, 0,
+            "Should add 0 new models because it's a prefixed duplicate"
+        );
+        assert_eq!(before, after, "Catalog length should remain unchanged");
+
+        // Registering a completely new model ID should work
+        let added_new = register_provider_models(
+            "ollama_cloud",
+            &["completely-new-model:7b".to_string()],
+            &catalog,
+        )
+        .await;
+
+        assert_eq!(added_new, 1, "Should add 1 new model");
+        assert_eq!(catalog.all_entries().await.len(), before + 1);
+
+        Ok(())
+    }
+
     #[test]
     fn test_infer_task_scores_strong() {
         let scores = infer_task_scores("anthropic/claude-sonnet-4-6");
@@ -534,5 +618,68 @@ mod tests {
             let scores = infer_task_scores(id);
             assert_eq!(scores.coding, 5, "{} should score 5 for coding", id);
         }
+    }
+
+    #[test]
+    fn test_parse_openrouter_free_model_pricing() {
+        // 1. String price "0" (free)
+        let model_str_zero = serde_json::json!({
+            "id": "meta-llama/llama-3-8b-instruct:free",
+            "name": "Llama 3 8B Instruct (Free)",
+            "context_length": 8192,
+            "pricing": {
+                "prompt": "0",
+                "completion": "0"
+            }
+        });
+        let entry =
+            parse_openrouter_free_model(&model_str_zero).expect("Should parse successfully");
+        assert_eq!(entry.model_id, "meta-llama/llama-3-8b-instruct:free");
+        assert_eq!(entry.cost_input_per_mtok, 0.0);
+        assert_eq!(entry.cost_output_per_mtok, 0.0);
+        assert_eq!(entry.display_name, "Llama 3 8B Instruct (Free) (free)");
+
+        // 2. Numeric price 0.0 (free)
+        let model_num_zero = serde_json::json!({
+            "id": "meta-llama/llama-3-8b-instruct:free",
+            "name": "Llama 3 8B Instruct (Free)",
+            "context_length": 8192,
+            "pricing": {
+                "prompt": 0.0,
+                "completion": 0.0
+            }
+        });
+        let entry2 =
+            parse_openrouter_free_model(&model_num_zero).expect("Should parse successfully");
+        assert_eq!(entry2.model_id, "meta-llama/llama-3-8b-instruct:free");
+
+        // 3. String price "0.0005" (paid) - should be skipped
+        let model_str_paid = serde_json::json!({
+            "id": "meta-llama/llama-3-8b-instruct",
+            "name": "Llama 3 8B Instruct",
+            "pricing": {
+                "prompt": "0.0005",
+                "completion": "0.0005"
+            }
+        });
+        assert!(parse_openrouter_free_model(&model_str_paid).is_none());
+
+        // 4. Numeric price 0.0005 (paid) - should be skipped
+        let model_num_paid = serde_json::json!({
+            "id": "meta-llama/llama-3-8b-instruct",
+            "name": "Llama 3 8B Instruct",
+            "pricing": {
+                "prompt": 0.0005,
+                "completion": 0.0005
+            }
+        });
+        assert!(parse_openrouter_free_model(&model_num_paid).is_none());
+
+        // 5. Missing price - defaults to paid (skipped)
+        let model_missing_price = serde_json::json!({
+            "id": "meta-llama/llama-3-8b-instruct",
+            "name": "Llama 3 8B Instruct"
+        });
+        assert!(parse_openrouter_free_model(&model_missing_price).is_none());
     }
 }

@@ -144,7 +144,7 @@ const ChatTerminal: React.FC = () => {
 
     useEffect(() => {
         if (!tenantId || !sessionKey) return;
-        fetch('/api/catalog/models', {
+        fetch('/api/router/models', {
             headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey },
         })
             .then(r => r.ok ? r.json() : null)

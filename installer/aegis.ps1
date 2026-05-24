@@ -15,6 +15,17 @@ param(
 $SERVICE_NAME = "AegisOS"
 $INSTALL_DIR  = "$env:ProgramFiles\Aegis"
 $DATA_DIR     = "$env:ProgramData\Aegis"
+$HTTP_PORT    = 8000
+$envPath = "$DATA_DIR\aegis.env"
+if (Test-Path $envPath) {
+    $envContent = Get-Content $envPath
+    foreach ($line in $envContent) {
+        if ($line -match "^(?:AEGIS_HTTP_PORT|ANK_HTTP_PORT)=(.*)$") {
+            $HTTP_PORT = [int]($matches[1].Trim('"').Trim())
+            break
+        }
+    }
+}
 $BIN_PATH     = "$INSTALL_DIR\ank-server.exe"
 $GITHUB_ORG   = "Gustavo324234"
 $GITHUB_REPO  = "Aegis-Core"
@@ -73,9 +84,9 @@ function cmd_status {
 
     Write-Cyan "`n--- API Health Check ---"
     try {
-        $res = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+        $res = Invoke-WebRequest -Uri "http://localhost:$HTTP_PORT/health" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
         if ($res.Content -match "Online") {
-            Write-Green "  API is UP  (http://localhost:8000)"
+            Write-Green "  API is UP  (http://localhost:$HTTP_PORT)"
         } else {
             Write-Yellow "  API responded but status unclear."
         }
@@ -168,7 +179,7 @@ function cmd_token {
             $ip = (Get-NetIPAddress -AddressFamily IPv4 |
                    Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.*" } |
                    Select-Object -First 1).IPAddress
-            Write-Green "`nSetup URL: http://${ip}:8000?setup_token=$t"
+            Write-Green "`nSetup URL: http://${ip}:${HTTP_PORT}?setup_token=$t"
         } else {
             Write-Yellow "No setup token found. System may already be initialized."
         }
@@ -212,7 +223,7 @@ function cmd_diag {
     }
 
     Write-Yellow "`n[4] PORTS"
-    $ports = netstat -ano | Select-String "8000|50051"
+    $ports = netstat -ano | Select-String "$HTTP_PORT|50051"
     if ($ports) { $ports | ForEach-Object { Write-Host "  $_" } }
     else { Write-Yellow "  Aegis ports not listening." }
 

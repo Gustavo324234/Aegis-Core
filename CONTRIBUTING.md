@@ -15,6 +15,28 @@ opening up to the community — contributions of any kind are genuinely apprecia
 
 ---
 
+## ⚠️ Active Project Focus & Feature Freeze
+
+Aegis OS is currently undergoing a **Feature Freeze** on secondary components to consolidate core stability:
+- **Active Focus:** 100% of development effort is directed toward stabilizing the backend (`ank-server`), multi-tenant database isolation, and the web Dashboard (visualizing real Kanban and API Cost data).
+- **Frozen Modules:** No new screens or features are being accepted for the mobile app (`app/`) or the custom Linux distribution packaging (`distro/`) at this time. This ensures we don't disperse our engineering efforts.
+
+We highly encourage community members to help us stabilize the core!
+
+---
+
+## 🌟 Good First Issues (Epic 53)
+
+If you are looking to make your first contribution, we have flagged several simple UI, visualization, and chore tickets as **Good First Issues** (marked with the `Good First Issue` label or listed in [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md)):
+- **Phase 2 (Shell Observability):**
+  - **CORE-252 / CORE-249 / CORE-250 / CORE-251:** UI/Dashboard widgets (financial statistics, tenant name headers, Chronos widget) using mock or raw API data.
+  - **CORE-256:** Basic service management tab inside the Admin panel.
+- **Phase 6 (Technical Debt & Cleanup):**
+  - **CORE-213:** Improving error logs in `key_pool.load()`.
+  - **CORE-224:** Cleaning up residual temp directories after execution.
+
+---
+
 ## Before You Start
 
 1. Check [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md) for open tickets
@@ -28,20 +50,78 @@ opening up to the community — contributions of any kind are genuinely apprecia
 **Requirements:**
 - Rust 1.80+
 - Node.js 20+
-- Linux (Ubuntu 22.04+ / Debian 12+) recommended for full testing
+- Linux (Ubuntu 22.04+ / Debian 12+) recommended for full testing (Windows/macOS are supported for local development)
 
+### 1. Full Build (Embedded UI)
+To compile a single production-ready binary with the web UI fully embedded (via Axum asset routing):
 ```bash
 git clone https://github.com/Gustavo324234/Aegis-Core.git
 cd Aegis-Core
 
-# Build UI + kernel
+# Build UI and embed it in the kernel binary
 make build-embed
 
-# Run
+# Run the server
 ./target/release/ank-server
 ```
-
 The web interface will be available at `http://localhost:8000`.
+
+### 2. Isolated Backend Compilation
+If you are only editing Rust kernel files and do not want to rebuild the React frontend every time, you can compile just the backend crates in isolation:
+```bash
+# Compile the main server binary without UI embedding
+cargo build -p ank-server
+
+# Run the server directly
+cargo run -p ank-server
+```
+
+### 3. Development Mode (Hot-Reload / Split Dev)
+To run both backend and frontend concurrently in development mode (avoiding constant rebuilds):
+1. Start the React frontend dev server:
+   ```bash
+   cd shell/ui
+   npm ci
+   npm run dev
+   ```
+2. In another terminal, point the kernel to your built web assets via the `UI_DIST_PATH` env variable and run:
+   * **Linux/macOS:**
+     ```bash
+     export UI_DIST_PATH=$(pwd)/shell/ui/dist
+     cargo run -p ank-server
+     ```
+   * **Windows (PowerShell):**
+     ```powershell
+     $env:UI_DIST_PATH="$(Get-Location)\shell\ui\dist"
+     cargo run -p ank-server
+     ```
+
+---
+
+## Multi-Tenant & Local Test Simulation
+
+Aegis OS uses a secure multi-tenant architecture enforced by the **Citadel Protocol**. Every cognitive cycle, agent loop, database record, and command execution is strictly bound to a `tenant_id`.
+
+### Simulating Tenants via API Headers
+To simulate requests from different tenants in your local test environment, pass the Citadel authentication and isolation headers in your HTTP/WebSocket requests:
+- `x-aegis-tenant-id`: The unique identifier for the tenant (e.g., `tenant_test_123`).
+- `x-aegis-session-key`: The cryptographic session key generated upon tenant linkage.
+
+### Simulating Tenants via Administrative CLI
+The administrative CLI (`ank-cli`) is the easiest way to test and verify multi-tenant isolation locally:
+1. Build the CLI:
+   ```bash
+   cargo build -p ank-cli
+   ```
+2. Execute commands on behalf of a specific tenant using the `--tenant-id` global flag (or by setting the `AEGIS_TENANT_ID` environment variable):
+   ```bash
+   # Send a chat message on behalf of user_alpha
+   ./target/debug/ank-cli --tenant-id user_alpha chat send "Evaluate current system status"
+   
+   # Send a message on behalf of user_beta to test complete database and file isolation
+   ./target/debug/ank-cli --tenant-id user_beta chat send "List active files"
+   ```
+Workspaces and project databases are automatically provisioned and isolated at `users/<tenant_id>/workspace` in the data directory.
 
 ---
 

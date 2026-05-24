@@ -74,7 +74,7 @@ impl ToolRegistry {
             .collect()
     }
 
-    fn definitions_for(role: &AgentRole) -> Vec<ToolDefinition> {
+    pub fn definitions_for(role: &AgentRole) -> Vec<ToolDefinition> {
         match role {
             // CORE-243: ChatAgent no tiene agent_id — query_agent y report requieren uno.
             // Solo puede hacer spawn_agent (para crear un ProjectSupervisor) y answer_supervisor (CORE-263).

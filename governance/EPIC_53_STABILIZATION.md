@@ -1,5 +1,7 @@
 # EPIC 53 — Stabilization: Agent Loop, Observability & Infrastructure
 
+**Estado:** ✅ Completa
+
 ## Objetivo
 
 Resolver todos los bugs críticos de funcionamiento descubiertos en las primeras
@@ -53,9 +55,9 @@ Completar la experiencia de configuración de providers y persistencia del chat.
 
 | ID | Título | Asignado a | Prioridad |
 |---|---|---|---|
-| CORE-247 | Historial de chat persistente: cargar al conectar, unificar IP y Cloudflare | Kernel + Shell | Crítica |
-| CORE-245 | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | Shell Engineer | Alta |
-| CORE-246 | Tenant: visualización de modelos disponibles por provider en tab Motor | Shell Engineer | Alta |
+| CORE-247 ✅ | Historial de chat persistente: cargar al conectar, unificar IP y Cloudflare | Kernel + Shell | ✅ Done |
+| CORE-245 ✅ | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | Shell Engineer | ✅ Done |
+| CORE-246 ✅ | Tenant: visualización de modelos disponibles por provider en tab Motor | Shell Engineer | ✅ Done |
 
 ---
 
@@ -77,9 +79,9 @@ Dejar el deploy robusto para entornos reales (VPS multi-servicio, Windows, CLI).
 
 | ID | Título | Asignado a | Prioridad |
 |---|---|---|---|
-| CORE-296 | Installer: puerto HTTP configurable + soporte entorno multi-servicio | DevOps Engineer | Crítica |
-| CORE-255 | Installer: registro robusto del servicio Windows + opción -Repair | DevOps Engineer | Crítica |
-| CORE-258 | CLI: ank-cli multiplataforma — Windows + Linux + CI | Kernel Engineer | Alta |
+| CORE-296 ✅ | Installer: puerto HTTP configurable + soporte entorno multi-servicio | DevOps Engineer | ✅ Done |
+| CORE-255 ✅ | Installer: registro robusto del servicio Windows + opción -Repair | DevOps Engineer | ✅ Done |
+| CORE-258 ✅ | CLI: ank-cli multiplataforma — Windows + Linux + CI | Kernel Engineer | ✅ Done |
 
 ---
 
@@ -87,24 +89,24 @@ Dejar el deploy robusto para entornos reales (VPS multi-servicio, Windows, CLI).
 
 | ID | Título | Asignado a | Prioridad |
 |---|---|---|---|
-| CORE-224 | Limpiar directorios temporales | Tavo | Baja |
-| CORE-225 | License field en Cargo.toml → MIT | Kernel Engineer | Alta |
-| CORE-213 | Kernel: loguear error en key_pool.load() al arranque | Kernel Engineer | Media |
-| CORE-306 | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | Tavo | Alta |
-| OPS-001 | Re-registrar API keys tras reinicio (workaround manual) | Tavo | Crítica |
+| CORE-224 ✅ | Limpiar directorios temporales | Tavo | ✅ Done |
+| CORE-225 ✅ | License field en Cargo.toml → MIT | Kernel Engineer | ✅ Done |
+| CORE-213 ✅ | Kernel: loguear error en key_pool.load() al arranque | Kernel Engineer | ✅ Done |
+| CORE-306 ✅ | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | Tavo | ✅ Done |
+| OPS-001 ✅ | Re-registrar API keys tras reinicio (workaround manual) | Tavo | ✅ Done |
 
 ---
 
 ## Criterios de completitud del Epic
 
-- [ ] Fase 1 completa: el pipeline multi-agente funciona end-to-end sin errores en logs
-- [ ] Fase 1 completa: no hay datos cross-tenant bajo ninguna circunstancia
-- [ ] Fase 2 completa: el dashboard no muestra ningún dato mock ni widget "unavailable"
-- [ ] Fase 2 completa: timeouts alineados entre cliente y servidor
-- [ ] Fase 3 completa: el historial de chat persiste entre sesiones
-- [ ] Fase 4 completa: Ollama Cloud configurable desde la UI
-- [ ] Fase 5 completa: `install.sh` en VPS con puerto 8000 ocupado funciona sin intervención manual
-- [ ] Fase 6 completa: licencia MIT en Cargo.toml, directorios limpios
+- [x] Fase 1 completa: el pipeline multi-agente funciona end-to-end sin errores en logs
+- [x] Fase 1 completa: no hay datos cross-tenant bajo ninguna circunstancia
+- [x] Fase 2 completa: el dashboard no muestra ningún dato mock ni widget "unavailable"
+- [x] Fase 2 completa: timeouts alineados entre cliente y servidor
+- [x] Fase 3 completa: el historial de chat persiste entre sesiones
+- [x] Fase 4 completa: Ollama Cloud configurable desde la UI
+- [x] Fase 5 completa: `install.sh` en VPS con puerto 8000 ocupado funciona sin intervención manual
+- [x] Fase 6 completa: licencia MIT en Cargo.toml, directorios limpios
 
 ---
 

@@ -77,6 +77,16 @@ export interface SystemMetrics {
     active_workers: number;
 }
 
+interface CustomWindow extends Window {
+    _aegis_webrtc_peer?: RTCPeerConnection;
+    _aegis_webrtc_dc?: RTCDataChannel;
+    _aegis_audio_stream?: MediaStream;
+    _aegis_audio_ctx?: AudioContext;
+    _aegis_audio_node?: AudioNode;
+    _aegis_audio_gain?: GainNode;
+    _aegis_speech_recognition?: unknown;
+}
+
 interface AegisState {
     messages: Message[];
     status: SystemStatus;
@@ -90,7 +100,7 @@ interface AegisState {
     tenantId: string | null;
     sessionKey: string | null;
     isRecording: boolean;
-    sirenSocket: WebSocket | null;
+    sirenSocket: RTCDataChannel | null;
     isEngineConfigured: boolean;
     taskType: TaskTypeValue;
     lastRoutingInfo: RoutingInfo | null;
@@ -906,7 +916,6 @@ export const useAegisStore = create<AegisState>()(
                     if (!AudioCtx) throw new Error('Web Audio API not supported');
                     const ctx = new AudioCtx({ sampleRate: 16000 });
                     const source = ctx.createMediaStreamSource(stream);
-                    const scriptNode = ctx.createScriptProcessor(4096, 1, 1);
                     const analyser = ctx.createAnalyser();
                     analyser.fftSize = 256;
                     analyser.smoothingTimeConstant = 0.2;
@@ -915,6 +924,22 @@ export const useAegisStore = create<AegisState>()(
                     gainNode.gain.value = 1;
                     source.connect(analyser);
                     source.connect(gainNode);
+
+                    // Inicializar WebRTC PeerConnection
+                    const peer = new RTCPeerConnection({
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                    });
+
+                    const audioRefs = window as unknown as CustomWindow;
+                    audioRefs._aegis_webrtc_peer = peer;
+
+                    stream.getTracks().forEach(track => {
+                        peer.addTrack(track, stream);
+                    });
+
+                    const dc = peer.createDataChannel("siren_events");
+                    audioRefs._aegis_webrtc_dc = dc;
+
                     let silenceStart = Date.now();
                     const SILENCE_THRESHOLD = 5;
                     const MAX_SILENCE_MS = 1500;
@@ -928,16 +953,16 @@ export const useAegisStore = create<AegisState>()(
                         if (sum / dataArray.length < SILENCE_THRESHOLD) {
                             if (Date.now() - silenceStart > MAX_SILENCE_MS) {
                                 vadRequestedStop = true;
+                                if (dc.readyState === 'open') {
+                                    dc.send("VAD_END_SIGNAL");
+                                }
                                 if (get().inputMode === 'conversation') {
-                                    // CORE-184: solo detener mic, sirenWs permanece abierto para TTS
                                     set({ isRecording: false });
                                     stream.getTracks().forEach(t => t.stop());
-                                    scriptNode.disconnect();
                                     ctx.close();
-                                    delete (window as Window & AegisAudioRefs)._aegis_audio_stream;
-                                    delete (window as Window & AegisAudioRefs)._aegis_audio_node;
-                                    delete (window as Window & AegisAudioRefs)._aegis_audio_ctx;
-                                    delete (window as Window & AegisAudioRefs)._aegis_audio_gain;
+                                    delete audioRefs._aegis_audio_stream;
+                                    delete audioRefs._aegis_audio_ctx;
+                                    delete audioRefs._aegis_audio_gain;
                                 } else {
                                     get().stopSirenStream();
                                 }
@@ -946,44 +971,40 @@ export const useAegisStore = create<AegisState>()(
                         } else silenceStart = Date.now();
                         requestAnimationFrame(checkSilence);
                     };
-                    const wsUrl = buildWsUrl(`/ws/siren/${encodeURIComponent(tenantId)}`);
-                    const sirenWs = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
-                    sirenWs.binaryType = 'arraybuffer';
-                    sirenWs.onopen = () => { set({ isRecording: true, sirenSocket: sirenWs }); requestAnimationFrame(checkSilence); };
-                    sirenWs.onmessage = (event) => {
-                        const msg = JSON.parse(event.data as string) as Record<string, unknown>;
+
+                    dc.onopen = () => {
+                        console.log('📡 Siren WebRTC: DataChannel abierto.');
+                        set({ isRecording: true, sirenSocket: dc });
+                        requestAnimationFrame(checkSilence);
+                    };
+
+                    dc.onmessage = (event) => {
+                        interface SirenEventPayload {
+                            event_type: string;
+                            message: string;
+                        }
+                        interface SirenMessage {
+                            event: string;
+                            data: SirenEventPayload;
+                        }
+                        const msg = JSON.parse(event.data) as SirenMessage;
                         if (msg.event === 'siren_event') {
-                            const sirenEvent = msg.data as Record<string, unknown>;
-                            if (sirenEvent.tts_audio_chunk) {
-                                // CORE-302: mute mic durante TTS para evitar feedback loop
-                                const gainRef = (window as Window & AegisAudioRefs)._aegis_audio_gain;
-                                if (gainRef) gainRef.gain.setTargetAtTime(0, gainRef.context.currentTime, 0.01);
-                                try { ttsPlayer.playChunk(sirenEvent.tts_audio_chunk as string, (sirenEvent.sample_rate as number) || 22050); }
-                                catch (e) { console.error('TTS Playback error:', e); }
-                            }
+                            const sirenEvent = msg.data;
                             if (sirenEvent.event_type === 'VAD_START') set({ status: 'listening' });
                             else if (sirenEvent.event_type === 'STT_START') set({ status: 'transcribing' });
                             else if (sirenEvent.event_type === 'STT_DONE') {
                                 try {
-                                    const payload = JSON.parse(sirenEvent.message as string) as { transcript: string; pid: string };
+                                    const payload = JSON.parse(sirenEvent.message) as { transcript: string; pid: string };
                                     set((state) => ({ messages: [...state.messages, { id: `voice-${Date.now()}`, role: 'user', content: payload.transcript, type: 'text', timestamp: Date.now() }], activePid: payload.pid, status: 'thinking' }));
                                     const chatSocket = get().socket;
                                     if (chatSocket?.readyState === WebSocket.OPEN) chatSocket.send(JSON.stringify({ action: 'watch', pid: payload.pid }));
                                     if (get().inputMode === 'audio') {
-                                        // Modo audio: cerrar sirenWs completamente
                                         get().stopSirenStream();
                                     } else if (get().inputMode === 'conversation') {
-                                        // CORE-184: modo conversación — solo detener captura de mic,
-                                        // mantener sirenWs abierto para recibir tts_audio_chunk
                                         set({ isRecording: false });
-                                        const audioRefs = window as Window & AegisAudioRefs;
                                         if (audioRefs._aegis_audio_stream) {
-                                            audioRefs._aegis_audio_stream.getTracks().forEach(track => track.stop());
+                                            audioRefs._aegis_audio_stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
                                             delete audioRefs._aegis_audio_stream;
-                                        }
-                                        if (audioRefs._aegis_audio_node) {
-                                            audioRefs._aegis_audio_node.disconnect();
-                                            delete audioRefs._aegis_audio_node;
                                         }
                                         if (audioRefs._aegis_audio_ctx) {
                                             audioRefs._aegis_audio_ctx.close();
@@ -992,34 +1013,70 @@ export const useAegisStore = create<AegisState>()(
                                         delete audioRefs._aegis_audio_gain;
                                     }
                                 } catch (e) { console.error('Failed to parse STT_DONE payload', e); set({ status: 'idle' }); }
+                            } else if (sirenEvent.event_type === 'TTS_DONE') {
+                                const gainRef = audioRefs._aegis_audio_gain;
+                                if (gainRef) gainRef.gain.setTargetAtTime(1, gainRef.context.currentTime, 0.01);
+                                if (get().inputMode === 'conversation') {
+                                    get().restartMicForConversation().catch(console.error);
+                                }
                             } else if (sirenEvent.event_type === 'STT_ERROR') set({ status: 'error' });
-                        } else if (msg.error) { console.error('❌ Siren Kernel Error:', msg.error); get().stopSirenStream(); }
+                        }
                     };
-                    sirenWs.onclose = () => {
-                        // CORE-184: en modo conversación el sirenWs cierra solo cuando el usuario
-                        // cambia de modo o hace logout — no al terminar cada grabación
-                        if (get().inputMode !== 'conversation') {
-                            get().stopSirenStream();
+
+                    peer.ontrack = (event) => {
+                        console.log('🔊 Siren WebRTC: Track de audio TTS recibido.');
+                        const gainRef = audioRefs._aegis_audio_gain;
+                        if (gainRef) gainRef.gain.setTargetAtTime(0, gainRef.context.currentTime, 0.01);
+
+                        const remoteStream = new MediaStream([event.track]);
+                        let audioEl = document.getElementById('siren-webrtc-audio') as HTMLAudioElement;
+                        if (!audioEl) {
+                            audioEl = document.createElement('audio');
+                            audioEl.id = 'siren-webrtc-audio';
+                            audioEl.style.display = 'none';
+                            document.body.appendChild(audioEl);
+                        }
+                        audioEl.srcObject = remoteStream;
+                        audioEl.play().catch(e => console.error("Playback error:", e));
+                    };
+
+                    // Intercambio SDP (Signaling) por REST
+                    const offer = await peer.createOffer();
+                    await peer.setLocalDescription(offer);
+
+                    await new Promise<void>((resolve) => {
+                        if (peer.iceGatheringState === 'complete') {
+                            resolve();
                         } else {
-                            set({ isRecording: false });
+                            const checkState = () => {
+                                if (peer.iceGatheringState === 'complete') {
+                                    peer.removeEventListener('icegatheringstatechange', checkState);
+                                    resolve();
+                                }
+                            };
+                            peer.addEventListener('icegatheringstatechange', checkState);
                         }
-                    };
-                    scriptNode.onaudioprocess = (audioEvent: AudioProcessingEvent) => {
-                        if (sirenWs.readyState !== WebSocket.OPEN) return;
-                        const inputData = audioEvent.inputBuffer.getChannelData(0);
-                        const pcmBuffer = new Int16Array(inputData.length);
-                        for (let i = 0; i < inputData.length; i++) {
-                            const s = Math.max(-1, Math.min(1, inputData[i]));
-                            pcmBuffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                        }
-                        sirenWs.send(pcmBuffer.buffer);
-                    };
-                    gainNode.connect(scriptNode);
-                    scriptNode.connect(ctx.destination);
-                    const audioRefs = window as Window & AegisAudioRefs;
+                    });
+
+                    const res = await fetch(`/api/siren/webrtc/offer/${encodeURIComponent(tenantId)}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey
+                        },
+                        body: JSON.stringify({ sdp: peer.localDescription?.sdp })
+                    });
+
+                    if (!res.ok) {
+                        throw new Error(`Siren WebRTC signaling failed: ${res.statusText}`);
+                    }
+
+                    const data = await res.json() as { sdp: string };
+                    await peer.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
+
                     audioRefs._aegis_audio_stream = stream;
                     audioRefs._aegis_audio_ctx = ctx;
-                    audioRefs._aegis_audio_node = scriptNode;
                     audioRefs._aegis_audio_gain = gainNode;
                 } catch (error) { console.error('🎤 Siren Capture Error:', error); set({ isRecording: false }); throw error; }
             },
@@ -1121,17 +1178,43 @@ export const useAegisStore = create<AegisState>()(
                 }
 
                 const { sirenSocket } = get();
-                if (sirenSocket?.readyState === WebSocket.OPEN) {
-                    sirenSocket.send(JSON.stringify({ sequence_number: 9999, data: '', format: 'VAD_END_SIGNAL', sample_rate: 16000 }));
-                    setTimeout(() => { if (sirenSocket.readyState === WebSocket.OPEN) sirenSocket.close(); }, 100);
-                } else if (sirenSocket) {
-                    sirenSocket.close();
+                if (sirenSocket && sirenSocket.readyState === 'open') {
+                    try {
+                        sirenSocket.send("VAD_END_SIGNAL");
+                    } catch (e) {
+                        console.error('Siren WebRTC: Failed to send VAD_END_SIGNAL', e);
+                    }
+                }
+                if (sirenSocket) {
+                    try {
+                        sirenSocket.close();
+                    } catch (e) {
+                        console.error('Siren WebRTC: Failed to close DataChannel', e);
+                    }
                 }
                 set({ sirenSocket: null });
 
-                const audioRefs = window as Window & AegisAudioRefs;
+                const audioRefs = window as unknown as CustomWindow;
+                if (audioRefs._aegis_webrtc_peer) {
+                    try {
+                        const peer = audioRefs._aegis_webrtc_peer as RTCPeerConnection;
+                        peer.close();
+                    } catch (e) {
+                        console.error('Siren WebRTC: Failed to close PeerConnection', e);
+                    }
+                    delete audioRefs._aegis_webrtc_peer;
+                }
+                if (audioRefs._aegis_webrtc_dc) {
+                    delete audioRefs._aegis_webrtc_dc;
+                }
+
+                const audioEl = document.getElementById('siren-webrtc-audio');
+                if (audioEl) {
+                    audioEl.parentNode?.removeChild(audioEl);
+                }
+
                 if (audioRefs._aegis_audio_stream) {
-                    audioRefs._aegis_audio_stream.getTracks().forEach(track => track.stop());
+                    audioRefs._aegis_audio_stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
                     delete audioRefs._aegis_audio_stream;
                 }
                 if (audioRefs._aegis_audio_node) {
@@ -1174,9 +1257,9 @@ export const useAegisStore = create<AegisState>()(
                     return;
                 }
 
-                // Modo Groq/Local: el sirenWs ya está abierto — solo reabrir el mic
-                if (!sirenSocket || sirenSocket.readyState !== WebSocket.OPEN) {
-                    // sirenWs se cerró inesperadamente — reiniciar todo
+                // Modo Groq/Local (WebRTC): el sirenSocket (RTCDataChannel) ya está abierto — solo reabrir el mic
+                if (!sirenSocket || sirenSocket.readyState !== 'open') {
+                    // sirenSocket se cerró inesperadamente — reiniciar todo
                     await get().startSirenStream();
                     return;
                 }
@@ -1191,7 +1274,6 @@ export const useAegisStore = create<AegisState>()(
                     if (!AudioCtx) throw new Error('Web Audio API not supported');
                     const ctx = new AudioCtx({ sampleRate: 16000 });
                     const source = ctx.createMediaStreamSource(stream);
-                    const scriptNode = ctx.createScriptProcessor(4096, 1, 1);
                     const analyser = ctx.createAnalyser();
                     analyser.fftSize = 256;
                     analyser.smoothingTimeConstant = 0.2;
@@ -1200,6 +1282,18 @@ export const useAegisStore = create<AegisState>()(
                     gainNode.gain.value = 1;
                     source.connect(analyser);
                     source.connect(gainNode);
+
+                    const audioRefs = window as unknown as CustomWindow;
+                    const peer = audioRefs._aegis_webrtc_peer as RTCPeerConnection | undefined;
+                    if (peer) {
+                        const newTrack = stream.getAudioTracks()[0];
+                        const sender = peer.getSenders().find(s => s.track?.kind === 'audio');
+                        if (sender && newTrack) {
+                            await sender.replaceTrack(newTrack);
+                        } else if (newTrack) {
+                            peer.addTrack(newTrack, stream);
+                        }
+                    }
 
                     let silenceStart = Date.now();
                     const SILENCE_THRESHOLD = 5;
@@ -1215,15 +1309,19 @@ export const useAegisStore = create<AegisState>()(
                         if (sum / dataArray.length < SILENCE_THRESHOLD) {
                             if (Date.now() - silenceStart > MAX_SILENCE_MS) {
                                 vadRequestedStop = true;
-                                // Solo detener mic, sirenWs permanece abierto para TTS
-                                set({ isRecording: false });
-                                stream.getTracks().forEach(t => t.stop());
-                                scriptNode.disconnect();
-                                ctx.close();
-                                delete (window as Window & AegisAudioRefs)._aegis_audio_stream;
-                                delete (window as Window & AegisAudioRefs)._aegis_audio_node;
-                                delete (window as Window & AegisAudioRefs)._aegis_audio_ctx;
-                                delete (window as Window & AegisAudioRefs)._aegis_audio_gain;
+                                if (sirenSocket && sirenSocket.readyState === 'open') {
+                                    sirenSocket.send("VAD_END_SIGNAL");
+                                }
+                                if (get().inputMode === 'conversation') {
+                                    set({ isRecording: false });
+                                    stream.getTracks().forEach(t => t.stop());
+                                    ctx.close();
+                                    delete audioRefs._aegis_audio_stream;
+                                    delete audioRefs._aegis_audio_ctx;
+                                    delete audioRefs._aegis_audio_gain;
+                                } else {
+                                    get().stopSirenStream();
+                                }
                                 return;
                             }
                         } else {
@@ -1232,24 +1330,8 @@ export const useAegisStore = create<AegisState>()(
                         requestAnimationFrame(checkSilence);
                     };
 
-                    scriptNode.onaudioprocess = (audioEvent: AudioProcessingEvent) => {
-                        if (sirenSocket.readyState !== WebSocket.OPEN) return;
-                        const inputData = audioEvent.inputBuffer.getChannelData(0);
-                        const pcmBuffer = new Int16Array(inputData.length);
-                        for (let i = 0; i < inputData.length; i++) {
-                            const s = Math.max(-1, Math.min(1, inputData[i]));
-                            pcmBuffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                        }
-                        sirenSocket.send(pcmBuffer.buffer);
-                    };
-
-                    gainNode.connect(scriptNode);
-                    scriptNode.connect(ctx.destination);
-
-                    const audioRefs = window as Window & AegisAudioRefs;
                     audioRefs._aegis_audio_stream = stream;
                     audioRefs._aegis_audio_ctx = ctx;
-                    audioRefs._aegis_audio_node = scriptNode;
                     audioRefs._aegis_audio_gain = gainNode;
 
                     set({ isRecording: true, status: 'listening' });

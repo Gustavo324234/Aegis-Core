@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [[bin]]
-name = "ank"
+name = "aegis"
 path = "src/main.rs"
 
 [dependencies]
@@ -14,7 +14,12 @@ tonic.workspace     = true
 tokio.workspace     = true
 tokio-stream.workspace = true
 anyhow.workspace    = true
-clap = { workspace = true, features = ["env"] }
+clap = { workspace = true, features = ["derive", "env"] }
 serde_json.workspace = true
 tracing.workspace   = true
 tracing-subscriber.workspace = true
+reqwest = { workspace = true, features = ["json", "blocking"] }
+colored = "2.1"
+regex = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }

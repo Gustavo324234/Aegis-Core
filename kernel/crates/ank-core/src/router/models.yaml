@@ -606,3 +606,91 @@
     analysis: 2
     summarization: 3
     extraction: 2
+- model_id: meta-llama/llama-3.2-1b-instruct
+  provider: ollama
+  display_name: Llama 3.2 1B (local)
+  context_window: 131072
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: false
+  supports_json_mode: false
+  is_local: true
+  avg_latency_ms: 200
+  task_scores:
+    chat: 2
+    coding: 1
+    planning: 1
+    analysis: 1
+    summarization: 2
+    extraction: 1
+- model_id: qwen/qwen-2.5-3b-instruct
+  provider: ollama
+  display_name: Qwen 2.5 3B (local)
+  context_window: 131072
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: false
+  supports_json_mode: false
+  is_local: true
+  avg_latency_ms: 300
+  task_scores:
+    chat: 3
+    coding: 2
+    planning: 2
+    analysis: 2
+    summarization: 3
+    extraction: 2
+
+- model_id: "ollama_cloud/gpt-oss:120b-cloud"
+  provider: "ollama_cloud"
+  display_name: "GPT-OSS 120B (Ollama Cloud)"
+  context_window: 128000
+  cost_input_per_mtok: 0.8
+  cost_output_per_mtok: 2.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1800
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+
+- model_id: "ollama_cloud/llama3.3:70b-cloud"
+  provider: "ollama_cloud"
+  display_name: "Llama 3.3 70B (Ollama Cloud)"
+  context_window: 131072
+  cost_input_per_mtok: 0.4
+  cost_output_per_mtok: 0.8
+  supports_tools: true
+  supports_json_mode: false
+  is_local: false
+  avg_latency_ms: 1200
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 3
+    analysis: 4
+    summarization: 4
+    extraction: 3
+
+- model_id: "ollama_cloud/gemma3:27b-cloud"
+  provider: "ollama_cloud"
+  display_name: "Gemma 3 27B (Ollama Cloud)"
+  context_window: 131072
+  cost_input_per_mtok: 0.3
+  cost_output_per_mtok: 0.6
+  supports_tools: false
+  supports_json_mode: false
+  is_local: false
+  avg_latency_ms: 900
+  task_scores:
+    chat: 4
+    coding: 3
+    planning: 3
+    analysis: 4
+    summarization: 4
+    extraction: 3

@@ -691,7 +691,11 @@ impl PluginManager {
 
     /// Verifica si un plugin está cargado y activo.
     pub fn is_plugin_active(&self, name: &str) -> bool {
-        self.plugins.contains_key(name)
+        if name == "maker" {
+            true // Maker capability is native and always active by default
+        } else {
+            self.plugins.contains_key(name)
+        }
     }
 }
 

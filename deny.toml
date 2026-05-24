@@ -5,6 +5,22 @@ ignore = [
     "RUSTSEC-2024-0436",
     # proc-macro-error is unmaintained (pulled by utoipa). No safe upgrade available.
     "RUSTSEC-2024-0370",
+    # CORE-304/webrtc: ring 0.16.20 unmaintained. No safe upgrade available.
+    "RUSTSEC-2025-0010",
+    # ring 0.16.20: overflow panic vulnerability.
+    "RUSTSEC-2025-0009",
+    # webrtc: rustls-webpki vulnerability ignored name constraints.
+    "RUSTSEC-2026-0098",
+    # webrtc: rustls-webpki vulnerability wildcard constraints.
+    "RUSTSEC-2026-0099",
+    # webrtc: rustls-webpki vulnerability CRL parsing panic.
+    "RUSTSEC-2026-0104",
+    # wasmtime: WASI path open write bypass vulnerability.
+    "RUSTSEC-2026-0149",
+    # opus: audiopus_sys unmaintained. No safe upgrade available.
+    "RUSTSEC-2026-0150",
+    # webrtc-dtls: bincode unmaintained. No safe upgrade available.
+    "RUSTSEC-2025-0141",
 ]
 
 [bans]
@@ -31,3 +47,11 @@ allow = [
     "Unlicense",
 ]
 confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+version = "0.16.20"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 }
+]
