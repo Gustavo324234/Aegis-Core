@@ -414,7 +414,8 @@ impl InferenceDriver for CloudProxyDriver {
                 .into_iter()
                 .map(|mut m| {
                     if let Some(content) = m.content.take() {
-                        m.content = Some(crate::chal::autocorrect::sanitize_prompt_content(&content));
+                        m.content =
+                            Some(crate::chal::autocorrect::sanitize_prompt_content(&content));
                     }
                     m
                 })
@@ -769,7 +770,9 @@ mod tests {
 
     #[test]
     fn test_is_local_network() {
-        assert!(is_local_network("http://localhost:11434/v1/chat/completions"));
+        assert!(is_local_network(
+            "http://localhost:11434/v1/chat/completions"
+        ));
         assert!(is_local_network("https://127.0.0.1/v1"));
         assert!(is_local_network("http://[::1]:11434"));
         assert!(is_local_network("http://192.168.1.50:8000/v1"));
@@ -778,7 +781,8 @@ mod tests {
 
         assert!(!is_local_network("https://api.openai.com/v1"));
         assert!(!is_local_network("https://openrouter.ai/api/v1"));
-        assert!(!is_local_network("https://generativelanguage.googleapis.com"));
+        assert!(!is_local_network(
+            "https://generativelanguage.googleapis.com"
+        ));
     }
 }
-

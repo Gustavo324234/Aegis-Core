@@ -764,7 +764,11 @@ impl CognitiveHAL {
                                 }
                                 for attempt in 0..3u32 {
                                     let alt = match kp
-                                        .get_available_key(&active_provider, &active_model_id, tenant_id)
+                                        .get_available_key(
+                                            &active_provider,
+                                            &active_model_id,
+                                            tenant_id,
+                                        )
                                         .await
                                     {
                                         Some(k) if !tried.contains(&k.key_id) => k,
@@ -784,7 +788,11 @@ impl CognitiveHAL {
                                         on_rate_limited.clone(),
                                     );
                                     match alt_driver
-                                        .generate_stream(local_messages.clone(), None, tools.clone())
+                                        .generate_stream(
+                                            local_messages.clone(),
+                                            None,
+                                            tools.clone(),
+                                        )
                                         .await
                                     {
                                         Ok(s) => {
@@ -798,7 +806,8 @@ impl CognitiveHAL {
                                                     active_provider
                                                 ),
                                             });
-                                            let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                            let _ = text_tx
+                                                .send(Ok(format!("__WARNING__{}", wpayload)));
                                             driver = alt_driver;
                                             recovered = Some(s);
                                             break;
@@ -869,7 +878,11 @@ impl CognitiveHAL {
                                         active_model_id = fb.model_id.clone();
                                         active_provider = fb.provider.clone();
                                         driver = fb_driver;
-                                        send_model_event(&text_tx, &active_model_id, &active_provider);
+                                        send_model_event(
+                                            &text_tx,
+                                            &active_model_id,
+                                            &active_provider,
+                                        );
                                         let wpayload = serde_json::json!({
                                             "category": "model_fallback",
                                             "message": format!(
@@ -877,7 +890,8 @@ impl CognitiveHAL {
                                                 fb.model_id
                                             )
                                         });
-                                        let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                        let _ =
+                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                         recovered = Some(s);
                                         break;
                                     }
@@ -913,7 +927,8 @@ impl CognitiveHAL {
                                     // (smoke-test symptom: Gemini quota exhausted +
                                     // all OpenRouter fallbacks 401).
                                     if let Some(r) = &tracker {
-                                        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                                        let tenant_id =
+                                            pcb.tenant_id.as_deref().unwrap_or("default");
                                         r.read().await.invalidate_sticky(tenant_id).await;
                                     }
                                     let summary = summarise_provider_failure(&primary_err);
@@ -979,7 +994,8 @@ impl CognitiveHAL {
                     match token_result {
                         Ok(token) if token.starts_with("__TOOL_CALL__") => {
                             let json_str = token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
-                            if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str) {
+                            if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str)
+                            {
                                 tool_calls.push(ToolCallRecord {
                                     id: tc.id,
                                     type_: "function".to_string(),
@@ -1023,8 +1039,10 @@ impl CognitiveHAL {
 
                 // CORE-FIX (A): the smoke test caught cogito-2.1:671b on ollama_cloud
                 // returning 200 OK with zero content tokens.
-                let stream_was_empty =
-                    iteration == 0 && autocorrect_retries == 0 && assistant_text.is_empty() && tool_calls.is_empty();
+                let stream_was_empty = iteration == 0
+                    && autocorrect_retries == 0
+                    && assistant_text.is_empty()
+                    && tool_calls.is_empty();
 
                 if stream_was_empty {
                     if let Some(r) = self.router_ref.read().await.clone() {
@@ -1131,7 +1149,8 @@ impl CognitiveHAL {
                                                 active_provider
                                             ),
                                         });
-                                        let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                        let _ =
+                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                         driver = alt_driver;
                                         assistant_text = alt_text;
                                         tool_calls = alt_tool_calls;
@@ -1201,10 +1220,13 @@ impl CognitiveHAL {
                                     while let Some(tr) = s.next().await {
                                         match tr {
                                             Ok(token) if token.starts_with("__TOOL_CALL__") => {
-                                                let json_str =
-                                                    token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
+                                                let json_str = token
+                                                    .strip_prefix("__TOOL_CALL__")
+                                                    .unwrap_or_default();
                                                 if let Ok(tc) =
-                                                    serde_json::from_str::<DriverToolCallPayload>(json_str)
+                                                    serde_json::from_str::<DriverToolCallPayload>(
+                                                        json_str,
+                                                    )
                                                 {
                                                     fb_tool_calls.push(ToolCallRecord {
                                                         id: tc.id,
@@ -1229,7 +1251,11 @@ impl CognitiveHAL {
                                         active_model_id = fb.model_id.clone();
                                         active_provider = fb.provider.clone();
                                         driver = fb_driver;
-                                        send_model_event(&text_tx, &active_model_id, &active_provider);
+                                        send_model_event(
+                                            &text_tx,
+                                            &active_model_id,
+                                            &active_provider,
+                                        );
                                         let wpayload = serde_json::json!({
                                             "category": "model_fallback",
                                             "message": format!(
@@ -1237,7 +1263,8 @@ impl CognitiveHAL {
                                                 fb.model_id
                                             )
                                         });
-                                        let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                        let _ =
+                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                         assistant_text = fb_text;
                                         tool_calls = fb_tool_calls;
                                         recovered = true;
@@ -1246,7 +1273,9 @@ impl CognitiveHAL {
                                         // Fallback also returned empty. Record and try next.
                                         if let Some(r) = self.router_ref.read().await.clone() {
                                             let tr = r.read().await;
-                                            tr.tracker_ref().record_empty_response(&fb.model_id).await;
+                                            tr.tracker_ref()
+                                                .record_empty_response(&fb.model_id)
+                                                .await;
                                             tr.tracker_ref()
                                                 .record_failure(&fb.model_id, &fb.provider)
                                                 .await;
@@ -1383,17 +1412,26 @@ impl CognitiveHAL {
                     // Push the failing assistant response
                     local_messages.push(ChatMessage {
                         role: ChatRole::Assistant,
-                        content: if assistant_text.is_empty() { None } else { Some(assistant_text.clone()) },
+                        content: if assistant_text.is_empty() {
+                            None
+                        } else {
+                            Some(assistant_text.clone())
+                        },
                         tool_calls: Some(tool_calls.clone()),
                         ..Default::default()
                     });
 
                     // Push a Tool role message for each tool call
                     for tc in &tool_calls {
-                        let error_for_this = validation_errors.iter().find(|err| err.contains(&tc.function.name) || err.contains(&tc.id));
+                        let error_for_this = validation_errors
+                            .iter()
+                            .find(|err| err.contains(&tc.function.name) || err.contains(&tc.id));
                         let err_msg = match error_for_this {
                             Some(msg) => msg.clone(),
-                            None => format!("Error: La llamada a la herramienta '{}' no pasó la validación.", tc.function.name),
+                            None => format!(
+                                "Error: La llamada a la herramienta '{}' no pasó la validación.",
+                                tc.function.name
+                            ),
                         };
                         local_messages.push(ChatMessage {
                             role: ChatRole::Tool,
@@ -1562,7 +1600,8 @@ impl CognitiveHAL {
                     match token_result {
                         Ok(token) if token.starts_with("__TOOL_CALL__") => {
                             let json_str = token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
-                            if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str) {
+                            if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str)
+                            {
                                 tool_calls.push(ToolCallRecord {
                                     id: tc.id,
                                     type_: "function".to_string(),
@@ -1642,17 +1681,26 @@ impl CognitiveHAL {
                     // Push the failing assistant response
                     local_messages.push(ChatMessage {
                         role: ChatRole::Assistant,
-                        content: if assistant_text.is_empty() { None } else { Some(assistant_text.clone()) },
+                        content: if assistant_text.is_empty() {
+                            None
+                        } else {
+                            Some(assistant_text.clone())
+                        },
                         tool_calls: Some(tool_calls.clone()),
                         ..Default::default()
                     });
 
                     // Push a Tool role message for each tool call
                     for tc in &tool_calls {
-                        let error_for_this = validation_errors.iter().find(|err| err.contains(&tc.function.name) || err.contains(&tc.id));
+                        let error_for_this = validation_errors
+                            .iter()
+                            .find(|err| err.contains(&tc.function.name) || err.contains(&tc.id));
                         let err_msg = match error_for_this {
                             Some(msg) => msg.clone(),
-                            None => format!("Error: La llamada a la herramienta '{}' no pasó la validación.", tc.function.name),
+                            None => format!(
+                                "Error: La llamada a la herramienta '{}' no pasó la validación.",
+                                tc.function.name
+                            ),
                         };
                         local_messages.push(ChatMessage {
                             role: ChatRole::Tool,
@@ -2721,54 +2769,69 @@ impl CognitiveHAL {
         messages
     }
 
-async fn get_dynamic_scripts_section(tenant_id: &str) -> String {
-    let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-    let workspace_path = std::path::Path::new(&base_dir)
-        .join("users")
-        .join(tenant_id)
-        .join("workspace");
+    async fn get_dynamic_scripts_section(tenant_id: &str) -> String {
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let workspace_path = std::path::Path::new(&base_dir)
+            .join("users")
+            .join(tenant_id)
+            .join("workspace");
 
-    let mut scripts_list = String::new();
+        let mut scripts_list = String::new();
 
-    if let Ok(entries) = std::fs::read_dir(workspace_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("js") {
-                if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                    let mut description = "No description available.".to_string();
-                    let mut params_example = "{}".to_string();
+        if let Ok(entries) = std::fs::read_dir(workspace_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("js") {
+                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
+                        let mut description = "No description available.".to_string();
+                        let mut params_example = "{}".to_string();
 
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        for line in content.lines().take(5) {
-                            let trimmed = line.trim();
-                            if trimmed.starts_with("// Description:") || trimmed.starts_with("// description:") {
-                                description = trimmed.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
-                            } else if trimmed.starts_with("// Parameters:") || trimmed.starts_with("// parameters:") || trimmed.starts_with("// Example:") {
-                                params_example = trimmed.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            for line in content.lines().take(5) {
+                                let trimmed = line.trim();
+                                if trimmed.starts_with("// Description:")
+                                    || trimmed.starts_with("// description:")
+                                {
+                                    description = trimmed
+                                        .splitn(2, ':')
+                                        .nth(1)
+                                        .unwrap_or("")
+                                        .trim()
+                                        .to_string();
+                                } else if trimmed.starts_with("// Parameters:")
+                                    || trimmed.starts_with("// parameters:")
+                                    || trimmed.starts_with("// Example:")
+                                {
+                                    params_example = trimmed
+                                        .splitn(2, ':')
+                                        .nth(1)
+                                        .unwrap_or("")
+                                        .trim()
+                                        .to_string();
+                                }
                             }
                         }
-                    }
 
-                    scripts_list.push_str(&format!(
+                        scripts_list.push_str(&format!(
                         "- **{}**: {}\n  Uso: [SYS_CALL_MAKER(\"js\", \"return eval(read_file('{}'))\", {})]\n",
                         filename, description, filename, params_example
                     ));
+                    }
                 }
             }
         }
-    }
 
-    if scripts_list.is_empty() {
-        String::new()
-    } else {
-        format!(
+        if scripts_list.is_empty() {
+            String::new()
+        } else {
+            format!(
             "\n\nDYNAMIC SCRIPTS (HERRAMIENTAS DINÁMICAS GUARDADAS EN EL WORKSPACE):\n\
              Podés reutilizar los siguientes scripts previamente creados y guardados en tu espacio de trabajo:\n\
              {}\n",
             scripts_list
         )
+        }
     }
-}
 
     /// CORE-FIX (A3): variant that also returns any non-fatal warnings produced
     /// while assembling the context (e.g. VCM failures that triggered a
@@ -3160,9 +3223,9 @@ mod tests {
     #[test]
     fn test_validate_and_sanitize_tool_call() {
         use super::autocorrect::validate_and_sanitize_tool_call;
-        use crate::chal::ToolCallRecord;
-        use crate::chal::FunctionCallRecord;
         use crate::agents::node::AgentRole;
+        use crate::chal::FunctionCallRecord;
+        use crate::chal::ToolCallRecord;
 
         // Valid spawn_agent call with coercion and typo fix
         let tc = ToolCallRecord {
@@ -3178,7 +3241,7 @@ mod tests {
         assert!(res.is_ok(), "Should successfully validate: {:?}", res.err());
         let sanitized = res.unwrap();
         assert_eq!(sanitized.function.name, "spawn_agent");
-        
+
         let args: serde_json::Value = serde_json::from_str(&sanitized.function.arguments).unwrap();
         assert_eq!(args["name"], "Test Supervisor");
         assert_eq!(args["role"], "supervisor");
@@ -3189,10 +3252,17 @@ mod tests {
             type_: "function".to_string(),
             function: FunctionCallRecord {
                 name: "writefile".to_string(), // Typo fix
-                arguments: "{\"path\": \"test.txt\", \"content\": \"hello\", \"mode\": \"rewrite\"}".to_string(),
+                arguments:
+                    "{\"path\": \"test.txt\", \"content\": \"hello\", \"mode\": \"rewrite\"}"
+                        .to_string(),
             },
         };
-        let res_spec = validate_and_sanitize_tool_call(&tc_spec, &AgentRole::Specialist { scope: "code".to_string() });
+        let res_spec = validate_and_sanitize_tool_call(
+            &tc_spec,
+            &AgentRole::Specialist {
+                scope: "code".to_string(),
+            },
+        );
         assert!(res_spec.is_ok(), "Should validate: {:?}", res_spec.err());
         let sanitized_spec = res_spec.unwrap();
         assert_eq!(sanitized_spec.function.name, "write_file");
@@ -3215,7 +3285,8 @@ mod tests {
         use super::autocorrect::sanitize_prompt_content;
 
         // OpenAI key
-        let text1 = "My key is sk-123456789012345678901234567890123456789012345678 and it is secret.";
+        let text1 =
+            "My key is sk-123456789012345678901234567890123456789012345678 and it is secret.";
         assert_eq!(
             sanitize_prompt_content(text1),
             "My key is [REDACTED_OPENAI_KEY] and it is secret."
@@ -3250,7 +3321,8 @@ mod tests {
         );
 
         // Database Password
-        let text6 = "Connect using postgres://admin:super_secret_password@localhost:5432/mydb and enjoy!";
+        let text6 =
+            "Connect using postgres://admin:super_secret_password@localhost:5432/mydb and enjoy!";
         assert_eq!(
             sanitize_prompt_content(text6),
             "Connect using postgres://admin:[REDACTED_PASSWORD]@localhost:5432/mydb and enjoy!"

@@ -162,7 +162,9 @@ impl SirenRouter {
                 // Fallback: intentar con la key global configurada en el perfil de root/admin pero preservando el voice_id del tenant
                 if let Ok(Some(admin_profile)) = self.persistence.get_voice_profile("root").await {
                     if admin_profile.engine_id == "elevenlabs" {
-                        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&admin_profile.settings_json) {
+                        if let Ok(settings) =
+                            serde_json::from_str::<serde_json::Value>(&admin_profile.settings_json)
+                        {
                             if let Some(api_key) = settings["api_key"].as_str() {
                                 if !api_key.is_empty() {
                                     let chosen_voice_id = if p.voice_id.is_empty() {

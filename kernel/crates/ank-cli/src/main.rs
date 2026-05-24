@@ -6,16 +6,16 @@ use ank_proto::v1::TaskSubscription;
 use ank_proto::v1::TenantCreateRequest;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use std::process::{self, Command};
+use colored::Colorize;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::process::{self, Command};
 use tokio_stream::StreamExt;
 use tonic::codegen::InterceptedService;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 use tonic::Request;
-use colored::Colorize;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Aegis OS Admin CLI", long_about = None)]
@@ -161,26 +161,28 @@ impl WindowsBackend {
 #[cfg(target_os = "windows")]
 impl ServiceBackend for WindowsBackend {
     fn start(&self) -> Result<()> {
-        let output = Command::new("sc.exe")
-            .args(["start", "AegisOS"])
-            .output()?;
+        let output = Command::new("sc.exe").args(["start", "AegisOS"]).output()?;
         if output.status.success() {
             println!("{}", "Service start command issued successfully.".green());
             Ok(())
         } else {
-            Err(anyhow!("Failed to start service: {}", String::from_utf8_lossy(&output.stderr)))
+            Err(anyhow!(
+                "Failed to start service: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
         }
     }
 
     fn stop(&self) -> Result<()> {
-        let output = Command::new("sc.exe")
-            .args(["stop", "AegisOS"])
-            .output()?;
+        let output = Command::new("sc.exe").args(["stop", "AegisOS"]).output()?;
         if output.status.success() {
             println!("{}", "Service stop command issued successfully.".green());
             Ok(())
         } else {
-            Err(anyhow!("Failed to stop service: {}", String::from_utf8_lossy(&output.stderr)))
+            Err(anyhow!(
+                "Failed to stop service: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
         }
     }
 
@@ -191,10 +193,8 @@ impl ServiceBackend for WindowsBackend {
     }
 
     fn status(&self) -> Result<()> {
-        let output = Command::new("sc.exe")
-            .args(["query", "AegisOS"])
-            .output()?;
-        
+        let output = Command::new("sc.exe").args(["query", "AegisOS"]).output()?;
+
         println!("{}", "Aegis OS — Status".bold().cyan());
         println!("{}", "─────────────────────────────────────────".cyan());
         let query_out = String::from_utf8_lossy(&output.stdout);
@@ -211,24 +211,46 @@ impl ServiceBackend for WindowsBackend {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
             .build()?;
-        match client.get(format!("http://localhost:{}/health", port)).send() {
+        match client
+            .get(format!("http://localhost:{}/health", port))
+            .send()
+        {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    println!("HTTP:     {}   http://localhost:{}", "✓ Online".green(), port);
+                    println!(
+                        "HTTP:     {}   http://localhost:{}",
+                        "✓ Online".green(),
+                        port
+                    );
                     // parse connection-info for Cloudflare Tunnel
-                    if let Ok(conn_resp) = client.get(format!("http://localhost:{}/api/system/connection-info", port)).send() {
+                    if let Ok(conn_resp) = client
+                        .get(format!(
+                            "http://localhost:{}/api/system/connection-info",
+                            port
+                        ))
+                        .send()
+                    {
                         if let Ok(json) = conn_resp.json::<serde_json::Value>() {
-                            if let Some(tunnel_url) = json.get("tunnel_url").and_then(|v| v.as_str()) {
+                            if let Some(tunnel_url) =
+                                json.get("tunnel_url").and_then(|v| v.as_str())
+                            {
                                 println!("Remote:   {}   {}", "✓ Active".green(), tunnel_url);
                             }
                         }
                     }
                 } else {
-                    println!("HTTP:     {}", format!("✗ Status Error ({})", resp.status()).red());
+                    println!(
+                        "HTTP:     {}",
+                        format!("✗ Status Error ({})", resp.status()).red()
+                    );
                 }
             }
             Err(_) => {
-                println!("HTTP:     {}   http://localhost:{}", "✗ Offline".red(), port);
+                println!(
+                    "HTTP:     {}   http://localhost:{}",
+                    "✗ Offline".red(),
+                    port
+                );
             }
         }
         println!("{}", "─────────────────────────────────────────".cyan());
@@ -238,20 +260,21 @@ impl ServiceBackend for WindowsBackend {
     fn logs(&self, lines: usize, follow: bool) -> Result<()> {
         let logs_dir = self.data_dir.join("logs");
         if !logs_dir.exists() {
-            return Err(anyhow!("Logs directory does not exist: {}", logs_dir.display()));
+            return Err(anyhow!(
+                "Logs directory does not exist: {}",
+                logs_dir.display()
+            ));
         }
         // find latest daily ank.log file
         let mut entries = std::fs::read_dir(logs_dir)?
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("ank.log")
-            })
+            .filter(|e| e.file_name().to_string_lossy().starts_with("ank.log"))
             .collect::<Vec<_>>();
-        
+
         entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
-        let latest = entries.last().ok_or_else(|| anyhow!("No logs found in logs directory"))?;
+        let latest = entries
+            .last()
+            .ok_or_else(|| anyhow!("No logs found in logs directory"))?;
         let path = latest.path();
 
         let file = File::open(&path)?;
@@ -345,7 +368,10 @@ impl ServiceBackend for SystemdBackend {
         if is_active == "active" {
             println!("Service:  {}  (aegis)", "● Running".green().bold());
         } else {
-            println!("Service:  {}  (aegis)", format!("● Inactive ({})", is_active).red().bold());
+            println!(
+                "Service:  {}  (aegis)",
+                format!("● Inactive ({})", is_active).red().bold()
+            );
         }
 
         // Call HTTP health check
@@ -353,23 +379,45 @@ impl ServiceBackend for SystemdBackend {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
             .build()?;
-        match client.get(format!("http://localhost:{}/health", port)).send() {
+        match client
+            .get(format!("http://localhost:{}/health", port))
+            .send()
+        {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    println!("HTTP:     {}   http://localhost:{}", "✓ Online".green(), port);
-                    if let Ok(conn_resp) = client.get(format!("http://localhost:{}/api/system/connection-info", port)).send() {
+                    println!(
+                        "HTTP:     {}   http://localhost:{}",
+                        "✓ Online".green(),
+                        port
+                    );
+                    if let Ok(conn_resp) = client
+                        .get(format!(
+                            "http://localhost:{}/api/system/connection-info",
+                            port
+                        ))
+                        .send()
+                    {
                         if let Ok(json) = conn_resp.json::<serde_json::Value>() {
-                            if let Some(tunnel_url) = json.get("tunnel_url").and_then(|v| v.as_str()) {
+                            if let Some(tunnel_url) =
+                                json.get("tunnel_url").and_then(|v| v.as_str())
+                            {
                                 println!("Remote:   {}   {}", "✓ Active".green(), tunnel_url);
                             }
                         }
                     }
                 } else {
-                    println!("HTTP:     {}", format!("✗ Status Error ({})", resp.status()).red());
+                    println!(
+                        "HTTP:     {}",
+                        format!("✗ Status Error ({})", resp.status()).red()
+                    );
                 }
             }
             Err(_) => {
-                println!("HTTP:     {}   http://localhost:{}", "✗ Offline".red(), port);
+                println!(
+                    "HTTP:     {}   http://localhost:{}",
+                    "✗ Offline".red(),
+                    port
+                );
             }
         }
         println!("{}", "─────────────────────────────────────────".cyan());
@@ -377,13 +425,17 @@ impl ServiceBackend for SystemdBackend {
     }
 
     fn logs(&self, lines: usize, follow: bool) -> Result<()> {
-        let mut args = vec!["journalctl".to_string(), "-u".to_string(), "aegis".to_string(), "-n".to_string(), lines.to_string()];
+        let mut args = vec![
+            "journalctl".to_string(),
+            "-u".to_string(),
+            "aegis".to_string(),
+            "-n".to_string(),
+            lines.to_string(),
+        ];
         if follow {
             args.push("-f".to_string());
         }
-        let mut child = Command::new("sudo")
-            .args(args)
-            .spawn()?;
+        let mut child = Command::new("sudo").args(args).spawn()?;
         child.wait()?;
         Ok(())
     }
@@ -463,39 +515,54 @@ fn get_setup_token() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             #[cfg(target_os = "windows")]
-            let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("aegis");
+            let base = dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("aegis");
             #[cfg(not(target_os = "windows"))]
             let base = PathBuf::from("/var/lib/aegis");
             base
         });
     let logs_dir = base_dir.join("logs");
     if !logs_dir.exists() {
-        return Err(anyhow!("Logs directory does not exist. Aegis might not be initialized yet."));
+        return Err(anyhow!(
+            "Logs directory does not exist. Aegis might not be initialized yet."
+        ));
     }
     let mut entries = std::fs::read_dir(logs_dir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().starts_with("ank.log"))
         .collect::<Vec<_>>();
-    
+
     entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
-    
+
     let re = regex::Regex::new(r"setup_token=([a-f0-9]{32})")?;
     for entry in entries.iter().rev() {
         let file = File::open(entry.path())?;
         let reader = BufReader::new(file);
-        let lines_vec = reader.lines().filter_map(|l| l.ok()).collect::<Vec<String>>();
+        let lines_vec = reader
+            .lines()
+            .filter_map(|l| l.ok())
+            .collect::<Vec<String>>();
         for line in lines_vec.iter().rev() {
             if let Some(caps) = re.captures(line) {
                 let token = &caps[1];
                 let hostname = std::env::var("COMPUTERNAME")
                     .or_else(|_| std::env::var("HOSTNAME"))
                     .unwrap_or_else(|_| "localhost".to_string());
-                println!("\n{} http://{}:8000?setup_token={}", "Setup URL:".green().bold(), hostname, token);
+                println!(
+                    "\n{} http://{}:8000?setup_token={}",
+                    "Setup URL:".green().bold(),
+                    hostname,
+                    token
+                );
                 return Ok(());
             }
         }
     }
-    println!("{}", "No active setup token found in the logs. Aegis OS might already be initialized.".yellow());
+    println!(
+        "{}",
+        "No active setup token found in the logs. Aegis OS might already be initialized.".yellow()
+    );
     Ok(())
 }
 
@@ -504,8 +571,12 @@ fn run_diagnostic_report() -> Result<()> {
     println!("Generated: {}", chrono::Utc::now().to_rfc3339());
     println!("{}", "─────────────────────────────────────────".cyan());
     println!("SYSTEM");
-    println!("  OS:      {} ({})", std::env::consts::OS, std::env::consts::ARCH);
-    
+    println!(
+        "  OS:      {} ({})",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+
     println!("\nSERVICE");
     let backend = get_backend();
     let _ = backend.status();
@@ -515,7 +586,9 @@ fn run_diagnostic_report() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             #[cfg(target_os = "windows")]
-            let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("aegis");
+            let base = dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("aegis");
             #[cfg(not(target_os = "windows"))]
             let base = PathBuf::from("/var/lib/aegis");
             base
@@ -528,9 +601,13 @@ fn run_diagnostic_report() -> Result<()> {
             if let Some(latest) = entries.last() {
                 if let Ok(file) = File::open(latest.path()) {
                     let reader = BufReader::new(file);
-                    let errors = reader.lines()
+                    let errors = reader
+                        .lines()
                         .filter_map(|l| l.ok())
-                        .filter(|line| line.to_uppercase().contains("ERROR") || line.to_uppercase().contains("WARN"))
+                        .filter(|line| {
+                            line.to_uppercase().contains("ERROR")
+                                || line.to_uppercase().contains("WARN")
+                        })
                         .collect::<Vec<_>>();
                     let start = errors.len().saturating_sub(20);
                     if errors.is_empty() {
@@ -574,9 +651,7 @@ fn run_update(beta: bool) -> Result<()> {
             "curl -fsSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh | sudo bash -s -- --tag {}",
             tag
         );
-        let status = Command::new("bash")
-            .args(["-c", &cmd])
-            .status()?;
+        let status = Command::new("bash").args(["-c", &cmd]).status()?;
         if status.success() {
             println!("{}", "Aegis OS updated successfully.".green());
             Ok(())
@@ -639,7 +714,10 @@ async fn main() -> Result<()> {
             let client = reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(1))
                 .build()?;
-            if let Ok(resp) = client.get(format!("http://localhost:{}/health", port)).send() {
+            if let Ok(resp) = client
+                .get(format!("http://localhost:{}/health", port))
+                .send()
+            {
                 if let Ok(json) = resp.json::<serde_json::Value>() {
                     if let Some(srv_ver) = json.get("version").and_then(|v| v.as_str()) {
                         println!("Aegis OS Kernel v{}", srv_ver);

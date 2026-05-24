@@ -523,30 +523,32 @@ mod tests {
         )?);
 
         // Add a prefixed model to the catalog
-        catalog.add_entry(ModelEntry {
-            model_id: "ollama_cloud/gpt-oss:120b-cloud".to_string(),
-            provider: "ollama_cloud".to_string(),
-            display_name: "GPT-OSS 120B (Ollama Cloud)".to_string(),
-            context_window: 128000,
-            cost_input_per_mtok: 0.8,
-            cost_output_per_mtok: 2.0,
-            supports_tools: true,
-            supports_json_mode: true,
-            tool_use_support: ToolUseSupport::Unknown,
-            is_local: false,
-            avg_latency_ms: Some(1800),
-            free_tier_rpm: None,
-            free_tier_rpd: None,
-            free_tier_eligible: true,
-            task_scores: TaskScores {
-                chat: 4,
-                coding: 4,
-                planning: 4,
-                analysis: 4,
-                summarization: 4,
-                extraction: 4,
-            },
-        }).await;
+        catalog
+            .add_entry(ModelEntry {
+                model_id: "ollama_cloud/gpt-oss:120b-cloud".to_string(),
+                provider: "ollama_cloud".to_string(),
+                display_name: "GPT-OSS 120B (Ollama Cloud)".to_string(),
+                context_window: 128000,
+                cost_input_per_mtok: 0.8,
+                cost_output_per_mtok: 2.0,
+                supports_tools: true,
+                supports_json_mode: true,
+                tool_use_support: ToolUseSupport::Unknown,
+                is_local: false,
+                avg_latency_ms: Some(1800),
+                free_tier_rpm: None,
+                free_tier_rpd: None,
+                free_tier_eligible: true,
+                task_scores: TaskScores {
+                    chat: 4,
+                    coding: 4,
+                    planning: 4,
+                    analysis: 4,
+                    summarization: 4,
+                    extraction: 4,
+                },
+            })
+            .await;
 
         let before = catalog.all_entries().await.len();
 
@@ -555,11 +557,15 @@ mod tests {
             "ollama_cloud",
             &["gpt-oss:120b-cloud".to_string()],
             &catalog,
-        ).await;
+        )
+        .await;
 
         let after = catalog.all_entries().await.len();
 
-        assert_eq!(added, 0, "Should add 0 new models because it's a prefixed duplicate");
+        assert_eq!(
+            added, 0,
+            "Should add 0 new models because it's a prefixed duplicate"
+        );
         assert_eq!(before, after, "Catalog length should remain unchanged");
 
         // Registering a completely new model ID should work
@@ -567,7 +573,8 @@ mod tests {
             "ollama_cloud",
             &["completely-new-model:7b".to_string()],
             &catalog,
-        ).await;
+        )
+        .await;
 
         assert_eq!(added_new, 1, "Should add 1 new model");
         assert_eq!(catalog.all_entries().await.len(), before + 1);
@@ -625,7 +632,8 @@ mod tests {
                 "completion": "0"
             }
         });
-        let entry = parse_openrouter_free_model(&model_str_zero).expect("Should parse successfully");
+        let entry =
+            parse_openrouter_free_model(&model_str_zero).expect("Should parse successfully");
         assert_eq!(entry.model_id, "meta-llama/llama-3-8b-instruct:free");
         assert_eq!(entry.cost_input_per_mtok, 0.0);
         assert_eq!(entry.cost_output_per_mtok, 0.0);
@@ -641,7 +649,8 @@ mod tests {
                 "completion": 0.0
             }
         });
-        let entry2 = parse_openrouter_free_model(&model_num_zero).expect("Should parse successfully");
+        let entry2 =
+            parse_openrouter_free_model(&model_num_zero).expect("Should parse successfully");
         assert_eq!(entry2.model_id, "meta-llama/llama-3-8b-instruct:free");
 
         // 3. String price "0.0005" (paid) - should be skipped

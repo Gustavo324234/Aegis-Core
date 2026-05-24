@@ -1,7 +1,7 @@
 use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
 use ank_core::scheduler::persistence::VoiceProfile;
 use axum::{
-    extract::{State, Path},
+    extract::{Path, State},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -13,9 +13,9 @@ use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::APIBuilder;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
-use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -276,12 +276,16 @@ async fn webrtc_offer_handler(
         .unwrap_or_default()
         .to_string();
 
-    tracing::info!("Siren WebRTC: Iniciando negociacion SDP para tenant={}", tenant_id);
+    tracing::info!(
+        "Siren WebRTC: Iniciando negociacion SDP para tenant={}",
+        tenant_id
+    );
 
     // 1. Configurar MediaEngine y APIBuilder
     let mut m = MediaEngine::default();
-    m.register_default_codecs()
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("MediaEngine setup failed: {}", e)))?;
+    m.register_default_codecs().map_err(|e| {
+        AegisHttpError::Internal(anyhow::anyhow!("MediaEngine setup failed: {}", e))
+    })?;
 
     let api = APIBuilder::new().with_media_engine(m).build();
 
@@ -293,11 +297,9 @@ async fn webrtc_offer_handler(
         ..Default::default()
     };
 
-    let peer_connection = Arc::new(
-        api.new_peer_connection(config)
-            .await
-            .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to create PeerConnection: {}", e)))?,
-    );
+    let peer_connection = Arc::new(api.new_peer_connection(config).await.map_err(|e| {
+        AegisHttpError::Internal(anyhow::anyhow!("Failed to create PeerConnection: {}", e))
+    })?);
 
     // 2. Configurar Track de Salida (TTS Opus)
     let local_track = Arc::new(TrackLocalStaticSample::new(
@@ -312,7 +314,9 @@ async fn webrtc_offer_handler(
     peer_connection
         .add_track(Arc::clone(&local_track) as Arc<dyn TrackLocal + Send + Sync>)
         .await
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to add WebRTC audio track: {}", e)))?;
+        .map_err(|e| {
+            AegisHttpError::Internal(anyhow::anyhow!("Failed to add WebRTC audio track: {}", e))
+        })?;
 
     // 3. Crear buffer de audio compartido
     let shared_audio = Arc::new(tokio::sync::Mutex::new(Vec::<i16>::new()));
@@ -382,16 +386,26 @@ async fn webrtc_offer_handler(
                         tracing::info!("Siren WebRTC: VAD_END_SIGNAL recibido.");
 
                         // Evento VAD_START
-                        let _ = d_inner.send_text(json!({
-                            "event": "siren_event",
-                            "data": { "event_type": "VAD_START" }
-                        }).to_string()).await;
+                        let _ = d_inner
+                            .send_text(
+                                json!({
+                                    "event": "siren_event",
+                                    "data": { "event_type": "VAD_START" }
+                                })
+                                .to_string(),
+                            )
+                            .await;
 
                         // Evento STT_START
-                        let _ = d_inner.send_text(json!({
-                            "event": "siren_event",
-                            "data": { "event_type": "STT_START" }
-                        }).to_string()).await;
+                        let _ = d_inner
+                            .send_text(
+                                json!({
+                                    "event": "siren_event",
+                                    "data": { "event_type": "STT_START" }
+                                })
+                                .to_string(),
+                            )
+                            .await;
 
                         // Obtener muestras y vaciar buffer
                         let pcm_samples = {
@@ -406,7 +420,11 @@ async fn webrtc_offer_handler(
                         }
 
                         // Procesar STT
-                        let transcript = match state_dc.siren_router.process_audio(&tenant_id_dc, pcm_bytes).await {
+                        let transcript = match state_dc
+                            .siren_router
+                            .process_audio(&tenant_id_dc, pcm_bytes)
+                            .await
+                        {
                             Ok(t) => t,
                             Err(e) => {
                                 tracing::error!("Siren WebRTC: STT Processing failed: {}", e);
@@ -419,7 +437,8 @@ async fn webrtc_offer_handler(
                         };
 
                         // Agendar tarea en el Scheduler
-                        let mut pcb = ank_core::PCB::new("Voice Task".to_string(), 5, transcript.clone());
+                        let mut pcb =
+                            ank_core::PCB::new("Voice Task".to_string(), 5, transcript.clone());
                         pcb.tenant_id = Some(tenant_id_dc.clone());
                         pcb.session_key = Some(session_key_dc.clone());
                         pcb.task_type = ank_core::pcb::TaskType::Chat;
@@ -427,26 +446,45 @@ async fn webrtc_offer_handler(
 
                         let (output_tx, output_rx) = tokio::sync::oneshot::channel::<String>();
 
-                        if let Err(e) = state_dc.scheduler_tx.send(ank_core::SchedulerEvent::ScheduleTaskConfirmed(
-                            Box::new(pcb),
-                            output_tx,
-                        )).await {
-                            tracing::error!("Siren WebRTC: Failed to schedule STT transcript: {}", e);
+                        if let Err(e) = state_dc
+                            .scheduler_tx
+                            .send(ank_core::SchedulerEvent::ScheduleTaskConfirmed(
+                                Box::new(pcb),
+                                output_tx,
+                            ))
+                            .await
+                        {
+                            tracing::error!(
+                                "Siren WebRTC: Failed to schedule STT transcript: {}",
+                                e
+                            );
                             return;
                         }
 
                         // Enviar STT_DONE
                         let payload = json!({ "transcript": transcript, "pid": pid }).to_string();
-                        let _ = d_inner.send_text(json!({
-                            "event": "siren_event",
-                            "data": { "event_type": "STT_DONE", "message": payload }
-                        }).to_string()).await;
+                        let _ = d_inner
+                            .send_text(
+                                json!({
+                                    "event": "siren_event",
+                                    "data": { "event_type": "STT_DONE", "message": payload }
+                                })
+                                .to_string(),
+                            )
+                            .await;
 
                         // Esperar respuesta LLM
-                        let llm_output = match tokio::time::timeout(std::time::Duration::from_secs(60), output_rx).await {
+                        let llm_output = match tokio::time::timeout(
+                            std::time::Duration::from_secs(60),
+                            output_rx,
+                        )
+                        .await
+                        {
                             Ok(Ok(output)) => output,
                             _ => {
-                                tracing::warn!("Siren WebRTC: LLM response channel error or timeout.");
+                                tracing::warn!(
+                                    "Siren WebRTC: LLM response channel error or timeout."
+                                );
                                 return;
                             }
                         };
@@ -477,10 +515,17 @@ async fn webrtc_offer_handler(
                         let samples_48000 = resample_linear(&samples_22050, 22050, 48000);
 
                         // Codificar Opus a 48kHz mono
-                        let mut encoder = match opus::Encoder::new(48000, opus::Channels::Mono, opus::Application::Voip) {
+                        let mut encoder = match opus::Encoder::new(
+                            48000,
+                            opus::Channels::Mono,
+                            opus::Application::Voip,
+                        ) {
                             Ok(enc) => enc,
                             Err(e) => {
-                                tracing::error!("Siren WebRTC: Failed to create Opus Encoder: {}", e);
+                                tracing::error!(
+                                    "Siren WebRTC: Failed to create Opus Encoder: {}",
+                                    e
+                                );
                                 return;
                             }
                         };
@@ -500,7 +545,10 @@ async fn webrtc_offer_handler(
                                         ..Default::default()
                                     };
                                     if let Err(e) = local_track_dc.write_sample(&sample).await {
-                                        tracing::error!("Siren WebRTC: Failed to write sample: {}", e);
+                                        tracing::error!(
+                                            "Siren WebRTC: Failed to write sample: {}",
+                                            e
+                                        );
                                         break;
                                     }
                                 }
@@ -511,10 +559,15 @@ async fn webrtc_offer_handler(
                         }
 
                         // Enviar TTS_DONE
-                        let _ = d_inner.send_text(json!({
-                            "event": "siren_event",
-                            "data": { "event_type": "TTS_DONE" }
-                        }).to_string()).await;
+                        let _ = d_inner
+                            .send_text(
+                                json!({
+                                    "event": "siren_event",
+                                    "data": { "event_type": "TTS_DONE" }
+                                })
+                                .to_string(),
+                            )
+                            .await;
                     }
                 })
             }));
@@ -522,13 +575,16 @@ async fn webrtc_offer_handler(
     }));
 
     // 6. Aplicar la oferta y generar la respuesta SDP
-    let offer = RTCSessionDescription::offer(req.sdp)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to parse SDP offer: {}", e)))?;
+    let offer = RTCSessionDescription::offer(req.sdp).map_err(|e| {
+        AegisHttpError::Internal(anyhow::anyhow!("Failed to parse SDP offer: {}", e))
+    })?;
 
     peer_connection
         .set_remote_description(offer)
         .await
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to set remote description: {}", e)))?;
+        .map_err(|e| {
+            AegisHttpError::Internal(anyhow::anyhow!("Failed to set remote description: {}", e))
+        })?;
 
     let answer = peer_connection
         .create_answer(None)
@@ -540,15 +596,16 @@ async fn webrtc_offer_handler(
     peer_connection
         .set_local_description(answer)
         .await
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to set local description: {}", e)))?;
+        .map_err(|e| {
+            AegisHttpError::Internal(anyhow::anyhow!("Failed to set local description: {}", e))
+        })?;
 
     // Esperar recoleccion completa de ICE locales
     let _ = gather_complete.recv().await;
 
-    let local_desc = peer_connection
-        .local_description()
-        .await
-        .ok_or_else(|| AegisHttpError::Internal(anyhow::anyhow!("Failed to extract local SDP answer")))?;
+    let local_desc = peer_connection.local_description().await.ok_or_else(|| {
+        AegisHttpError::Internal(anyhow::anyhow!("Failed to extract local SDP answer"))
+    })?;
 
     tracing::info!("Siren WebRTC: SDP Answer generada y enviada.");
 

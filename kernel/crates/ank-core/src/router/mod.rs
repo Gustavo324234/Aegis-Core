@@ -648,7 +648,10 @@ impl CognitiveRouter {
             if entry.is_local {
                 let lower_id = entry.model_id.to_lowercase();
                 let is_tiny = ["1b", "2b", "3b"].iter().any(|tag| lower_id.contains(tag));
-                let is_heavy_task = matches!(task_type, TaskType::Code | TaskType::Planning | TaskType::Analysis);
+                let is_heavy_task = matches!(
+                    task_type,
+                    TaskType::Code | TaskType::Planning | TaskType::Analysis
+                );
                 let is_complex_prompt = prompt.chars().count() > 300;
                 if is_tiny && (is_heavy_task || is_complex_prompt) {
                     0.10 // 90% penalty -> keeps 10% of score
@@ -1178,8 +1181,11 @@ mod tests {
         let router = CognitiveRouter::new(catalog, key_pool);
 
         // We want to check that llama-3.2-1b-instruct is penalized on heavy tasks compared to plain chat
-        let entry_1b = router.catalog_find("meta-llama/llama-3.2-1b-instruct").await.unwrap();
-        
+        let entry_1b = router
+            .catalog_find("meta-llama/llama-3.2-1b-instruct")
+            .await
+            .unwrap();
+
         let ctx = ScoreCtx {
             prompt: "Implement this complex coding task in Rust",
             max_cost: 0.0,
