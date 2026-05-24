@@ -156,9 +156,36 @@ impl SirenRouter {
                     return Ok(driver);
                 }
                 warn!(
-                    "SirenRouter: Tenant '{}' has ElevenLabs but no valid api_key. Trying admin profile.",
+                    "SirenRouter: Tenant '{}' has ElevenLabs but no valid api_key. Trying admin profile fallback while preserving tenant voice_id.",
                     tenant_id
                 );
+                // Fallback: intentar con la key global configurada en el perfil de root/admin pero preservando el voice_id del tenant
+                if let Ok(Some(admin_profile)) = self.persistence.get_voice_profile("root").await {
+                    if admin_profile.engine_id == "elevenlabs" {
+                        if let Ok(settings) = serde_json::from_str::<serde_json::Value>(&admin_profile.settings_json) {
+                            if let Some(api_key) = settings["api_key"].as_str() {
+                                if !api_key.is_empty() {
+                                    let chosen_voice_id = if p.voice_id.is_empty() {
+                                        admin_profile.voice_id.clone()
+                                    } else {
+                                        p.voice_id.clone()
+                                    };
+                                    if let Ok(driver) = crate::chal::drivers::ElevenLabsDriver::new(
+                                        api_key.to_string(),
+                                        chosen_voice_id,
+                                    ) {
+                                        info!(
+                                            "SirenRouter: Using admin ElevenLabs key for tenant '{}' with voice_id '{}'",
+                                            tenant_id,
+                                            if p.voice_id.is_empty() { &admin_profile.voice_id } else { &p.voice_id }
+                                        );
+                                        return Ok(Arc::new(driver));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } else {
             info!(
