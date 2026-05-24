@@ -39,6 +39,32 @@ detect_arch() {
 
 AEGIS_MODE=$(detect_mode)
 
+# Resolve HTTP port dynamically from environment or aegis.env
+resolve_http_port() {
+    if [[ -n "${AEGIS_HTTP_PORT:-}" ]]; then
+        echo "$AEGIS_HTTP_PORT"
+        return
+    fi
+    if [[ -n "${ANK_HTTP_PORT:-}" ]]; then
+        echo "$ANK_HTTP_PORT"
+        return
+    fi
+    local env_file="/etc/aegis/aegis.env"
+    if [[ "$AEGIS_MODE" == "docker" && -f "$INSTALL_DIR/.env" ]]; then
+        env_file="$INSTALL_DIR/.env"
+    fi
+    if [[ -f "$env_file" ]]; then
+        local port
+        port=$(grep -E '^(AEGIS_HTTP_PORT|ANK_HTTP_PORT)=' "$env_file" | head -n 1 | cut -d= -f2 | tr -d '"' | tr -d ' ' || true)
+        if [[ -n "$port" ]]; then
+            echo "$port"
+            return
+        fi
+    fi
+    echo "8000"
+}
+AEGIS_HTTP_PORT=$(resolve_http_port)
+
 cmd_start() {
     printf '%bStarting Aegis OS (%s)...%b\n' "$CYAN" "$AEGIS_MODE" "$NC"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
@@ -69,11 +95,11 @@ cmd_status() {
     local PROTOCOL="http"
     local CURL_FLAGS=("-s" "-f" "--connect-timeout" "2")
 
-    if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:8000/health" > /dev/null 2>&1; then
-        printf '%sAPI is UP (%s://localhost:8000)%s\n' "$GREEN" "$PROTOCOL" "$NC"
+    if curl "${CURL_FLAGS[@]}" "${PROTOCOL}://localhost:${AEGIS_HTTP_PORT}/health" > /dev/null 2>&1; then
+        printf '%sAPI is UP (%s://localhost:%s)%s\n' "$GREEN" "$PROTOCOL" "$AEGIS_HTTP_PORT" "$NC"
         
         local conn_info
-        conn_info=$(curl -s "${PROTOCOL}://localhost:8000/api/system/connection-info" || true)
+        conn_info=$(curl -s "${PROTOCOL}://localhost:${AEGIS_HTTP_PORT}/api/system/connection-info" || true)
         if [[ -n "$conn_info" ]]; then
             local tunnel_url
             tunnel_url=$(echo "$conn_info" | grep -oP '(?<="tunnel_url":")[^"]+')
@@ -317,7 +343,7 @@ cmd_diag() {
     printf '%s[1] SYSTEM RESOURCE USAGE%s\n' "$YELLOW" "$NC"
     ps -u aegis -o %cpu,%mem,cmd 2>/dev/null || echo "Aegis process not found."
     printf '\n%s[2] NETWORK & PORTS%s\n' "$YELLOW" "$NC"
-    ss -tulpn | grep -E "8000|50051" || echo "Aegis ports not listening."
+    ss -tulpn | grep -E "${AEGIS_HTTP_PORT}|50051" || echo "Aegis ports not listening."
     printf '\n%s[3] RECENT ERROR LOGS%s\n' "$YELLOW" "$NC"
     if [[ "$AEGIS_MODE" == "docker" ]]; then
         (cd "$INSTALL_DIR" || exit; docker compose logs --tail 20 "$DOCKER_SERVICE" | grep -i "error") || echo "No recent errors found."
@@ -507,7 +533,7 @@ cmd_token() {
         local ip
         ip=$(hostname -I | awk '{print $1}' || echo "localhost")
         local PROTOCOL="http"
-        printf '\n%bSetup URL: %s://%s:8000?setup_token=%s%b\n' "$GREEN" "$PROTOCOL" "$ip" "$token" "$NC"
+        printf '\n%bSetup URL: %s://%s:%s?setup_token=%s%b\n' "$GREEN" "$PROTOCOL" "$ip" "$AEGIS_HTTP_PORT" "$token" "$NC"
     fi
 }
 
@@ -524,7 +550,7 @@ cmd_tunnel() {
     fi
     
     local protocol="http"
-    local port=8000
+    local port="${AEGIS_HTTP_PORT}"
     
     printf 'Iniciando túnel hacia %s://localhost:%s...\n' "$protocol" "$port"
     printf '%bPresioná Ctrl+C para detener el túnel.%b\n\n' "$YELLOW" "$NC"

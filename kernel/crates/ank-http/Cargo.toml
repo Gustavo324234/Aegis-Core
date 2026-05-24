@@ -31,6 +31,8 @@ async-trait.workspace     = true
 dirs.workspace            = true
 reqwest.workspace          = true
 regex.workspace            = true
+webrtc.workspace           = true
+opus.workspace             = true
 
 base64 = "0.22"
 dashmap = "5"

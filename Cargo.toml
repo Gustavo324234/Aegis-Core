@@ -104,6 +104,10 @@ openssl            = { version = "0.10", features = ["vendored"] }
 # Windows service integration (used conditionally by ank-server on Windows)
 windows-service    = "0.7"
 
+# WebRTC and Opus for Siren Protocol Migration
+webrtc             = { version = "0.10.0", default-features = false }
+opus               = { version = "0.3.0" }
+
 [profile.release]
 opt-level     = 3
 lto            = "thin"

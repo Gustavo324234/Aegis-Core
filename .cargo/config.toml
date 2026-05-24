@@ -14,6 +14,7 @@
 rustflags = ["-L", "native=C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"]
 
 [env]
+CMAKE_POLICY_VERSION_MINIMUM               = "3.5"
 X86_64_PC_WINDOWS_MSVC_OPENSSL_NO_VENDOR   = "1"
 X86_64_PC_WINDOWS_MSVC_OPENSSL_DIR         = "C:\\Program Files\\OpenSSL-Win64"
 X86_64_PC_WINDOWS_MSVC_OPENSSL_LIB_DIR     = "C:\\Program Files\\OpenSSL-Win64\\lib\\VC\\x64\\MD"
