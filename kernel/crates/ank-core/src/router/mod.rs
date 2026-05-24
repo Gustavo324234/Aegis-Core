@@ -192,13 +192,12 @@ impl CognitiveRouter {
         if crate::chal::autocorrect::is_light_task(&pcb.memory_pointers.l1_instruction, task_type) {
             let mut has_healthy_local = false;
             for entry in &all_candidates {
-                if entry.is_local {
-                    if !self.tracker.is_provider_circuit_open(&entry.provider).await
-                        && !self.tracker.is_model_circuit_open(&entry.model_id).await
-                    {
-                        has_healthy_local = true;
-                        break;
-                    }
+                if entry.is_local
+                    && !self.tracker.is_provider_circuit_open(&entry.provider).await
+                    && !self.tracker.is_model_circuit_open(&entry.model_id).await
+                {
+                    has_healthy_local = true;
+                    break;
                 }
             }
             if has_healthy_local {

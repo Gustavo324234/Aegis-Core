@@ -1,3 +1,4 @@
+#![allow(unused_assignments)]
 use crate::agents::instructions::InstructionLoader;
 use crate::agents::node::AgentRole;
 use crate::agents::tool_registry::{ProviderKind, ToolRegistry};
@@ -2793,8 +2794,8 @@ impl CognitiveHAL {
                                     || trimmed.starts_with("// description:")
                                 {
                                     description = trimmed
-                                        .splitn(2, ':')
-                                        .nth(1)
+                                        .split_once(':')
+                                        .map(|x| x.1)
                                         .unwrap_or("")
                                         .trim()
                                         .to_string();
@@ -2803,8 +2804,8 @@ impl CognitiveHAL {
                                     || trimmed.starts_with("// Example:")
                                 {
                                     params_example = trimmed
-                                        .splitn(2, ':')
-                                        .nth(1)
+                                        .split_once(':')
+                                        .map(|x| x.1)
                                         .unwrap_or("")
                                         .trim()
                                         .to_string();

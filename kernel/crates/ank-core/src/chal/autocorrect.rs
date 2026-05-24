@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crate::agents::node::AgentRole;
 use crate::agents::tool_registry::ToolRegistry;
 use crate::chal::ToolCallRecord;
