@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{self, Command};
 use tokio_stream::StreamExt;
@@ -286,6 +286,7 @@ impl ServiceBackend for WindowsBackend {
         }
 
         if follow {
+            use std::io::{Seek, SeekFrom};
             let mut file = File::open(&path)?;
             file.seek(SeekFrom::End(0))?;
             let mut reader = BufReader::new(file);
@@ -479,7 +480,7 @@ fn get_http_port() -> u16 {
         if path.exists() {
             if let Ok(file) = File::open(path) {
                 let reader = BufReader::new(file);
-                for line in reader.lines().filter_map(|l| l.ok()) {
+                for line in reader.lines().map_while(Result::ok) {
                     let trim = line.trim();
                     if trim.starts_with("AEGIS_HTTP_PORT=") {
                         if let Some(val) = trim.strip_prefix("AEGIS_HTTP_PORT=") {
@@ -541,7 +542,7 @@ fn get_setup_token() -> Result<()> {
         let reader = BufReader::new(file);
         let lines_vec = reader
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .collect::<Vec<String>>();
         for line in lines_vec.iter().rev() {
             if let Some(caps) = re.captures(line) {
@@ -603,7 +604,7 @@ fn run_diagnostic_report() -> Result<()> {
                     let reader = BufReader::new(file);
                     let errors = reader
                         .lines()
-                        .filter_map(|l| l.ok())
+                        .map_while(Result::ok)
                         .filter(|line| {
                             line.to_uppercase().contains("ERROR")
                                 || line.to_uppercase().contains("WARN")
