@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, Volume2, VolumeX, ChevronDown, Check } from 'lucide-react';
+import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, Volume2, VolumeX, ChevronDown, Check, X, AlertTriangle } from 'lucide-react';
 import { useAegisStore, Message } from '../store/useAegisStore';
 import { AgentBadge } from './AgentBadge';
 import { InputModeSelector } from './InputModeSelector';
@@ -112,6 +112,13 @@ const ChatTerminal: React.FC = () => {
     const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
     const [availableModels, setAvailableModels] = useState<CatalogModel[]>([]);
     const [showModelPicker, setShowModelPicker] = useState(false);
+    const [showLocalHistoryWarning, setShowLocalHistoryWarning] = useState(() => {
+        if (typeof window === 'undefined') return false;
+        const dismissed = localStorage.getItem('aegis_dismiss_http_warn') === 'true';
+        const isInsecure = window.location.protocol === 'http:' &&
+            !['localhost', '127.0.0.1'].includes(window.location.hostname);
+        return isInsecure && !dismissed;
+    });
 
     const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
         if (scrollRef.current) {
@@ -300,6 +307,34 @@ const ChatTerminal: React.FC = () => {
                     </div>
                 </header>
 
+                <AnimatePresence>
+                    {showLocalHistoryWarning && (
+                        <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="shrink-0 bg-amber-500/10 border-b border-amber-500/20 px-8 py-3 flex items-center justify-between gap-4 text-[10px] font-mono text-amber-300 uppercase tracking-widest leading-relaxed overflow-hidden"
+                        >
+                            <div className="flex items-center gap-3">
+                                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                                <span>
+                                    ⚠️ Acceso local (HTTP). El historial de Cloudflare no está disponible aquí. Para historial unificado, usá siempre el link de Cloudflare.
+                                </span>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    localStorage.setItem('aegis_dismiss_http_warn', 'true');
+                                    setShowLocalHistoryWarning(false);
+                                }}
+                                className="text-white/20 hover:text-white transition-colors p-1"
+                                title="Ocultar advertencia"
+                            >
+                                <X className="w-3.5 h-3.5" />
+                            </button>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
                 {/* Mensajes — flex-1 + overflow-y-auto */}
                 <main ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', minHeight: 0 }} className="px-6 py-8 space-y-8 scrollbar-hide relative">
