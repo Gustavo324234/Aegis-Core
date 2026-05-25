@@ -614,6 +614,111 @@ pub(crate) async fn run_server() -> Result<()> {
         });
     }
 
+    // Aegis Connect (Epic 54) Persistent WebSocket Tunnel Manager via Orion ID
+    {
+        let tunnel_url_state = Arc::clone(&state.tunnel_url);
+        let data_dir_clone = data_dir.clone();
+        tokio::spawn(async move {
+            use serde::{Serialize, Deserialize};
+
+            #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+            struct ConnectConfig {
+                token: String,
+                tenant: String,
+                relay_url: Option<String>,
+            }
+
+            // Sync environment variables to config file if present and file doesn't exist
+            let env_token = std::env::var("ORION_ID_TOKEN").or_else(|_| std::env::var("AEGIS_CONNECT_TOKEN")).ok();
+            let env_tenant = std::env::var("ORION_ID_TENANT").or_else(|_| std::env::var("AEGIS_CONNECT_TENANT")).ok();
+            let config_path = data_dir_clone.join("aegis_connect.json");
+
+            if let (Some(tok), Some(ten)) = (env_token, env_tenant) {
+                if !config_path.exists() {
+                    let default_relay = std::env::var("AEGIS_CONNECT_RELAY")
+                        .unwrap_or_else(|_| "ws://127.0.0.1:8083/ws/connect".to_string());
+                    let cfg = ConnectConfig {
+                        token: tok,
+                        tenant: ten,
+                        relay_url: Some(default_relay),
+                    };
+                    if let Ok(content) = serde_json::to_string_pretty(&cfg) {
+                        let _ = std::fs::write(&config_path, content);
+                    }
+                }
+            }
+
+            let mut active_task: Option<(tokio::task::JoinHandle<()>, ConnectConfig)> = None;
+
+            loop {
+                // Read configuration
+                let current_config: Option<ConnectConfig> = if config_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&config_path) {
+                        serde_json::from_str::<ConnectConfig>(&content).ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                match (&active_task, &current_config) {
+                    (Some((_, active_cfg)), Some(curr_cfg)) if active_cfg == curr_cfg => {
+                        // Already running the correct tunnel. Do nothing.
+                    }
+                    (Some(_), _) => {
+                        // Configuration changed or removed, stop current tunnel
+                        info!("Aegis Connect: Configuration changed or removed. Stopping active tunnel.");
+                        if let Some((handle, _)) = active_task.take() {
+                            handle.abort();
+                        }
+                        let mut lock = tunnel_url_state.write().await;
+                        *lock = None;
+                    }
+                    (None, Some(curr_cfg)) => {
+                        if !curr_cfg.token.is_empty() && !curr_cfg.tenant.is_empty() {
+                            info!("Aegis Connect: Spawning new tunnel for tenant '{}'", curr_cfg.tenant);
+                            let relay = curr_cfg.relay_url.clone().unwrap_or_else(|| {
+                                std::env::var("AEGIS_CONNECT_RELAY")
+                                    .unwrap_or_else(|_| "ws://127.0.0.1:8083/ws/connect".to_string())
+                            });
+
+                            let client = ank_core::tunnel::TunnelClient::new(
+                                relay.clone(),
+                                curr_cfg.tenant.clone(),
+                                curr_cfg.token.clone(),
+                                format!("http://127.0.0.1:{}", http_port),
+                            );
+
+                            let handle = tokio::spawn(async move {
+                                client.run().await;
+                            });
+
+                            // Parse hostname/scheme to present public URL nicely in settings
+                            let public_url = if relay.contains("aegistest.orioncrea.com") {
+                                format!("https://aegistest.orioncrea.com/u/{}", curr_cfg.tenant)
+                            } else {
+                                format!("http://127.0.0.1:8083/u/{}", curr_cfg.tenant)
+                            };
+
+                            {
+                                let mut lock = tunnel_url_state.write().await;
+                                *lock = Some(public_url);
+                            }
+
+                            active_task = Some((handle, curr_cfg.clone()));
+                        }
+                    }
+                    (None, None) => {
+                        // No config and no tunnel running.
+                    }
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        });
+    }
+
     let http_server = AegisHttpServer::new(state);
     http_server.serve().await?;
 

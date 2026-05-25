@@ -9,6 +9,7 @@ members = [
     "kernel/crates/ank-mcp",
     "kernel/crates/aegis-supervisor",
     "kernel/crates/aegis-sdk",
+    "kernel/crates/aegis-connect-relay",
     "kernel/plugins_src",
 ]
 

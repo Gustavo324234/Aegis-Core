@@ -382,6 +382,15 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
     const [showModal, setShowModal] = useState(false);
     const [editingKey, setEditingKey] = useState<KeyInfo | null>(null);
 
+    // Aegis Connect state
+    const [activeTab, setActiveTab] = useState<'keys' | 'connect'>('keys');
+    const [orionToken, setOrionToken] = useState('');
+    const [orionStatus, setOrionStatus] = useState<string | null>(null);
+    const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
+    const [isSavingOrion, setIsSavingOrion] = useState(false);
+    const [orionError, setOrionError] = useState<string | null>(null);
+    const [orionSuccess, setOrionSuccess] = useState(false);
+
     const fetchKeys = useCallback(async () => {
         setIsLoading(true);
         try {
@@ -400,7 +409,38 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
         }
     }, [tenantId, sessionKey]);
 
-    useEffect(() => { fetchKeys(); }, [fetchKeys]);
+    const fetchConnectStatus = useCallback(async () => {
+        try {
+            const configRes = await fetch('/api/workspace/config', {
+                headers: { 
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                }
+            });
+            if (configRes.ok) {
+                const configData = await configRes.json();
+                setOrionStatus(configData.orion_id_token_status || null);
+            }
+
+            const statusRes = await fetch('/api/status', {
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                }
+            });
+            if (statusRes.ok) {
+                const statusData = await statusRes.json();
+                setTunnelUrl(statusData.tunnel_url || null);
+            }
+        } catch (err) {
+            console.error('Error fetching Aegis Connect status:', err);
+        }
+    }, [tenantId, sessionKey]);
+
+    useEffect(() => { 
+        fetchKeys(); 
+        fetchConnectStatus();
+    }, [fetchKeys, fetchConnectStatus]);
 
     const handleDelete = async (keyId: string) => {
         if (!confirm('¿Eliminar esta clave personal?')) return;
@@ -418,6 +458,79 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
         }
     };
 
+    const handleSaveOrionToken = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setIsSavingOrion(true);
+        setOrionError(null);
+        setOrionSuccess(false);
+
+        if (orionToken.trim() && !orionToken.trim().startsWith('orion_id_tok_live_aegis_')) {
+            setOrionError('Token inválido. Debe comenzar con orion_id_tok_live_aegis_');
+            setIsSavingOrion(false);
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/workspace/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                },
+                body: JSON.stringify({
+                    key: 'orion_id_token',
+                    value: orionToken.trim()
+                })
+            });
+
+            if (res.ok) {
+                setOrionSuccess(true);
+                setOrionToken('');
+                setTimeout(() => setOrionSuccess(false), 3000);
+                await fetchConnectStatus();
+            } else {
+                const errData = await res.json();
+                setOrionError(errData.error || 'Error al guardar el token');
+            }
+        } catch (err) {
+            setOrionError('Error al conectar con la API');
+        } finally {
+            setIsSavingOrion(false);
+        }
+    };
+
+    const handleDisconnectOrion = async () => {
+        if (!confirm('¿Desconectar este nodo de Orion ID? El túnel público se desactivará.')) return;
+        setIsSavingOrion(true);
+        setOrionError(null);
+
+        try {
+            const res = await fetch('/api/workspace/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                },
+                body: JSON.stringify({
+                    key: 'orion_id_token',
+                    value: ''
+                })
+            });
+
+            if (res.ok) {
+                await fetchConnectStatus();
+            } else {
+                setOrionError('Error al desconectar');
+            }
+        } catch (err) {
+            setOrionError('Error de red');
+        } finally {
+            setIsSavingOrion(false);
+        }
+    };
+
     const getRateLimitText = (until: string | undefined): string => {
         if (!until) return '';
         const ms = new Date(until).getTime() - Date.now();
@@ -428,106 +541,283 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
 
     return (
         <div className="glass p-6 rounded-2xl border border-white/10 bg-white/[0.01]">
-            <div className="flex items-start gap-3 p-3 mb-6 bg-white/5 border border-white/10 rounded-lg">
-                <Info className="w-4 h-4 text-aegis-cyan mt-0.5 shrink-0" />
-                <p className="text-[10px] font-mono text-white/40 leading-relaxed uppercase tracking-wider">
-                    {t('global_keys_usage_info')}
-                </p>
+            {/* Tab Navigation */}
+            <div className="flex gap-4 border-b border-white/10 pb-4 mb-6">
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('keys')}
+                    className={`pb-2 px-1 text-xs font-mono font-bold tracking-widest uppercase transition-all relative ${
+                        activeTab === 'keys' ? 'text-aegis-cyan' : 'text-white/40 hover:text-white'
+                    }`}
+                >
+                    {t('my_keys')}
+                    {activeTab === 'keys' && (
+                        <motion.div layoutId="activeTabUnderline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-aegis-cyan" />
+                    )}
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('connect')}
+                    className={`pb-2 px-1 text-xs font-mono font-bold tracking-widest uppercase transition-all relative flex items-center gap-2 ${
+                        activeTab === 'connect' ? 'text-aegis-cyan' : 'text-white/40 hover:text-white'
+                    }`}
+                >
+                    <Cloud className="w-3.5 h-3.5" />
+                    Aegis Connect
+                    {orionStatus === 'configured' && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                    )}
+                    {activeTab === 'connect' && (
+                        <motion.div layoutId="activeTabUnderline" className="absolute bottom-0 left-0 right-0 h-0.5 bg-aegis-cyan" />
+                    )}
+                </button>
             </div>
 
-            <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                    <Key className="w-5 h-5 text-aegis-cyan" />
-                    <h3 className="text-sm font-mono font-bold tracking-widest uppercase text-white">{t('my_keys')}</h3>
-                </div>
-                <div className="flex gap-2">
-                    <button type="button" onClick={fetchKeys} className="p-2 border border-white/10 rounded-lg hover:bg-white/5 transition-colors">
-                        <RefreshCw className={`w-4 h-4 text-white/40 ${isLoading ? 'animate-spin' : ''}`} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => { setEditingKey(null); setShowModal(true); }}
-                        className="flex items-center gap-2 px-3 py-2 bg-aegis-cyan/10 border border-aegis-cyan/30 rounded-lg hover:bg-aegis-cyan/20 transition-colors text-xs font-mono text-aegis-cyan font-bold"
+            <AnimatePresence mode="wait">
+                {activeTab === 'keys' ? (
+                    <motion.div
+                        key="keysTab"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="space-y-6"
                     >
-                        <Plus className="w-4 h-4" /> {t('add_key')}
-                    </button>
-                </div>
-            </div>
+                        <div className="flex items-start gap-3 p-3 bg-white/5 border border-white/10 rounded-lg">
+                            <Info className="w-4 h-4 text-aegis-cyan mt-0.5 shrink-0" />
+                            <p className="text-[10px] font-mono text-white/40 leading-relaxed uppercase tracking-wider">
+                                {t('global_keys_usage_info')}
+                            </p>
+                        </div>
 
-            {isLoading && keys.length === 0 ? (
-                <div className="text-center py-8 text-white/30 text-xs font-mono uppercase tracking-widest animate-pulse">{t('syncing')}</div>
-            ) : keys.length === 0 ? (
-                <div className="text-center py-8 text-white/30 text-xs font-mono uppercase tracking-widest border border-dashed border-white/10 rounded-xl bg-white/2">{t('personal_keys_notice')}</div>
-            ) : (
-                <div className="overflow-x-auto">
-                    <table className="w-full text-xs font-mono">
-                        <thead>
-                            <tr className="text-white/30 uppercase tracking-widest border-b border-white/5">
-                                <th className="text-left py-2 pr-4">Identificador</th>
-                                <th className="text-left py-2 pr-4">Proveedor</th>
-                                <th className="text-left py-2 pr-4">Clasificación</th>
-                                <th className="text-left py-2 pr-4">Modelos Habilitados</th>
-                                <th className="text-left py-2 pr-4">Estado</th>
-                                <th className="text-right py-2">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {keys.map((k) => {
-                                const rateLimitText = getRateLimitText(k.rate_limited_until);
-                                const isAvailable = k.is_active && !rateLimitText;
-                                return (
-                                    <tr key={k.key_id} className="border-b border-white/5 hover:bg-white/[0.02]">
-                                        <td className="py-3 pr-4 text-white font-bold">{k.label || '—'}</td>
-                                        <td className="py-3 pr-4 text-aegis-cyan uppercase">{k.provider}</td>
-                                        <td className="py-3 pr-4">
-                                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold border uppercase ${k.is_free_tier ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-purple-400 border-purple-500/30 bg-purple-500/10'}`}>
-                                                {k.is_free_tier ? 'FREE' : 'PAID'}
-                                            </span>
-                                        </td>
-                                        <td className="py-3 pr-4 text-white/40 truncate max-w-[200px]" title={k.active_models?.join(', ')}>
-                                            {k.active_models && k.active_models.length > 0 ? (
-                                                <>
-                                                    {k.active_models.slice(0, 2).join(', ')}
-                                                    {k.active_models.length > 2 && ` (+${k.active_models.length - 2})`}
-                                                </>
-                                            ) : 'Auto'}
-                                        </td>
-                                        <td className="py-3 pr-4">
-                                            {rateLimitText ? (
-                                                <span className="text-yellow-400 uppercase">{rateLimitText}</span>
-                                            ) : isAvailable ? (
-                                                <span className="text-green-400 uppercase font-bold">Activo</span>
-                                            ) : (
-                                                <span className="text-red-400 uppercase font-bold">Inactivo</span>
-                                            )}
-                                        </td>
-                                        <td className="py-3 text-right">
-                                            <div className="flex items-center justify-end gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => { setEditingKey(k); setShowModal(true); }}
-                                                    className="p-1.5 border border-white/10 rounded hover:bg-white/5 transition-colors group"
-                                                    title="Editar modelos/clave"
-                                                >
-                                                    <Settings className="w-3.5 h-3.5 text-white/30 group-hover:text-white" />
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleDelete(k.key_id)}
-                                                    className="p-1.5 border border-red-500/20 rounded hover:bg-red-500/10 transition-colors group"
-                                                    title="Eliminar"
-                                                >
-                                                    <Trash2 className="w-3.5 h-3.5 text-red-400 group-hover:text-red-500" />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
-            )}
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <Key className="w-5 h-5 text-aegis-cyan" />
+                                <h3 className="text-sm font-mono font-bold tracking-widest uppercase text-white">{t('my_keys')}</h3>
+                            </div>
+                            <div className="flex gap-2">
+                                <button type="button" onClick={fetchKeys} className="p-2 border border-white/10 rounded-lg hover:bg-white/5 transition-colors">
+                                    <RefreshCw className={`w-4 h-4 text-white/40 ${isLoading ? 'animate-spin' : ''}`} />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { setEditingKey(null); setShowModal(true); }}
+                                    className="flex items-center gap-2 px-3 py-2 bg-aegis-cyan/10 border border-aegis-cyan/30 rounded-lg hover:bg-aegis-cyan/20 transition-colors text-xs font-mono text-aegis-cyan font-bold"
+                                >
+                                    <Plus className="w-4 h-4" /> {t('add_key')}
+                                </button>
+                            </div>
+                        </div>
+
+                        {isLoading && keys.length === 0 ? (
+                            <div className="text-center py-8 text-white/30 text-xs font-mono uppercase tracking-widest animate-pulse">{t('syncing')}</div>
+                        ) : keys.length === 0 ? (
+                            <div className="text-center py-8 text-white/30 text-xs font-mono uppercase tracking-widest border border-dashed border-white/10 rounded-xl bg-white/2">{t('personal_keys_notice')}</div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs font-mono">
+                                    <thead>
+                                        <tr className="text-white/30 uppercase tracking-widest border-b border-white/5">
+                                            <th className="text-left py-2 pr-4">Identificador</th>
+                                            <th className="text-left py-2 pr-4">Proveedor</th>
+                                            <th className="text-left py-2 pr-4">Clasificación</th>
+                                            <th className="text-left py-2 pr-4">Modelos Habilitados</th>
+                                            <th className="text-left py-2 pr-4">Estado</th>
+                                            <th className="text-right py-2">Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {keys.map((k) => {
+                                            const rateLimitText = getRateLimitText(k.rate_limited_until);
+                                            const isAvailable = k.is_active && !rateLimitText;
+                                            return (
+                                                <tr key={k.key_id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                                                    <td className="py-3 pr-4 text-white font-bold">{k.label || '—'}</td>
+                                                    <td className="py-3 pr-4 text-aegis-cyan uppercase">{k.provider}</td>
+                                                    <td className="py-3 pr-4">
+                                                        <span className={`px-2 py-0.5 rounded text-[9px] font-bold border uppercase ${k.is_free_tier ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-purple-400 border-purple-500/30 bg-purple-500/10'}`}>
+                                                            {k.is_free_tier ? 'FREE' : 'PAID'}
+                                                        </span>
+                                                    </td>
+                                                    <td className="py-3 pr-4 text-white/40 truncate max-w-[200px]" title={k.active_models?.join(', ')}>
+                                                        {k.active_models && k.active_models.length > 0 ? (
+                                                            <>
+                                                                {k.active_models.slice(0, 2).join(', ')}
+                                                                {k.active_models.length > 2 && ` (+${k.active_models.length - 2})`}
+                                                            </>
+                                                        ) : 'Auto'}
+                                                    </td>
+                                                    <td className="py-3 pr-4">
+                                                        {rateLimitText ? (
+                                                            <span className="text-yellow-400 uppercase">{rateLimitText}</span>
+                                                        ) : isAvailable ? (
+                                                            <span className="text-green-400 uppercase font-bold">Activo</span>
+                                                        ) : (
+                                                            <span className="text-red-400 uppercase font-bold">Inactivo</span>
+                                                        )}
+                                                    </td>
+                                                    <td className="py-3 text-right">
+                                                        <div className="flex items-center justify-end gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => { setEditingKey(k); setShowModal(true); }}
+                                                                className="p-1.5 border border-white/10 rounded hover:bg-white/5 transition-colors group"
+                                                                title="Editar modelos/clave"
+                                                            >
+                                                                <Settings className="w-3.5 h-3.5 text-white/30 group-hover:text-white" />
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleDelete(k.key_id)}
+                                                                className="p-1.5 border border-red-500/20 rounded hover:bg-red-500/10 transition-colors group"
+                                                                title="Eliminar"
+                                                            >
+                                                                <Trash2 className="w-3.5 h-3.5 text-red-400 group-hover:text-red-500" />
+                                                            </button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </motion.div>
+                ) : (
+                    <motion.div
+                        key="connectTab"
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="space-y-6"
+                    >
+                        <div className="flex items-start gap-3 p-3 bg-white/5 border border-white/10 rounded-lg">
+                            <Cloud className="w-4 h-4 text-aegis-cyan mt-0.5 shrink-0 animate-pulse" />
+                            <div>
+                                <p className="text-[10px] font-mono text-white/80 leading-relaxed uppercase tracking-wider font-bold">
+                                    Vincular con Orion ID
+                                </p>
+                                <p className="text-[9px] font-mono text-white/40 leading-relaxed uppercase tracking-widest mt-1">
+                                    Conectá tu nodo de Aegis para habilitar un túnel HTTPS persistente. Vas a poder acceder de forma remota a tu terminal a través de tu slug de Orion ID.
+                                </p>
+                            </div>
+                        </div>
+
+                        {orionStatus === 'configured' ? (
+                            <div className="p-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.02] space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <span className="relative flex h-3 w-3">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                                        </span>
+                                        <h4 className="text-xs font-mono font-bold tracking-widest uppercase text-emerald-400">
+                                            Túnel Activo con Orion ID
+                                        </h4>
+                                    </div>
+                                    <span className="text-[9px] font-mono px-2 py-0.5 border border-emerald-500/30 rounded text-emerald-400 bg-emerald-500/10 uppercase tracking-widest font-bold">
+                                        Persistente
+                                    </span>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label className="block text-[9px] font-mono text-white/30 uppercase tracking-widest">
+                                        URL de Acceso Remoto Seguro
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1 bg-black/40 border border-white/10 rounded-xl py-2.5 px-4 text-xs font-mono text-aegis-cyan truncate select-all">
+                                            {tunnelUrl || `https://aegistest.orioncrea.com/u/${tenantId}`}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                navigator.clipboard.writeText(tunnelUrl || `https://aegistest.orioncrea.com/u/${tenantId}`);
+                                                alert('¡URL copiado al portapapeles!');
+                                            }}
+                                            className="px-4 border border-white/10 rounded-xl hover:bg-white/5 transition-colors text-[10px] font-mono text-white/60 hover:text-white uppercase tracking-wider font-bold"
+                                        >
+                                            Copiar
+                                        </button>
+                                        <a
+                                            href={tunnelUrl || `https://aegistest.orioncrea.com/u/${tenantId}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="px-4 bg-aegis-cyan/20 border border-aegis-cyan/30 rounded-xl hover:bg-aegis-cyan/30 transition-colors text-[10px] font-mono text-aegis-cyan uppercase tracking-wider font-bold flex items-center justify-center"
+                                        >
+                                            Acceder
+                                        </a>
+                                    </div>
+                                </div>
+
+                                <div className="pt-2 border-t border-white/5 flex justify-between items-center">
+                                    <span className="text-[8px] font-mono text-white/20 uppercase tracking-widest">
+                                        Aegis Connect v1.0.0
+                                    </span>
+                                    <button
+                                        type="button"
+                                        disabled={isSavingOrion}
+                                        onClick={handleDisconnectOrion}
+                                        className="px-4 py-2 border border-red-500/20 hover:border-red-500/40 rounded-xl hover:bg-red-500/10 transition-all text-[9px] font-mono text-red-400 hover:text-red-500 uppercase tracking-widest font-bold flex items-center gap-1.5"
+                                    >
+                                        {isSavingOrion ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                                        Desconectar
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <form onSubmit={handleSaveOrionToken} className="space-y-4">
+                                <div className="space-y-1.5">
+                                    <label className="block text-[10px] font-mono text-white/40 uppercase tracking-widest ml-1">
+                                        Token de Acceso Aegis Connect
+                                    </label>
+                                    <input
+                                        type="password"
+                                        value={orionToken}
+                                        onChange={(e) => setOrionToken(e.target.value)}
+                                        placeholder="orion_id_tok_live_aegis_..."
+                                        className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-xs font-mono focus:border-aegis-cyan/50 outline-none text-white placeholder:text-white/10"
+                                        required
+                                    />
+                                    <p className="text-[8px] font-mono text-white/20 uppercase tracking-wider ml-1 mt-1">
+                                        Pegá el token generado desde tu panel web de Orion ID para registrar este nodo.
+                                    </p>
+                                </div>
+
+                                {orionError && (
+                                    <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center gap-3">
+                                        <Terminal className="w-4 h-4 text-red-500" />
+                                        <p className="text-[9px] font-mono text-red-400 uppercase tracking-tight">{orionError}</p>
+                                    </div>
+                                )}
+
+                                {orionSuccess && (
+                                    <div className="bg-emerald-500/10 border border-emerald-500/30 p-3 rounded-xl flex items-center gap-3">
+                                        <Check className="w-4 h-4 text-emerald-400" />
+                                        <p className="text-[9px] font-mono text-emerald-400 uppercase tracking-tight">¡Token vinculado con éxito! Conectando túnel...</p>
+                                    </div>
+                                )}
+
+                                <button
+                                    type="submit"
+                                    disabled={isSavingOrion || !orionToken.trim()}
+                                    className={`w-full group relative overflow-hidden rounded-xl py-3.5 transition-all duration-500 ${
+                                        isSavingOrion || !orionToken.trim()
+                                            ? "bg-white/5 border border-white/10 cursor-not-allowed opacity-50"
+                                            : "bg-aegis-cyan/10 hover:bg-aegis-cyan/20 border border-aegis-cyan/30 text-aegis-cyan"
+                                    }`}
+                                >
+                                    <div className="relative z-10 flex items-center justify-center gap-3">
+                                        {isSavingOrion ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                                        <span className="text-[10px] font-mono font-bold tracking-[0.3em] uppercase">
+                                            {isSavingOrion ? 'Vinculando...' : 'Vincular con Orion ID'}
+                                        </span>
+                                    </div>
+                                </button>
+                            </form>
+                        )}
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <AnimatePresence>
                 {showModal && (
