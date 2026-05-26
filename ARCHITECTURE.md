@@ -1,7 +1,7 @@
 # Aegis Core — Architecture
 
-> **Version:** 1.1.0
-> **Updated:** 2026-05-21
+> **Version:** 1.2.0
+> **Updated:** 2026-05-26
 
 ---
 
@@ -137,6 +137,12 @@ aegis-core/
 | Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) | ✅ Done |
 | Epic 45 | Cognitive Agent Architecture (CAA) | ✅ Done |
 | Epic 46 | Public Launch (docs, community, open source health) | ✅ Done |
+| Epic 51 | Model Intelligence (PinchBench, Ollama Cloud, CMR v2 context scoring) | ✅ Done |
+| Epic 52 | Voice Quality (Siren audio WebRTC streaming stabilization & mic-mute) | ✅ Done |
+| Epic 53 | Stabilization (Real LLM agent loop, observability dashboard, SRE fixes) | ✅ Done |
+| Epic 54 | Aegis Connect (Persistent WebSocket tunnels mapped to Orion ID) | ✅ Done |
+| CORE-150 | Sandbox scripting (Maker Capability - autonomous JS sandbox) | ✅ Done |
+| CORE-151 | Project context integration (Git/VCM active context tracking) | ✅ Done |
 
 ---
 
@@ -160,6 +166,9 @@ aegis-core/
 | ADR-034 | TenantDB es !Send — ops bloqueantes via spawn_blocking | Activo |
 | ADR-035 | GitHub token nunca serializado en respuestas HTTP | Activo |
 | ADR-036 | Rutas de FS validadas con canonicalize() + starts_with(root) | Activo |
+| ADR-037 | Siren Audio migrado a WebRTC/WebTransport para baja latencia | Activo |
+| ADR-038 | Sandbox JS autónomo para Maker Capability (`CORE-150`) | Activo |
+| ADR-039 | Aegis Connect: túneles WebSocket inversos y persistentes a Orion ID | Activo |
 
 ---
 

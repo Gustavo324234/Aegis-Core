@@ -45,7 +45,7 @@ pub struct MemoryFragment {
 }
 
 /// --- STORAGE MODEL ---
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct TenantData {
     pub fragments: HashMap<u64, MemoryFragment>,
     pub next_id: u64,
@@ -85,6 +85,13 @@ impl LanceSwapManager {
 
     /// Inicializa la conexión para un tenant específico (Lazy).
     pub async fn init_tenant(&self, tenant_id: &str) -> Result<(), SwapError> {
+        {
+            let tenants_map = self.tenants.read().await;
+            if tenants_map.contains_key(tenant_id) {
+                return Ok(());
+            }
+        }
+
         let mut tenants_map = self.tenants.write().await;
         if tenants_map.contains_key(tenant_id) {
             return Ok(());
@@ -170,29 +177,42 @@ impl LanceSwapManager {
             tags: Vec::new(),
         };
 
-        let tenants_map = self.tenants.read().await;
-        let tenant_swap = tenants_map.get(tenant_id).ok_or_else(|| {
-            SwapError::IndexError(format!("Tenant index not found: {}", tenant_id))
-        })?;
+        let tenant_swap = {
+            let tenants_map = self.tenants.read().await;
+            tenants_map.get(tenant_id).cloned().ok_or_else(|| {
+                SwapError::IndexError(format!("Tenant index not found: {}", tenant_id))
+            })?
+        };
 
-        let mut swap = tenant_swap.write().await;
-        let id_num = swap.data.next_id;
-        swap.data.next_id += 1;
+        let (id_num, data_clone) = {
+            let mut swap = tenant_swap.write().await;
+            let id_num = swap.data.next_id;
+            swap.data.next_id += 1;
 
-        swap.index
-            .add(id_num, &q_vec)
-            .map_err(|e| SwapError::IndexError(e.to_string()))?;
-        swap.data.fragments.insert(id_num, fragment);
+            swap.index
+                .add(id_num, &q_vec)
+                .map_err(|e| SwapError::IndexError(e.to_string()))?;
+            swap.data.fragments.insert(id_num, fragment);
+            (id_num, swap.data.clone())
+        };
 
         let db_dir = self.compute_db_dir(tenant_id);
         let index_path = format!("{}/memory.usearch", db_dir);
         let data_path = format!("{}/fragments.json", db_dir);
 
-        swap.index
-            .save(&index_path)
-            .map_err(|e| SwapError::IndexError(e.to_string()))?;
+        // Offload blocking CPU/IO save of index to threadpool with a read lock
+        let tenant_swap_clone = Arc::clone(&tenant_swap);
+        let index_path_clone = index_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let swap_read = tenant_swap_clone.blocking_read();
+            swap_read.index.save(&index_path_clone)
+        })
+        .await
+        .map_err(|e| SwapError::StorageError(e.to_string()))?
+        .map_err(|e| SwapError::IndexError(e.to_string()))?;
 
-        let json = serde_json::to_string(&swap.data)
+        // Serialization is slow and CPU-bound: do it outside the write lock!
+        let json = serde_json::to_string(&data_clone)
             .map_err(|e| SwapError::SerializationError(e.to_string()))?;
         tokio::fs::write(&data_path, json)
             .await

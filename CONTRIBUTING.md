@@ -15,25 +15,23 @@ opening up to the community — contributions of any kind are genuinely apprecia
 
 ---
 
-## ⚠️ Active Project Focus & Feature Freeze
+## ⚠️ Active Project Focus & Roadmap
 
-Aegis OS is currently undergoing a **Feature Freeze** on secondary components to consolidate core stability:
-- **Active Focus:** 100% of development effort is directed toward stabilizing the backend (`ank-server`), multi-tenant database isolation, and the web Dashboard (visualizing real Kanban and API Cost data).
-- **Frozen Modules:** No new screens or features are being accepted for the mobile app (`app/`) or the custom Linux distribution packaging (`distro/`) at this time. This ensures we don't disperse our engineering efforts.
-
-We highly encourage community members to help us stabilize the core!
+With the successful completion of the stabilization and core intelligence epics (up to version 1.1.0), the project has transitioned to the next phase of its roadmap:
+- **Active Focus:** Development effort is now directed toward:
+  1. **Mobile Application (`app/`):** Completing the React Native / Expo client in both Satellite and Cloud modes.
+  2. **Minimal Linux Distribution (`distro/`):** Designing the read-only immutable self-hosted system service image.
+  3. **Cognitive Performance:** Scaling L3 Vector Memory (LanceDB) and optimizing cognitive scheduler loops.
+- **General Contributions:** Bug reports, architectural enhancements, UI/UX refinement, and documentation translations are always welcome across all crates.
 
 ---
 
-## 🌟 Good First Issues (Epic 53)
+## 🌟 How to Find Open Issues
 
-If you are looking to make your first contribution, we have flagged several simple UI, visualization, and chore tickets as **Good First Issues** (marked with the `Good First Issue` label or listed in [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md)):
-- **Phase 2 (Shell Observability):**
-  - **CORE-252 / CORE-249 / CORE-250 / CORE-251:** UI/Dashboard widgets (financial statistics, tenant name headers, Chronos widget) using mock or raw API data.
-  - **CORE-256:** Basic service management tab inside the Admin panel.
-- **Phase 6 (Technical Debt & Cleanup):**
-  - **CORE-213:** Improving error logs in `key_pool.load()`.
-  - **CORE-224:** Cleaning up residual temp directories after execution.
+If you are looking to make your first contribution, check out the active roadmap items and untracked bugs:
+1. Consult the single source of truth for tickets at [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md).
+2. Look for open issues on GitHub labeled `Good First Issue` or `Help Wanted`.
+3. Open a design discussion issue before embarking on major architectural contributions so we can align on design principles.
 
 ---
 

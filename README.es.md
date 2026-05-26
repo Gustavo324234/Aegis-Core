@@ -23,6 +23,7 @@ No es un wrapper de chatbot. No es un pipeline de LangChain. Es un runtime a niv
 - **Protocolo Citadel** — autenticación multi-tenant Zero-Trust en cada capa
 - **Un binario** — `ank-server` sirve la API HTTP, WebSocket y la UI React sin runtime externo
 - **Listo para distro** — diseñado para correr como servicio de sistema, eventualmente embebido en una distribución Linux mínima
+- **Aegis Connect** — túneles WebSocket seguros y persistentes que reemplazan los túneles Cloudflare Quick efímeros y aleatorios, vinculando tu instancia local directamente a una URL permanente y segura a través de tu cuenta de Orion ID
 
 ---
 
@@ -206,18 +207,24 @@ aegis-core/
 | Epic 44 | Developer Workspace (terminal, explorador de archivos, Git, PR manager) | ✅ Listo |
 | Epic 45 | Arquitectura de Agentes Cognitivos | ✅ Listo |
 | Epic 46 | Lanzamiento Público (docs, comunidad, salud open source) | ✅ Listo |
+| Epic 47 | Protocolo de Agente v2 (Paradigma Tool Use reemplaza parsing de texto) | ✅ Listo |
+| Epic 48 | Observabilidad de Shell (Widgets del Dashboard en tiempo real y pestaña Sistema) | ✅ Listo |
+| Epic 49 | Bucle Cognitivo (Loop ReAct multi-agente y capas de memoria semántica) | ✅ Listo |
+| Epic 50 | Inbox de Agente (Intercambios directos Usuario-Supervisor en hilos) | ✅ Listo |
+| Epic 51 | Inteligencia de Modelos (PinchBench, Ollama Cloud, scoring de contexto CMR v2) | ✅ Listo |
+| Epic 52 | Calidad de Voz (estabilización de stream Siren WebRTC y feedback de silenciar mic) | ✅ Listo |
+| Epic 53 | Estabilización (loop real de agentes LLM, panel de observabilidad, correcciones SRE) | ✅ Listo |
+| Epic 54 | Aegis Connect (Túneles WebSocket persistentes mapeados a Orion ID) | ✅ Listo |
+| Epic 55 | App Móvil (modos Satélite y Cloud con integración Orion ID y Web) | ✅ Listo |
+| CORE-150 | Scripting en Sandbox (Maker Capability - sandbox JS autónomo) | ✅ Listo |
+| CORE-151 | Integración de contexto de proyecto (VCM y seguimiento de Git) | ✅ Listo |
 
 ---
 
 ## Roadmap
 
-- [ ] Epic 51 — Inteligencia de Modelos (PinchBench, Ollama Cloud, scoring de contexto CMR v2)
-- [ ] Epic 52 — Calidad de Voz (estabilización de Siren audio stream y lógica de silenciar micrófono)
-- [ ] Epic 53 — Estabilización (loop real de LLM de agentes, observabilidad y reparaciones de infraestructura)
-- [ ] Scripting en Sandbox (Maker Capability) — CORE-150
-- [ ] Integración de contexto de proyecto (Git/VCM) — CORE-151
-- [ ] App móvil completa (modos Satélite y Cloud)
-- [ ] `distro/` — distribución mínima de Linux
+- [ ] `distro/` — distribución mínima e inmutable de Linux autohospedada
+- [ ] Optimización de rendimiento de Cognitive Loop y escalamiento de base de datos vectorial local (LanceDB L3)
 
 ---
 
