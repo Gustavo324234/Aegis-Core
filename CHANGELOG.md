@@ -8,15 +8,22 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### In Progress
-- Epic 51: Model Intelligence (PinchBench, Ollama Cloud integration, CMR v2 context scoring)
-- Epic 52: Voice Quality (Siren audio streaming stabilization, feedback muting logic)
-- Epic 53: Stabilization (Agent Loop real LLM execution, real-time dashboard observability, systemd multi-service VPS installation)
-- CORE-148: Natural conversational tone (prompt tuning)
-- CORE-151: Project context integration (Git/VCM)
-
 ### Planned
-- CORE-150: Sandbox scripting — Maker Capability
+- Satellite & Cloud Mobile App completion (`app/` client)
+- Minimal immutable self-hosted Linux distribution (`distro/`)
+- Performance optimization and local vector database scaling (LanceDB L3)
+
+---
+
+## [1.1.0] — 2026-05-26
+
+### Added
+- **Epic 51: Model Intelligence** — Integrated PinchBench, Ollama Cloud support, real-time CMR v2 context scoring, and symmetric local-first routing.
+- **Epic 52: Voice Quality** — Stabilized Siren audio streaming protocol, transitioned WebSocket to WebRTC/WebTransport channels, and added hardware-level mic-mute feedback loops during TTS.
+- **Epic 53: Stabilization** — Realized ReAct LLM execution in `run_agent_loop`, integrated administrative service management, and created real-time Dashboard observability widgets (Kanban, API costs) with true multi-tenant database isolation.
+- **Epic 54: Aegis Connect** — Implemented persistent secure WebSocket tunnels linked to Orion ID accounts, replacing ephemeral/random Cloudflare Quick Tunnels.
+- **CORE-150: Sandbox Scripting** — Created Maker Capability for autonomous runtime JS sandboxing inside secure enclaves.
+- **CORE-151: Project Context Integration** — Integrated active project file state, Git branch tracking, and VCM (Virtual Context Manager) deep context scoring.
 
 ---
 

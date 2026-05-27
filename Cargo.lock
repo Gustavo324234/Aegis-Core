@@ -28,6 +28,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aegis-connect-relay"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.7.9",
+ "futures",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "aegis-sdk"
 version = "0.1.5"
 dependencies = [
@@ -183,6 +199,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite 0.21.0",
  "tokio-util",
  "tonic",
  "tracing",

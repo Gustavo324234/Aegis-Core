@@ -23,6 +23,7 @@ It is not a chatbot wrapper. It is not a LangChain pipeline. It is a kernel-leve
 - **Citadel Protocol** — Zero-Trust multi-tenant authentication at every layer
 - **One binary** — `ank-server` serves the HTTP API, WebSocket streams, and the React UI with no external runtime
 - **Distro-ready** — designed to run as a system service, eventually embedded in a minimal Linux distribution
+- **Aegis Connect** — secure, persistent WebSocket tunnels replacing random/ephemeral Cloudflare Quick Tunnels, mapping your local instance directly to a permanent secure URL via your Orion ID account
 
 ---
 
@@ -214,18 +215,24 @@ aegis-core/
 | Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) | ✅ Done |
 | Epic 45 | Cognitive Agent Architecture | ✅ Done |
 | Epic 46 | Public Launch (docs, community, open source health) | ✅ Done |
+| Epic 47 | Agent Protocol v2 (Tool Use paradigm replacing text parsing) | ✅ Done |
+| Epic 48 | Shell Observability (Dashboard real-time widgets & service tab) | ✅ Done |
+| Epic 49 | Cognitive Loop (Multi-agent ReAct loop & memory layers) | ✅ Done |
+| Epic 50 | Agent Inbox (Direct User-Supervisor thread exchanges) | ✅ Done |
+| Epic 51 | Model Intelligence (PinchBench, Ollama Cloud, CMR v2 context scoring) | ✅ Done |
+| Epic 52 | Voice Quality (Siren WebRTC stream stabilization & mic-mute feedback) | ✅ Done |
+| Epic 53 | Stabilization (Real LLM agent loop, observability dashboard, SRE fixes) | ✅ Done |
+| Epic 54 | Aegis Connect (Persistent WebSocket tunneling mapped to Orion ID) | ✅ Done |
+| Epic 55 | Mobile App (Satellite and Cloud modes with Orion ID & Web integration) | ✅ Done |
+| CORE-150 | Sandbox scripting (Maker Capability - autonomous JS sandbox) | ✅ Done |
+| CORE-151 | Project context integration (Git/VCM active context tracking) | ✅ Done |
 
 ---
 
 ## Roadmap
 
-- [ ] Epic 51 — Model Intelligence (PinchBench, Ollama Cloud, CMR v2 context scoring)
-- [ ] Epic 52 — Voice Quality (Siren audio stream stabilization and mic-mute logic)
-- [ ] Epic 53 — Stabilization (Agent Loop real LLM run loop, observability, and infra repairs)
-- [ ] Sandbox scripting (Maker Capability) — CORE-150
-- [ ] Project context integration (Git/VCM) — CORE-151
-- [ ] Mobile app completion (Satellite and Cloud modes)
-- [ ] `distro/` — minimal Linux distribution
+- [ ] `distro/` — minimal immutable self-hosted Linux distribution
+- [ ] Cognitive Loop performance optimization and local vector database scaling (LanceDB L3)
 
 ---
 

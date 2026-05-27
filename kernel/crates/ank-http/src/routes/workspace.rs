@@ -44,7 +44,7 @@ struct SetConfigBody {
 }
 
 async fn set_config(
-    _state: State<AppState>,
+    State(state): State<AppState>,
     auth: CitadelAuthenticated,
     Json(body): Json<SetConfigBody>,
 ) -> Result<Json<Value>, AegisHttpError> {
@@ -55,6 +55,7 @@ async fn set_config(
         "terminal_allowlist",
         "pr_merge_mode",
         "pr_auto_fix_ci",
+        "orion_id_token",
     ];
     if !allowed_keys.contains(&body.key.as_str()) {
         return Err(AegisHttpError::BadRequest(format!(
@@ -63,9 +64,53 @@ async fn set_config(
         )));
     }
 
+    if body.key == "orion_id_token" {
+        let token = body.value.clone();
+        let tenant = auth.tenant_id.clone();
+        let data_dir = state.config.data_dir.clone();
+        tokio::spawn(async move {
+            #[derive(serde::Serialize, serde::Deserialize)]
+            struct ConnectConfig {
+                token: String,
+                tenant: String,
+                relay_url: Option<String>,
+            }
+            let config_path = data_dir.join("aegis_connect.json");
+
+            let mut relay_url = None;
+            if config_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&config_path) {
+                    if let Ok(cfg) = serde_json::from_str::<ConnectConfig>(&content) {
+                        relay_url = cfg.relay_url;
+                    }
+                }
+            }
+            if relay_url.is_none() {
+                relay_url = Some(
+                    std::env::var("AEGIS_CONNECT_RELAY")
+                        .unwrap_or_else(|_| "ws://127.0.0.1:8083/ws/connect".to_string()),
+                );
+            }
+
+            let cfg = ConnectConfig {
+                token,
+                tenant,
+                relay_url,
+            };
+            if let Ok(content) = serde_json::to_string_pretty(&cfg) {
+                let _ = std::fs::write(&config_path, content);
+            }
+        });
+    }
+
+    let tenant_id = auth.tenant_id.clone();
+    let session_key_hash = auth.session_key_hash.clone();
+    let body_key = body.key.clone();
+    let body_value = body.value.clone();
+
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)?;
-        WorkspaceConfig::set(&db, &body.key, &body.value)?;
+        let db = TenantDB::open(&tenant_id, &session_key_hash)?;
+        WorkspaceConfig::set(&db, &body_key, &body_value)?;
         Ok(())
     })
     .await

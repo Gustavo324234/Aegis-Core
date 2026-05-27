@@ -20,6 +20,7 @@ impl WorkspaceConfig {
         let github_token = db.workspace_config_get("github_token")?;
         let project_root = db.workspace_config_get("project_root")?;
         let github_repo = db.workspace_config_get("github_repo")?;
+        let orion_id_token = db.workspace_config_get("orion_id_token")?;
 
         let terminal_allowlist = db
             .workspace_config_get("terminal_allowlist")?
@@ -46,6 +47,7 @@ impl WorkspaceConfig {
             terminal_allowlist,
             pr_merge_mode,
             pr_auto_fix_ci,
+            orion_id_token,
         })
     }
 }
@@ -69,6 +71,8 @@ pub struct WorkspaceSettings {
     pub terminal_allowlist: Vec<String>,
     pub pr_merge_mode: MergeMode,
     pub pr_auto_fix_ci: bool,
+    #[serde(skip_serializing)]
+    pub orion_id_token: Option<String>,
 }
 
 /// DTO para serializar al frontend: el token nunca aparece — solo "configured" o null.
@@ -80,6 +84,7 @@ pub struct WorkspaceSettingsDto {
     pub terminal_allowlist: Vec<String>,
     pub pr_merge_mode: String,
     pub pr_auto_fix_ci: bool,
+    pub orion_id_token_status: Option<&'static str>,
 }
 
 impl From<WorkspaceSettings> for WorkspaceSettingsDto {
@@ -98,6 +103,11 @@ impl From<WorkspaceSettings> for WorkspaceSettingsDto {
                 MergeMode::Manual => "manual".to_string(),
             },
             pr_auto_fix_ci: s.pr_auto_fix_ci,
+            orion_id_token_status: if s.orion_id_token.is_some() {
+                Some("configured")
+            } else {
+                None
+            },
         }
     }
 }

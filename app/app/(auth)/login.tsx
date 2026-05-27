@@ -19,12 +19,20 @@ import * as secureStorage from '@/services/secureStorage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 
+type LoginType = 'orion' | 'local';
+
 export default function LoginScreen() {
   const router = useRouter();
   const { loginSuccess } = useAuthStore();
 
+  const [loginType, setLoginType] = useState<LoginType>('orion');
+  const [orionId, setOrionId] = useState('');
+  
+  // Local Satellite state
   const [serverUrl, setServerUrl] = useState('http://');
   const [email, setEmail] = useState('');
+  
+  // Shared state
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -34,31 +42,52 @@ export default function LoginScreen() {
   useEffect(() => {
     // Load last used server URL
     secureStorage.getServerUrl().then((url) => {
-      if (url) setServerUrl(url);
+      if (url) {
+        if (url.includes('.aegis.orioncrea.com')) {
+          setLoginType('orion');
+          const cleanHost = url.replace('https://', '').replace('.aegis.orioncrea.com', '');
+          setOrionId(cleanHost);
+        } else {
+          setLoginType('local');
+          setServerUrl(url);
+        }
+      }
     });
   }, []);
 
   const handleLogin = async () => {
-    if (!serverUrl || !email || !password) {
+    let targetServerUrl = serverUrl;
+    let targetEmail = email;
+
+    if (loginType === 'orion') {
+      if (!orionId.trim()) {
+        Alert.alert('Error', 'Please enter your Orion ID');
+        return;
+      }
+      targetServerUrl = `https://${orionId.trim().toLowerCase()}.aegis.orioncrea.com`;
+      targetEmail = 'admin';
+    }
+
+    if (!targetServerUrl || !targetEmail || !password) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
     }
 
     setIsLoading(true);
     try {
-      const response = await bffClient.login(serverUrl, email, password);
+      const response = await bffClient.login(targetServerUrl, targetEmail, password);
       
       await loginSuccess({
         sessionKey: response.session_key,
         tenantId: response.tenant_id,
-        serverUrl: serverUrl,
+        serverUrl: targetServerUrl,
       });
 
       router.replace('/(main)/chat');
     } catch (error: any) {
       console.error('Login error:', error);
       const message = error.message === 'AUTH_FAILURE' 
-        ? 'Invalid email or password' 
+        ? 'Invalid credentials' 
         : `Connection error: ${error.message}`;
       Alert.alert('Login Failed', message);
     } finally {
@@ -77,13 +106,52 @@ export default function LoginScreen() {
     setShowScanner(true);
   };
 
-  const handleBarCodeScanned = ({ data }: { data: string }) => {
+  const handleBarCodeScanned = async ({ data }: { data: string }) => {
     try {
-      // Validate it's a URL
       if (data.startsWith('http')) {
         const url = new URL(data);
-        setServerUrl(url.origin);
+        const setupToken = url.searchParams.get('setup_token') || url.searchParams.get('token');
+        
+        let targetServer = url.origin;
+        const host = url.hostname.toLowerCase();
+        
+        if (host.endsWith('.aegis.orioncrea.com')) {
+          const orionIdPart = host.split('.')[0];
+          setLoginType('orion');
+          setOrionId(orionIdPart);
+          setPassword(setupToken || '');
+          setEmail('admin');
+        } else {
+          setLoginType('local');
+          setServerUrl(targetServer);
+          setPassword(setupToken || '');
+          setEmail('admin');
+        }
+        
         setShowScanner(false);
+
+        if (setupToken) {
+          setIsLoading(true);
+          try {
+            const response = await bffClient.login(targetServer, 'admin', setupToken);
+            
+            await loginSuccess({
+              sessionKey: response.session_key,
+              tenantId: response.tenant_id,
+              serverUrl: targetServer,
+            });
+
+            router.replace('/(main)/chat');
+          } catch (error: any) {
+            console.error('QR Auto-Login error:', error);
+            const message = error.message === 'AUTH_FAILURE' 
+              ? 'Invalid QR token' 
+              : `Connection error: ${error.message}`;
+            Alert.alert('Auto-Pairing Failed', message);
+          } finally {
+            setIsLoading(false);
+          }
+        }
       } else {
         Alert.alert('Invalid QR', 'The scanned code is not a valid URL');
       }
@@ -107,6 +175,22 @@ export default function LoginScreen() {
           <Text style={styles.subtitle}>SATELLITE TERMINAL</Text>
         </View>
 
+        {/* Tab Selection */}
+        <View style={styles.tabContainer}>
+          <TouchableOpacity
+            style={[styles.tabButton, loginType === 'orion' && styles.tabButtonActive]}
+            onPress={() => setLoginType('orion')}
+          >
+            <Text style={[styles.tabText, loginType === 'orion' && styles.tabTextActive]}>AEGIS CONNECT</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabButton, loginType === 'local' && styles.tabButtonActive]}
+            onPress={() => setLoginType('local')}
+          >
+            <Text style={[styles.tabText, loginType === 'local' && styles.tabTextActive]}>LOCAL IP</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.form}>
           <TouchableOpacity 
             style={styles.qrBannerButton}
@@ -116,41 +200,61 @@ export default function LoginScreen() {
             <Text style={styles.qrBannerButtonText}>PAIR WITH SERVER QR</Text>
           </TouchableOpacity>
 
-          <Text style={styles.label}>Server URL</Text>
-          <View style={styles.inputWithAction}>
-            <TextInput
-              style={styles.inputInner}
-              value={serverUrl}
-              onChangeText={setServerUrl}
-              placeholder="http://192.168.1.x:8000"
-              placeholderTextColor="#444"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
-            <TouchableOpacity 
-              onPress={handleScanPress} 
-              style={styles.qrButton}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="qr-code-outline" size={20} color="#00E5CC" />
-              <Text style={styles.qrButtonText}>SCAN</Text>
-            </TouchableOpacity>
-          </View>
+          {loginType === 'orion' ? (
+            <View>
+              <Text style={styles.label}>Orion ID</Text>
+              <View style={styles.inputContainerOrion}>
+                <TextInput
+                  style={styles.inputOrion}
+                  value={orionId}
+                  onChangeText={setOrionId}
+                  placeholder="username"
+                  placeholderTextColor="#444"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Text style={styles.domainSuffix}>.aegis.orioncrea.com</Text>
+              </View>
+            </View>
+          ) : (
+            <View>
+              <Text style={styles.label}>Server URL</Text>
+              <View style={styles.inputWithAction}>
+                <TextInput
+                  style={styles.inputInner}
+                  value={serverUrl}
+                  onChangeText={setServerUrl}
+                  placeholder="http://192.168.1.x:8000"
+                  placeholderTextColor="#444"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                />
+                <TouchableOpacity 
+                  onPress={handleScanPress} 
+                  style={styles.qrButton}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="qr-code-outline" size={20} color="#00E5CC" />
+                  <Text style={styles.qrButtonText}>SCAN</Text>
+                </TouchableOpacity>
+              </View>
 
-          <Text style={styles.label}>Email / Tenant ID</Text>
-          <TextInput
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            placeholder="admin@aegis"
-            placeholderTextColor="#666"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="email-address"
-          />
+              <Text style={styles.label}>Email / Tenant ID</Text>
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                placeholder="admin@aegis"
+                placeholderTextColor="#666"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+              />
+            </View>
+          )}
 
-          <Text style={styles.label}>Password</Text>
+          <Text style={styles.label}>{loginType === 'orion' ? 'Orion Token / Password' : 'Password'}</Text>
           <View style={styles.passwordContainer}>
             <TextInput
               style={[styles.input, { flex: 1, marginBottom: 0 }]}
@@ -223,12 +327,20 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#050505' },
   scrollContent: { flexGrow: 1, justifyContent: 'center', padding: 24 },
-  header: { alignItems: 'center', marginBottom: 48 },
+  header: { alignItems: 'center', marginBottom: 32 },
   logo: { width: 200, height: 60, marginBottom: 8 },
   subtitle: { color: '#00E5CC', fontSize: 12, letterSpacing: 4, fontWeight: 'bold' },
+  tabContainer: { flexDirection: 'row', backgroundColor: '#0A0A0A', borderRadius: 8, borderWidth: 1, borderColor: '#1A1A1A', padding: 4, marginBottom: 24 },
+  tabButton: { flex: 1, paddingVertical: 12, alignItems: 'center', borderRadius: 6 },
+  tabButtonActive: { backgroundColor: '#7C6FE0' },
+  tabText: { color: '#666', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  tabTextActive: { color: '#FFF' },
   form: { width: '100%' },
   label: { color: '#AAA', fontSize: 12, marginBottom: 8, fontWeight: '600', textTransform: 'uppercase' },
   input: { backgroundColor: '#111', borderWidth: 1, borderColor: '#333', borderRadius: 8, color: '#FFF', padding: 16, marginBottom: 20, fontSize: 16 },
+  inputContainerOrion: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderWidth: 1, borderColor: '#333', borderRadius: 8, marginBottom: 20, overflow: 'hidden' },
+  inputOrion: { flex: 1, color: '#FFF', padding: 16, fontSize: 16, textAlign: 'right' },
+  domainSuffix: { color: '#666', paddingRight: 16, fontSize: 14, fontWeight: '600' },
   passwordContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderWidth: 1, borderColor: '#333', borderRadius: 8, marginBottom: 24 },
   toggle: { paddingHorizontal: 16 },
   toggleText: { color: '#7C6FE0', fontSize: 10, fontWeight: 'bold' },
@@ -238,7 +350,7 @@ const styles = StyleSheet.create({
   secondaryButton: { marginTop: 20, padding: 12, alignItems: 'center' },
   secondaryButtonText: { color: '#7C6FE0', fontSize: 13, fontWeight: '600' },
   footer: { color: '#333', fontSize: 10, textAlign: 'center', marginTop: 48, letterSpacing: 1 },
-  qrBannerButton: { flexDirection: 'row', backgroundColor: '#00E5CC', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 32, shadowColor: '#00E5CC', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 5 },
+  qrBannerButton: { flexDirection: 'row', backgroundColor: '#00E5CC', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 24, shadowColor: '#00E5CC', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 5 },
   qrBannerButtonText: { color: '#000', fontWeight: '900', fontSize: 14, letterSpacing: 1 },
   inputWithAction: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#111', borderWidth: 1, borderColor: '#333', borderRadius: 8, marginBottom: 20, overflow: 'hidden' },
   inputInner: { flex: 1, color: '#FFF', padding: 16, fontSize: 16 },

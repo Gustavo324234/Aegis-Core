@@ -22,7 +22,7 @@ import * as bffClient from '@/services/bffClient';
 import * as cloudRouter from '@/services/cloudRouter';
 import * as voiceService from '@/services/voiceService';
 import * as DocumentPicker from 'expo-document-picker';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import ModeSelector from '@/components/ModeSelector';
 import ChatBubble from '@/components/ChatBubble';
 import VoiceButton from '@/components/VoiceButton';
@@ -327,14 +327,14 @@ export default function ChatScreen() {
                 style={[styles.miniOauthBtn, { borderColor: '#4285F433' }]} 
                 onPress={() => router.push('/(main)/connected-accounts')}
               >
-                <Ionicons name="logo-google" size={14} color="#4285F4" />
+                <MaterialCommunityIcons name="google" size={14} color="#4285F4" />
                 <Text style={styles.miniOauthText}>{t.link_services} Google</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 style={[styles.miniOauthBtn, { borderColor: '#1DB95433' }]} 
                 onPress={() => router.push('/(main)/connected-accounts')}
               >
-                <Ionicons name="logo-spotify" size={14} color="#1DB954" />
+                <MaterialCommunityIcons name="spotify" size={14} color="#1DB954" />
                 <Text style={styles.miniOauthText}>{t.link_services} Spotify</Text>
               </TouchableOpacity>
             </View>

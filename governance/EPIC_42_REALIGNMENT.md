@@ -1,6 +1,6 @@
 # EPIC 42 — Aegis Vision Realignment & Autonomy
 
-**Estado:** Planificado
+**Estado:** Completa
 **Prioridad:** Crítica
 **Dueño:** Kernel & UI Engineers
 
@@ -25,14 +25,14 @@ Esta Epic tiene como objetivo re-alinear el proyecto Aegis-Core con su visión o
 | [CORE-151](./Tickets/CORE-151.md) | Integración de Contexto de Proyecto (Git/VCM) | Terminado | Alta |
 | [CORE-152](./Tickets/CORE-152.md) | Plugins de Dominios (Ledger & Chronos) | Terminado | Media |
 | [CORE-153](./Tickets/CORE-153.md) | Dashboard Dinámico & Kanban UI | Terminado | Alta |
-| [CORE-154](./Tickets/CORE-154.md) | Orquestación de Sub-Agentes especializados | Pendiente | Baja |
+| [CORE-154](./Tickets/CORE-154.md) | Orquestación de Sub-Agentes especializados | Terminado | Baja |
 
 ---
 
 ## 4. Criterios de Aceptación Globales
 
 - [x] Aegis puede crear un script "hello world" y ejecutarlo como una herramienta.
-- [ ] Aegis puede responder "estábamos trabajando en el ticket X" al iniciar un chat.
+- [x] Aegis puede responder "estábamos trabajando en el ticket X" al iniciar un chat.
 - [x] El usuario puede ver un resumen de sus gastos en un panel visual.
 - [x] El usuario puede ver sus tareas pendientes en un tablero Kanban.
 

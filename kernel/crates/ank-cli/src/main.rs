@@ -279,7 +279,7 @@ impl ServiceBackend for WindowsBackend {
 
         let file = File::open(&path)?;
         let reader = BufReader::new(file);
-        let all_lines = reader.lines().filter_map(|l| l.ok()).collect::<Vec<_>>();
+        let all_lines = reader.lines().map_while(Result::ok).collect::<Vec<_>>();
         let start = all_lines.len().saturating_sub(lines);
         for line in &all_lines[start..] {
             println!("{}", line);

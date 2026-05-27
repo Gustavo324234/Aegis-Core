@@ -4,15 +4,21 @@
 
 | ID | Título | Estado | Progreso |
 |---|---|---|---|
-| EPIC 41 | UX & Onboarding | ✅ Completa | 95% |
-| EPIC 42 | Vision Realignment & Autonomy | 🚧 In Progress | 80% |
+| EPIC 41 | UX & Onboarding | ✅ Completa | 100% |
+| EPIC 42 | Vision Realignment & Autonomy | ✅ Completa | 100% |
 | EPIC 43 | Hierarchical Multi-Agent Orchestration | ✅ Completa | 100% |
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
 | EPIC 46 | Public Launch | ✅ Completa | 100% |
+| EPIC 47 | Agent Protocol v2: Tool Use | ✅ Completa | 100% |
+| EPIC 48 | Shell Observability | ✅ Completa | 100% |
+| EPIC 49 | Cognitive Loop: Memory layers & latency | ✅ Completa | 100% |
+| EPIC 50 | Agent Inbox: Direct User-Supervisor exchanges | ✅ Completa | 100% |
 | EPIC 51 | Model Intelligence: PinchBench + Ollama Cloud + CMR v2 | ✅ Completa | 100% |
 | EPIC 52 | Voice Quality | ✅ Completa | 100% |
 | EPIC 53 | Stabilization: Agent Loop, Observability & Infrastructure | ✅ Completa | 100% |
+| EPIC 54 | Aegis Connect: Persistent WebSocket Tunneling | ✅ Completa | 100% |
+| EPIC 55 | Mobile App (Orion ID & Web Redirection) | ✅ Completa | 100% |
 
 ---
 
@@ -99,7 +105,36 @@
 | CORE-213 | fix | Kernel: loguear error en key_pool.load() | ✅ Done | Media | Kernel Engineer |
 | CORE-224 | chore | Limpiar directorios temporales | ✅ Done | Baja | Tavo |
 | CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | ✅ Done | Alta | Tavo |
-| OPS-001 | ops | Re-registrar API keys tras reinicio | ✅ Done | Crítica | Tavo |
+| OPS-001 | ops | Re-register API keys tras reinicio | ✅ Done | Crítica | Tavo |
+
+---
+
+## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-307 | feat | Relay server WebSocket tunnel protocol | ✅ Done | Alta | DevOps / Infra |
+| CORE-308 | feat | Client agent integration & heartbeat | ✅ Done | Alta | Kernel Engineer |
+| CORE-309 | feat | Shell: Connect status widget & Orion ID linking | ✅ Done | Alta | Shell Engineer |
+
+---
+
+## Otras Características Consolidadas
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-150 | feat | Sandbox scripting (Maker Capability - autonomous JS sandbox) | ✅ Done | Alta | Kernel Engineer |
+| CORE-151 | feat | Project context integration (Git/VCM active context tracking) | ✅ Done | Alta | Kernel Engineer |
+
+---
+
+## EPIC 55 — Mobile App (Orion ID & Web Redirection)
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-310 | fix | Fix TypeScript Icon type compiler error (Spotify icon) | ✅ Done | Alta | UI Engineer |
+| CORE-311 | feat | Orion ID login tab and automatic domain resolution | ✅ Done | Alta | App Developer |
+| CORE-312 | feat | connected-accounts Web redirect button via expo-web-browser | ✅ Done | Alta | App Developer |
 
 ---
 
