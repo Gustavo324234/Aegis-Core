@@ -51,11 +51,13 @@ struct RelayState {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Setting default subscriber failed");
+    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("Failed to set global subscriber: {}", e);
+    }
 
     let state = Arc::new(RelayState {
         tunnels: RwLock::new(HashMap::new()),
@@ -70,9 +72,11 @@ async fn main() {
 
     let port = std::env::var("AEGIS_RELAY_PORT").unwrap_or_else(|_| "8083".to_string());
     let addr = format!("0.0.0.0:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("Aegis Connect Relay starting on http://{}", addr);
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await?;
+    
+    Ok(())
 }
 
 // WebSocket Tunnel Connection endpoint (Local Aegis connects here)
@@ -288,9 +292,16 @@ async fn proxy_request(
                 response_builder = response_builder.header(k, v);
             }
             let body_bytes = body.unwrap_or_default();
-            response_builder
-                .body(axum::body::Body::from(body_bytes))
-                .unwrap()
+            match response_builder.body(axum::body::Body::from(body_bytes)) {
+                Ok(res) => res,
+                Err(e) => {
+                    warn!("Failed to construct proxy response: {}", e);
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(axum::body::Body::from("Internal Server Error"))
+                        .unwrap_or_else(|_| Response::new(axum::body::Body::empty()))
+                }
+            }
         }
         _ => {
             // Clean up waiter
