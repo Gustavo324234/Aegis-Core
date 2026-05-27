@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.71](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.70...ank-core-v0.1.71) (2026-05-27)
+
+
+### Features
+
+* complete epics 47-55 realignment, mobile Orion ([#322](https://github.com/Gustavo324234/Aegis-Core/issues/322)) ([1f1c37e](https://github.com/Gustavo324234/Aegis-Core/commit/1f1c37edf4f4b7789b5dd34b69765f41a1baed12))
+
 ## [0.1.70](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.69...ank-core-v0.1.70) (2026-05-24)
 
 

@@ -24,6 +24,13 @@
 
 
 
+## [0.1.78](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.77...ank-http-v0.1.78) (2026-05-27)
+
+
+### Features
+
+* complete epics 47-55 realignment, mobile Orion ([#322](https://github.com/Gustavo324234/Aegis-Core/issues/322)) ([1f1c37e](https://github.com/Gustavo324234/Aegis-Core/commit/1f1c37edf4f4b7789b5dd34b69765f41a1baed12))
+
 ## [0.1.77](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.76...ank-http-v0.1.77) (2026-05-24)
 
 
