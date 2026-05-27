@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.70](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.69...ank-core-v0.1.70) (2026-05-24)
+
+
+### Features
+
+* **core:** integrate script sandbox, WebRTC voice migration, and provider key pooling ([#320](https://github.com/Gustavo324234/Aegis-Core/issues/320)) ([1932637](https://github.com/Gustavo324234/Aegis-Core/commit/19326379e2817ad7d6c20d368b29cebb92e5e58d))
+
 ## [0.1.69](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.68...ank-core-v0.1.69) (2026-05-21)
 
 
