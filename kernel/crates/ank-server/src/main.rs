@@ -619,7 +619,7 @@ pub(crate) async fn run_server() -> Result<()> {
         let tunnel_url_state = Arc::clone(&state.tunnel_url);
         let data_dir_clone = data_dir.clone();
         tokio::spawn(async move {
-            use serde::{Serialize, Deserialize};
+            use serde::{Deserialize, Serialize};
 
             #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
             struct ConnectConfig {
@@ -629,8 +629,12 @@ pub(crate) async fn run_server() -> Result<()> {
             }
 
             // Sync environment variables to config file if present and file doesn't exist
-            let env_token = std::env::var("ORION_ID_TOKEN").or_else(|_| std::env::var("AEGIS_CONNECT_TOKEN")).ok();
-            let env_tenant = std::env::var("ORION_ID_TENANT").or_else(|_| std::env::var("AEGIS_CONNECT_TENANT")).ok();
+            let env_token = std::env::var("ORION_ID_TOKEN")
+                .or_else(|_| std::env::var("AEGIS_CONNECT_TOKEN"))
+                .ok();
+            let env_tenant = std::env::var("ORION_ID_TENANT")
+                .or_else(|_| std::env::var("AEGIS_CONNECT_TENANT"))
+                .ok();
             let config_path = data_dir_clone.join("aegis_connect.json");
 
             if let (Some(tok), Some(ten)) = (env_token, env_tenant) {
@@ -677,10 +681,14 @@ pub(crate) async fn run_server() -> Result<()> {
                     }
                     (None, Some(curr_cfg)) => {
                         if !curr_cfg.token.is_empty() && !curr_cfg.tenant.is_empty() {
-                            info!("Aegis Connect: Spawning new tunnel for tenant '{}'", curr_cfg.tenant);
+                            info!(
+                                "Aegis Connect: Spawning new tunnel for tenant '{}'",
+                                curr_cfg.tenant
+                            );
                             let relay = curr_cfg.relay_url.clone().unwrap_or_else(|| {
-                                std::env::var("AEGIS_CONNECT_RELAY")
-                                    .unwrap_or_else(|_| "ws://127.0.0.1:8083/ws/connect".to_string())
+                                std::env::var("AEGIS_CONNECT_RELAY").unwrap_or_else(|_| {
+                                    "ws://127.0.0.1:8083/ws/connect".to_string()
+                                })
                             });
 
                             let client = ank_core::tunnel::TunnelClient::new(

@@ -1,17 +1,20 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}},
-    http::{Method, HeaderMap, StatusCode},
+    extract::{
+        ws::{Message, WebSocket},
+        Path, Query, State, WebSocketUpgrade,
+    },
+    http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{any, get},
     Router,
 };
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, RwLock, oneshot};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
@@ -80,12 +83,14 @@ async fn handle_tunnel_websocket(
     State(state): State<Arc<RelayState>>,
 ) -> impl IntoResponse {
     // Token extraction and validation
-    let token = headers.get("authorization")
+    let token = headers
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
         .or_else(|| params.get("token").map(|s| s.as_str()));
 
-    let tenant = headers.get("x-citadel-tenant")
+    let tenant = headers
+        .get("x-citadel-tenant")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string())
         .or_else(|| params.get("tenant").cloned());
@@ -94,24 +99,30 @@ async fn handle_tunnel_websocket(
         Some(t) if t.starts_with("orion_id_tok_live_aegis_") && t.len() >= 30 => t,
         _ => {
             warn!("Rejecting tunnel: missing or invalid Orion ID Token");
-            return (StatusCode::UNAUTHORIZED, "Unauthorized Orion ID Token required").into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Unauthorized Orion ID Token required",
+            )
+                .into_response();
         }
     };
 
     let tenant_id = match tenant {
-        Some(t) if !t.is_empty() => {
-            t.to_lowercase()
-                .chars()
-                .map(|c| if c.is_alphanumeric() { c } else { '-' })
-                .collect::<String>()
-        }
+        Some(t) if !t.is_empty() => t
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>(),
         _ => {
             warn!("Rejecting tunnel: missing tenant name header");
             return (StatusCode::BAD_REQUEST, "x-citadel-tenant header required").into_response();
         }
     };
 
-    info!("Orion ID validated successfully for tunnel tenant '{}' (Token prefix matches)", tenant_id);
+    info!(
+        "Orion ID validated successfully for tunnel tenant '{}' (Token prefix matches)",
+        tenant_id
+    );
 
     ws.on_upgrade(move |socket| register_tunnel(socket, tenant_id, state))
 }
@@ -125,7 +136,10 @@ async fn register_tunnel(socket: WebSocket, tenant: String, state: Arc<RelayStat
     {
         let mut tunnels = state.tunnels.write().await;
         tunnels.insert(tenant.clone(), tx.clone());
-        info!("Aegis Connect: Tunnel established and registered for tenant '{}'", tenant);
+        info!(
+            "Aegis Connect: Tunnel established and registered for tenant '{}'",
+            tenant
+        );
     }
 
     // Task to receive frames from the queue and send them down the WebSocket
@@ -136,7 +150,10 @@ async fn register_tunnel(socket: WebSocket, tenant: String, state: Arc<RelayStat
                 break;
             }
         }
-        info!("Aegis Connect: Tunnel sender loop closed for tenant '{}'", tenant_name);
+        info!(
+            "Aegis Connect: Tunnel sender loop closed for tenant '{}'",
+            tenant_name
+        );
     });
 
     // Main read loop from WebSocket
@@ -166,7 +183,10 @@ async fn register_tunnel(socket: WebSocket, tenant: String, state: Arc<RelayStat
     {
         let mut tunnels = state.tunnels.write().await;
         if tunnels.remove(&tenant).is_some() {
-            info!("Aegis Connect: Tunnel disconnected and unregistered for tenant '{}'", tenant);
+            info!(
+                "Aegis Connect: Tunnel disconnected and unregistered for tenant '{}'",
+                tenant
+            );
         }
     }
     send_task.abort();
@@ -193,8 +213,12 @@ async fn proxy_request(
             None => {
                 return (
                     StatusCode::NOT_FOUND,
-                    format!("Aegis instance for tenant '{}' is offline (Tunnel not found)", tenant)
-                ).into_response()
+                    format!(
+                        "Aegis instance for tenant '{}' is offline (Tunnel not found)",
+                        tenant
+                    ),
+                )
+                    .into_response()
             }
         }
     };
@@ -208,20 +232,33 @@ async fn proxy_request(
     }
 
     // Extract path after "/u/:tenant"
-    let path = params.get("path").map(|p| format!("/{}", p)).unwrap_or_else(|| "/".to_string());
+    let path = params
+        .get("path")
+        .map(|p| format!("/{}", p))
+        .unwrap_or_else(|| "/".to_string());
 
     let frame = TunnelFrame::Request {
         id: request_id,
         method: method.to_string(),
         path,
         headers: headers_map,
-        body: if body.is_empty() { None } else { Some(body.to_vec()) },
+        body: if body.is_empty() {
+            None
+        } else {
+            Some(body.to_vec())
+        },
     };
 
     // Serialize frame
     let frame_bytes = match serde_json::to_vec(&frame) {
         Ok(b) => b,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to serialize request").into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to serialize request",
+            )
+                .into_response()
+        }
     };
 
     // Register oneshot response waiter
@@ -240,13 +277,20 @@ async fn proxy_request(
 
     // Wait for response frame with 30s timeout
     match tokio::time::timeout(Duration::from_secs(30), rx).await {
-        Ok(Ok(TunnelFrame::Response { status, headers, body, .. })) => {
+        Ok(Ok(TunnelFrame::Response {
+            status,
+            headers,
+            body,
+            ..
+        })) => {
             let mut response_builder = Response::builder().status(status);
             for (k, v) in headers {
                 response_builder = response_builder.header(k, v);
             }
             let body_bytes = body.unwrap_or_default();
-            response_builder.body(axum::body::Body::from(body_bytes)).unwrap()
+            response_builder
+                .body(axum::body::Body::from(body_bytes))
+                .unwrap()
         }
         _ => {
             // Clean up waiter

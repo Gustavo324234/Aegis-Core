@@ -1,17 +1,14 @@
+use futures::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
     connect_async,
-    tungstenite::{
-        handshake::client::Request,
-        Message,
-    },
+    tungstenite::{handshake::client::Request, Message},
 };
-use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use tracing::{error, info, warn};
 use uuid::Uuid;
-use tracing::{info, warn, error};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TunnelFrame {
@@ -95,7 +92,10 @@ impl TunnelClient {
                 .header("Connection", "Upgrade")
                 .header("Upgrade", "websocket")
                 .header("Sec-WebSocket-Version", "13")
-                .header("Sec-WebSocket-Key", tokio_tungstenite::tungstenite::handshake::client::generate_key())
+                .header(
+                    "Sec-WebSocket-Key",
+                    tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+                )
                 .header("x-citadel-tenant", &self.tenant)
                 .header("Authorization", format!("Bearer {}", self.token));
 
@@ -139,8 +139,13 @@ impl TunnelClient {
                     while let Some(msg_result) = ws_rx.next().await {
                         match msg_result {
                             Ok(Message::Binary(bytes)) => {
-                                if let Ok(TunnelFrame::Request { id, method, path, headers, body }) =
-                                    serde_json::from_slice::<TunnelFrame>(&bytes)
+                                if let Ok(TunnelFrame::Request {
+                                    id,
+                                    method,
+                                    path,
+                                    headers,
+                                    body,
+                                }) = serde_json::from_slice::<TunnelFrame>(&bytes)
                                 {
                                     let tx_clone = tx.clone();
                                     let client_clone = local_client.clone();
@@ -148,7 +153,11 @@ impl TunnelClient {
 
                                     // Spawn HTTP dispatch task so we don't block the WebSocket reading loop
                                     tokio::spawn(async move {
-                                        let local_req_url = format!("{}{}", local_url_clone.trim_end_matches('/'), path);
+                                        let local_req_url = format!(
+                                            "{}{}",
+                                            local_url_clone.trim_end_matches('/'),
+                                            path
+                                        );
                                         let mut req_builder = client_clone.request(
                                             reqwest::Method::from_bytes(method.as_bytes())
                                                 .unwrap_or(reqwest::Method::GET),
@@ -173,10 +182,12 @@ impl TunnelClient {
                                                 let mut resp_headers = HashMap::new();
                                                 for (k, v) in resp.headers().iter() {
                                                     if let Ok(val) = v.to_str() {
-                                                        resp_headers.insert(k.to_string(), val.to_string());
+                                                        resp_headers
+                                                            .insert(k.to_string(), val.to_string());
                                                     }
                                                 }
-                                                let body_bytes = resp.bytes().await.ok().map(|b| b.to_vec());
+                                                let body_bytes =
+                                                    resp.bytes().await.ok().map(|b| b.to_vec());
                                                 TunnelFrame::Response {
                                                     id,
                                                     status,
@@ -185,17 +196,24 @@ impl TunnelClient {
                                                 }
                                             }
                                             Err(e) => {
-                                                warn!("Failed proxying request locally to {}: {}", local_req_url, e);
+                                                warn!(
+                                                    "Failed proxying request locally to {}: {}",
+                                                    local_req_url, e
+                                                );
                                                 TunnelFrame::Response {
                                                     id,
                                                     status: 502,
                                                     headers: HashMap::new(),
-                                                    body: Some(format!("Local proxy error: {}", e).into_bytes()),
+                                                    body: Some(
+                                                        format!("Local proxy error: {}", e)
+                                                            .into_bytes(),
+                                                    ),
                                                 }
                                             }
                                         };
 
-                                        if let Ok(resp_bytes) = serde_json::to_vec(&response_frame) {
+                                        if let Ok(resp_bytes) = serde_json::to_vec(&response_frame)
+                                        {
                                             let _ = tx_clone.send(Message::Binary(resp_bytes));
                                         }
                                     });
@@ -221,7 +239,10 @@ impl TunnelClient {
                     heartbeat_task.abort();
                 }
                 Err(e) => {
-                    error!("WebSocket connection error: {}. Retrying in 5 seconds...", e);
+                    error!(
+                        "WebSocket connection error: {}. Retrying in 5 seconds...",
+                        e
+                    );
                 }
             }
 

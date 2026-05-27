@@ -76,7 +76,7 @@ async fn set_config(
                 relay_url: Option<String>,
             }
             let config_path = data_dir.join("aegis_connect.json");
-            
+
             let mut relay_url = None;
             if config_path.exists() {
                 if let Ok(content) = std::fs::read_to_string(&config_path) {
@@ -86,8 +86,10 @@ async fn set_config(
                 }
             }
             if relay_url.is_none() {
-                relay_url = Some(std::env::var("AEGIS_CONNECT_RELAY")
-                    .unwrap_or_else(|_| "ws://127.0.0.1:8083/ws/connect".to_string()));
+                relay_url = Some(
+                    std::env::var("AEGIS_CONNECT_RELAY")
+                        .unwrap_or_else(|_| "ws://127.0.0.1:8083/ws/connect".to_string()),
+                );
             }
 
             let cfg = ConnectConfig {
