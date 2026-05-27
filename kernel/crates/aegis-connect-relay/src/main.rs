@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("Aegis Connect Relay starting on http://{}", addr);
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }
 
