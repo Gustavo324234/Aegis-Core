@@ -480,10 +480,7 @@ pub async fn get_service_logs(
         .map_err(|e| AegisHttpError::Kernel(format!("Failed to open log file: {}", e)))?;
     let reader = std::io::BufReader::new(file);
     use std::io::BufRead;
-    let all_lines = reader
-        .lines()
-        .map_while(Result::ok)
-        .collect::<Vec<_>>();
+    let all_lines = reader.lines().map_while(Result::ok).collect::<Vec<_>>();
 
     let start = all_lines.len().saturating_sub(lines_to_read);
     let selected_lines = &all_lines[start..];
