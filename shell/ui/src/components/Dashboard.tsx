@@ -362,24 +362,24 @@ const Dashboard: React.FC = () => {
     return (
         <div className="h-full w-full flex flex-col bg-black text-white overflow-hidden">
             {/* Header */}
-            <header className="shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/40 backdrop-blur-3xl z-50" style={{ height: '56px' }}>
-                <div className="flex items-center gap-6">
+            <header className="shrink-0 border-b border-white/5 flex items-center justify-between px-4 sm:px-8 bg-black/40 backdrop-blur-3xl z-50" style={{ height: '56px' }}>
+                <div className="flex items-center gap-4 sm:gap-6">
                     <button
                         onClick={() => setCurrentView('chat')}
                         className="group flex items-center gap-2 text-white/40 hover:text-aegis-cyan transition-colors"
                     >
                         <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-                        <span className="text-[10px] font-mono uppercase tracking-widest">Back to Chat</span>
+                        <span className="text-[10px] font-mono uppercase tracking-widest hidden sm:block">Back to Chat</span>
                     </button>
-                    <div className="h-4 w-px bg-white/10" />
+                    <div className="h-4 w-px bg-white/10 hidden sm:block" />
                     <div className="flex items-center gap-2">
                         <LayoutDashboard className="w-4 h-4 text-aegis-cyan" />
-                        <h1 className="text-[10px] font-mono tracking-[0.4em] text-white font-bold uppercase">System Dashboard</h1>
+                        <h1 className="text-[10px] font-mono tracking-[0.4em] text-white font-bold uppercase hidden sm:block">System Dashboard</h1>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-6">
-                    <div className="flex flex-col items-end">
+                <div className="flex items-center gap-4 sm:gap-6">
+                    <div className="hidden sm:flex flex-col items-end">
                         <div className="flex items-center justify-between gap-2 w-24">
                             <span className="text-[8px] font-mono text-white/20 uppercase tracking-widest">CPU</span>
                             <span className="text-[9px] font-mono text-white/40">{system_metrics.cpu_load.toFixed(0)}%</span>
@@ -392,15 +392,15 @@ const Dashboard: React.FC = () => {
                             />
                         </div>
                     </div>
-                    <div className="h-8 w-px bg-white/10" />
-                    <div className="flex items-center gap-3">
+                    <div className="h-8 w-px bg-white/10 hidden sm:block" />
+                    <div className="flex items-center gap-2 sm:gap-3">
                         <div className={cn(
                             "w-2 h-2 rounded-full",
                             isOperational ? "bg-green-500 animate-pulse"
                             : systemState === 'STATE_INITIALIZING' ? "bg-yellow-500"
                             : "bg-red-500"
                         )} />
-                        <span className="text-[10px] font-mono text-white/40 uppercase">
+                        <span className="text-[10px] font-mono text-white/40 uppercase hidden sm:block">
                             {isOperational ? 'Kernel Operational' : systemState === 'STATE_INITIALIZING' ? 'Kernel Initializing' : 'System Unknown'}
                         </span>
                     </div>
@@ -480,8 +480,8 @@ const Dashboard: React.FC = () => {
                                 : <span className="text-[9px] font-mono text-white/20 uppercase tracking-widest">○ connecting</span>
                             }
                         </div>
-                        <div className="glass rounded-2xl border border-white/10 p-6">
-                            <div className="grid grid-cols-2 gap-4">
+                        <div className="glass rounded-2xl border border-white/10 p-4 sm:p-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div>
                                     <p className="text-[9px] font-mono text-white/30 uppercase tracking-widest mb-2">Projects</p>
                                     <ProjectList

@@ -7,6 +7,7 @@
   "kernel/crates/ank-mcp": "0.1.5",
   "kernel/crates/aegis-supervisor": "0.1.5",
   "kernel/crates/aegis-sdk": "0.1.5",
+  "kernel/crates/aegis-connect-relay": "0.1.0",
   "kernel/plugins_src": "0.1.6",
   "shell/ui": "1.23.0"
 }

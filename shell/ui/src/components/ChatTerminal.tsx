@@ -276,28 +276,28 @@ const ChatTerminal: React.FC = () => {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
 
                 {/* Header */}
-                <header className="shrink-0 border-b border-white/5 flex items-center justify-between px-8 bg-black/40 backdrop-blur-3xl z-50" style={{ height: '56px' }}>
-                    <div className="flex items-center gap-6">
-                        <div className="flex items-center gap-4">
+                <header className="shrink-0 border-b border-white/5 flex items-center justify-between px-4 sm:px-8 bg-black/40 backdrop-blur-3xl z-50" style={{ height: '56px' }}>
+                    <div className="flex items-center gap-4 sm:gap-6">
+                        <div className="flex items-center gap-2 sm:gap-4">
                             <AegisLogo variant="icon" className="w-5 h-5 text-aegis-cyan drop-shadow-[0_0_8px_rgba(0,242,254,0.4)]" />
-                            <h1 className="text-[10px] font-mono tracking-[0.4em] text-white font-bold uppercase">Aegis Shell v0.1.15</h1>
+                            <h1 className="text-[10px] font-mono tracking-[0.4em] text-white font-bold uppercase hidden sm:block">Aegis Shell v0.1.15</h1>
                         </div>
-                        <div className="h-4 w-px bg-white/10" />
+                        <div className="h-4 w-px bg-white/10 hidden sm:block" />
                         <button 
                             onClick={() => useAegisStore.getState().setCurrentView('dashboard')}
                             className="group flex items-center gap-2 text-white/40 hover:text-aegis-cyan transition-colors"
                         >
                             <LayoutDashboard className="w-3.5 h-3.5 group-hover:scale-110 transition-transform" />
-                            <span className="text-[10px] font-mono uppercase tracking-[0.2em]">Dashboard</span>
+                            <span className="text-[10px] font-mono uppercase tracking-[0.2em] hidden sm:block">Dashboard</span>
                         </button>
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2 sm:gap-4">
                         <AgentBadge />
                         <StatusBadge status={status} />
-                        <div className="h-4 w-px bg-white/10" />
+                        <div className="h-4 w-px bg-white/10 hidden sm:block" />
                         <div className="flex items-center gap-2">
-                            <span className="text-[8px] font-mono text-white/40 uppercase tracking-widest">{tenantId} // Active Domain</span>
-                            <button onClick={() => setShowQR(true)} className="p-1.5 rounded-md hover:bg-white/5 text-white/20 hover:text-aegis-cyan transition-colors" title="Mobile Connection">
+                            <span className="text-[8px] font-mono text-white/40 uppercase tracking-widest hidden md:block">{tenantId} // Active Domain</span>
+                            <button onClick={() => setShowQR(true)} className="p-1.5 rounded-md hover:bg-white/5 text-white/20 hover:text-aegis-cyan transition-colors hidden sm:block" title="Mobile Connection">
                                 <QrCode className="w-3.5 h-3.5" />
                             </button>
                             <button onClick={logout} className="p-1.5 rounded-md hover:bg-white/5 text-white/20 hover:text-red-400 transition-colors" title="Disconnect">
@@ -383,7 +383,7 @@ const ChatTerminal: React.FC = () => {
                         </motion.div>
                     )}
                     <div className="max-w-4xl mx-auto relative">
-                        <div className="glass rounded-xl border border-white/10 flex items-end p-2 gap-2 focus-within:border-aegis-cyan/30 transition-all shadow-2xl">
+                        <div className="glass rounded-xl border border-white/10 flex flex-col sm:flex-row items-stretch sm:items-end p-2 gap-2 focus-within:border-aegis-cyan/30 transition-all shadow-2xl">
                             <textarea
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
@@ -392,119 +392,121 @@ const ChatTerminal: React.FC = () => {
                                 className="w-full bg-transparent border-none focus:ring-0 text-sm py-2 px-3 resize-none max-h-32 min-h-[40px] font-mono placeholder:text-white/20"
                                 rows={1}
                             />
-                            <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); }} />
-                            <button onClick={() => fileInputRef.current?.click()} disabled={isUploading} className={cn("p-2 rounded-lg transition-all", isUploading ? "text-aegis-cyan animate-pulse" : "bg-white/5 text-white/40 hover:text-white hover:bg-white/10")} title="Inject File">
-                                {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
-                            </button>
-                            <InputModeSelector />
-                            <button
-                                onClick={handleVoiceToggle}
-                                className={cn(
-                                    "p-2 rounded-lg transition-all",
-                                    voiceEnabled
-                                        ? "bg-aegis-cyan/20 text-aegis-cyan hover:bg-aegis-cyan/30"
-                                        : "bg-white/5 text-white/40 hover:text-white hover:bg-white/10"
-                                )}
-                                title={voiceEnabled ? "Desactivar voz" : "Activar voz"}
-                            >
-                                {voiceEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
-                            </button>
-                            {(inputMode === 'audio' || inputMode === 'conversation') && (
+                            <div className="flex flex-wrap items-center justify-end gap-1.5 px-2 pb-1 sm:pb-0 sm:px-0 sm:flex-nowrap sm:gap-2">
+                                <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileUpload(f); }} />
+                                <button onClick={() => fileInputRef.current?.click()} disabled={isUploading} className={cn("p-2 rounded-lg transition-all", isUploading ? "text-aegis-cyan animate-pulse" : "bg-white/5 text-white/40 hover:text-white hover:bg-white/10")} title="Inject File">
+                                    {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
+                                </button>
+                                <InputModeSelector />
                                 <button
-                                    onClick={handleToggleMic}
-                                    disabled={!sttAvailable}
+                                    onClick={handleVoiceToggle}
                                     className={cn(
                                         "p-2 rounded-lg transition-all",
-                                        status === 'listening'    && "bg-green-500 text-white animate-pulse shadow-[0_0_15px_rgba(34,197,94,0.5)]",
-                                        status === 'transcribing' && "bg-yellow-500 text-black",
-                                        isRecording && status !== 'listening' && status !== 'transcribing' && "bg-red-500/20 text-red-400",
-                                        !isRecording && status !== 'listening' && status !== 'transcribing' && "bg-white/5 text-white/40 hover:text-white hover:bg-white/10",
-                                        !sttAvailable && "opacity-30 cursor-not-allowed"
+                                        voiceEnabled
+                                            ? "bg-aegis-cyan/20 text-aegis-cyan hover:bg-aegis-cyan/30"
+                                            : "bg-white/5 text-white/40 hover:text-white hover:bg-white/10"
                                     )}
-                                    title={isRecording ? "Stop" : "Voice"}
+                                    title={voiceEnabled ? "Desactivar voz" : "Activar voz"}
                                 >
-                                    {status === 'transcribing'
-                                        ? <Loader2 className="w-5 h-5 animate-spin" />
-                                        : isRecording
-                                            ? <MicOff className="w-5 h-5" />
-                                            : <Mic className="w-5 h-5" />
-                                    }
+                                    {voiceEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
                                 </button>
-                            )}
-                            {/* CORE-300: model selector */}
-                            <div className="relative shrink-0" ref={modelPickerRef}>
-                                <button
-                                    onClick={() => setShowModelPicker(v => !v)}
-                                    className={cn(
-                                        "flex items-center gap-1 px-2 py-1.5 rounded-lg transition-all text-[10px] font-mono max-w-[160px]",
-                                        selectedModelId
-                                            ? "bg-aegis-cyan/10 text-aegis-cyan border border-aegis-cyan/20"
-                                            : "bg-white/5 text-white/40 hover:text-aegis-cyan hover:bg-aegis-cyan/10"
-                                    )}
-                                    title="Seleccionar modelo"
-                                >
-                                    <span className="truncate">
-                                        {selectedModelId
-                                            ? (availableModels.find(m => m.model_id === selectedModelId)?.display_name
-                                                || selectedModelId.split('/').slice(-1)[0])
-                                            : '⚡ Auto'}
-                                    </span>
-                                    <ChevronDown className="w-3 h-3 flex-shrink-0 opacity-60" />
-                                </button>
-                                {showModelPicker && (
-                                    <div className="absolute bottom-full right-0 mb-2 w-64 bg-[#0d1117] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50">
-                                        <div className="max-h-72 overflow-y-auto">
-                                            <button
-                                                onClick={() => { setSelectedModelId(null); setShowModelPicker(false); }}
-                                                className="w-full flex items-center justify-between px-3 py-2.5 text-[10px] font-mono hover:bg-white/5 transition-colors"
-                                            >
-                                                <span className="text-aegis-cyan font-bold">⚡ Auto (CMR)</span>
-                                                {selectedModelId === null && <Check className="w-3 h-3 text-aegis-cyan" />}
-                                            </button>
-                                            {availableModels.length > 0 && (
-                                                <>
-                                                    <div className="border-t border-white/10" />
-                                                    {Object.entries(
-                                                        availableModels.reduce<Record<string, CatalogModel[]>>((acc, m) => {
-                                                            (acc[m.provider] = acc[m.provider] || []).push(m);
-                                                            return acc;
-                                                        }, {})
-                                                    ).map(([provider, providerModels]) => (
-                                                        <div key={provider}>
-                                                            <div className="px-3 py-1.5 text-[9px] font-mono text-white/30 uppercase tracking-widest bg-white/2">
-                                                                {provider}
-                                                            </div>
-                                                            {providerModels.map(m => (
-                                                                <button
-                                                                    key={m.model_id}
-                                                                    onClick={() => { setSelectedModelId(m.model_id); setShowModelPicker(false); }}
-                                                                    className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono hover:bg-white/5 transition-colors"
-                                                                >
-                                                                    <span className="text-white/70 truncate flex-1 text-left">
-                                                                        {m.display_name || m.model_id.split('/').slice(-1)[0] || m.model_id}
-                                                                        {m.cost_input_per_mtok === 0 && (
-                                                                            <span className="ml-1 text-green-400/60">(free)</span>
-                                                                        )}
-                                                                    </span>
-                                                                    {selectedModelId === m.model_id && (
-                                                                        <Check className="w-3 h-3 text-aegis-cyan flex-shrink-0 ml-1" />
-                                                                    )}
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                    ))}
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
+                                {(inputMode === 'audio' || inputMode === 'conversation') && (
+                                    <button
+                                        onClick={handleToggleMic}
+                                        disabled={!sttAvailable}
+                                        className={cn(
+                                            "p-2 rounded-lg transition-all",
+                                            status === 'listening'    && "bg-green-500 text-white animate-pulse shadow-[0_0_15px_rgba(34,197,94,0.5)]",
+                                            status === 'transcribing' && "bg-yellow-500 text-black",
+                                            isRecording && status !== 'listening' && status !== 'transcribing' && "bg-red-500/20 text-red-400",
+                                            !isRecording && status !== 'listening' && status !== 'transcribing' && "bg-white/5 text-white/40 hover:text-white hover:bg-white/10",
+                                            !sttAvailable && "opacity-30 cursor-not-allowed"
+                                        )}
+                                        title={isRecording ? "Stop" : "Voice"}
+                                    >
+                                        {status === 'transcribing'
+                                            ? <Loader2 className="w-5 h-5 animate-spin" />
+                                            : isRecording
+                                                ? <MicOff className="w-5 h-5" />
+                                                : <Mic className="w-5 h-5" />
+                                        }
+                                    </button>
                                 )}
+                                {/* CORE-300: model selector */}
+                                <div className="relative shrink-0" ref={modelPickerRef}>
+                                    <button
+                                        onClick={() => setShowModelPicker(v => !v)}
+                                        className={cn(
+                                            "flex items-center gap-1 px-2 py-1.5 rounded-lg transition-all text-[10px] font-mono max-w-[160px]",
+                                            selectedModelId
+                                                ? "bg-aegis-cyan/10 text-aegis-cyan border border-aegis-cyan/20"
+                                                : "bg-white/5 text-white/40 hover:text-aegis-cyan hover:bg-aegis-cyan/10"
+                                        )}
+                                        title="Seleccionar modelo"
+                                    >
+                                        <span className="truncate">
+                                            {selectedModelId
+                                                ? (availableModels.find(m => m.model_id === selectedModelId)?.display_name
+                                                    || selectedModelId.split('/').slice(-1)[0])
+                                                : '⚡ Auto'}
+                                        </span>
+                                        <ChevronDown className="w-3 h-3 flex-shrink-0 opacity-60" />
+                                    </button>
+                                    {showModelPicker && (
+                                        <div className="absolute bottom-full right-0 mb-2 w-64 bg-[#0d1117] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50">
+                                            <div className="max-h-72 overflow-y-auto">
+                                                <button
+                                                    onClick={() => { setSelectedModelId(null); setShowModelPicker(false); }}
+                                                    className="w-full flex items-center justify-between px-3 py-2.5 text-[10px] font-mono hover:bg-white/5 transition-colors"
+                                                >
+                                                    <span className="text-aegis-cyan font-bold">⚡ Auto (CMR)</span>
+                                                    {selectedModelId === null && <Check className="w-3 h-3 text-aegis-cyan" />}
+                                                </button>
+                                                {availableModels.length > 0 && (
+                                                    <>
+                                                        <div className="border-t border-white/10" />
+                                                        {Object.entries(
+                                                            availableModels.reduce<Record<string, CatalogModel[]>>((acc, m) => {
+                                                                (acc[m.provider] = acc[m.provider] || []).push(m);
+                                                                return acc;
+                                                            }, {})
+                                                        ).map(([provider, providerModels]) => (
+                                                            <div key={provider}>
+                                                                <div className="px-3 py-1.5 text-[9px] font-mono text-white/30 uppercase tracking-widest bg-white/2">
+                                                                    {provider}
+                                                                </div>
+                                                                {providerModels.map(m => (
+                                                                    <button
+                                                                        key={m.model_id}
+                                                                        onClick={() => { setSelectedModelId(m.model_id); setShowModelPicker(false); }}
+                                                                        className="w-full flex items-center justify-between px-3 py-2 text-[10px] font-mono hover:bg-white/5 transition-colors"
+                                                                    >
+                                                                        <span className="text-white/70 truncate flex-1 text-left">
+                                                                            {m.display_name || m.model_id.split('/').slice(-1)[0] || m.model_id}
+                                                                            {m.cost_input_per_mtok === 0 && (
+                                                                                <span className="ml-1 text-green-400/60">(free)</span>
+                                                                            )}
+                                                                        </span>
+                                                                        {selectedModelId === m.model_id && (
+                                                                            <Check className="w-3 h-3 text-aegis-cyan flex-shrink-0 ml-1" />
+                                                                        )}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        ))}
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                <button onClick={() => setShowSettings(true)} className="p-2 rounded-lg bg-white/5 text-white/40 hover:text-aegis-cyan hover:bg-aegis-cyan/10 transition-all" title="Settings">
+                                    <Settings className="w-5 h-5" />
+                                </button>
+                                <button onClick={handleSend} disabled={!input.trim() || status === 'thinking'} className={cn("p-2 rounded-lg transition-all", input.trim() ? "bg-aegis-cyan text-black hover:scale-105" : "bg-white/5 text-white/20")}>
+                                    <Send className="w-5 h-5" />
+                                </button>
                             </div>
-                            <button onClick={() => setShowSettings(true)} className="p-2 rounded-lg bg-white/5 text-white/40 hover:text-aegis-cyan hover:bg-aegis-cyan/10 transition-all" title="Settings">
-                                <Settings className="w-5 h-5" />
-                            </button>
-                            <button onClick={handleSend} disabled={!input.trim() || status === 'thinking'} className={cn("p-2 rounded-lg transition-all", input.trim() ? "bg-aegis-cyan text-black hover:scale-105" : "bg-white/5 text-white/20")}>
-                                <Send className="w-5 h-5" />
-                            </button>
                         </div>
                         <div className="mt-2 flex justify-center">
                             <span className="text-[9px] font-mono text-white/20 uppercase tracking-[0.2em]">Citadel Protocol Active</span>

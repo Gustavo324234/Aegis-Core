@@ -62,6 +62,7 @@ pub fn system_router() -> Router<AppState> {
         .route("/service/status", get(get_service_status))
         .route("/service/restart", post(service_restart))
         .route("/service/stop", post(service_stop))
+        .route("/service/logs", get(get_service_logs))
 }
 
 #[derive(serde::Serialize, ToSchema)]
@@ -415,4 +416,78 @@ fn get_local_ip() -> Option<String> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     socket.local_addr().ok().map(|addr| addr.ip().to_string())
+}
+
+#[derive(serde::Deserialize, ToSchema)]
+pub struct LogsQuery {
+    pub lines: Option<usize>,
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct LogsResponse {
+    pub logs: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/system/service/logs",
+    tag = "status",
+    responses(
+        (status = 200, description = "Service logs", body = LogsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal Server Error")
+    ),
+    params(
+        ("lines" = Option<usize>, Query, description = "Number of lines to return"),
+        ("x-citadel-tenant" = String, Header, description = "Admin tenant ID"),
+        ("x-citadel-key" = String, Header, description = "Admin key (plaintext)")
+    )
+)]
+pub async fn get_service_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<LogsQuery>,
+) -> Result<Json<LogsResponse>, AegisHttpError> {
+    require_service_master_auth(&state, &headers).await?;
+
+    let lines_to_read = query.lines.unwrap_or(100);
+    let logs_dir = state.config.data_dir.join("logs");
+
+    if !logs_dir.exists() {
+        return Ok(Json(LogsResponse {
+            logs: "[System Logs] Logs directory does not exist yet.".to_string(),
+        }));
+    }
+
+    let mut entries = std::fs::read_dir(&logs_dir)
+        .map_err(|e| AegisHttpError::Kernel(format!("Failed to read logs directory: {}", e)))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("ank.log"))
+        .collect::<Vec<_>>();
+
+    entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+
+    let latest = match entries.last() {
+        Some(e) => e,
+        None => {
+            return Ok(Json(LogsResponse {
+                logs: "[System Logs] No active log files found.".to_string(),
+            }));
+        }
+    };
+
+    let file = std::fs::File::open(latest.path())
+        .map_err(|e| AegisHttpError::Kernel(format!("Failed to open log file: {}", e)))?;
+    let reader = std::io::BufReader::new(file);
+    use std::io::BufRead;
+    let all_lines = reader
+        .lines()
+        .map_while(Result::ok)
+        .collect::<Vec<_>>();
+
+    let start = all_lines.len().saturating_sub(lines_to_read);
+    let selected_lines = &all_lines[start..];
+    let logs_content = selected_lines.join("\n");
+
+    Ok(Json(LogsResponse { logs: logs_content }))
 }
