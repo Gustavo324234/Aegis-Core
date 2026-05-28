@@ -16,7 +16,7 @@ interface NewTenant {
     network_port: number;
 }
 
-type TabId = 'users' | 'system' | 'providers' | 'siren' | 'persona';
+type TabId = 'users' | 'system' | 'providers' | 'siren' | 'persona' | 'logs';
 
 const UsersTab: React.FC<{ tenantId: string | null; sessionKey: string | null }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
@@ -596,7 +596,176 @@ const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: Rea
     { id: 'providers', label: 'IA Tools', icon: <Cpu className="w-4 h-4" /> },
     { id: 'siren', label: t('voice_audio'), icon: <Mic className="w-4 h-4" /> },
     { id: 'persona', label: t('tab_persona'), icon: <Sparkles className="w-4 h-4" /> },
+    { id: 'logs', label: 'Logs', icon: <Terminal className="w-4 h-4" /> },
 ];
+
+const LogsTab: React.FC<{ tenantId: string | null; sessionKey: string | null }> = ({ tenantId, sessionKey }) => {
+    const [logs, setLogs] = useState<string>('');
+    const [lines, setLines] = useState<number>(100);
+    const [filterText, setFilterText] = useState<string>('');
+    const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [copied, setCopied] = useState<boolean>(false);
+
+    const fetchLogs = useCallback(async () => {
+        if (!tenantId || !sessionKey) return;
+        setIsLoading(true);
+        try {
+            const headers = {
+                'x-citadel-tenant': tenantId,
+                'x-citadel-key': sessionKey
+            };
+            const response = await fetch(`/api/system/service/logs?lines=${lines}`, { headers });
+            if (response.ok) {
+                const data = await response.json();
+                setLogs(data.logs);
+            } else {
+                setLogs('[Error] Failed to fetch logs. Verify admin authorization.');
+            }
+        } catch (err) {
+            console.error('Fetch logs error:', err);
+            setLogs('[Error] Failed to connect to logs api.');
+        } finally {
+            setIsLoading(false);
+        }
+    }, [tenantId, sessionKey, lines]);
+
+    useEffect(() => {
+        fetchLogs();
+    }, [fetchLogs]);
+
+    const handleCopy = () => {
+        if (logs) {
+            navigator.clipboard.writeText(logs);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }
+    };
+
+    const handleDownload = () => {
+        if (!logs) return;
+        const blob = new Blob([logs], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `aegis-tenant-logs-${new Date().toISOString().slice(0,10)}.log`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
+    // Filter logs locally
+    const filteredLogs = logs
+        .split('\n')
+        .filter(line => !filterText || line.toLowerCase().includes(filterText.toLowerCase()))
+        .join('\n');
+
+    return (
+        <div className="space-y-6">
+            <div className="glass p-6 sm:p-8 rounded-2xl border border-white/10 shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+                    <Terminal className="w-32 h-32 text-aegis-cyan" />
+                </div>
+
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                    <div className="flex items-center gap-3">
+                        <Terminal className="w-6 h-6 text-aegis-cyan" />
+                        <h3 className="text-lg font-bold tracking-widest uppercase">Citadel Neural Logs</h3>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center bg-black/40 rounded-lg border border-white/10 p-1">
+                            {[50, 100, 250, 500].map(n => (
+                                <button
+                                    key={n}
+                                    onClick={() => setLines(n)}
+                                    className={`px-3 py-1 text-[10px] font-mono rounded transition-colors ${lines === n ? 'bg-aegis-cyan/20 text-aegis-cyan border border-aegis-cyan/30' : 'text-white/40 hover:text-white/70'}`}
+                                >
+                                    {n}
+                                </button>
+                            ))}
+                        </div>
+
+                        <button
+                            onClick={fetchLogs}
+                            disabled={isLoading}
+                            className="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-white/60 hover:text-white transition-colors disabled:opacity-50"
+                            title="Recargar logs"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                        </button>
+                    </div>
+                </div>
+
+                <div className="flex flex-col md:flex-row justify-between items-stretch gap-4 mb-6">
+                    <input
+                        type="text"
+                        value={filterText}
+                        onChange={(e) => setFilterText(e.target.value)}
+                        placeholder="Filtrar logs (ej: ERROR, WARN, git)..."
+                        className="bg-black/40 border border-white/10 rounded-xl px-4 py-2 text-sm font-mono placeholder:text-white/20 focus:ring-1 focus:ring-aegis-cyan/30 focus:border-aegis-cyan/30 transition-all flex-1"
+                    />
+
+                    <div className="flex gap-2 shrink-0">
+                        <button
+                            onClick={handleCopy}
+                            disabled={!logs}
+                            className="px-4 py-2 bg-aegis-cyan/10 hover:bg-aegis-cyan/20 border border-aegis-cyan/30 rounded-xl text-aegis-cyan text-xs font-mono uppercase font-bold tracking-widest transition-colors flex items-center gap-1.5 disabled:opacity-50 flex-1 sm:flex-initial justify-center"
+                        >
+                            <Copy className="w-4 h-4" /> {copied ? 'Copiado' : 'Copiar'}
+                        </button>
+
+                        <button
+                            onClick={handleDownload}
+                            disabled={!logs}
+                            className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white/70 hover:text-white text-xs font-mono uppercase font-bold tracking-widest transition-colors flex items-center gap-1.5 disabled:opacity-50 flex-1 sm:flex-initial justify-center"
+                        >
+                            <ExternalLink className="w-4 h-4" /> Descargar
+                        </button>
+                    </div>
+                </div>
+
+                <div className="bg-black/80 font-mono text-[11px] leading-relaxed border border-white/10 text-white/80 p-4 sm:p-6 rounded-xl overflow-auto select-text max-h-[500px] min-h-[300px] scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                    {isLoading && !logs ? (
+                        <div className="flex flex-col items-center justify-center py-20 gap-3">
+                            <RefreshCw className="w-8 h-8 text-aegis-cyan animate-spin" />
+                            <span className="text-[10px] uppercase tracking-widest text-white/40 font-mono">Streaming Citadel Logs...</span>
+                        </div>
+                    ) : filteredLogs ? (
+                        <pre className="whitespace-pre-wrap font-mono select-text">
+                            {filteredLogs.split('\n').map((line, i) => {
+                                let colorClass = 'text-white/60';
+                                if (line.toUpperCase().includes('ERROR') || line.toUpperCase().includes('PANIC') || line.toUpperCase().includes('FAIL')) {
+                                    colorClass = 'text-red-400 font-bold';
+                                } else if (line.toUpperCase().includes('WARN')) {
+                                    colorClass = 'text-yellow-400 font-bold';
+                                } else if (line.toUpperCase().includes('INFO') || line.toUpperCase().includes('OK')) {
+                                    colorClass = 'text-green-400/80';
+                                } else if (line.toUpperCase().includes('DEBUG')) {
+                                    colorClass = 'text-blue-400/60';
+                                }
+                                return (
+                                    <div key={i} className={colorClass}>
+                                        {line}
+                                    </div>
+                                );
+                            })}
+                        </pre>
+                    ) : (
+                        <div className="text-center py-20 text-white/20 uppercase tracking-widest text-[10px]">
+                            {filterText ? 'No coinciden logs con el filtro' : 'Sin logs registrados'}
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex items-center gap-2 justify-center text-[9px] font-mono text-white/20 uppercase tracking-[0.2em] mt-6">
+                    <span className="w-1.5 h-1.5 bg-aegis-cyan rounded-full animate-pulse" />
+                    Neural Logs Stream — Encrypted Enclave Connection
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const AdminDashboard: React.FC = () => {
     const { t } = useTranslation();
@@ -609,29 +778,29 @@ const AdminDashboard: React.FC = () => {
     // anything past the viewport — which is why the generated password below the
     // fold was unreachable without zooming out.
     return (
-        <div className="h-screen bg-black text-white p-8 overflow-y-auto relative">
+        <div className="h-screen bg-black text-white p-4 sm:p-8 overflow-y-auto relative">
             <div className="absolute inset-0 overflow-hidden pointer-events-none">
                 <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-red-500/5 rounded-full blur-[120px]" />
                 <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-aegis-cyan/5 rounded-full blur-[100px]" />
             </div>
             <div className="max-w-6xl mx-auto z-10 relative">
-                <header className="flex justify-between items-center mb-8 border-b border-red-500/20 pb-6">
+                <header className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-4 mb-8 border-b border-red-500/20 pb-6 w-full">
                     <div className="flex items-center gap-4">
                         <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30">
                             <Shield className="w-8 h-8 text-red-500" />
                         </div>
                         <div>
                             <h1 className="text-2xl font-bold tracking-[0.2em] uppercase text-white">Master <span className="text-red-500">{t('dashboard')}</span></h1>
-                            <p className="text-sm font-mono text-red-500/60 uppercase tracking-widest">Citadel Authorization Level: MAXIMUM</p>
+                            <p className="text-xs sm:text-sm font-mono text-red-500/60 uppercase tracking-widest">Citadel Authorization Level: MAXIMUM</p>
                         </div>
                     </div>
-                    <button onClick={logout} className="flex items-center gap-2 px-4 py-2 border border-white/10 rounded-lg hover:bg-white/5 transition-colors font-mono text-xs uppercase text-red-400 hover:text-red-300">
+                    <button onClick={logout} className="flex items-center justify-center gap-2 px-4 py-2 border border-white/10 rounded-lg hover:bg-white/5 transition-colors font-mono text-xs uppercase text-red-400 hover:text-red-300 w-full sm:w-auto">
                         <LogOut className="w-4 h-4" /> Disconnect
                     </button>
                 </header>
-                <div className="flex flex-wrap gap-1 mb-8 bg-white/5 p-1 rounded-xl border border-white/10 w-fit">
+                <div className="flex flex-wrap gap-1 mb-8 bg-white/5 p-1 rounded-xl border border-white/10 w-full sm:w-fit">
                     {tabsList.map((tab) => (
-                        <button key={tab.id} onClick={() => setAdminActiveTab(tab.id as TabId)} className={`flex items-center gap-2 px-5 py-2.5 rounded-lg transition-all duration-300 text-xs font-mono uppercase tracking-widest ${adminActiveTab === tab.id ? 'bg-aegis-cyan/20 text-aegis-cyan border border-aegis-cyan/30' : 'text-white/40 hover:text-white/70 hover:bg-white/5 border border-transparent'}`}>
+                        <button key={tab.id} onClick={() => setAdminActiveTab(tab.id as TabId)} className={`flex items-center justify-center gap-1.5 px-3 sm:px-5 py-2.5 rounded-lg transition-all duration-300 text-[10px] sm:text-xs font-mono uppercase tracking-widest flex-1 sm:flex-initial ${adminActiveTab === tab.id ? 'bg-aegis-cyan/20 text-aegis-cyan border border-aegis-cyan/30' : 'text-white/40 hover:text-white/70 hover:bg-white/5 border border-transparent'}`}>
                             {tab.icon}{tab.label}
                         </button>
                     ))}
@@ -643,6 +812,7 @@ const AdminDashboard: React.FC = () => {
                         {adminActiveTab === 'providers' && <ProvidersTab tenantId={tenantId} sessionKey={sessionKey} />}
                         {adminActiveTab === 'siren' && <SirenConfigTab />}
                         {adminActiveTab === 'persona' && <PersonaTab tenantId={tenantId} sessionKey={sessionKey} />}
+                        {adminActiveTab === 'logs' && <LogsTab tenantId={tenantId} sessionKey={sessionKey} />}
                     </motion.div>
                 </AnimatePresence>
             </div>

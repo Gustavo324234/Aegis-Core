@@ -195,6 +195,15 @@ function detectLanguage(text: string): string {
     return (spanishChars.test(text) || commonSpanish.test(text)) ? 'es-ES' : 'en-US';
 }
 
+function formatAgentRole(role: AgentRole): string {
+    if (!role) return 'Agente';
+    if (role.type === 'ChatAgent') return 'Chat Agent';
+    if (role.type === 'ProjectSupervisor') return 'Project Supervisor';
+    if (role.type === 'Supervisor') return `Supervisor (${role.name})`;
+    if (role.type === 'Specialist') return `Specialist (${role.scope})`;
+    return 'Agente';
+}
+
 // CORE-124: bump version para migrar stores viejos que tenían sessionKey persistida
 const STORE_VERSION = 4;
 
@@ -1430,6 +1439,50 @@ export const useAegisStore = create<AegisState>()(
                                     return {};
                             }
                         });
+
+                        // Generate system message from the event to keep the user informed in real time
+                        let systemMsg: string | null = null;
+                        const currentTree = get().agentTree;
+
+                        switch (payload.type) {
+                            case 'Spawned': {
+                                const roleStr = formatAgentRole(payload.role);
+                                systemMsg = `🤖 [${roleStr}] Creado para ejecutar tareas usando el modelo ${payload.model}. (ID: ${payload.agent_id.substring(0, 8)})`;
+                                break;
+                            }
+                            case 'StateChanged': {
+                                const agent = currentTree.find(n => n.id === payload.agent_id);
+                                const roleStr = agent ? formatAgentRole(agent.role) : 'Agente';
+                                if (typeof payload.state === 'object' && payload.state && 'Failed' in payload.state) {
+                                    systemMsg = `⚠️ [${roleStr}] Error en ejecución: ${payload.state.Failed.reason}`;
+                                } else if (payload.state === 'Running') {
+                                    systemMsg = `⚡ [${roleStr}] Ha comenzado a trabajar...`;
+                                } else if (payload.state === 'WaitingQuery') {
+                                    systemMsg = `❓ [${roleStr}] Requiere confirmación o datos adicionales del usuario.`;
+                                } else if (payload.state === 'Complete') {
+                                    systemMsg = `✅ [${roleStr}] Tarea completada con éxito.`;
+                                }
+                                break;
+                            }
+                            case 'Activity': {
+                                const agent = currentTree.find(n => n.id === payload.agent_id);
+                                const roleStr = agent ? formatAgentRole(agent.role) : 'Agente';
+                                systemMsg = `⚙️ [${roleStr}] Actividad: ${payload.description}`;
+                                break;
+                            }
+                            case 'Reported': {
+                                const agent = currentTree.find(n => n.id === payload.agent_id);
+                                const roleStr = agent ? formatAgentRole(agent.role) : 'Agente';
+                                systemMsg = `📋 [${roleStr}] Reporte: ${payload.summary}`;
+                                break;
+                            }
+                            default:
+                                break;
+                        }
+
+                        if (systemMsg) {
+                            get().addSystemMessage(systemMsg);
+                        }
                     } catch (e) {
                         console.error('[AgentStream] Failed to parse event:', e);
                     }

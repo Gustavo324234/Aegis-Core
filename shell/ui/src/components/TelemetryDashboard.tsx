@@ -18,11 +18,11 @@ const TelemetryDashboard: React.FC = () => {
     const vramPercentage = (system_metrics.vram_allocated_mb / system_metrics.vram_total_mb) * 100 || 0;
 
     return (
-        <div className="w-full bg-black/60 backdrop-blur-2xl border-b border-white/10 px-6 py-3 flex items-center justify-between z-40 relative overflow-hidden shrink-0">
+        <div className="w-full bg-black/60 backdrop-blur-2xl border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between z-40 relative overflow-hidden shrink-0">
             {/* Subtle background glow */}
             <div className="absolute top-0 left-1/4 w-1/2 h-px bg-gradient-to-r from-transparent via-aegis-cyan/30 to-transparent" />
 
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4 sm:gap-6">
                 {/* Orb + título */}
                 <div className="flex items-center gap-3">
                     <div className="scale-[0.45] origin-center -my-5 -mx-3">
@@ -37,10 +37,10 @@ const TelemetryDashboard: React.FC = () => {
                     </div>
                 </div>
 
-                <div className="h-10 w-px bg-white/10 mx-1" />
+                <div className="h-10 w-px bg-white/10 mx-1 hidden md:block" />
 
                 {/* Métricas */}
-                <div className="flex items-center gap-8">
+                <div className="hidden md:flex items-center gap-8">
                     <HorizontalMetric
                         icon={<Cpu size={15} />}
                         label="CARGA"
@@ -76,8 +76,8 @@ const TelemetryDashboard: React.FC = () => {
                         </span>
                     </div>
                 )}
-                {lastRoutingInfo && <div className="h-8 w-px bg-white/10" />}
-                <div className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 flex items-center gap-2 group hover:border-aegis-cyan/30 transition-all">
+                {lastRoutingInfo && <div className="h-8 w-px bg-white/10 hidden lg:block" />}
+                <div className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 hidden sm:flex items-center gap-2 group hover:border-aegis-cyan/30 transition-all">
                     <Zap size={13} className="text-aegis-cyan group-hover:animate-pulse" />
                     <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest">Citadel Protocol</span>
                 </div>
