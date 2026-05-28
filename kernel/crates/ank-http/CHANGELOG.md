@@ -24,6 +24,13 @@
 
 
 
+## [0.1.79](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.78...ank-http-v0.1.79) (2026-05-28)
+
+
+### Features
+
+* **ux:** implement responsive layouts and secure tenant logs viewer ([#325](https://github.com/Gustavo324234/Aegis-Core/issues/325)) ([037aae9](https://github.com/Gustavo324234/Aegis-Core/commit/037aae9f12120c2e000ff37a0134c1872c845a2e))
+
 ## [0.1.78](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.77...ank-http-v0.1.78) (2026-05-27)
 
 

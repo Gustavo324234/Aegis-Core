@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.24.0...shell-ui-v1.25.0) (2026-05-28)
+
+
+### Features
+
+* **ux:** implement responsive layouts and secure tenant logs viewer ([#325](https://github.com/Gustavo324234/Aegis-Core/issues/325)) ([037aae9](https://github.com/Gustavo324234/Aegis-Core/commit/037aae9f12120c2e000ff37a0134c1872c845a2e))
+
 ## [1.24.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.23.0...shell-ui-v1.24.0) (2026-05-27)
 
 
