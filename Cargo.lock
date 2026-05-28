@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-connect-relay"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "ank-http"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "ank-core",
  "ank-proto",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "ank-server"
-version = "0.1.82"
+version = "0.1.83"
 dependencies = [
  "ank-core",
  "ank-http",
