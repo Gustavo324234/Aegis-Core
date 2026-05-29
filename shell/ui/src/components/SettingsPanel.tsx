@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info } from 'lucide-react';
+import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info, Search, RefreshCw, Copy, FileText } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -14,12 +14,13 @@ interface SettingsPanelProps {
     sessionKey: string;
 }
 
-type TabId = 'perfil' | 'motor' | 'voz' | 'cuenta';
+type TabId = 'perfil' | 'motor' | 'voz' | 'logs' | 'cuenta';
 
 const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: React.ReactNode }[] => [
     { id: 'perfil', label: t('tab_persona'), icon: <Sparkles className="w-4 h-4" /> },
     { id: 'motor', label: t('tab_motor'), icon: <Cpu className="w-4 h-4" /> },
     { id: 'voz', label: t('tab_voz'), icon: <Volume2 className="w-4 h-4" /> },
+    { id: 'logs', label: t('tab_logs'), icon: <Terminal className="w-4 h-4" /> },
     { id: 'cuenta', label: 'Cuenta', icon: <Globe className="w-4 h-4" /> },
 ];
 
@@ -644,6 +645,228 @@ const CuentaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantI
     );
 };
 
+const LogsTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
+    const { t } = useTranslation();
+    const [subTab, setSubTab] = useState<'history' | 'traces'>('history');
+    const [logs, setLogs] = useState<any[]>([]);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const getHeaders = useCallback(() => ({
+        'Content-Type': 'application/json',
+        'x-citadel-tenant': tenantId,
+        'x-citadel-key': sessionKey,
+    }), [tenantId, sessionKey]);
+
+    const fetchLogs = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const endpoint = subTab === 'history' ? '/api/chat/history?limit=100' : '/api/chat/traces?limit=200';
+            const res = await fetch(endpoint, { headers: getHeaders() });
+            if (res.ok) {
+                const data = await res.json();
+                if (subTab === 'history') {
+                    setLogs(data.messages || []);
+                } else {
+                    setLogs(data.traces || []);
+                }
+            } else {
+                setLogs([]);
+            }
+        } catch (err) {
+            console.error('Fetch logs error:', err);
+            setLogs([]);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [subTab, getHeaders]);
+
+    useEffect(() => {
+        fetchLogs();
+    }, [fetchLogs]);
+
+    const handleCopy = () => {
+        let textToCopy = '';
+        if (subTab === 'history') {
+            textToCopy = logs
+                .map((msg: any) => `[${msg.timestamp}] ${msg.role.toUpperCase()}: ${msg.content}`)
+                .join('\n');
+        } else {
+            textToCopy = logs.join('\n');
+        }
+        navigator.clipboard.writeText(textToCopy);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+
+    const filteredLogs = logs.filter((log: any) => {
+        if (!searchTerm) return true;
+        const term = searchTerm.toLowerCase();
+        if (subTab === 'history') {
+            return (
+                log.content.toLowerCase().includes(term) ||
+                log.role.toLowerCase().includes(term) ||
+                log.timestamp.toLowerCase().includes(term)
+            );
+        } else {
+            return log.toLowerCase().includes(term);
+        }
+    });
+
+    const formatTimestamp = (ts: string) => {
+        try {
+            const date = new Date(ts);
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        } catch {
+            return ts;
+        }
+    };
+
+    return (
+        <div className="space-y-4 flex flex-col h-[52vh]">
+            <div className="flex flex-col sm:flex-row gap-3 justify-between items-start sm:items-center shrink-0">
+                {/* Dual Sub-Tabs */}
+                <div className="flex bg-black/40 border border-white/5 p-1 rounded-xl w-full sm:w-auto">
+                    <button
+                        onClick={() => {
+                            setSubTab('history');
+                            setLogs([]);
+                        }}
+                        className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-mono uppercase tracking-wider transition-all ${
+                            subTab === 'history'
+                                ? 'bg-aegis-cyan/10 text-aegis-cyan border border-aegis-cyan/20'
+                                : 'text-white/40 hover:text-white border border-transparent'
+                        }`}
+                    >
+                        <FileText className="w-3.5 h-3.5" />
+                        {t('logs_chat_history')}
+                    </button>
+                    <button
+                        onClick={() => {
+                            setSubTab('traces');
+                            setLogs([]);
+                        }}
+                        className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-mono uppercase tracking-wider transition-all ${
+                            subTab === 'traces'
+                                ? 'bg-aegis-cyan/10 text-aegis-cyan border border-aegis-cyan/20'
+                                : 'text-white/40 hover:text-white border border-transparent'
+                        }`}
+                    >
+                        <Terminal className="w-3.5 h-3.5" />
+                        {t('logs_agent_traces')}
+                    </button>
+                </div>
+
+                {/* Sub Tab Description / Actions */}
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    <button
+                        onClick={fetchLogs}
+                        disabled={isLoading}
+                        className="p-2 bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-50 text-white/80 hover:text-white rounded-lg transition-all"
+                        title={t('logs_refresh')}
+                    >
+                        <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-aegis-cyan' : ''}`} />
+                    </button>
+                    <button
+                        onClick={handleCopy}
+                        disabled={logs.length === 0}
+                        className="flex items-center gap-2 px-3 py-2 bg-white/5 border border-white/10 hover:bg-white/10 disabled:opacity-50 text-white/80 hover:text-white rounded-lg transition-all text-xs font-mono uppercase tracking-wider"
+                    >
+                        {copied ? (
+                            <>
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                <span className="text-emerald-400">{t('logs_copied')}</span>
+                            </>
+                        ) : (
+                            <>
+                                <Copy className="w-3.5 h-3.5" />
+                                <span>{t('logs_copy')}</span>
+                            </>
+                        )}
+                    </button>
+                </div>
+            </div>
+
+            {/* Description Info Alert */}
+            <div className="p-3 bg-white/5 border border-white/10 rounded-xl flex items-start gap-3 shrink-0">
+                <Info className="w-4 h-4 text-aegis-cyan/70 mt-0.5 shrink-0" />
+                <p className="text-[11px] font-mono text-white/60 leading-relaxed">
+                    {subTab === 'history' ? t('logs_dialogue_desc') : t('logs_traces_desc')}
+                </p>
+            </div>
+
+            {/* Filter Search Bar */}
+            <div className="relative shrink-0">
+                <Search className="absolute left-3 top-2.5 w-4 h-4 text-white/30" />
+                <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder={t('logs_search_placeholder')}
+                    className="w-full bg-black/40 border border-white/10 focus:border-aegis-cyan/50 focus:ring-0 rounded-xl pl-10 pr-4 py-2 text-xs font-mono placeholder:text-white/20 transition-all"
+                />
+            </div>
+
+            {/* Log Display Window */}
+            <div className="flex-1 min-h-0 bg-black/60 border border-white/10 rounded-xl p-4 overflow-y-auto font-mono text-xs text-white/80 select-text scrollbar-thin">
+                {isLoading && logs.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full py-12 gap-3">
+                        <Loader2 className="w-6 h-6 text-aegis-cyan animate-spin" />
+                        <span className="text-[10px] uppercase tracking-widest text-white/40">{t('connecting_telemetry')}</span>
+                    </div>
+                ) : filteredLogs.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full py-12 text-center text-white/30">
+                        <Terminal className="w-8 h-8 mb-2 opacity-20" />
+                        <p className="text-xs">{t('logs_empty')}</p>
+                    </div>
+                ) : (
+                    <div className="space-y-2">
+                        {subTab === 'history' ? (
+                            (filteredLogs as any[]).map((msg, idx) => (
+                                <div key={idx} className="border-b border-white/5 pb-2 last:border-0 last:pb-0 flex flex-col sm:flex-row sm:items-start gap-2">
+                                    <span className="text-[10px] text-white/30 shrink-0 font-mono">
+                                        [{formatTimestamp(msg.timestamp)}]
+                                    </span>
+                                    <span className={`text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded shrink-0 ${
+                                        msg.role === 'user'
+                                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                            : 'bg-aegis-cyan/10 text-aegis-cyan border border-aegis-cyan/20'
+                                    }`}>
+                                        {msg.role === 'user' ? 'USER' : 'AEGIS'}
+                                    </span>
+                                    <span className="text-white/90 break-words flex-1 whitespace-pre-wrap">
+                                        {msg.content}
+                                    </span>
+                                </div>
+                            ))
+                        ) : (
+                            (filteredLogs as string[]).map((line, idx) => {
+                                const tsMatch = line.match(/^\[(.*?)\]\s*(.*)$/);
+                                if (!tsMatch) return <div key={idx} className="whitespace-pre-wrap break-all text-white/70">{line}</div>;
+
+                                const ts = tsMatch[1];
+                                const body = tsMatch[2];
+
+                                return (
+                                    <div key={idx} className="py-1 border-b border-white/5 last:border-0 flex flex-col sm:flex-row sm:items-start gap-2 text-white/80 font-mono">
+                                        <span className="text-[10px] text-white/30 shrink-0 font-mono">
+                                            [{formatTimestamp(ts)}]
+                                        </span>
+                                        <span className="text-white/90 break-words flex-1 whitespace-pre-wrap">
+                                            {body}
+                                        </span>
+                                    </div>
+                                );
+                            })
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, tenantId, sessionKey }) => {
     const { t } = useTranslation();
     const [activeTab, setActiveTab] = useState<TabId>('perfil');
@@ -706,6 +929,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, tenantId, sessio
                             {activeTab === 'perfil' && <PersonaTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'motor' && <MotorTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'voz' && <VozTab tenantId={tenantId} sessionKey={sessionKey} />}
+                            {activeTab === 'logs' && <LogsTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'cuenta' && <CuentaTab tenantId={tenantId} sessionKey={sessionKey} />}
                         </motion.div>
                     </AnimatePresence>
