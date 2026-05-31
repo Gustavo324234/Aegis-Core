@@ -86,9 +86,7 @@ Whitelisted programs only:
 `node`, `deno`, `bun`, `go`, `gradle`, `mvn`, `make`, plus read-only utilities
 (`ls`, `echo`, `pwd`, `cat`, `head`, `tail`).
 
-The command runs with a 60-second timeout and output is truncated to 8KB per
-stream (stdout/stderr). Use it for fast checks — not for full integration
-suites or package installs.
+The command runs with a configurable command execution timeout (default: 300 seconds, controlled by `AEGIS_COMMAND_TIMEOUT` env variable) and output is truncated to 8KB per stream (stdout/stderr). Use it for fast checks — not for full integration suites or package installs.
 
 Examples:
 ```
@@ -101,7 +99,7 @@ If `exit_code != 0`, your task is NOT done. Either fix the issue and re-run,
 or report `status="error"` with the relevant stderr included in `observations`.
 
 You may not use `execute_command` to install packages, modify git history,
-push to remotes, or run anything that mutates state outside your workspace.
+    push to remotes, or run anything that mutates state outside your workspace.
 
 ### Cloning and analyzing an external repository
 
@@ -109,16 +107,17 @@ If your task is to clone a repo and inspect it (e.g. "clone X and verify
 bugs"), do it yourself with the tools you already have — do NOT ask anyone
 for the URL or for permission; it's in your scope.
 
-1. Clone shallowly so it fits the 60s budget:
+1. Clone shallowly to be fast and efficient:
    `execute_command(command="git clone --depth 1 <url> repo")`
-   (`git` is whitelisted; cloning INTO your workspace is read-only fetching,
-   which is allowed — you are not pushing or mutating anything external.)
+   (`git` is whitelisted; cloning INTO your workspace is read-only fetching, which is allowed — you are not pushing or mutating anything external.)
+   *CRITICAL TIP:* Since you clone into a subfolder like `repo`, all subsequent tool calls (`read_file`, `list_files`, `execute_command`) MUST explicitly target this subdirectory or pass `cwd="repo"` as a parameter to avoid "file not found" errors.
 2. Map the project:
-   `list_files(path="repo")`, then `read_file` the files that matter.
+   `list_files(path="repo")`, then `read_file` the files that matter (e.g. `repo/Cargo.toml`).
 3. Verify / hunt for bugs with the project's own tooling:
    `execute_command(command="cargo check", cwd="repo")`,
    `execute_command(command="npm test --silent", cwd="repo")`, etc.
    Pick the command that matches the stack you found in step 2.
+   *NOTE:* Core compiler dependencies like `protoc` (protobuf compiler) and compilation libraries (`gcc`, `make`, `ssl-dev`) are automatically installed on the fly by the Aegis kernel in Linux VPS environments, so cargo checks and compilations will run successfully.
 4. Report concrete findings: which file/line, what's wrong, and the
    build/test output that proves it.
 

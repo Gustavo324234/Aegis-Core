@@ -24,6 +24,7 @@ import CodeViewer from './workspace/CodeViewer';
 import GitTimeline from './workspace/GitTimeline';
 import PRManagerPanel from './workspace/PRManagerPanel';
 import WorkspaceSettings from './workspace/WorkspaceSettings';
+import { DynamicModulePanel } from './DynamicModulePanel';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -424,6 +425,13 @@ const Dashboard: React.FC = () => {
                     {/* Chronos / Neural Schedule — CORE-251 */}
                     <div className="col-span-12 lg:col-span-8">
                         <ChronosWidget tenantId={tenantId} sessionKey={sessionKey} />
+                    </div>
+
+                    {/* Microkernel Modules & Dynamic Views (SDUI) — Phase 4 */}
+                    <div className="col-span-12">
+                        <WidgetErrorBoundary name="DynamicModulePanel">
+                            <DynamicModulePanel />
+                        </WidgetErrorBoundary>
                     </div>
 
                     {/* Kanban Board */}

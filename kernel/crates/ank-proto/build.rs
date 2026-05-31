@@ -9,7 +9,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_client(true)
         .compile_protos_with_config(
             config,
-            &["../../proto/kernel.proto", "../../proto/siren.proto"],
+            &[
+                "../../proto/kernel.proto",
+                "../../proto/siren.proto",
+                "../../proto/module.proto",
+            ],
             &["../../proto"],
         )?;
     Ok(())

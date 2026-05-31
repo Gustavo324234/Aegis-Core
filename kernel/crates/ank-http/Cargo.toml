@@ -13,6 +13,7 @@ tower        = { workspace = true, features = ["util"] }
 tower-http   = { workspace = true, features = ["cors", "fs", "trace"] }
 tokio.workspace           = true
 tokio-stream       = { workspace = true, features = ["sync"] }
+tonic.workspace            = true
 
 serde.workspace           = true
 serde_json.workspace      = true

@@ -82,6 +82,9 @@ pub enum Syscall {
 
     /// --- EPIC 44: CORE-172 --- Push de la branch al remoto.
     GitPush { branch_name: String },
+
+    /// Privileged call to dynamically install/enable a discovered Microkernel Module
+    EnableModule { module_id: String },
 }
 
 /// --- SYSCALL ERROR ---
@@ -115,6 +118,8 @@ pub struct SyscallExecutor {
     /// Orquestador de agentes para AgentToolCall dispatch (EPIC 47).
     /// None si el ejecutor fue creado antes de que se inicializara el orquestador.
     agent_orchestrator: Option<std::sync::Arc<crate::agents::orchestrator::AgentOrchestrator>>,
+    /// Referencia al router para redirección de llamadas a módulos de dominio.
+    router: Option<Arc<tokio::sync::RwLock<crate::router::CognitiveRouter>>>,
 }
 
 impl SyscallExecutor {
@@ -137,7 +142,18 @@ impl SyscallExecutor {
             maker: maker::MakerExecutor::new(),
             scheduler_tx,
             agent_orchestrator: None,
+            router: None,
         }
+    }
+
+    /// Asocia el CognitiveRouter para habilitar redirección de llamadas a módulos de dominio.
+    pub fn with_router(
+        mut self,
+        router: Arc<tokio::sync::RwLock<crate::router::CognitiveRouter>>,
+    ) -> Self {
+        self.router = Some(router);
+        tracing::info!("SyscallExecutor: CognitiveRouter connected. Microkernel modules redirection ready.");
+        self
     }
 
     /// Asocia el AgentOrchestrator para habilitar AgentToolCall dispatch (EPIC 47).
@@ -150,6 +166,47 @@ impl SyscallExecutor {
             "SyscallExecutor: AgentOrchestrator connected. AgentToolCall dispatch ready."
         );
         self
+    }
+
+    async fn execute_external_module_tool(
+        &self,
+        endpoint: &str,
+        tool_name: &str,
+        args_json: &str,
+        tenant_id: &str,
+    ) -> Result<String, SyscallError> {
+        let channel_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            endpoint.to_string()
+        } else {
+            format!("http://{}", endpoint)
+        };
+
+        let endpoint_parsed = tonic::transport::Endpoint::from_shared(channel_url)
+            .map_err(|e| SyscallError::PluginError(format!("Invalid endpoint format: {}", e)))?
+            .timeout(std::time::Duration::from_secs(5))
+            .connect_timeout(std::time::Duration::from_secs(5));
+
+        let channel = endpoint_parsed.connect().await
+            .map_err(|e| SyscallError::PluginError(format!("Failed to connect to microkernel module: {}", e)))?;
+
+        let mut client = ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
+
+        let request = tonic::Request::new(ank_proto::v1::ExecuteToolRequest {
+            tool_name: tool_name.to_string(),
+            arguments_json: args_json.to_string(),
+            tenant_id: tenant_id.to_string(),
+        });
+
+        let response = client.execute_tool(request)
+            .await
+            .map_err(|e| SyscallError::PluginError(format!("Module tool execution failed: {}", e)))?
+            .into_inner();
+
+        if response.success {
+            Ok(response.result_json)
+        } else {
+            Err(SyscallError::PluginError(response.result_json))
+        }
     }
 
     pub async fn execute(
@@ -245,6 +302,28 @@ impl SyscallExecutor {
                     serde_json::from_str(&args_json).map_err(|e| {
                         SyscallError::InternalError(format!("Invalid MCP args JSON: {}", e))
                     })?;
+
+                // Check if this tool belongs to a loaded microkernel module
+                let mut is_module_tool = false;
+                let mut target_endpoint = String::new();
+
+                if let Some(ref router_lock) = self.router {
+                    let router = router_lock.read().await;
+                    let modules = router.modules.read().await;
+                    for module in modules.values() {
+                        if module.exposed_tools.iter().any(|t| t.name == tool_name) {
+                            is_module_tool = true;
+                            target_endpoint = module.ipc_transport.endpoint.clone();
+                            break;
+                        }
+                    }
+                }
+
+                if is_module_tool {
+                    tracing::info!("Microkernel: Redirecting tool '{}' to external gRPC module at {}", tool_name, target_endpoint);
+                    let result = self.execute_external_module_tool(&target_endpoint, &tool_name, &args_json, tenant_id).await?;
+                    return Ok(format!("[SYSTEM_RESULT: {}]", result));
+                }
 
                 let result = ank_mcp::registry::McpToolDispatcher::execute(
                     &self.mcp_registry,
@@ -449,6 +528,30 @@ impl SyscallExecutor {
                  GitHubBridge requires runtime context — integrate via AgentOrchestrator.]",
                 branch_name
             )),
+
+            // Privileged call to dynamically install/enable a discovered Microkernel Module
+            Syscall::EnableModule { module_id } => {
+                let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+
+                match TenantDB::open(tenant_id, session_key) {
+                    Ok(db) => {
+                        db.set_kv(&format!("module_active:{}", module_id), "true")
+                            .map_err(|e| SyscallError::IOError(e.to_string()))?;
+                        
+                        tracing::info!("Microkernel: Module '{}' enabled successfully for tenant '{}'", module_id, tenant_id);
+                        Ok(format!(
+                            "[SYSTEM_RESULT: Module '{}' has been enabled and integrated successfully. \
+                             You can now invoke its exposed tools in subsequent turns.]",
+                            module_id
+                        ))
+                    }
+                    Err(e) => Err(SyscallError::InternalError(format!(
+                        "Failed to access secure enclave database: {}",
+                        e
+                    ))),
+                }
+            }
         }
     }
 
@@ -1074,6 +1177,14 @@ static GIT_PUSH_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap_or_else(|_| panic!("FATAL: hardcoded SYS_GIT_PUSH regex is invalid"))
 });
 
+/// Privileged Call: SYS_ENABLE_MODULE
+#[allow(clippy::expect_used)]
+static ENABLE_MODULE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\[SYS_ENABLE_MODULE\("([^"]+)"\)\]"#).unwrap_or_else(|_| {
+        panic!("FATAL: hardcoded SYS_ENABLE_MODULE regex is invalid")
+    })
+});
+
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
 pub fn init_syscall_regexes() {}
 
@@ -1294,6 +1405,13 @@ pub fn parse_syscall(text: &str) -> Option<Syscall> {
         }
     }
 
+    // 16. Privileged check for dynamic module installation/enablement
+    if let Some(caps) = ENABLE_MODULE_RE.captures(text) {
+        return Some(Syscall::EnableModule {
+            module_id: caps[1].to_string(),
+        });
+    }
+
     None
 }
 
@@ -1455,6 +1573,20 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_parse_enable_module() -> anyhow::Result<()> {
+        let stream = r#"Por favor ejecuta el comando privileged: [SYS_ENABLE_MODULE("aegis.domain.business")] para activarlo."#;
+        let syscall = parse_syscall(stream).context("Should parse enable module call")?;
+
+        if let Syscall::EnableModule { module_id } = syscall {
+            assert_eq!(module_id, "aegis.domain.business");
+        } else {
+            anyhow::bail!("Wrong syscall type");
+        }
+        Ok(())
+    }
+
+
     #[tokio::test]
     async fn test_syscall_execution_format() -> anyhow::Result<()> {
         let manager = Arc::new(tokio::sync::RwLock::new(PluginManager::new()?));
@@ -1502,6 +1634,131 @@ mod tests {
             res_private,
             Err(SyscallError::SecurityViolation(_))
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_integration_module_activation_and_execution() -> anyhow::Result<()> {
+        let manager = Arc::new(tokio::sync::RwLock::new(PluginManager::new()?));
+        let vcm = Arc::new(VirtualContextManager::new());
+        let scribe = Arc::new(ScribeManager::new("./users_test"));
+        let swap = Arc::new(LanceSwapManager::new("./swap_test"));
+        let mcp_registry = Arc::new(ank_mcp::registry::McpToolRegistry::new());
+        let http_client = Arc::new(reqwest::Client::new());
+        let (tx, _) = tokio::sync::mpsc::channel(1);
+
+        // 1. Load modules and build CognitiveRouter
+        let catalog = Arc::new(crate::router::catalog::ModelCatalog::load_bundled_with_profile(
+            crate::router::catalog::ModelProfile::Hybrid,
+        )?);
+        struct NoopPersistor;
+        #[async_trait::async_trait]
+        impl crate::scheduler::persistence::StatePersistor for NoopPersistor {
+            async fn save_pcb(&self, _pcb: &crate::pcb::PCB) -> anyhow::Result<()> { Ok(()) }
+            async fn delete_pcb(&self, _pid: &str) -> anyhow::Result<()> { Ok(()) }
+            async fn load_all_pcbs(&self) -> anyhow::Result<Vec<crate::pcb::PCB>> { Ok(vec![]) }
+            async fn flush(&self) -> anyhow::Result<()> { Ok(()) }
+            async fn get_voice_profile(&self, _tenant_id: &str) -> anyhow::Result<Option<crate::scheduler::persistence::VoiceProfile>> { Ok(None) }
+            async fn update_voice_profile(&self, _profile: crate::scheduler::persistence::VoiceProfile) -> anyhow::Result<()> { Ok(()) }
+            async fn save_voice_fingerprint(&self, _tenant_id: &str, _fingerprint: &[f32], _threshold: f32) -> anyhow::Result<()> { Ok(()) }
+            async fn get_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<Option<(Vec<f32>, f32)>> { Ok(None) }
+            async fn delete_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<()> { Ok(()) }
+        }
+        let key_pool = Arc::new(crate::router::key_pool::KeyPool::new(Arc::new(NoopPersistor)));
+        let mut router = crate::router::CognitiveRouter::new(catalog, key_pool);
+
+        // Load Aegis-Biz manifest
+        let manifest = crate::router::modules::ModuleManifest {
+            module_id: "aegis.domain.business".to_string(),
+            display_name: "Aegis Business & Store Manager".to_string(),
+            version: "1.0.0".to_string(),
+            ipc_transport: crate::router::modules::IpcTransport {
+                protocol: "gRPC".to_string(),
+                endpoint: "localhost:50071".to_string(),
+            },
+            database: crate::router::modules::ModuleDatabase {
+                driver: "sqlite".to_string(),
+                encryption: true,
+            },
+            exposed_tools: vec![
+                crate::router::modules::ExposedTool {
+                    name: "biz_update_stock".to_string(),
+                    description: "Update product stock count".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "quantity_change": {"type": "integer"}
+                        },
+                        "required": ["name", "quantity_change"]
+                    }),
+                }
+            ],
+            ui_views: vec![],
+        };
+        router.modules.write().await.insert("aegis.domain.business".to_string(), manifest);
+        let router_arc = Arc::new(tokio::sync::RwLock::new(router));
+
+        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx)
+            .with_router(router_arc.clone());
+
+        let mut pcb = crate::pcb::PCB::new("test".into(), 5, "test".into());
+        pcb.tenant_id = Some("test_tenant".to_string());
+        pcb.session_key = Some("test_session_key_32_bytes_long!!!!".to_string());
+
+        // Ensure clean DB state (remove any leftovers)
+        if let Ok(db) = crate::enclave::TenantDB::open("test_tenant", "test_session_key_32_bytes_long!!!!") {
+            let _ = db.set_kv("module_active:aegis.domain.business", "false");
+        }
+
+        // 2. Turn 1: Check Suggestion Prompt (should offer installation recommendation)
+        let prompt_turn_1 = "Crea el proyecto de la tienda de lácteos";
+        let modules_locked = router_arc.read().await;
+        let system_prompt_1 = crate::router::modules::generate_system_prompt_for_modules(
+            &*modules_locked.modules.read().await,
+            prompt_turn_1,
+            "test_tenant",
+            "test_session_key_32_bytes_long!!!!"
+        );
+        assert!(system_prompt_1.contains("MÓDULOS DE DOMINIO DISPONIBLES (INSTALACIÓN BAJO DEMANDA)"));
+        assert!(system_prompt_1.contains("[SYS_ENABLE_MODULE(\"aegis.domain.business\")]"));
+        assert!(!system_prompt_1.contains("biz_update_stock")); // Tools should NOT be active yet!
+        drop(modules_locked);
+
+        // 3. Turn 2: LLM executes SYS_ENABLE_MODULE
+        let syscall_install = Syscall::EnableModule {
+            module_id: "aegis.domain.business".to_string(),
+        };
+        let res_install = executor.execute(&pcb, syscall_install).await?;
+        assert!(res_install.contains("enabled and integrated successfully"));
+
+        // 4. Turn 3: Check Active Prompt (should now inject gRPC tools!)
+        let modules_locked_2 = router_arc.read().await;
+        let system_prompt_2 = crate::router::modules::generate_system_prompt_for_modules(
+            &*modules_locked_2.modules.read().await,
+            prompt_turn_1,
+            "test_tenant",
+            "test_session_key_32_bytes_long!!!!"
+        );
+        assert!(system_prompt_2.contains("HERRAMIENTAS DE MÓDULOS DE DOMINIO (MICROKERNEL) ACTIVAS"));
+        assert!(system_prompt_2.contains("biz_update_stock"));
+        assert!(!system_prompt_2.contains("INSTALACIÓN BAJO DEMANDA"));
+        drop(modules_locked_2);
+
+        // 5. Turn 4: Execute active tool (redirects to Python mock gRPC!)
+        let syscall_exec = Syscall::McpExec {
+            tool_name: "biz_update_stock".to_string(),
+            args_json: r#"{"name": "queso", "quantity_change": 15}"#.to_string(),
+        };
+        let res_exec = executor.execute(&pcb, syscall_exec).await?;
+        assert!(res_exec.contains("Inventario de 'queso' actualizado"));
+        assert!(res_exec.contains("Cantidad actual"));
+
+        // Clean up
+        if let Ok(db) = crate::enclave::TenantDB::open("test_tenant", "test_session_key_32_bytes_long!!!!") {
+            let _ = db.set_kv("module_active:aegis.domain.business", "false");
+        }
+
         Ok(())
     }
 }

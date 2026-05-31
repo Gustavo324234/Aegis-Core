@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package ank.v1;
+
+// --- MICROKERNEL MODULE INTERFACE ---
+// Exposes the privileged API for domain modules to process neural tools dispatched by the microkernel core.
+service DomainModuleService {
+  // Executes an exposed tool in the domain module
+  rpc ExecuteTool (ExecuteToolRequest) returns (ExecuteToolResponse);
+}
+
+message ExecuteToolRequest {
+  // Name of the tool to execute (e.g. "biz_update_stock")
+  string tool_name = 1;
+  
+  // JSON-encoded arguments for the tool (e.g. '{"name": "queso", "quantity_change": 10}')
+  string arguments_json = 2;
+  
+  // A unique identifier of the tenant executing the tool for multi-tenant isolation
+  string tenant_id = 3;
+}
+
+message ExecuteToolResponse {
+  // True if execution succeeded, false if an error occurred
+  bool success = 1;
+  
+  // JSON-encoded result of the tool execution on success, or error message on failure
+  string result_json = 2;
+}

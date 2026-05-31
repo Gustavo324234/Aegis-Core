@@ -33,6 +33,9 @@ pub fn router() -> Router<AppState> {
         .route("/models", get(list_router_models))
         .route("/sync", post(sync_router_catalog))
         .route("/status", get(router_status))
+        .route("/modules", get(list_modules))
+        .route("/modules/:module_id/enable", post(enable_module))
+        .route("/modules/:module_id/execute", post(execute_module_tool))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -809,3 +812,179 @@ async fn auto_discover_models(provider: &str, api_url: Option<&str>, api_key: &s
         }
     }
 }
+
+// ── MODULES UI INTEGRATION ENDPOINTS (PHASE 4) ───────────────────────────────
+
+#[derive(Serialize)]
+pub struct ModuleUiResponse {
+    pub module_id: String,
+    pub display_name: String,
+    pub version: String,
+    pub active: bool,
+    pub exposed_tools: Vec<ank_core::router::modules::ExposedTool>,
+    pub ui_views: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+pub struct ModulesListResponse {
+    pub modules: Vec<ModuleUiResponse>,
+}
+
+#[derive(Deserialize)]
+pub struct EnableModuleBody {
+    pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ExecuteToolBody {
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+}
+
+async fn list_modules(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> Result<Json<ModulesListResponse>, AegisHttpError> {
+    let router = state.router.read().await;
+    let modules_registry = router.modules.read().await;
+
+    // Open TenantDB to query module status
+    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
+
+    let mut response_modules = Vec::new();
+
+    for manifest in modules_registry.values() {
+        let active = db.get_kv(&format!("module_active:{}", manifest.module_id))
+            .unwrap_or(None)
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+        response_modules.push(ModuleUiResponse {
+            module_id: manifest.module_id.clone(),
+            display_name: manifest.display_name.clone(),
+            version: manifest.version.clone(),
+            active,
+            exposed_tools: manifest.exposed_tools.clone(),
+            ui_views: manifest.ui_views.clone(),
+        });
+    }
+
+    Ok(Json(ModulesListResponse {
+        modules: response_modules,
+    }))
+}
+
+async fn enable_module(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Path(module_id): Path<String>,
+    Json(body): Json<EnableModuleBody>,
+) -> Result<Json<serde_json::Value>, AegisHttpError> {
+    // Open TenantDB to toggle status
+    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
+
+    let router = state.router.read().await;
+    let modules_registry = router.modules.read().await;
+
+    if !modules_registry.contains_key(&module_id) {
+        return Err(AegisHttpError::BadRequest(format!("Module '{}' not found in system", module_id)));
+    }
+
+    db.set_kv(&format!("module_active:{}", module_id), if body.enabled { "true" } else { "false" })
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to set active status in DB: {}", e)))?;
+
+    info!("HTTP API: Module '{}' active status set to {} for tenant '{}'", module_id, body.enabled, auth.tenant_id);
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "module_id": module_id,
+        "active": body.enabled
+    })))
+}
+
+async fn execute_module_tool(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Path(module_id): Path<String>,
+    Json(body): Json<ExecuteToolBody>,
+) -> Result<Json<serde_json::Value>, AegisHttpError> {
+    // Verify that the module is active for this tenant
+    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
+
+    let is_active = db.get_kv(&format!("module_active:{}", module_id))
+        .unwrap_or(None)
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    if !is_active {
+        return Err(AegisHttpError::BadRequest(format!("Module '{}' is not enabled for this tenant", module_id)));
+    }
+
+    let router = state.router.read().await;
+    let modules_registry = router.modules.read().await;
+
+    let manifest = modules_registry.get(&module_id).ok_or_else(|| {
+        AegisHttpError::BadRequest(format!("Module '{}' not found in system", module_id))
+    })?;
+
+    // Verify the tool is exposed by this module
+    if !manifest.exposed_tools.iter().any(|t| t.name == body.tool_name) {
+        return Err(AegisHttpError::BadRequest(format!(
+            "Tool '{}' is not exposed by module '{}'",
+            body.tool_name, module_id
+        )));
+    }
+
+    let endpoint = manifest.ipc_transport.endpoint.clone();
+
+    // Call the external module tool via gRPC (using tonic)
+    let channel_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        endpoint
+    } else {
+        format!("http://{}", endpoint)
+    };
+
+    let endpoint_parsed = tonic::transport::Endpoint::from_shared(channel_url)
+        .map_err(|e| AegisHttpError::BadRequest(format!("Invalid endpoint format: {}", e)))?
+        .timeout(std::time::Duration::from_secs(5))
+        .connect_timeout(std::time::Duration::from_secs(5));
+
+    let channel = endpoint_parsed.connect().await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to connect to microkernel module: {}", e)))?;
+
+    let mut client = ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
+
+    // Convert arguments to string JSON
+    let args_str = serde_json::to_string(&body.arguments)
+        .map_err(|e| AegisHttpError::BadRequest(format!("Invalid arguments format: {}", e)))?;
+
+    let request = tonic::Request::new(ank_proto::v1::ExecuteToolRequest {
+        tool_name: body.tool_name,
+        arguments_json: args_str,
+        tenant_id: auth.tenant_id.clone(),
+    });
+
+    let response = client.execute_tool(request)
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Module tool execution failed: {}", e)))?
+        .into_inner();
+
+    if response.success {
+        // Formulate result as a parsed JSON value
+        let parsed_result: serde_json::Value = serde_json::from_str(&response.result_json)
+            .unwrap_or_else(|_| serde_json::Value::String(response.result_json));
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "result": parsed_result
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "success": false,
+            "error": response.result_json
+        })))
+    }
+}
+

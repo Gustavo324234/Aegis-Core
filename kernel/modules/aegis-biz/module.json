@@ -1,0 +1,105 @@
+{
+  "module_id": "aegis.domain.business",
+  "display_name": "Aegis Business & Store Manager",
+  "version": "1.0.0",
+  "ipc_transport": {
+    "protocol": "gRPC",
+    "endpoint": "localhost:50071"
+  },
+  "database": {
+    "driver": "sqlite",
+    "encryption": true
+  },
+  "exposed_tools": [
+    {
+      "name": "biz_add_product",
+      "description": "Register a new product in the store database",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "barcode": { "type": "string" },
+          "name": { "type": "string" },
+          "price": { "type": "number" }
+        },
+        "required": ["name", "price"]
+      }
+    },
+    {
+      "name": "biz_update_stock",
+      "description": "Update the inventory stock count for a specific item",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "barcode": { "type": "string" },
+          "name": { "type": "string" },
+          "quantity_change": { "type": "integer" }
+        },
+        "required": ["quantity_change"]
+      }
+    }
+  ],
+  "ui_views": [
+    {
+      "view_id": "add_product_form",
+      "type": "form",
+      "title": "Registrar Producto",
+      "description": "Añade un nuevo producto a la base de datos de la tienda",
+      "icon": "Plus",
+      "tool_name": "biz_add_product",
+      "fields": [
+        {
+          "name": "barcode",
+          "label": "Código de Barras",
+          "type": "text",
+          "placeholder": "841023...",
+          "required": false
+        },
+        {
+          "name": "name",
+          "label": "Nombre del Producto",
+          "type": "text",
+          "placeholder": "Ej. Queso Parmesano",
+          "required": true
+        },
+        {
+          "name": "price",
+          "label": "Precio Unitario",
+          "type": "number",
+          "placeholder": "0.00",
+          "required": true
+        }
+      ]
+    },
+    {
+      "view_id": "update_stock_form",
+      "type": "form",
+      "title": "Control de Inventario",
+      "description": "Modifica el stock disponible de un artículo",
+      "icon": "TrendingUp",
+      "tool_name": "biz_update_stock",
+      "fields": [
+        {
+          "name": "barcode",
+          "label": "Código de Barras",
+          "type": "text",
+          "placeholder": "841023...",
+          "required": false
+        },
+        {
+          "name": "name",
+          "label": "Nombre del Producto",
+          "type": "text",
+          "placeholder": "Ej. Queso Parmesano",
+          "required": false
+        },
+        {
+          "name": "quantity_change",
+          "label": "Cambio de Cantidad",
+          "type": "number",
+          "placeholder": "Ej. 15 o -5",
+          "required": true
+        }
+      ]
+    }
+  ]
+}
