@@ -24,6 +24,13 @@
 
 
 
+## [0.1.80](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.79...ank-http-v0.1.80) (2026-05-31)
+
+
+### Features
+
+* **security:** isolate agent logs and traces by tenant and implement secure logs tab ([#327](https://github.com/Gustavo324234/Aegis-Core/issues/327)) ([b9b1223](https://github.com/Gustavo324234/Aegis-Core/commit/b9b1223cde1a308cc5050fe2587ae8be8ac89d83))
+
 ## [0.1.79](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.78...ank-http-v0.1.79) (2026-05-28)
 
 

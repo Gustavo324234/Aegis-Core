@@ -1,5 +1,7 @@
 # Changelog
 
+
+
 ## [0.1.7](https://github.com/Gustavo324234/Aegis-Core/compare/ank-cli-v0.1.6...ank-cli-v0.1.7) (2026-05-27)
 
 
