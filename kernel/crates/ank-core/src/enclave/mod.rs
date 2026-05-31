@@ -198,6 +198,62 @@ impl TenantDB {
             )
             .context("Failed to initialize managed_prs table")?;
 
+        // Replicación y Sincronización (Fase 3)
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS sync_metadata (
+                device_id TEXT PRIMARY KEY,
+                last_seq_num INTEGER NOT NULL DEFAULT 0,
+                last_sync_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+                [],
+            )
+            .context("Failed to initialize sync_metadata table")?;
+
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS sync_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                table_name TEXT NOT NULL,
+                row_key TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                data_json TEXT,
+                client_id TEXT NOT NULL DEFAULT 'server',
+                seq_num INTEGER NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+                [],
+            )
+            .context("Failed to initialize sync_log table")?;
+
+        Ok(())
+    }
+
+    /// Registra una entrada en el diario de sincronización para replicación delta.
+    pub fn record_sync_log(
+        &self,
+        table_name: &str,
+        row_key: &str,
+        operation: &str,
+        data_json: Option<&str>,
+    ) -> Result<()> {
+        use anyhow::Context;
+        // Obtener el próximo seq_num de forma monótona
+        let next_seq: i64 = self
+            .connection
+            .query_row(
+                "SELECT COALESCE(MAX(seq_num), 0) + 1 FROM sync_log",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(1);
+
+        self.connection.execute(
+            "INSERT INTO sync_log (table_name, row_key, operation, data_json, client_id, seq_num, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, 'server', ?5, CURRENT_TIMESTAMP)",
+            rusqlite::params![table_name, row_key, operation, data_json, next_seq],
+        ).with_context(|| format!("Failed to record sync log entry for {}", table_name))?;
+
         Ok(())
     }
 
@@ -208,6 +264,13 @@ impl TenantDB {
             "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?1, ?2, CURRENT_TIMESTAMP)",
             [key, value],
         ).with_context(|| format!("Failed to set KV: {}", key))?;
+
+        // Evitamos registrar los tokens OAuth temporales o estados de onboarding
+        if !key.starts_with("oauth_") && !key.starts_with("onboarding_") {
+            let data = serde_json::json!({ "value": value });
+            let _ = self.record_sync_log("kv_store", key, "UPDATE", Some(&data.to_string()));
+        }
+
         Ok(())
     }
 
@@ -408,6 +471,20 @@ impl TenantDB {
                 (amount, description, category),
             )
             .context("Failed to insert expense")?;
+
+        let row_id = self.connection.last_insert_rowid();
+        let data = serde_json::json!({
+            "amount": amount,
+            "description": description,
+            "category": category
+        });
+        let _ = self.record_sync_log(
+            "expenses",
+            &row_id.to_string(),
+            "INSERT",
+            Some(&data.to_string()),
+        );
+
         Ok(())
     }
 
@@ -440,6 +517,20 @@ impl TenantDB {
                 [remind_at, description],
             )
             .context("Failed to insert reminder")?;
+
+        let row_id = self.connection.last_insert_rowid();
+        let data = serde_json::json!({
+            "remind_at": remind_at,
+            "description": description,
+            "status": "pending"
+        });
+        let _ = self.record_sync_log(
+            "reminders",
+            &row_id.to_string(),
+            "INSERT",
+            Some(&data.to_string()),
+        );
+
         Ok(())
     }
 
@@ -718,6 +809,82 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sync_log_recording() -> anyhow::Result<()> {
+        let _guard = acquire_test_lock();
+        let tenant_id = format!(
+            "test_synclog_user_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+                .as_millis()
+        );
+        let correct_key = "test_key_sync_999";
+
+        let db = TenantDB::open(&tenant_id, correct_key)?;
+
+        // 1. KV write
+        db.set_kv("agent_persona", "Hello test persona")?;
+
+        // 2. Gasto write
+        db.add_expense(450.0, "Almuerzo de negocios", Some("comida"))?;
+
+        // 3. Recordatorio write
+        db.add_reminder("2026-06-01 12:00:00", "Reunión de alineación")?;
+
+        // Verificar entradas en sync_log
+        let mut stmt = db.connection.prepare(
+            "SELECT table_name, row_key, operation, data_json, seq_num FROM sync_log ORDER BY seq_num ASC"
+        )?;
+
+        struct SyncEntry {
+            table_name: String,
+            row_key: String,
+            operation: String,
+            data_json: Option<String>,
+            seq_num: i64,
+        }
+
+        let rows = stmt.query_map([], |row| {
+            Ok(SyncEntry {
+                table_name: row.get(0)?,
+                row_key: row.get(1)?,
+                operation: row.get(2)?,
+                data_json: row.get(3)?,
+                seq_num: row.get(4)?,
+            })
+        })?;
+
+        let results: Vec<SyncEntry> = rows.filter_map(|r| r.ok()).collect();
+
+        // Debería haber exactamente 3 entradas
+        assert_eq!(results.len(), 3);
+
+        // Turno 1: kv_store
+        assert_eq!(results[0].table_name, "kv_store");
+        assert_eq!(results[0].row_key, "agent_persona");
+        assert_eq!(results[0].operation, "UPDATE");
+        assert!(results[0]
+            .data_json
+            .as_ref()
+            .unwrap()
+            .contains("Hello test persona"));
+        assert_eq!(results[0].seq_num, 1);
+
+        // Turno 2: expenses
+        assert_eq!(results[1].table_name, "expenses");
+        assert_eq!(results[1].operation, "INSERT");
+        assert_eq!(results[1].seq_num, 2);
+
+        // Turno 3: reminders
+        assert_eq!(results[2].table_name, "reminders");
+        assert_eq!(results[2].operation, "INSERT");
+        assert_eq!(results[2].seq_num, 3);
+
+        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
         Ok(())
     }
 }

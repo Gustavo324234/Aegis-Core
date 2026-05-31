@@ -2583,9 +2583,12 @@ impl CognitiveHAL {
                 const ALLOWED_PROGRAMS: &[&str] = &[
                     "cargo", "rustc", "npm", "pnpm", "yarn", "git", "python", "python3", "pytest",
                     "node", "deno", "bun", "go", "gradle", "mvn", "make", "ls", "echo", "pwd",
-                    "cat", "head", "tail",
+                    "cat", "head", "tail", "protoc",
                 ];
-                const TIMEOUT_SECS: u64 = 60;
+                let timeout_secs = std::env::var("AEGIS_COMMAND_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(300); // Generous 5-minute default
                 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 
                 let command = args["command"].as_str().unwrap_or("").trim().to_string();
@@ -2600,6 +2603,118 @@ impl CognitiveHAL {
                         program,
                         serde_json::to_string(ALLOWED_PROGRAMS).unwrap_or_else(|_| "[]".to_string())
                     );
+                }
+
+                let mut cmd_str = command.clone();
+                if cfg!(windows) {
+                    // Quick translation of common Unix shell commands to Windows CMD builtins
+                    if cmd_str.starts_with("ls ") || cmd_str == "ls" {
+                        cmd_str = cmd_str.replace("ls", "dir");
+                    }
+                    if cmd_str.starts_with("cat ") {
+                        cmd_str = cmd_str.replace("cat", "type");
+                    }
+                    if cmd_str.starts_with("rm -rf ") {
+                        let target = cmd_str.strip_prefix("rm -rf ").unwrap_or("").trim();
+                        cmd_str = format!("rmdir /s /q {}", target);
+                    }
+                    if cmd_str == "pwd" {
+                        cmd_str = "cd".to_string();
+                    }
+                    if cmd_str == "clear" {
+                        cmd_str = "cls".to_string();
+                    }
+                }
+
+                // --- Auto-installation check on Linux ---
+                if cfg!(target_os = "linux") {
+                    fn check_tool_exists(prog: &str) -> bool {
+                        std::process::Command::new("sh")
+                            .args(["-c", &format!("command -v {}", prog)])
+                            .output()
+                            .map(|o| o.status.success())
+                            .unwrap_or_else(|_| {
+                                std::process::Command::new("which")
+                                    .arg(prog)
+                                    .output()
+                                    .map(|o| o.status.success())
+                                    .unwrap_or(false)
+                            })
+                    }
+
+                    fn install_tool_on_linux(prog: &str) {
+                        let package = match prog {
+                            "git" => "git",
+                            "protoc" | "protobuf" => "protobuf-compiler",
+                            "node" | "npm" => "nodejs npm",
+                            "cargo" | "rustc" => "rustc cargo",
+                            "make" | "gcc" => "build-essential pkg-config libssl-dev",
+                            _ => return,
+                        };
+
+                        println!("[AEGIS] La herramienta '{}' no esta instalada. Intentando instalar el paquete '{}' de forma rapida...", prog, package);
+
+                        // Try fast apt-get install directly first (saves 10-20 seconds!)
+                        let fast_cmd = format!("apt-get install -y {}", package);
+                        let output = std::process::Command::new("sh")
+                            .args(["-c", &fast_cmd])
+                            .output();
+
+                        if let Ok(ref out) = output {
+                            if out.status.success() {
+                                println!(
+                                    "[AEGIS] Instale con exito '{}' de forma rapida.",
+                                    package
+                                );
+                                return;
+                            }
+                        }
+
+                        // Fallback: update package list and try again
+                        println!("[AEGIS] Intento rapido fallido. Actualizando repositorio e instalando '{}'...", package);
+                        let cmd = format!("apt-get update && apt-get install -y {}", package);
+                        let output = std::process::Command::new("sh").args(["-c", &cmd]).output();
+
+                        if let Ok(ref out) = output {
+                            if out.status.success() {
+                                println!(
+                                    "[AEGIS] Instale con exito '{}' via apt-get con actualizacion.",
+                                    package
+                                );
+                                return;
+                            }
+                        }
+
+                        // Try with sudo if previous attempts failed
+                        let sudo_cmd =
+                            format!("sudo apt-get update && sudo apt-get install -y {}", package);
+                        let _ = std::process::Command::new("sh")
+                            .args(["-c", &sudo_cmd])
+                            .output();
+                    }
+
+                    // Check primary program
+                    let exists = if program == "cargo" || program == "rustc" {
+                        check_tool_exists("cargo") && check_tool_exists("rustc")
+                    } else {
+                        check_tool_exists(program)
+                    };
+
+                    if !exists {
+                        install_tool_on_linux(program);
+                    }
+
+                    // Check protobuf compiler if program is cargo or make
+                    if (program == "cargo" || program == "make") && !check_tool_exists("protoc") {
+                        install_tool_on_linux("protoc");
+                    }
+
+                    // Check gcc/make compiler tools if program is cargo or make
+                    if (program == "cargo" || program == "make")
+                        && (!check_tool_exists("gcc") || !check_tool_exists("make"))
+                    {
+                        install_tool_on_linux("make");
+                    }
                 }
 
                 let workspace = Self::get_tenant_workspace(pcb);
@@ -2620,32 +2735,46 @@ impl CognitiveHAL {
                     _ => workspace.clone(),
                 };
 
+                // OPTIMIZATION: Configure Shared Cargo Target Directory cache to speed up subagent rust checks from minutes to seconds
+                let central_target = workspace
+                    .parent()
+                    .unwrap_or(&workspace)
+                    .join("cargo_target_cache");
+
                 let output_result = if cfg!(windows) {
                     tokio::time::timeout(
-                        std::time::Duration::from_secs(TIMEOUT_SECS),
+                        std::time::Duration::from_secs(timeout_secs),
                         tokio::process::Command::new("cmd")
-                            .args(["/C", command.as_str()])
+                            .args(["/C", cmd_str.as_str()])
                             .current_dir(&cwd)
+                            .env("CARGO_TARGET_DIR", &central_target)
                             .output(),
                     )
                     .await
                 } else {
                     tokio::time::timeout(
-                        std::time::Duration::from_secs(TIMEOUT_SECS),
+                        std::time::Duration::from_secs(timeout_secs),
                         tokio::process::Command::new("sh")
-                            .args(["-c", command.as_str()])
+                            .args(["-c", cmd_str.as_str()])
                             .current_dir(&cwd)
+                            .env("CARGO_TARGET_DIR", &central_target)
                             .output(),
                     )
                     .await
                 };
 
-                fn truncate_output(mut s: String, max: usize) -> String {
+                fn truncate_output(s: String, max: usize) -> String {
                     if s.len() > max {
-                        s.truncate(max);
-                        s.push_str("\n[...truncated]");
+                        let half = max / 2;
+                        let head: String = s.chars().take(half).collect();
+                        let tail: String = s
+                            .chars()
+                            .skip(s.chars().count().saturating_sub(half))
+                            .collect();
+                        format!("{}\n\n[...truncated...]\n\n{}", head, tail)
+                    } else {
+                        s
                     }
-                    s
                 }
 
                 match output_result {
@@ -2671,7 +2800,7 @@ impl CognitiveHAL {
                     }
                     Err(_) => format!(
                         "{{\"error\":\"timeout\",\"detail\":\"command exceeded {}s\"}}",
-                        TIMEOUT_SECS
+                        timeout_secs
                     ),
                 }
             }
@@ -2874,6 +3003,22 @@ impl CognitiveHAL {
             .get_available_tools_prompt();
         let mcp_tool_prompt = self.mcp_registry.generate_system_prompt().await;
 
+        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+        let session_key = pcb.session_key.as_deref().unwrap_or("default");
+
+        let modules_tool_prompt = if let Some(ref router_lock) = *self.router.read().await {
+            let router = router_lock.read().await;
+            router
+                .generate_modules_prompt(
+                    &pcb.memory_pointers.l1_instruction,
+                    tenant_id,
+                    session_key,
+                )
+                .await
+        } else {
+            String::new()
+        };
+
         let persona_section = match persona {
             Some(p) if !p.trim().is_empty() => PERSONA_SECTION_TEMPLATE.replace("{persona}", p),
             _ => String::new(),
@@ -2929,7 +3074,10 @@ impl CognitiveHAL {
             "".to_string()
         };
 
-        let system_content = if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() {
+        let system_content = if tool_prompt.trim().is_empty()
+            && mcp_tool_prompt.trim().is_empty()
+            && modules_tool_prompt.trim().is_empty()
+        {
             format!(
                 "{}{}{}{}{}",
                 maker_section,
@@ -2940,14 +3088,15 @@ impl CognitiveHAL {
             )
         } else {
             format!(
-                "{}{}{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}\n{}",
+                "{}{}{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}{}{}",
                 maker_section,
                 SPAWN_INSTRUCTIONS,
                 role_instructions,
                 persona_section,
                 music_section,
                 tool_prompt,
-                mcp_tool_prompt
+                mcp_tool_prompt,
+                modules_tool_prompt
             )
         };
 
@@ -3380,6 +3529,52 @@ function multiply(a, b) {
         assert!(section.contains("Multiplica dos números usando sandbox"));
         assert!(section.contains("[SYS_CALL_MAKER(\"js\", \"return eval(read_file('my_custom_tool.js'))\", {\"a\": 2, \"b\": 3})]"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_execute_command_configurable_timeout() -> anyhow::Result<()> {
+        let pm = Arc::new(RwLock::new(PluginManager::new()?));
+        let hal = CognitiveHAL::new(pm)?;
+        let pcb = PCB::new("test_tenant".into(), 5, "hola".into());
+
+        // 1. Test standard success command with a moderate timeout
+        std::env::set_var("AEGIS_COMMAND_TIMEOUT", "10");
+        let cmd = ToolCallRecord {
+            id: "call-123".to_string(),
+            type_: "function".to_string(),
+            function: FunctionCallRecord {
+                name: "execute_command".to_string(),
+                arguments: "{\"command\": \"echo test_ok\"}".to_string(),
+            },
+        };
+        let res = hal
+            .execute_tool_call_internal(&cmd, "some_agent", &pcb)
+            .await;
+        assert!(res.contains("test_ok"));
+
+        // 2. Test timeout trigger by setting a very short timeout (1s)
+        // and running a command that is slow (using whitelisted python)
+        std::env::set_var("AEGIS_COMMAND_TIMEOUT", "1");
+
+        let cmd_slow = ToolCallRecord {
+            id: "call-456".to_string(),
+            type_: "function".to_string(),
+            function: FunctionCallRecord {
+                name: "execute_command".to_string(),
+                arguments: "{\"command\": \"git clone http://10.255.255.1/repo.git\"}".to_string(),
+            },
+        };
+        let res_slow = hal
+            .execute_tool_call_internal(&cmd_slow, "some_agent", &pcb)
+            .await;
+        assert!(
+            res_slow.contains("timeout") || res_slow.contains("exceeded 1s"),
+            "res_slow was: {}",
+            res_slow
+        );
+
+        std::env::remove_var("AEGIS_COMMAND_TIMEOUT");
         Ok(())
     }
 }

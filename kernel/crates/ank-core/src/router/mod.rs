@@ -1,6 +1,7 @@
 pub mod catalog;
 pub mod discovery;
 pub mod key_pool;
+pub mod modules;
 pub mod rate_tracker;
 pub mod siren;
 pub mod syncer;
@@ -61,6 +62,7 @@ pub struct CognitiveRouter {
     /// intent. Keeps consecutive turns on the same model so the persona/style
     /// stays consistent. Invalidated on failure (see `invalidate_sticky`).
     sticky: Arc<RwLock<HashMap<StickyKey, (Instant, RoutingDecision)>>>,
+    pub modules: Arc<RwLock<HashMap<String, modules::ModuleManifest>>>,
 }
 
 impl CognitiveRouter {
@@ -70,6 +72,7 @@ impl CognitiveRouter {
             key_pool,
             tracker: Arc::new(ModelUsageTracker::new()),
             sticky: Arc::new(RwLock::new(HashMap::new())),
+            modules: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -106,6 +109,26 @@ impl CognitiveRouter {
         tenant_id: Option<&str>,
     ) -> Option<key_pool::ApiKeyEntry> {
         self.key_pool.get_raw_key_by_id(key_id, tenant_id).await
+    }
+
+    /// Dynamic Domain Module loading interface.
+    pub async fn load_modules(&self, path: &std::path::Path) -> anyhow::Result<usize> {
+        let loaded = modules::load_modules_from_dir(path)?;
+        let count = loaded.len();
+        let mut registry = self.modules.write().await;
+        *registry = loaded;
+        Ok(count)
+    }
+
+    /// Dynamic Domain Module prompt injection interface.
+    pub async fn generate_modules_prompt(
+        &self,
+        prompt: &str,
+        tenant_id: &str,
+        session_key: &str,
+    ) -> String {
+        let registry = self.modules.read().await;
+        modules::generate_system_prompt_for_modules(&registry, prompt, tenant_id, session_key)
     }
 
     pub async fn list_models_for_catalog(&self) -> Vec<ModelEntry> {

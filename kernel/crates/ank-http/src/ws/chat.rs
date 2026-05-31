@@ -256,6 +256,8 @@ async fn handle_chat(
                             .agent_event_belongs_to_tenant(&event, &tenant_id)
                             .await
                         {
+                            let _ = append_to_agent_traces(&tenant_id, &event).await;
+
                             if let Ok(data) = serde_json::to_value(&event) {
                                 let frame = json!({ "event": "agent_event", "data": data });
                                 let _ = socket.send(Message::Text(frame.to_string())).await;
@@ -862,6 +864,89 @@ async fn append_to_chat_history(tenant_id: &str, role: &str, text: &str) -> anyh
         role,
         text
     );
+    file.write_all(entry.as_bytes()).await?;
+    Ok(())
+}
+
+/// Appends an agent event trace to the tenant's private agent traces log.
+async fn append_to_agent_traces(
+    tenant_id: &str,
+    event: &ank_core::agents::event::AgentEvent,
+) -> anyhow::Result<()> {
+    let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+    let workspace_path = std::path::Path::new(&base_dir)
+        .join("users")
+        .join(tenant_id)
+        .join("workspace");
+
+    let _ = tokio::fs::create_dir_all(&workspace_path).await;
+    let log_path = workspace_path.join("agent_traces.log");
+
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .await?;
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let text = match event {
+        ank_core::agents::event::AgentEvent::Spawned {
+            agent_id,
+            role,
+            model,
+            task_type,
+            ..
+        } => {
+            format!(
+                "🤖 [SPAWNED] Agent '{}' with role '{}' on model '{}' for task '{}'",
+                agent_id,
+                role.display_name(),
+                model,
+                task_type
+            )
+        }
+        ank_core::agents::event::AgentEvent::StateChanged { agent_id, state } => {
+            format!(
+                "⚙️ [STATE] Agent '{}' state changed to '{}'",
+                agent_id, state
+            )
+        }
+        ank_core::agents::event::AgentEvent::Activity {
+            agent_id,
+            description,
+        } => {
+            format!("🧠 [ACTIVITY] Agent '{}': {}", agent_id, description)
+        }
+        ank_core::agents::event::AgentEvent::Reported { agent_id, summary } => {
+            format!("📋 [REPORT] Agent '{}' reported: {}", agent_id, summary)
+        }
+        ank_core::agents::event::AgentEvent::SupervisorQuestion {
+            agent_id, question, ..
+        } => {
+            format!(
+                "❓ [QUESTION] Supervisor Agent '{}' asked: {}",
+                agent_id, question
+            )
+        }
+        ank_core::agents::event::AgentEvent::SupervisorCompleted {
+            agent_id, summary, ..
+        } => {
+            format!(
+                "✅ [COMPLETED] Supervisor Agent '{}' completed: {}",
+                agent_id, summary
+            )
+        }
+        ank_core::agents::event::AgentEvent::SupervisorTimedOut { agent_id, .. } => {
+            format!(
+                "⏳ [TIMEOUT] Supervisor Agent '{}' timed out waiting for input",
+                agent_id
+            )
+        }
+        _ => return Ok(()),
+    };
+
+    let entry = format!("[{}] {}\n", timestamp, text);
     file.write_all(entry.as_bytes()).await?;
     Ok(())
 }

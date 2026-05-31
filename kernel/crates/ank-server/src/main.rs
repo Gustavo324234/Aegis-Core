@@ -194,6 +194,21 @@ pub(crate) async fn run_server() -> Result<()> {
     hal.set_router(router.clone()).await;
     hal.set_router_ref(router.clone()).await;
 
+    // Discovery & Loading of Domain Modules (Phase 1)
+    let modules_dir = std::path::Path::new("kernel/modules");
+    info!(
+        "Microkernel: Discovering modules in {}",
+        modules_dir.display()
+    );
+    match router.read().await.load_modules(modules_dir).await {
+        Ok(count) => {
+            info!("Microkernel: Successfully registered {} modules.", count);
+        }
+        Err(e) => {
+            error!("Microkernel Module Discovery failed: {}", e);
+        }
+    }
+
     let catalog_syncer = Arc::new(ank_core::router::syncer::CatalogSyncer::new(
         catalog, key_pool,
     ));
@@ -277,7 +292,12 @@ pub(crate) async fn run_server() -> Result<()> {
                     let swap = hal_runner.swap_manager.clone();
                     let plugin_manager = hal_runner.plugin_manager.clone();
 
-                    let executor = ank_core::syscalls::SyscallExecutor::new(
+                    let router_opt = {
+                        let r_lock = hal_runner.router.read().await;
+                        r_lock.clone()
+                    };
+
+                    let mut executor = ank_core::syscalls::SyscallExecutor::new(
                         plugin_manager,
                         vcm,
                         scribe_runner,
@@ -287,6 +307,10 @@ pub(crate) async fn run_server() -> Result<()> {
                         scheduler_tx_runner.clone(),
                     )
                     .with_orchestrator(orchestrator_clone);
+
+                    if let Some(router_arc) = router_opt {
+                        executor = executor.with_router(router_arc);
+                    }
 
                     match hal_runner
                         .route_and_execute(Arc::clone(&shared_pcb), persona)

@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/history", get(get_chat_history))
+    Router::new()
+        .route("/history", get(get_chat_history))
+        .route("/traces", get(get_agent_traces))
 }
 
 #[derive(Deserialize)]
@@ -90,4 +92,39 @@ fn parse_line(line: &str) -> Option<ChatMessage> {
         content,
         timestamp,
     })
+}
+
+// ── GET /api/chat/traces?limit=100 ────────────────────────────────────────────
+
+async fn get_agent_traces(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<Value>, AegisHttpError> {
+    let limit = query.limit.unwrap_or(100).min(500);
+
+    let log_path = state
+        .config
+        .data_dir
+        .join("users")
+        .join(&auth.tenant_id)
+        .join("workspace")
+        .join("agent_traces.log");
+
+    let content = tokio::fs::read_to_string(&log_path)
+        .await
+        .unwrap_or_default();
+
+    let mut traces: Vec<String> = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|s| s.to_string())
+        .collect();
+
+    if traces.len() > limit {
+        let start = traces.len() - limit;
+        traces.drain(..start);
+    }
+
+    Ok(Json(json!({ "traces": traces })))
 }
