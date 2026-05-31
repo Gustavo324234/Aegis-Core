@@ -200,7 +200,7 @@ pub(crate) async fn run_server() -> Result<()> {
         "Microkernel: Discovering modules in {}",
         modules_dir.display()
     );
-    match router.read().await.load_modules(&modules_dir).await {
+    match router.read().await.load_modules(modules_dir).await {
         Ok(count) => {
             info!("Microkernel: Successfully registered {} modules.", count);
         }
