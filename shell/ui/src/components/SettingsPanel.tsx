@@ -645,10 +645,16 @@ const CuentaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantI
     );
 };
 
+interface ChatMessage {
+    timestamp: string;
+    role: string;
+    content: string;
+}
+
 const LogsTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
     const [subTab, setSubTab] = useState<'history' | 'traces'>('history');
-    const [logs, setLogs] = useState<any[]>([]);
+    const [logs, setLogs] = useState<(ChatMessage | string)[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [copied, setCopied] = useState(false);
@@ -689,28 +695,28 @@ const LogsTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId,
     const handleCopy = () => {
         let textToCopy = '';
         if (subTab === 'history') {
-            textToCopy = logs
-                .map((msg: any) => `[${msg.timestamp}] ${msg.role.toUpperCase()}: ${msg.content}`)
+            textToCopy = (logs as ChatMessage[])
+                .map((msg) => `[${msg.timestamp}] ${msg.role.toUpperCase()}: ${msg.content}`)
                 .join('\n');
         } else {
-            textToCopy = logs.join('\n');
+            textToCopy = (logs as string[]).join('\n');
         }
         navigator.clipboard.writeText(textToCopy);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };
 
-    const filteredLogs = logs.filter((log: any) => {
+    const filteredLogs = logs.filter((log) => {
         if (!searchTerm) return true;
         const term = searchTerm.toLowerCase();
-        if (subTab === 'history') {
+        if (typeof log === 'string') {
+            return log.toLowerCase().includes(term);
+        } else {
             return (
                 log.content.toLowerCase().includes(term) ||
                 log.role.toLowerCase().includes(term) ||
                 log.timestamp.toLowerCase().includes(term)
             );
-        } else {
-            return log.toLowerCase().includes(term);
         }
     });
 
@@ -823,7 +829,7 @@ const LogsTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId,
                 ) : (
                     <div className="space-y-2">
                         {subTab === 'history' ? (
-                            (filteredLogs as any[]).map((msg, idx) => (
+                            (filteredLogs as ChatMessage[]).map((msg, idx) => (
                                 <div key={idx} className="border-b border-white/5 pb-2 last:border-0 last:pb-0 flex flex-col sm:flex-row sm:items-start gap-2">
                                     <span className="text-[10px] text-white/30 shrink-0 font-mono">
                                         [{formatTimestamp(msg.timestamp)}]
