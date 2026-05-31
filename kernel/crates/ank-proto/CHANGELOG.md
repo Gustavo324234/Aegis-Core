@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/Gustavo324234/Aegis-Core/compare/ank-proto-v0.1.5...ank-proto-v0.1.6) (2026-05-31)
+
+
+### Features
+
+* **security:** isolate agent logs and traces by tenant and implement secure logs tab ([#327](https://github.com/Gustavo324234/Aegis-Core/issues/327)) ([b9b1223](https://github.com/Gustavo324234/Aegis-Core/commit/b9b1223cde1a308cc5050fe2587ae8be8ac89d83))
+
 ## [0.1.5](https://github.com/Gustavo324234/Aegis-Core/compare/ank-proto-v0.1.4...ank-proto-v0.1.5) (2026-05-14)
 
 
