@@ -56,6 +56,12 @@ interface ModuleData {
     ui_views: UiViewSchema[];
 }
 
+interface ExecuteResult {
+    success: boolean;
+    result?: unknown;
+    error?: string;
+}
+
 export const DynamicModulePanel: React.FC = () => {
     const { tenantId, sessionKey } = useAegisStore();
     const [modules, setModules] = useState<ModuleData[]>([]);
@@ -64,7 +70,7 @@ export const DynamicModulePanel: React.FC = () => {
     const [formValues, setFormValues] = useState<Record<string, string | number>>({});
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [executingTool, setExecutingTool] = useState<string | null>(null);
-    const [execResult, setExecResult] = useState<unknown | null>(null);
+    const [execResult, setExecResult] = useState<ExecuteResult | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [fetchError, setFetchError] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState<boolean>(false);

@@ -1003,7 +1003,7 @@ async fn execute_module_tool(
     if response.success {
         // Formulate result as a parsed JSON value
         let parsed_result: serde_json::Value = serde_json::from_str(&response.result_json)
-            .unwrap_or_else(|_| serde_json::Value::String(response.result_json));
+            .unwrap_or(serde_json::Value::String(response.result_json));
         Ok(Json(serde_json::json!({
             "success": true,
             "result": parsed_result
