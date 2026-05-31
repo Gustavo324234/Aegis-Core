@@ -2662,7 +2662,10 @@ impl CognitiveHAL {
 
                         if let Ok(ref out) = output {
                             if out.status.success() {
-                                println!("[AEGIS] Instale con exito '{}' de forma rapida.", package);
+                                println!(
+                                    "[AEGIS] Instale con exito '{}' de forma rapida.",
+                                    package
+                                );
                                 return;
                             }
                         }
@@ -2670,19 +2673,21 @@ impl CognitiveHAL {
                         // Fallback: update package list and try again
                         println!("[AEGIS] Intento rapido fallido. Actualizando repositorio e instalando '{}'...", package);
                         let cmd = format!("apt-get update && apt-get install -y {}", package);
-                        let output = std::process::Command::new("sh")
-                            .args(["-c", &cmd])
-                            .output();
+                        let output = std::process::Command::new("sh").args(["-c", &cmd]).output();
 
                         if let Ok(ref out) = output {
                             if out.status.success() {
-                                println!("[AEGIS] Instale con exito '{}' via apt-get con actualizacion.", package);
+                                println!(
+                                    "[AEGIS] Instale con exito '{}' via apt-get con actualizacion.",
+                                    package
+                                );
                                 return;
                             }
                         }
 
                         // Try with sudo if previous attempts failed
-                        let sudo_cmd = format!("sudo apt-get update && sudo apt-get install -y {}", package);
+                        let sudo_cmd =
+                            format!("sudo apt-get update && sudo apt-get install -y {}", package);
                         let _ = std::process::Command::new("sh")
                             .args(["-c", &sudo_cmd])
                             .output();
@@ -2705,7 +2710,9 @@ impl CognitiveHAL {
                     }
 
                     // Check gcc/make compiler tools if program is cargo or make
-                    if (program == "cargo" || program == "make") && (!check_tool_exists("gcc") || !check_tool_exists("make")) {
+                    if (program == "cargo" || program == "make")
+                        && (!check_tool_exists("gcc") || !check_tool_exists("make"))
+                    {
                         install_tool_on_linux("make");
                     }
                 }
@@ -2729,7 +2736,10 @@ impl CognitiveHAL {
                 };
 
                 // OPTIMIZATION: Configure Shared Cargo Target Directory cache to speed up subagent rust checks from minutes to seconds
-                let central_target = workspace.parent().unwrap_or(&workspace).join("cargo_target_cache");
+                let central_target = workspace
+                    .parent()
+                    .unwrap_or(&workspace)
+                    .join("cargo_target_cache");
 
                 let output_result = if cfg!(windows) {
                     tokio::time::timeout(
@@ -2757,7 +2767,10 @@ impl CognitiveHAL {
                     if s.len() > max {
                         let half = max / 2;
                         let head: String = s.chars().take(half).collect();
-                        let tail: String = s.chars().skip(s.chars().count().saturating_sub(half)).collect();
+                        let tail: String = s
+                            .chars()
+                            .skip(s.chars().count().saturating_sub(half))
+                            .collect();
                         format!("{}\n\n[...truncated...]\n\n{}", head, tail)
                     } else {
                         s
@@ -2995,7 +3008,13 @@ impl CognitiveHAL {
 
         let modules_tool_prompt = if let Some(ref router_lock) = *self.router.read().await {
             let router = router_lock.read().await;
-            router.generate_modules_prompt(&pcb.memory_pointers.l1_instruction, tenant_id, session_key).await
+            router
+                .generate_modules_prompt(
+                    &pcb.memory_pointers.l1_instruction,
+                    tenant_id,
+                    session_key,
+                )
+                .await
         } else {
             String::new()
         };
@@ -3055,7 +3074,10 @@ impl CognitiveHAL {
             "".to_string()
         };
 
-        let system_content = if tool_prompt.trim().is_empty() && mcp_tool_prompt.trim().is_empty() && modules_tool_prompt.trim().is_empty() {
+        let system_content = if tool_prompt.trim().is_empty()
+            && mcp_tool_prompt.trim().is_empty()
+            && modules_tool_prompt.trim().is_empty()
+        {
             format!(
                 "{}{}{}{}{}",
                 maker_section,
@@ -3526,13 +3548,15 @@ function multiply(a, b) {
                 arguments: "{\"command\": \"echo test_ok\"}".to_string(),
             },
         };
-        let res = hal.execute_tool_call_internal(&cmd, "some_agent", &pcb).await;
+        let res = hal
+            .execute_tool_call_internal(&cmd, "some_agent", &pcb)
+            .await;
         assert!(res.contains("test_ok"));
 
         // 2. Test timeout trigger by setting a very short timeout (1s)
         // and running a command that is slow (using whitelisted python)
         std::env::set_var("AEGIS_COMMAND_TIMEOUT", "1");
-        
+
         let cmd_slow = ToolCallRecord {
             id: "call-456".to_string(),
             type_: "function".to_string(),
@@ -3541,8 +3565,14 @@ function multiply(a, b) {
                 arguments: "{\"command\": \"git clone http://10.255.255.1/repo.git\"}".to_string(),
             },
         };
-        let res_slow = hal.execute_tool_call_internal(&cmd_slow, "some_agent", &pcb).await;
-        assert!(res_slow.contains("timeout") || res_slow.contains("exceeded 1s"), "res_slow was: {}", res_slow);
+        let res_slow = hal
+            .execute_tool_call_internal(&cmd_slow, "some_agent", &pcb)
+            .await;
+        assert!(
+            res_slow.contains("timeout") || res_slow.contains("exceeded 1s"),
+            "res_slow was: {}",
+            res_slow
+        );
 
         std::env::remove_var("AEGIS_COMMAND_TIMEOUT");
         Ok(())

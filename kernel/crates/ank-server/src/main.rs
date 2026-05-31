@@ -196,7 +196,10 @@ pub(crate) async fn run_server() -> Result<()> {
 
     // Discovery & Loading of Domain Modules (Phase 1)
     let modules_dir = std::path::Path::new("kernel/modules");
-    info!("Microkernel: Discovering modules in {}", modules_dir.display());
+    info!(
+        "Microkernel: Discovering modules in {}",
+        modules_dir.display()
+    );
     match router.read().await.load_modules(&modules_dir).await {
         Ok(count) => {
             info!("Microkernel: Successfully registered {} modules.", count);

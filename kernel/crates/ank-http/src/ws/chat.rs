@@ -891,26 +891,57 @@ async fn append_to_agent_traces(
 
     let timestamp = chrono::Utc::now().to_rfc3339();
     let text = match event {
-        ank_core::agents::event::AgentEvent::Spawned { agent_id, role, model, task_type, .. } => {
-            format!("🤖 [SPAWNED] Agent '{}' with role '{}' on model '{}' for task '{}'", agent_id, role.display_name(), model, task_type)
+        ank_core::agents::event::AgentEvent::Spawned {
+            agent_id,
+            role,
+            model,
+            task_type,
+            ..
+        } => {
+            format!(
+                "🤖 [SPAWNED] Agent '{}' with role '{}' on model '{}' for task '{}'",
+                agent_id,
+                role.display_name(),
+                model,
+                task_type
+            )
         }
         ank_core::agents::event::AgentEvent::StateChanged { agent_id, state } => {
-            format!("⚙️ [STATE] Agent '{}' state changed to '{}'", agent_id, state)
+            format!(
+                "⚙️ [STATE] Agent '{}' state changed to '{}'",
+                agent_id, state
+            )
         }
-        ank_core::agents::event::AgentEvent::Activity { agent_id, description } => {
+        ank_core::agents::event::AgentEvent::Activity {
+            agent_id,
+            description,
+        } => {
             format!("🧠 [ACTIVITY] Agent '{}': {}", agent_id, description)
         }
         ank_core::agents::event::AgentEvent::Reported { agent_id, summary } => {
             format!("📋 [REPORT] Agent '{}' reported: {}", agent_id, summary)
         }
-        ank_core::agents::event::AgentEvent::SupervisorQuestion { agent_id, question, .. } => {
-            format!("❓ [QUESTION] Supervisor Agent '{}' asked: {}", agent_id, question)
+        ank_core::agents::event::AgentEvent::SupervisorQuestion {
+            agent_id, question, ..
+        } => {
+            format!(
+                "❓ [QUESTION] Supervisor Agent '{}' asked: {}",
+                agent_id, question
+            )
         }
-        ank_core::agents::event::AgentEvent::SupervisorCompleted { agent_id, summary, .. } => {
-            format!("✅ [COMPLETED] Supervisor Agent '{}' completed: {}", agent_id, summary)
+        ank_core::agents::event::AgentEvent::SupervisorCompleted {
+            agent_id, summary, ..
+        } => {
+            format!(
+                "✅ [COMPLETED] Supervisor Agent '{}' completed: {}",
+                agent_id, summary
+            )
         }
         ank_core::agents::event::AgentEvent::SupervisorTimedOut { agent_id, .. } => {
-            format!("⏳ [TIMEOUT] Supervisor Agent '{}' timed out waiting for input", agent_id)
+            format!(
+                "⏳ [TIMEOUT] Supervisor Agent '{}' timed out waiting for input",
+                agent_id
+            )
         }
         _ => return Ok(()),
     };
@@ -919,7 +950,6 @@ async fn append_to_agent_traces(
     file.write_all(entry.as_bytes()).await?;
     Ok(())
 }
-
 
 /// CORE-FIX: extract the assistant's name out of a free-form reply during
 /// the onboarding "awaiting_name" step. The user often writes a phrase like

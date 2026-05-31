@@ -1,9 +1,9 @@
 pub mod catalog;
 pub mod discovery;
 pub mod key_pool;
+pub mod modules;
 pub mod rate_tracker;
 pub mod siren;
-pub mod modules;
 pub mod syncer;
 
 pub use siren::{SirenEngine, SirenRouter};
@@ -121,7 +121,12 @@ impl CognitiveRouter {
     }
 
     /// Dynamic Domain Module prompt injection interface.
-    pub async fn generate_modules_prompt(&self, prompt: &str, tenant_id: &str, session_key: &str) -> String {
+    pub async fn generate_modules_prompt(
+        &self,
+        prompt: &str,
+        tenant_id: &str,
+        session_key: &str,
+    ) -> String {
         let registry = self.modules.read().await;
         modules::generate_system_prompt_for_modules(&registry, prompt, tenant_id, session_key)
     }

@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IpcTransport {
@@ -105,49 +105,103 @@ pub fn match_prompt_to_module(prompt: &str, manifest: &ModuleManifest) -> bool {
     let display_name = manifest.display_name.to_lowercase();
 
     // 1. Heuristics for Business & Commerce domain (Aegis-Biz)
-    if module_id.contains("business") || module_id.contains("biz") || display_name.contains("business") || display_name.contains("negocio") || display_name.contains("store") || display_name.contains("tienda") {
+    if module_id.contains("business")
+        || module_id.contains("biz")
+        || display_name.contains("business")
+        || display_name.contains("negocio")
+        || display_name.contains("store")
+        || display_name.contains("tienda")
+    {
         let biz_keywords = &[
-            "stock", "inventario", "facturación", "facturacion", "contabilidad",
-            "aegis-biz", "aegis.domain.business"
+            "stock",
+            "inventario",
+            "facturación",
+            "facturacion",
+            "contabilidad",
+            "aegis-biz",
+            "aegis.domain.business",
         ];
         let biz_phrases = &[
-            "crear tienda", "crear negocio", "crear comercio", "crear store",
-            "crear proyecto de tienda", "crear proyecto de la tienda",
-            "proyecto de la tienda", "proyecto de tienda",
-            "nueva tienda", "nuevo negocio", "tienda de", "negocio de"
+            "crear tienda",
+            "crear negocio",
+            "crear comercio",
+            "crear store",
+            "crear proyecto de tienda",
+            "crear proyecto de la tienda",
+            "proyecto de la tienda",
+            "proyecto de tienda",
+            "nueva tienda",
+            "nuevo negocio",
+            "tienda de",
+            "negocio de",
         ];
         if biz_keywords.iter().any(|&kw| lower_prompt.contains(kw))
-            || biz_phrases.iter().any(|&phrase| lower_prompt.contains(phrase)) {
+            || biz_phrases
+                .iter()
+                .any(|&phrase| lower_prompt.contains(phrase))
+        {
             return true;
         }
     }
 
     // 2. Heuristics for Security & Auditing domain (Aegis-Sec)
-    if module_id.contains("security") || module_id.contains("sec") || display_name.contains("security") || display_name.contains("cybersecurity") || display_name.contains("ciberseguridad") {
+    if module_id.contains("security")
+        || module_id.contains("sec")
+        || display_name.contains("security")
+        || display_name.contains("cybersecurity")
+        || display_name.contains("ciberseguridad")
+    {
         let sec_keywords = &[
-            "ciberseguridad", "cybersecurity", "pentest", "nmap", "vulnerabilidades",
-            "hacking", "sandbox", "jailbreak", "firewall", "exploit", "aegis-sec"
+            "ciberseguridad",
+            "cybersecurity",
+            "pentest",
+            "nmap",
+            "vulnerabilidades",
+            "hacking",
+            "sandbox",
+            "jailbreak",
+            "firewall",
+            "exploit",
+            "aegis-sec",
         ];
         let sec_phrases = &[
-            "escanear puertos", "auditoría de seguridad", "auditoria de seguridad",
-            "seguridad informática", "seguridad informatica", "red team", "cyber attack"
+            "escanear puertos",
+            "auditoría de seguridad",
+            "auditoria de seguridad",
+            "seguridad informática",
+            "seguridad informatica",
+            "red team",
+            "cyber attack",
         ];
         if sec_keywords.iter().any(|&kw| lower_prompt.contains(kw))
-            || sec_phrases.iter().any(|&phrase| lower_prompt.contains(phrase)) {
+            || sec_phrases
+                .iter()
+                .any(|&phrase| lower_prompt.contains(phrase))
+        {
             return true;
         }
     }
 
     // 3. Heuristics for Developer & Programming domain (Aegis-Dev)
-    if module_id.contains("dev") || module_id.contains("programming") || display_name.contains("programming") || display_name.contains("desarrollo") || display_name.contains("código") {
-        let dev_keywords = &[
-            "compilar", "compiler", "depurar", "debugger", "aegis-dev"
-        ];
+    if module_id.contains("dev")
+        || module_id.contains("programming")
+        || display_name.contains("programming")
+        || display_name.contains("desarrollo")
+        || display_name.contains("código")
+    {
+        let dev_keywords = &["compilar", "compiler", "depurar", "debugger", "aegis-dev"];
         let dev_phrases = &[
-            "escribir código", "escribir codigo", "compilar proyecto", "ejecutar test", "ejecutar pruebas"
+            "escribir código",
+            "escribir codigo",
+            "compilar proyecto",
+            "ejecutar test",
+            "ejecutar pruebas",
         ];
         if dev_keywords.iter().any(|&kw| lower_prompt.contains(kw))
-            || dev_phrases.iter().any(|&phrase| lower_prompt.contains(phrase)) {
+            || dev_phrases
+                .iter()
+                .any(|&phrase| lower_prompt.contains(phrase))
+        {
             return true;
         }
     }
@@ -181,7 +235,8 @@ pub fn generate_system_prompt_for_modules(
     for manifest in modules.values() {
         if match_prompt_to_module(prompt, manifest) {
             let is_enabled = if let Some(ref tenant_db) = db {
-                tenant_db.get_kv(&format!("module_active:{}", manifest.module_id))
+                tenant_db
+                    .get_kv(&format!("module_active:{}", manifest.module_id))
                     .unwrap_or(None)
                     .map(|v| v == "true")
                     .unwrap_or(false)
@@ -204,7 +259,10 @@ pub fn generate_system_prompt_for_modules(
         system_prompt.push_str("\n## HERRAMIENTAS DE MÓDULOS DE DOMINIO (MICROKERNEL) ACTIVAS\n");
         system_prompt.push_str("You can invoke active microkernel tools using the system call [SYS_MCP_EXEC(tool_name, {args})].\n\n");
         for manifest in relevant_enabled {
-            system_prompt.push_str(&format!("### {} ({})\n", manifest.display_name, manifest.version));
+            system_prompt.push_str(&format!(
+                "### {} ({})\n",
+                manifest.display_name, manifest.version
+            ));
             for tool in &manifest.exposed_tools {
                 system_prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
                 system_prompt.push_str(&format!(
@@ -223,8 +281,14 @@ pub fn generate_system_prompt_for_modules(
                                 Be highly specific to the user's request (e.g., if they ask to create a store or business project, ask them if they want to install the Business module to have control over product listings, stock, inventory, and secure billing). \
                                 If the user explicitly authorizes it, you MUST output the privileged system call [SYS_ENABLE_MODULE(\"module_id\")] in your response to perform the secure installation:\n\n");
         for manifest in relevant_suggested {
-            system_prompt.push_str(&format!("- **{}** (ID: `{}`): Exposes tools to manage this domain.\n", manifest.display_name, manifest.module_id));
-            system_prompt.push_str(&format!("  Privileged Syscall to enable: `[SYS_ENABLE_MODULE(\"{}\")]`\n\n", manifest.module_id));
+            system_prompt.push_str(&format!(
+                "- **{}** (ID: `{}`): Exposes tools to manage this domain.\n",
+                manifest.display_name, manifest.module_id
+            ));
+            system_prompt.push_str(&format!(
+                "  Privileged Syscall to enable: `[SYS_ENABLE_MODULE(\"{}\")]`\n\n",
+                manifest.module_id
+            ));
         }
     }
 
@@ -234,9 +298,9 @@ pub fn generate_system_prompt_for_modules(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs::File;
     use std::io::Write;
+    use tempfile::tempdir;
 
     #[test]
     fn test_manifest_deserialization() {
@@ -287,19 +351,20 @@ mod tests {
                 driver: "sqlite".to_string(),
                 encryption: true,
             },
-            exposed_tools: vec![
-                ExposedTool {
-                    name: "biz_add_product".to_string(),
-                    description: "Add product".to_string(),
-                    parameters: serde_json::json!({}),
-                }
-            ],
+            exposed_tools: vec![ExposedTool {
+                name: "biz_add_product".to_string(),
+                description: "Add product".to_string(),
+                parameters: serde_json::json!({}),
+            }],
             ui_views: vec![],
         };
 
         // Query with business keyword
-        assert!(match_prompt_to_module("Agrega 10 quesos al inventario", &manifest));
-        
+        assert!(match_prompt_to_module(
+            "Agrega 10 quesos al inventario",
+            &manifest
+        ));
+
         // Query explicitly calling the tool name
         assert!(match_prompt_to_module("Llama a biz_add_product", &manifest));
 
@@ -315,7 +380,7 @@ mod tests {
 
         let manifest_path = module_dir.join("module.json");
         let mut file = File::create(&manifest_path)?;
-        
+
         let json_data = r#"{
             "module_id": "aegis.domain.business",
             "display_name": "Aegis Business",
@@ -330,7 +395,7 @@ mod tests {
             },
             "exposed_tools": []
         }"#;
-        
+
         file.write_all(json_data.as_bytes())?;
 
         let loaded = load_modules_from_dir(dir.path())?;

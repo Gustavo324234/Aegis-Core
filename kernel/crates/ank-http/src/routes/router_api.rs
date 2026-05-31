@@ -855,7 +855,8 @@ async fn list_modules(
     let mut response_modules = Vec::new();
 
     for manifest in modules_registry.values() {
-        let active = db.get_kv(&format!("module_active:{}", manifest.module_id))
+        let active = db
+            .get_kv(&format!("module_active:{}", manifest.module_id))
             .unwrap_or(None)
             .map(|v| v == "true")
             .unwrap_or(false);
@@ -889,13 +890,24 @@ async fn enable_module(
     let modules_registry = router.modules.read().await;
 
     if !modules_registry.contains_key(&module_id) {
-        return Err(AegisHttpError::BadRequest(format!("Module '{}' not found in system", module_id)));
+        return Err(AegisHttpError::BadRequest(format!(
+            "Module '{}' not found in system",
+            module_id
+        )));
     }
 
-    db.set_kv(&format!("module_active:{}", module_id), if body.enabled { "true" } else { "false" })
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to set active status in DB: {}", e)))?;
+    db.set_kv(
+        &format!("module_active:{}", module_id),
+        if body.enabled { "true" } else { "false" },
+    )
+    .map_err(|e| {
+        AegisHttpError::Internal(anyhow::anyhow!("Failed to set active status in DB: {}", e))
+    })?;
 
-    info!("HTTP API: Module '{}' active status set to {} for tenant '{}'", module_id, body.enabled, auth.tenant_id);
+    info!(
+        "HTTP API: Module '{}' active status set to {} for tenant '{}'",
+        module_id, body.enabled, auth.tenant_id
+    );
 
     Ok(Json(serde_json::json!({
         "success": true,
@@ -914,13 +926,17 @@ async fn execute_module_tool(
     let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
 
-    let is_active = db.get_kv(&format!("module_active:{}", module_id))
+    let is_active = db
+        .get_kv(&format!("module_active:{}", module_id))
         .unwrap_or(None)
         .map(|v| v == "true")
         .unwrap_or(false);
 
     if !is_active {
-        return Err(AegisHttpError::BadRequest(format!("Module '{}' is not enabled for this tenant", module_id)));
+        return Err(AegisHttpError::BadRequest(format!(
+            "Module '{}' is not enabled for this tenant",
+            module_id
+        )));
     }
 
     let router = state.router.read().await;
@@ -931,7 +947,11 @@ async fn execute_module_tool(
     })?;
 
     // Verify the tool is exposed by this module
-    if !manifest.exposed_tools.iter().any(|t| t.name == body.tool_name) {
+    if !manifest
+        .exposed_tools
+        .iter()
+        .any(|t| t.name == body.tool_name)
+    {
         return Err(AegisHttpError::BadRequest(format!(
             "Tool '{}' is not exposed by module '{}'",
             body.tool_name, module_id
@@ -952,10 +972,15 @@ async fn execute_module_tool(
         .timeout(std::time::Duration::from_secs(5))
         .connect_timeout(std::time::Duration::from_secs(5));
 
-    let channel = endpoint_parsed.connect().await
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to connect to microkernel module: {}", e)))?;
+    let channel = endpoint_parsed.connect().await.map_err(|e| {
+        AegisHttpError::Internal(anyhow::anyhow!(
+            "Failed to connect to microkernel module: {}",
+            e
+        ))
+    })?;
 
-    let mut client = ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
+    let mut client =
+        ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
 
     // Convert arguments to string JSON
     let args_str = serde_json::to_string(&body.arguments)
@@ -967,9 +992,12 @@ async fn execute_module_tool(
         tenant_id: auth.tenant_id.clone(),
     });
 
-    let response = client.execute_tool(request)
+    let response = client
+        .execute_tool(request)
         .await
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Module tool execution failed: {}", e)))?
+        .map_err(|e| {
+            AegisHttpError::Internal(anyhow::anyhow!("Module tool execution failed: {}", e))
+        })?
         .into_inner();
 
     if response.success {
@@ -987,4 +1015,3 @@ async fn execute_module_tool(
         })))
     }
 }
-

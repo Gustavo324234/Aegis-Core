@@ -152,7 +152,9 @@ impl SyscallExecutor {
         router: Arc<tokio::sync::RwLock<crate::router::CognitiveRouter>>,
     ) -> Self {
         self.router = Some(router);
-        tracing::info!("SyscallExecutor: CognitiveRouter connected. Microkernel modules redirection ready.");
+        tracing::info!(
+            "SyscallExecutor: CognitiveRouter connected. Microkernel modules redirection ready."
+        );
         self
     }
 
@@ -186,10 +188,12 @@ impl SyscallExecutor {
             .timeout(std::time::Duration::from_secs(5))
             .connect_timeout(std::time::Duration::from_secs(5));
 
-        let channel = endpoint_parsed.connect().await
-            .map_err(|e| SyscallError::PluginError(format!("Failed to connect to microkernel module: {}", e)))?;
+        let channel = endpoint_parsed.connect().await.map_err(|e| {
+            SyscallError::PluginError(format!("Failed to connect to microkernel module: {}", e))
+        })?;
 
-        let mut client = ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
+        let mut client =
+            ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
 
         let request = tonic::Request::new(ank_proto::v1::ExecuteToolRequest {
             tool_name: tool_name.to_string(),
@@ -197,7 +201,8 @@ impl SyscallExecutor {
             tenant_id: tenant_id.to_string(),
         });
 
-        let response = client.execute_tool(request)
+        let response = client
+            .execute_tool(request)
             .await
             .map_err(|e| SyscallError::PluginError(format!("Module tool execution failed: {}", e)))?
             .into_inner();
@@ -320,8 +325,19 @@ impl SyscallExecutor {
                 }
 
                 if is_module_tool {
-                    tracing::info!("Microkernel: Redirecting tool '{}' to external gRPC module at {}", tool_name, target_endpoint);
-                    let result = self.execute_external_module_tool(&target_endpoint, &tool_name, &args_json, tenant_id).await?;
+                    tracing::info!(
+                        "Microkernel: Redirecting tool '{}' to external gRPC module at {}",
+                        tool_name,
+                        target_endpoint
+                    );
+                    let result = self
+                        .execute_external_module_tool(
+                            &target_endpoint,
+                            &tool_name,
+                            &args_json,
+                            tenant_id,
+                        )
+                        .await?;
                     return Ok(format!("[SYSTEM_RESULT: {}]", result));
                 }
 
@@ -538,8 +554,12 @@ impl SyscallExecutor {
                     Ok(db) => {
                         db.set_kv(&format!("module_active:{}", module_id), "true")
                             .map_err(|e| SyscallError::IOError(e.to_string()))?;
-                        
-                        tracing::info!("Microkernel: Module '{}' enabled successfully for tenant '{}'", module_id, tenant_id);
+
+                        tracing::info!(
+                            "Microkernel: Module '{}' enabled successfully for tenant '{}'",
+                            module_id,
+                            tenant_id
+                        );
                         Ok(format!(
                             "[SYSTEM_RESULT: Module '{}' has been enabled and integrated successfully. \
                              You can now invoke its exposed tools in subsequent turns.]",
@@ -1180,9 +1200,8 @@ static GIT_PUSH_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Privileged Call: SYS_ENABLE_MODULE
 #[allow(clippy::expect_used)]
 static ENABLE_MODULE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\[SYS_ENABLE_MODULE\("([^"]+)"\)\]"#).unwrap_or_else(|_| {
-        panic!("FATAL: hardcoded SYS_ENABLE_MODULE regex is invalid")
-    })
+    Regex::new(r#"\[SYS_ENABLE_MODULE\("([^"]+)"\)\]"#)
+        .unwrap_or_else(|_| panic!("FATAL: hardcoded SYS_ENABLE_MODULE regex is invalid"))
 });
 
 /// No-op kept for backwards compatibility. Regexes are now initialized lazily via `LazyLock`.
@@ -1586,7 +1605,6 @@ mod tests {
         Ok(())
     }
 
-
     #[tokio::test]
     async fn test_syscall_execution_format() -> anyhow::Result<()> {
         let manager = Arc::new(tokio::sync::RwLock::new(PluginManager::new()?));
@@ -1648,23 +1666,59 @@ mod tests {
         let (tx, _) = tokio::sync::mpsc::channel(1);
 
         // 1. Load modules and build CognitiveRouter
-        let catalog = Arc::new(crate::router::catalog::ModelCatalog::load_bundled_with_profile(
-            crate::router::catalog::ModelProfile::Hybrid,
-        )?);
+        let catalog = Arc::new(
+            crate::router::catalog::ModelCatalog::load_bundled_with_profile(
+                crate::router::catalog::ModelProfile::Hybrid,
+            )?,
+        );
         struct NoopPersistor;
         #[async_trait::async_trait]
         impl crate::scheduler::persistence::StatePersistor for NoopPersistor {
-            async fn save_pcb(&self, _pcb: &crate::pcb::PCB) -> anyhow::Result<()> { Ok(()) }
-            async fn delete_pcb(&self, _pid: &str) -> anyhow::Result<()> { Ok(()) }
-            async fn load_all_pcbs(&self) -> anyhow::Result<Vec<crate::pcb::PCB>> { Ok(vec![]) }
-            async fn flush(&self) -> anyhow::Result<()> { Ok(()) }
-            async fn get_voice_profile(&self, _tenant_id: &str) -> anyhow::Result<Option<crate::scheduler::persistence::VoiceProfile>> { Ok(None) }
-            async fn update_voice_profile(&self, _profile: crate::scheduler::persistence::VoiceProfile) -> anyhow::Result<()> { Ok(()) }
-            async fn save_voice_fingerprint(&self, _tenant_id: &str, _fingerprint: &[f32], _threshold: f32) -> anyhow::Result<()> { Ok(()) }
-            async fn get_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<Option<(Vec<f32>, f32)>> { Ok(None) }
-            async fn delete_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<()> { Ok(()) }
+            async fn save_pcb(&self, _pcb: &crate::pcb::PCB) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn delete_pcb(&self, _pid: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn load_all_pcbs(&self) -> anyhow::Result<Vec<crate::pcb::PCB>> {
+                Ok(vec![])
+            }
+            async fn flush(&self) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn get_voice_profile(
+                &self,
+                _tenant_id: &str,
+            ) -> anyhow::Result<Option<crate::scheduler::persistence::VoiceProfile>> {
+                Ok(None)
+            }
+            async fn update_voice_profile(
+                &self,
+                _profile: crate::scheduler::persistence::VoiceProfile,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn save_voice_fingerprint(
+                &self,
+                _tenant_id: &str,
+                _fingerprint: &[f32],
+                _threshold: f32,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+            async fn get_voice_fingerprint(
+                &self,
+                _tenant_id: &str,
+            ) -> anyhow::Result<Option<(Vec<f32>, f32)>> {
+                Ok(None)
+            }
+            async fn delete_voice_fingerprint(&self, _tenant_id: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
         }
-        let key_pool = Arc::new(crate::router::key_pool::KeyPool::new(Arc::new(NoopPersistor)));
+        let key_pool = Arc::new(crate::router::key_pool::KeyPool::new(Arc::new(
+            NoopPersistor,
+        )));
         let mut router = crate::router::CognitiveRouter::new(catalog, key_pool);
 
         // Load Aegis-Biz manifest
@@ -1680,34 +1734,39 @@ mod tests {
                 driver: "sqlite".to_string(),
                 encryption: true,
             },
-            exposed_tools: vec![
-                crate::router::modules::ExposedTool {
-                    name: "biz_update_stock".to_string(),
-                    description: "Update product stock count".to_string(),
-                    parameters: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string"},
-                            "quantity_change": {"type": "integer"}
-                        },
-                        "required": ["name", "quantity_change"]
-                    }),
-                }
-            ],
+            exposed_tools: vec![crate::router::modules::ExposedTool {
+                name: "biz_update_stock".to_string(),
+                description: "Update product stock count".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "quantity_change": {"type": "integer"}
+                    },
+                    "required": ["name", "quantity_change"]
+                }),
+            }],
             ui_views: vec![],
         };
-        router.modules.write().await.insert("aegis.domain.business".to_string(), manifest);
+        router
+            .modules
+            .write()
+            .await
+            .insert("aegis.domain.business".to_string(), manifest);
         let router_arc = Arc::new(tokio::sync::RwLock::new(router));
 
-        let executor = SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx)
-            .with_router(router_arc.clone());
+        let executor =
+            SyscallExecutor::new(manager, vcm, scribe, swap, mcp_registry, http_client, tx)
+                .with_router(router_arc.clone());
 
         let mut pcb = crate::pcb::PCB::new("test".into(), 5, "test".into());
         pcb.tenant_id = Some("test_tenant".to_string());
         pcb.session_key = Some("test_session_key_32_bytes_long!!!!".to_string());
 
         // Ensure clean DB state (remove any leftovers)
-        if let Ok(db) = crate::enclave::TenantDB::open("test_tenant", "test_session_key_32_bytes_long!!!!") {
+        if let Ok(db) =
+            crate::enclave::TenantDB::open("test_tenant", "test_session_key_32_bytes_long!!!!")
+        {
             let _ = db.set_kv("module_active:aegis.domain.business", "false");
         }
 
@@ -1718,9 +1777,11 @@ mod tests {
             &*modules_locked.modules.read().await,
             prompt_turn_1,
             "test_tenant",
-            "test_session_key_32_bytes_long!!!!"
+            "test_session_key_32_bytes_long!!!!",
         );
-        assert!(system_prompt_1.contains("MÓDULOS DE DOMINIO DISPONIBLES (INSTALACIÓN BAJO DEMANDA)"));
+        assert!(
+            system_prompt_1.contains("MÓDULOS DE DOMINIO DISPONIBLES (INSTALACIÓN BAJO DEMANDA)")
+        );
         assert!(system_prompt_1.contains("[SYS_ENABLE_MODULE(\"aegis.domain.business\")]"));
         assert!(!system_prompt_1.contains("biz_update_stock")); // Tools should NOT be active yet!
         drop(modules_locked);
@@ -1738,9 +1799,11 @@ mod tests {
             &*modules_locked_2.modules.read().await,
             prompt_turn_1,
             "test_tenant",
-            "test_session_key_32_bytes_long!!!!"
+            "test_session_key_32_bytes_long!!!!",
         );
-        assert!(system_prompt_2.contains("HERRAMIENTAS DE MÓDULOS DE DOMINIO (MICROKERNEL) ACTIVAS"));
+        assert!(
+            system_prompt_2.contains("HERRAMIENTAS DE MÓDULOS DE DOMINIO (MICROKERNEL) ACTIVAS")
+        );
         assert!(system_prompt_2.contains("biz_update_stock"));
         assert!(!system_prompt_2.contains("INSTALACIÓN BAJO DEMANDA"));
         drop(modules_locked_2);
@@ -1755,7 +1818,9 @@ mod tests {
         assert!(res_exec.contains("Cantidad actual"));
 
         // Clean up
-        if let Ok(db) = crate::enclave::TenantDB::open("test_tenant", "test_session_key_32_bytes_long!!!!") {
+        if let Ok(db) =
+            crate::enclave::TenantDB::open("test_tenant", "test_session_key_32_bytes_long!!!!")
+        {
             let _ = db.set_kv("module_active:aegis.domain.business", "false");
         }
 

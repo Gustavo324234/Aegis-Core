@@ -239,11 +239,14 @@ impl TenantDB {
     ) -> Result<()> {
         use anyhow::Context;
         // Obtener el próximo seq_num de forma monótona
-        let next_seq: i64 = self.connection.query_row(
-            "SELECT COALESCE(MAX(seq_num), 0) + 1 FROM sync_log",
-            [],
-            |row| row.get(0),
-        ).unwrap_or(1);
+        let next_seq: i64 = self
+            .connection
+            .query_row(
+                "SELECT COALESCE(MAX(seq_num), 0) + 1 FROM sync_log",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(1);
 
         self.connection.execute(
             "INSERT INTO sync_log (table_name, row_key, operation, data_json, client_id, seq_num, updated_at) \
@@ -475,7 +478,12 @@ impl TenantDB {
             "description": description,
             "category": category
         });
-        let _ = self.record_sync_log("expenses", &row_id.to_string(), "INSERT", Some(&data.to_string()));
+        let _ = self.record_sync_log(
+            "expenses",
+            &row_id.to_string(),
+            "INSERT",
+            Some(&data.to_string()),
+        );
 
         Ok(())
     }
@@ -516,7 +524,12 @@ impl TenantDB {
             "description": description,
             "status": "pending"
         });
-        let _ = self.record_sync_log("reminders", &row_id.to_string(), "INSERT", Some(&data.to_string()));
+        let _ = self.record_sync_log(
+            "reminders",
+            &row_id.to_string(),
+            "INSERT",
+            Some(&data.to_string()),
+        );
 
         Ok(())
     }
@@ -826,7 +839,7 @@ mod tests {
         let mut stmt = db.connection.prepare(
             "SELECT table_name, row_key, operation, data_json, seq_num FROM sync_log ORDER BY seq_num ASC"
         )?;
-        
+
         struct SyncEntry {
             table_name: String,
             row_key: String,
@@ -854,7 +867,11 @@ mod tests {
         assert_eq!(results[0].table_name, "kv_store");
         assert_eq!(results[0].row_key, "agent_persona");
         assert_eq!(results[0].operation, "UPDATE");
-        assert!(results[0].data_json.as_ref().unwrap().contains("Hello test persona"));
+        assert!(results[0]
+            .data_json
+            .as_ref()
+            .unwrap()
+            .contains("Hello test persona"));
         assert_eq!(results[0].seq_num, 1);
 
         // Turno 2: expenses

@@ -128,4 +128,3 @@ async fn get_agent_traces(
 
     Ok(Json(json!({ "traces": traces })))
 }
-
