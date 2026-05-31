@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
     Puzzle,
@@ -15,7 +15,7 @@ import {
 import { useAegisStore } from '../store/useAegisStore';
 
 // Dynamic mapping of Lucide icons based on manifest strings
-const iconMap: Record<string, React.ComponentType<any>> = {
+const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
     Plus: Plus,
     TrendingUp: TrendingUp,
     Settings: Settings,
@@ -44,11 +44,11 @@ interface UiViewSchema {
 interface ExposedToolSchema {
     name: string;
     description: string;
-    parameters: any;
+    parameters: Record<string, unknown>;
 }
 
 interface ModuleData {
-    module_id: String;
+    module_id: string;
     display_name: string;
     version: string;
     active: boolean;
@@ -61,16 +61,16 @@ export const DynamicModulePanel: React.FC = () => {
     const [modules, setModules] = useState<ModuleData[]>([]);
     const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
     const [activeViewId, setActiveViewId] = useState<string | null>(null);
-    const [formValues, setFormValues] = useState<Record<string, any>>({});
+    const [formValues, setFormValues] = useState<Record<string, string | number>>({});
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [executingTool, setExecutingTool] = useState<string | null>(null);
-    const [execResult, setExecResult] = useState<any | null>(null);
+    const [execResult, setExecResult] = useState<unknown | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [fetchError, setFetchError] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState<boolean>(false);
 
     // Fetch discovered modules on mount
-    const fetchModules = async (silent = false) => {
+    const fetchModules = useCallback(async (silent = false) => {
         if (!tenantId || !sessionKey) return;
         if (!silent) setRefreshing(true);
         setFetchError(null);
@@ -98,17 +98,17 @@ export const DynamicModulePanel: React.FC = () => {
                     setActiveViewId(firstModule.ui_views[0].view_id);
                 }
             }
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Failed to fetch modules:', err);
-            setFetchError(err.message || 'Error de conexión');
+            setFetchError((err as Error).message || 'Error de conexión');
         } finally {
             setRefreshing(false);
         }
-    };
+    }, [tenantId, sessionKey, selectedModuleId]);
 
     useEffect(() => {
         fetchModules();
-    }, [tenantId, sessionKey]);
+    }, [tenantId, sessionKey, fetchModules]);
 
     // Handle module activation toggle
     const toggleModule = async (moduleId: string, currentStatus: boolean) => {
@@ -140,9 +140,9 @@ export const DynamicModulePanel: React.FC = () => {
                     )
                 );
             }
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
-            setErrorMsg(err.message || 'Error al cambiar estado del módulo');
+            setErrorMsg((err as Error).message || 'Error al cambiar estado del módulo');
         } finally {
             setIsLoading(false);
         }
@@ -184,7 +184,7 @@ export const DynamicModulePanel: React.FC = () => {
 
         try {
             // Remove empty fields
-            const cleanArgs: Record<string, any> = {};
+            const cleanArgs: Record<string, string | number> = {};
             Object.entries(formValues).forEach(([key, val]) => {
                 if (val !== '' && val !== undefined) {
                     cleanArgs[key] = val;
@@ -211,9 +211,9 @@ export const DynamicModulePanel: React.FC = () => {
 
             const data = await res.json();
             setExecResult(data);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error('Manual execution failed:', err);
-            setErrorMsg(err.message || 'Fallo en la ejecución del comando.');
+            setErrorMsg((err as Error).message || 'Fallo en la ejecución del comando.');
         } finally {
             setExecutingTool(null);
         }
