@@ -27,6 +27,9 @@ rustls                       = { version = "0.23", features = ["ring"] }
 serde_json.workspace = true
 serde.workspace = true
 dotenvy.workspace = true
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+rand = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 windows-service = { workspace = true }

@@ -4,6 +4,10 @@
 > **Arquitecto IA · 2026-05-31**
 > **Objetivo del primer lanzamiento:** Validar la tesis técnica — estrellas, credibilidad y atención de developers.
 
+> **Decisiones registradas en esta sesión:**
+> 1. **Objetivo del launch:** validar la tesis con developers (estrellas / credibilidad), no captar usuarios finales aún.
+> 2. **Arquitectura de producto:** el OS cognitivo real (distro) es el **norte estratégico y flagship de v2**; el **overlay/satélite se shippea primero** como MVP (ver §2).
+
 ---
 
 ## 0. Veredicto (TL;DR)
@@ -29,7 +33,26 @@ Todo el recorte de abajo se mide contra una sola pregunta: **¿esto hace que un 
 
 ---
 
-## 2. Hallazgo de integridad de governance (riesgo de credibilidad directo)
+## 2. Arquitectura de producto: dos modos de entrega y el norte
+
+Decisión registrada (2026-05-31). Mismo kernel, dos entregas:
+
+| Modo | Qué es | Rol | Cuándo |
+|---|---|---|---|
+| **Aegis OS (distro)** | Imagen NixOS mínima, inmutable, bare-metal con `ank-server` como servicio de sistema de primera clase | **Flagship** — el OS real, máxima expresión de la tesis | **v2 (norte)** |
+| **Aegis overlay / satélite** | Instalación sobre un SO existente (Linux/macOS/Windows), como ya hacen los satélites mobile | **Rampa de entrada** — runtime self-hosted | **MVP (ahora)** |
+
+"Satélite" ya es vocabulario del proyecto en mobile: los satélites orbitan un core; el distro *es* el core, los overlays orbitan o corren standalone. No es un compromiso — es arquitectura de producto intencional.
+
+**Estado del distro:** `distro/README.md` lo marca **INITIATED & DESIGNED** — NixOS declarativo, root de solo lectura (`ro`), LUKS2 full-disk, SQLCipher dual-encryption, swap dentro del volumen cifrado. Diseño serio y Codex-aligned; *fortalece* Citadel. **Pero diseñado ≠ shippeado:** falta imagen firmada + canal OTA, ISO/instalador real (hoy el flujo es NixOS-minimal manual), matriz de hardware/drivers, y la decisión de shell on-device (kiosk Wayland + shell React) vs UI web headless.
+
+**Convergencia clave:** una imagen inmutable, firmada, con updates atómicos A/B vuelve irrelevante el `curl | sudo bash`. El distro *es* la solución definitiva al problema de confianza del install — por eso los arreglos del install overlay (B5) son **interinos**: resuelven el on-ramp ahora; el distro lo cierra de raíz en v2.
+
+**Secuencia (por qué este orden):** la tesis es idéntica corra como overlay o bare-metal → no se necesita el distro para validarla. Se valida con el overlay MVP, se junta audiencia/credibilidad, y el distro se lanza como **segundo golpe (v2)** ante gente que ya cree en la tesis. Mientras tanto sigue horneándose en background sin bloquear el launch. Al revés, es tirar el artefacto más difícil al vacío.
+
+---
+
+## 3. Hallazgo de integridad de governance (riesgo de credibilidad directo)
 
 La fuente de verdad de estado **no es confiable hoy**, y es verificable:
 
@@ -45,7 +68,7 @@ La fuente de verdad de estado **no es confiable hoy**, y es verificable:
 
 ---
 
-## 3. Gap analysis — "Done" vs "Listo para ojos de developers"
+## 4. Gap analysis — "Done" vs "Listo para ojos de developers"
 
 | Área | Estado declarado | Realidad para un dev escéptico | ¿Bloquea validar la tesis? |
 |---|---|---|---|
@@ -54,77 +77,89 @@ La fuente de verdad de estado **no es confiable hoy**, y es verificable:
 | **Prueba de que funciona** (demo / screenshots / video / GIF) | — | **Cero.** Para un producto con UI + agentes + voz, ningún visual = ningún proof. | **SÍ** |
 | **Benchmarks** (PinchBench) | Existe el harness | **Ningún resultado publicado.** "Ruteo cognitivo" es claim sin evidencia. | **SÍ** |
 | **Señal de calidad** (tests / coverage / CI verde de tests) | Zero-Panic en CI | README solo muestra badge de *build*. Sin señal de tests visible → flojo para credibilidad de un kernel en Rust. | **SÍ** |
-| Postura de seguridad (Citadel, SQLCipher, Zero-Trust) | Claim central | Bien narrada, pero no visible/auditada (sin threat model, sin firmas). | Parcial |
-| **Primeros 5 minutos / confianza en el install** | `curl \| sudo bash` | Ironía para un producto Zero-Trust: pipear script a root. Y post-install no se ve qué pasa. | **SÍ** |
+| **Firma de plugins** (Citadel) | Plugins Wasm firmados (ed25519) | El installer setea `AEGIS_ALLOW_INSECURE_PLUGINS=1` por defecto → **firma desactivada en lo que se shippea**. Contradice el claim Zero-Trust. | **SÍ** |
+| Postura de seguridad (Citadel, SQLCipher, Zero-Trust) | Claim central | Bien narrada, pero no visible/auditada (sin threat model, sin firmas de release). | Parcial |
+| **Primeros 5 minutos / confianza en el install** | `curl \| sudo bash` (baja `nightly`) | Ironía para un producto Zero-Trust: pipear script no verificado a root, y la *nightly* por default. Post-install no se ve qué pasa. | **SÍ** |
 | Amplitud vs profundidad | 15 epics Done | Superficie enorme, 1 mantenedor (+agentes). Dispersa la tesis y dispara "¿se mantiene o se pudre?". | **SÍ** (vía recorte) |
-| Trazabilidad por tickets | Pilar Codex | Roto en la práctica (ver §2). | **SÍ** |
+| Trazabilidad por tickets | Pilar Codex | Roto en la práctica (ver §3). | **SÍ** |
 | Evidencia de uso real / dogfooding | — | "Done" ≠ "probado en uso". Sin relato de "corriendo en prod hace N semanas". | Parcial |
 
 ---
 
-## 4. Bloqueantes reales del MVP (priorizados)
+## 5. Bloqueantes reales del MVP (priorizados)
 
-Lo que **debe ser cierto** antes de publicar para devs. Estos son las semillas de los tickets del futuro Epic 56 — **no se crean acá** hasta validar el recorte.
+Lo que **debe ser cierto** antes de publicar para devs. Son las semillas de los tickets del futuro Epic 56 — **no se crean acá** hasta validar el recorte (§6).
 
-- **B1 — Asset de prueba (máxima palanca).** Un video corto (<3 min) + 3-4 screenshots/GIF en el README que muestren el loop real: chat maestro → spawn de sub-agente → tool use nativo → resultado, más el dashboard mostrando agentes como procesos. Un solo asset que convierte 15 claims en una demostración.
-- **B2 — Un benchmark publicado.** Tabla de resultados de PinchBench, aunque sea chica, **honesta y reproducible**, que sustente "el ruteo cognitivo elige el modelo correcto". Convierte el claim en evidencia.
-- **B3 — Señales de credibilidad en el README.** Badge real de tests/coverage + estado de CI de tests, y un deep-dive técnico breve (o link fuerte a `ARCHITECTURE.md`) con un **diagrama de secuencia del cognitive loop**. Los devs estrellan profundidad, no checkmarks.
-- **B4 — Honestidad de alcance.** Etiquetar como *experimental / roadmap* la superficie no probada (móvil, voz/Siren, distro, maker-capability, módulos SDUI) en vez de "✅ Done". Así el núcleo que prueba la tesis se lee sólido y el resto se lee como futuro. El over-claiming es la vía más rápida a perder al dev.
-- **B5 — Confianza en el primer arranque.** Para el público objetivo, ofrecer un camino que no sea `curl | sudo bash`: `docker compose up` o (ideal) un **demo hosted read-only** donde un dev toque Aegis sin instalar nada. Documentar checksums/firmas y opción no-root. Más un "qué ves después de instalar" de 5 líneas.
-- **B6 — Reconciliación de governance (§2).** Sincronizar el estado real antes de que alguien lo cruce.
+- **B1 — Asset de prueba (máxima palanca) · Alta.** Un video corto (<3 min) + 3-4 screenshots/GIF en el README que muestren el loop real: chat maestro → spawn de sub-agente → tool use nativo → resultado, más el dashboard mostrando agentes como procesos. Un solo asset que convierte 15 claims en una demostración.
+- **B2 — Un benchmark publicado · Alta.** Tabla de resultados de PinchBench, aunque sea chica, **honesta y reproducible**, que sustente "el ruteo cognitivo elige el modelo correcto". Convierte el claim en evidencia.
+- **B3 — Señales de credibilidad en el README · Alta.** Badge real de tests/coverage + estado de CI de tests, y un deep-dive técnico breve (o link fuerte a `ARCHITECTURE.md`) con un **diagrama de secuencia del cognitive loop**. Los devs estrellan profundidad, no checkmarks.
+- **B4 — Honestidad de alcance · Alta.** Etiquetar como *experimental / roadmap* la superficie no probada (móvil, voz/Siren, distro, maker-capability, módulos SDUI) en vez de "✅ Done". Así el núcleo que prueba la tesis se lee sólido y el resto se lee como futuro. El over-claiming es la vía más rápida a perder al dev.
+- **B5 — Confianza en el primer arranque del overlay (interino) · Alta.** Para el público objetivo:
+  - (a) un **demo hosted read-only**, o surfacear el modo **Docker que ya existe** en el installer, para tocar Aegis sin instalar;
+  - (b) default a un **tag de release fijo**, no `nightly`;
+  - (c) **`SHA256SUMS` por asset + verificación** en el installer (fail-closed); idealmente firmas (Sigstore/cosign o GitHub artifact attestations);
+  - (d) documentar el **dos-pasos read-first** (`curl -o install.sh …; less install.sh; sudo bash install.sh`) como camino recomendado;
+  - (e) opción **rootless** user-scoped (el daemon ya corre como usuario `aegis` no-root con hardening systemd — eso está bien y se mantiene).
+  - Más un "qué ves después de instalar" de 5 líneas. *Nota: el distro (v2) cierra esto de raíz; esto es para el on-ramp.*
+- **B6 — Cerrar la firma de plugins · CRÍTICO (Zero-Trust).** El install escribe `AEGIS_ALLOW_INSECURE_PLUGINS=1` por defecto porque todavía no existe el comando de keygen (lo admite el propio comentario; el backfill de upgrade lo perpetúa). Acción: shippear `aegis keygen` (par ed25519), generarlo en el primer arranque, setear `AEGIS_PLUGIN_ROOT_KEY`, y **sacar el flag inseguro del default**. Sin esto, "Citadel Zero-Trust en cada capa" es un claim falso que un dev encuentra leyendo el script. Es exactamente el workaround "me funciona a mí" que el proyecto dice rechazar.
+- **B7 — Reconciliación de governance (§3) · Alta.** Sincronizar el estado real antes de que alguien lo cruce.
 
-*(Opcional alto-impacto)* **B7 — Nota de dogfooding honesta:** "lo corro para mí hace N semanas; esto se rompió y se arregló". La autenticidad vende a devs mejor que cualquier feature.
+*(Opcional alto-impacto)* **B8 — Nota de dogfooding honesta · Media.** "Lo corro para mí hace N semanas; esto se rompió y se arregló". La autenticidad vende a devs mejor que cualquier feature.
 
 ---
 
-## 5. Recorte del MVP — qué entra al frente / qué se esconde
+## 6. Recorte del MVP — qué entra al frente / qué se esconde
 
 Principio del recorte: **el MVP debe hacer que un dev diga "la idea de kernel-como-OS-para-agentes es real y funciona". Nada más necesita estar perfecto.**
 
-| Núcleo que PRUEBA la tesis (ship + destacar) | Se mantiene pero se BAJA del frente (etiquetar experimental/roadmap) |
+| Núcleo que PRUEBA la tesis (ship + destacar) | Se mantiene pero se BAJA del frente |
 |---|---|
-| Kernel determinista + cognitive loop (ReAct + tool use nativo) | App móvil (Expo / Orion ID) |
-| Binario único, cero runtime deps (`ank-server`) | Voz / Siren Protocol (WebRTC) |
-| Ruteo cognitivo + el benchmark de B2 | `distro/` (Linux inmutable) |
-| Local-first / multi-tenant cifrado (Citadel) como narrativa | Maker-capability (sandbox JS autónomo) |
-| Dashboard mostrando agentes como procesos (el "OS" hecho tangible) | Módulos SDUI / paneles dinámicos |
+| Kernel determinista + cognitive loop (ReAct + tool use nativo) | App móvil (Expo / Orion ID) — experimental |
+| Binario único, cero runtime deps (`ank-server`) | Voz / Siren Protocol (WebRTC) — experimental |
+| Ruteo cognitivo + el benchmark de B2 | Maker-capability (sandbox JS autónomo) — experimental |
+| Local-first / multi-tenant cifrado (Citadel) como narrativa | Módulos SDUI / paneles dinámicos — experimental |
+| Dashboard mostrando agentes como procesos (el "OS" hecho tangible) | **`distro/` Aegis OS → flagship de v2 (norte):** se comunica como roadmap, no como entregable del MVP (§2) |
 
 La amplitud no se borra — se **reordena**. Hoy juega en contra porque diluye la tesis y multiplica la superficie de riesgo sin probar el núcleo.
 
+**Nota:** la firma de plugins (B6) es parte del *núcleo honesto*: aunque no se "muestra" como feature, debe estar correcta para que el claim Citadel del núcleo no sea falso.
+
 ---
 
-## 6. Lo que explícitamente NO bloquea el lanzamiento
+## 7. Lo que explícitamente NO bloquea el lanzamiento
 
 Para proteger el foco (achicar scope, no expandirlo), **nada de esto debe demorar la validación de la tesis**:
 
-- `distro/` (imagen Linux inmutable)
-- Escalado de LanceDB L3 / optimización fina del cognitive loop
-- Pulido de la app móvil
-- Matriz amplia de providers
-- Fase 3 de sincronización/replicación
+- `distro/` / Aegis OS bare-metal → **es el norte (flagship v2), no un bloqueante del MVP** (§2).
+- Escalado de LanceDB L3 / optimización fina del cognitive loop.
+- Pulido de la app móvil.
+- Matriz amplia de providers.
+- Fase 3 de sincronización/replicación.
 
 Son post-MVP. Si aparecen como precondición, es scope creep.
 
 ---
 
-## 7. Límite de esta auditoría
+## 8. Límite de esta auditoría
 
-Esta auditoría evaluó el **estado declarado** (governance docs) y la **cara pública** (README, estructura). **No es una auditoría de código.** No verifiqué que el binario haga lo que cada ticket dice.
+Esta auditoría evaluó el **estado declarado** (governance docs) y la **cara pública** (README, estructura, `install.sh`, `distro/README.md`). **No es una auditoría de código.** No verifiqué que el binario haga lo que cada ticket dice.
 
 Dado que la tesis *es* el cognitive loop, se recomienda un **pase de verificación acotado al núcleo** antes de publicar: confirmar contra el binario real (principio "verify the deployed binary": `strings` sobre el binario compilado para configs embebidas vía `rust-embed`) que el loop ReAct + tool use + spawn de agentes funciona end-to-end como se declara. Ese pase es el seguro contra la misma ilusión de completitud que motiva este documento.
 
 ---
 
-## 8. Próximo paso (gated)
+## 9. Próximo paso (gated)
 
-Una vez que el Owner valide este recorte:
+Una vez que el Owner valide el recorte (§6):
 
 1. Crear **EPIC 56 — Public MVP / Thesis Validation** en governance.
-2. Convertir B1–B6 (y B7 si entra) en **tickets individuales** en `governance/Tickets/CORE-NNN.md`, cada uno con criterios de aceptación verificables.
+2. Convertir **B1–B7** (y B8 si entra) en **tickets individuales** en `governance/Tickets/CORE-NNN.md`, cada uno con criterios de aceptación verificables.
 3. Sincronizar `TICKETS_MASTER.md`.
 
-**No se crea el epic ni los tickets hasta validar §5.** Alineación antes de expandir scope.
+El distro **no genera epic ahora** (es norte v2); su finalización se planifica post-validación como epic flagship aparte.
+
+**No se crea el epic ni los tickets hasta validar §6.** Alineación antes de expandir scope.
 
 ---
 
-*Arquitecto IA — 2026-05-31 — DRAFT v1*
+*Arquitecto IA — 2026-05-31 — DRAFT v2*
