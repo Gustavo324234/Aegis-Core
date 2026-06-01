@@ -50,6 +50,13 @@
 
 
 
+## [0.1.85](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.84...ank-server-v0.1.85) (2026-06-01)
+
+
+### Bug Fixes
+
+* **core:** resolve infinite synthesis loop, secure onboarding SHA256, and reconcile governance. ([#329](https://github.com/Gustavo324234/Aegis-Core/issues/329)) ([48041f0](https://github.com/Gustavo324234/Aegis-Core/commit/48041f0ae346ed6f1c9c7ff52e0d83c6aa12644d))
+
 ## [0.1.84](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.83...ank-server-v0.1.84) (2026-05-31)
 
 
