@@ -5,7 +5,7 @@
 **Tipo:** feat
 **Prioridad:** Alta
 **Asignado a:** Kernel Engineer
-**Estado:** ✅ Completo
+**Estado:✅ Done
 
 ---
 

@@ -93,7 +93,6 @@
   supports_json_mode: true
   is_local: false
   avg_latency_ms: 3000
-  # CORE-FIX (F): Pro/preview tier — not available on Gemini's free plan.
   free_tier_eligible: false
   free_tier_rpm: 2
   free_tier_rpd: 50
@@ -136,11 +135,11 @@
   free_tier_rpm: 10
   free_tier_rpd: 500
   task_scores:
-    chat: 5
+    chat: 4
     coding: 4
     planning: 4
-    analysis: 5
-    summarization: 5
+    analysis: 4
+    summarization: 4
     extraction: 4
 - model_id: gemini-2.5-pro
   provider: gemini
@@ -152,8 +151,6 @@
   supports_json_mode: true
   is_local: false
   avg_latency_ms: 2000
-  # CORE-FIX (F): Google's free tier returns `limit: 0` for 2.5-pro — it is a
-  # paid-only model. Free-tier-only tenants must not be routed here.
   free_tier_eligible: false
   free_tier_rpm: 5
   free_tier_rpd: 100
@@ -355,18 +352,6 @@
     analysis: 4
     summarization: 4
     extraction: 4
-# ─────────────────────────────────────────────────────────────────
-# OpenRouter Routers
-#
-# openrouter/auto — powered by NotDiamond. Analiza el prompt y
-#   elige el modelo óptimo (paid). Sin costo adicional — pagás el
-#   modelo elegido. Score 5 en todo porque delega a un sistema de
-#   routing profesional. Usar cuando hay key paid de OpenRouter.
-#
-# openrouter/free — elige al azar entre modelos free disponibles.
-#   Fallback cuando no hay keys de pago. Score 4 porque la calidad
-#   depende del modelo que OpenRouter seleccione aleatoriamente.
-# ─────────────────────────────────────────────────────────────────
 - model_id: openrouter/auto
   provider: openrouter
   display_name: OpenRouter Auto (NotDiamond)
@@ -403,7 +388,6 @@
     analysis: 4
     summarization: 4
     extraction: 4
-# Modelos OpenRouter paid
 - model_id: meta-llama/llama-3.3-70b-instruct
   provider: openrouter
   display_name: Llama 3.3 70B (OpenRouter)
@@ -432,13 +416,12 @@
   is_local: false
   avg_latency_ms: 1500
   task_scores:
-    chat: 4
-    coding: 3
-    planning: 3
-    analysis: 3
-    summarization: 4
-    extraction: 3
-# Modelos OpenRouter free tier (se actualizan via update_models.py)
+    chat: 1
+    coding: 1
+    planning: 1
+    analysis: 1
+    summarization: 1
+    extraction: 1
 - model_id: meta-llama/llama-3.3-70b-instruct:free
   provider: openrouter
   display_name: Llama 3.3 70B (free)
@@ -602,10 +585,9 @@
     analysis: 2
     summarization: 3
     extraction: 2
-
-- model_id: "ollama_cloud/gpt-oss:120b-cloud"
-  provider: "ollama_cloud"
-  display_name: "GPT-OSS 120B (Ollama Cloud)"
+- model_id: ollama_cloud/gpt-oss:120b-cloud
+  provider: ollama_cloud
+  display_name: GPT-OSS 120B (Ollama Cloud)
   context_window: 128000
   cost_input_per_mtok: 0.8
   cost_output_per_mtok: 2.0
@@ -620,10 +602,9 @@
     analysis: 4
     summarization: 4
     extraction: 4
-
-- model_id: "ollama_cloud/llama3.3:70b-cloud"
-  provider: "ollama_cloud"
-  display_name: "Llama 3.3 70B (Ollama Cloud)"
+- model_id: ollama_cloud/llama3.3:70b-cloud
+  provider: ollama_cloud
+  display_name: Llama 3.3 70B (Ollama Cloud)
   context_window: 131072
   cost_input_per_mtok: 0.4
   cost_output_per_mtok: 0.8
@@ -638,10 +619,9 @@
     analysis: 4
     summarization: 4
     extraction: 3
-
-- model_id: "ollama_cloud/gemma3:27b-cloud"
-  provider: "ollama_cloud"
-  display_name: "Gemma 3 27B (Ollama Cloud)"
+- model_id: ollama_cloud/gemma3:27b-cloud
+  provider: ollama_cloud
+  display_name: Gemma 3 27B (Ollama Cloud)
   context_window: 131072
   cost_input_per_mtok: 0.3
   cost_output_per_mtok: 0.6

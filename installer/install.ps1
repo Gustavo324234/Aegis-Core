@@ -188,6 +188,25 @@ function New-AegisDirs {
     Write-OK "Directorios creados."
 }
 
+function Verify-FileHash {
+    param (
+        [string]$filePath,
+        [string]$expectedHash
+    )
+    if (-not $expectedHash) {
+        Write-Warn "Suma de comprobacion SHA256 no encontrada para $(Split-Path $filePath -Leaf) — procediendo con advertencia."
+        return
+    }
+    
+    $cleanExpected = $expectedHash.Split()[0].Trim().ToLower()
+    $actualHash = (Get-FileHash -Path $filePath -Algorithm SHA256).Hash.ToLower()
+    
+    if ($cleanExpected -ne $actualHash) {
+        Write-Fail "ERROR CRITICO DE SEGURIDAD: La verificacion de integridad SHA256 falló para $(Split-Path $filePath -Leaf).`nEsperado: $cleanExpected`nObtenido: $actualHash"
+    }
+    Write-OK "Suma de comprobacion SHA256 verificada con exito para $(Split-Path $filePath -Leaf)."
+}
+
 function Get-AegisBinaries {
     Write-Step "Descargando ank-server (Windows x86_64)..."
 
@@ -201,6 +220,13 @@ function Get-AegisBinaries {
         Write-Fail "No se pudo descargar el binario desde:`n  $zipUrl`nError: $_"
     }
 
+    $expectedHash = ""
+    try {
+        $expectedHash = (Invoke-RestMethod -Uri "$zipUrl.sha256" -UseBasicParsing).Trim()
+    } catch {}
+
+    Verify-FileHash -filePath $zipPath -expectedHash $expectedHash
+
     Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
     Move-Item "$env:TEMP\ank-server-windows-x86_64.exe" "$InstallDir\$BIN_NAME" -Force
     Remove-Item $zipPath -Force
@@ -213,12 +239,22 @@ function Get-AegisUI {
 
     $tarPath = "$env:TEMP\ui-dist.tar.gz"
     $uiDir   = "$InstallDir\ui"
+    $uiUrl   = "$RELEASE_URL/ui-dist.tar.gz"
 
     try {
-        Invoke-WebRequest -Uri "$RELEASE_URL/ui-dist.tar.gz" -OutFile $tarPath -UseBasicParsing
+        Invoke-WebRequest -Uri $uiUrl -OutFile $tarPath -UseBasicParsing
     } catch {
         Write-Warn "No se pudo descargar la UI. Continuando sin ella."
         return
+    }
+
+    $expectedHash = ""
+    try {
+        $expectedHash = (Invoke-RestMethod -Uri "$uiUrl.sha256" -UseBasicParsing).Trim()
+    } catch {}
+
+    if ($expectedHash) {
+        Verify-FileHash -filePath $tarPath -expectedHash $expectedHash
     }
 
     if (-not (Test-Path $uiDir)) {
@@ -235,9 +271,20 @@ function Get-AgentsConfig {
     Write-Step "Descargando configuracion de agentes..."
 
     $tarPath = "$env:TEMP\agents-config.tar.gz"
+    $configUrl = "$RELEASE_URL/agents-config.tar.gz"
 
     try {
-        Invoke-WebRequest -Uri "$RELEASE_URL/agents-config.tar.gz" -OutFile $tarPath -UseBasicParsing
+        Invoke-WebRequest -Uri $configUrl -OutFile $tarPath -UseBasicParsing
+        
+        $expectedHash = ""
+        try {
+            $expectedHash = (Invoke-RestMethod -Uri "$configUrl.sha256" -UseBasicParsing).Trim()
+        } catch {}
+
+        if ($expectedHash) {
+            Verify-FileHash -filePath $tarPath -expectedHash $expectedHash
+        }
+
         tar -xzf $tarPath -C "$DataDir\agents"
         Remove-Item $tarPath -Force
         Write-OK "Agent config -> $DataDir\agents"

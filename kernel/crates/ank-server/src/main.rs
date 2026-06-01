@@ -101,6 +101,72 @@ pub(crate) async fn run_server() -> Result<()> {
     // 3. Data Dir
     info!("ANK data directory: {}", data_dir.display());
 
+    // Citadel: Auto-generate plugin signing keys if not present
+    let keys_dir = data_dir.join("keys");
+    let pub_key_path = keys_dir.join("plugin_signer.pub");
+    let priv_key_path = keys_dir.join("plugin_signer.key");
+
+    if std::env::var("AEGIS_PLUGIN_ROOT_KEY").is_err() {
+        if pub_key_path.exists() {
+            if let Ok(pub_hex) = std::fs::read_to_string(&pub_key_path) {
+                let clean_hex = pub_hex.trim();
+                if !clean_hex.is_empty() {
+                    info!("Citadel: Loading existing local plugin root key from {}", pub_key_path.display());
+                    std::env::set_var("AEGIS_PLUGIN_ROOT_KEY", clean_hex);
+                }
+            }
+        } else {
+            info!("Citadel: No plugin root key found. Auto-generating root of trust...");
+            let _ = std::fs::create_dir_all(&keys_dir);
+            
+            use ed25519_dalek::SigningKey;
+            use rand::RngCore;
+            
+            let mut secret_bytes = [0u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut secret_bytes);
+            let signing_key = SigningKey::from_bytes(&secret_bytes);
+            let verifying_key = signing_key.verifying_key();
+            
+            let priv_hex = hex::encode(signing_key.to_bytes());
+            let pub_hex = hex::encode(verifying_key.to_bytes());
+            
+            if std::fs::write(&priv_key_path, &priv_hex).is_ok() && std::fs::write(&pub_key_path, &pub_hex).is_ok() {
+                // Encontrar cuál env file cargamos
+                let mut env_file_path = None;
+                
+                let mut candidates = vec![];
+                if let Ok(explicit) = std::env::var("AEGIS_ENV_FILE") {
+                    candidates.push(std::path::PathBuf::from(explicit));
+                }
+                #[cfg(windows)]
+                candidates.push(std::path::PathBuf::from(r"C:\ProgramData\Aegis\aegis.env"));
+                #[cfg(not(windows))]
+                candidates.push(std::path::PathBuf::from("/etc/aegis/aegis.env"));
+                candidates.push(std::path::PathBuf::from(".env"));
+                
+                for path in candidates {
+                    if path.exists() {
+                        env_file_path = Some(path);
+                        break;
+                    }
+                }
+                
+                if let Some(env_path) = env_file_path {
+                    if let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(&env_path) {
+                        use std::io::Write;
+                        let _ = writeln!(file, "\nAEGIS_PLUGIN_ROOT_KEY={}", pub_hex);
+                        info!("Citadel: Appended AEGIS_PLUGIN_ROOT_KEY to env file: {:?}", env_path);
+                    }
+                }
+                
+                std::env::set_var("AEGIS_PLUGIN_ROOT_KEY", &pub_hex);
+                info!("Citadel: Local root of trust initialized with key: {}", pub_hex);
+            } else {
+                error!("Citadel: Failed to persist auto-generated key pair.");
+            }
+        }
+    }
+
     // 4. Persistence
     let scheduler_db_path = data_dir.join("scheduler_state.db");
     info!(
@@ -757,8 +823,7 @@ pub(crate) async fn run_server() -> Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     load_env_file();
 
     let args: Vec<String> = std::env::args().collect();
@@ -769,11 +834,21 @@ async fn main() -> Result<()> {
     }
 
     #[cfg(windows)]
-    if args.contains(&"--service".to_string()) {
-        return windows_service_impl::run();
+    {
+        // Si start() tiene éxito, corre el loop del SCM y termina aquí.
+        // Si falla (ej. error 1063 por consola), continúa al modo interactivo.
+        if windows_service_impl::run().is_ok() {
+            return Ok(());
+        }
     }
 
-    run_server().await
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    rt.block_on(async {
+        run_server().await
+    })
 }
 
 #[cfg(windows)]

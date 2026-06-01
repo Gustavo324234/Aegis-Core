@@ -1614,21 +1614,11 @@ impl AgentOrchestrator {
                             error!("[{}] Failed to report to parent: {}", role_label, e);
                         }
                     } else {
-                        // CORE-FIX: ProjectSupervisor (sin padre) queda Idle esperando
-                        // nuevos Dispatch del ChatAgent. Antes eliminábamos el canal y
-                        // rompíamos el loop, dejando al supervisor inutilizable y
-                        // obligando al ChatAgent a respawnear (con el costo del restore).
-                        {
-                            let mut t = tree.write().await;
-                            if let Some(n) = t.get_mut(&agent_id) {
-                                if matches!(n.state, AgentState::Complete) {
-                                    n.set_state(AgentState::Idle);
-                                }
-                            }
-                        }
-                        // Permitir que una nueva tanda de hijos dispare síntesis otra vez.
-                        synthesis_done = false;
-                        // No `break` — el loop sigue esperando mensajes (rx.recv).
+                        // CORE-288: ProjectSupervisor (sin padre) debe terminar su loop tras Complete
+                        // para evitar loops de reportes huérfanos o síntesis recursivas redundantes.
+                        // El ChatAgent lo reactivará o creará uno nuevo haciendo el restore correspondiente.
+                        channels.write().await.remove(&agent_id);
+                        break;
                     }
                 }
 

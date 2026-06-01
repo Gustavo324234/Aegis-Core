@@ -3,9 +3,9 @@
 **Epic:** 42 — Vision Realignment & Autonomy
 **Repo:** Aegis-Core
 **Tipo:** feat
-**Prioridad:** Crítica
+**Prioridad:Alta
 **Asignado a:** Kernel Engineer
-**Estado:** ✅ Completo
+**Estado:✅ Done
 
 ---
 

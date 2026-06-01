@@ -43,6 +43,28 @@ success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GR
 warn()    { echo "[WARN] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${YELLOW}  [!]${NC} $1"; }
 error()   { echo "[ERROR] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 
+verify_sha256() {
+    local file="$1"
+    local expected_hash="$2"
+    local actual_hash=""
+    
+    if command -v sha256sum &>/dev/null; then
+        actual_hash=$(sha256sum "$file" | awk '{print $1}')
+    elif command -v shasum &>/dev/null; then
+        actual_hash=$(shasum -a 256 "$file" | awk '{print $1}')
+    elif command -v openssl &>/dev/null; then
+        actual_hash=$(openssl dgst -sha256 "$file" | awk '{print $2}')
+    else
+        warn "Neither sha256sum, shasum, nor openssl found. Skipping hash verification."
+        return 0
+    fi
+    
+    if [[ "$expected_hash" != "$actual_hash" ]]; then
+        error "SHA256 checksum verification failed for $file\nExpected: $expected_hash\nGot:      $actual_hash"
+    fi
+    success "SHA256 checksum verified for $(basename "$file")."
+}
+
 print_banner() {
     echo -e "${CYAN}"
     cat << "EOF"
@@ -440,6 +462,13 @@ install_native() {
 
     log "Downloading ank-server binary (${RELEASE_TAG})..."
     curl -L --fail --progress-bar "${release_url}/${bin_file}" -o "/tmp/${bin_file}" || error "Download failed"
+    local bin_sha
+    bin_sha=$(curl -L --fail --silent "${release_url}/${bin_file}.sha256" | awk '{print $1}')
+    if [[ -n "$bin_sha" ]]; then
+        verify_sha256 "/tmp/${bin_file}" "$bin_sha"
+    else
+        warn "Suma de comprobación SHA256 no encontrada para ${bin_file} — procediendo con advertencia."
+    fi
 
     tar -xzf "/tmp/${bin_file}" -C "/tmp/"
     mv "/tmp/ank-server-linux-${ARCH}" "${BIN_DIR}/ank-server"
@@ -451,6 +480,13 @@ install_native() {
     curl -L --fail --progress-bar \
         "${release_url}/ui-dist.tar.gz" -o "/tmp/ui-dist.tar.gz" \
         || error "Failed to download UI assets."
+    local ui_sha
+    ui_sha=$(curl -L --fail --silent "${release_url}/ui-dist.tar.gz.sha256" | awk '{print $1}')
+    if [[ -n "$ui_sha" ]]; then
+        verify_sha256 "/tmp/ui-dist.tar.gz" "$ui_sha"
+    else
+        warn "Suma de comprobación SHA256 no encontrada para ui-dist.tar.gz — procediendo con advertencia."
+    fi
     tar -xzf "/tmp/ui-dist.tar.gz" -C "$UI_DIST_PATH"
     rm "/tmp/ui-dist.tar.gz"
     chown -R aegis:aegis "$UI_DIST_PATH"
@@ -460,6 +496,11 @@ install_native() {
     mkdir -p "$CONFIG_DIR/agents"
     if curl -L --fail --progress-bar \
         "${release_url}/agents-config.tar.gz" -o "/tmp/agents-config.tar.gz" 2>/dev/null; then
+        local agents_sha
+        agents_sha=$(curl -L --fail --silent "${release_url}/agents-config.tar.gz.sha256" | awk '{print $1}')
+        if [[ -n "$agents_sha" ]]; then
+            verify_sha256 "/tmp/agents-config.tar.gz" "$agents_sha"
+        fi
         tar -xzf "/tmp/agents-config.tar.gz" -C "$CONFIG_DIR/agents"
         rm -f "/tmp/agents-config.tar.gz"
         chown -R aegis:aegis "$CONFIG_DIR/agents"

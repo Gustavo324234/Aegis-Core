@@ -152,23 +152,64 @@ Cada módulo se define mediante un archivo de configuración que le dice a Aegis
 
 ---
 
-## 🗺️ 4. Roadmap de Implementación Sugerido
+## 🖥️ 4. Interfaces Dinámicas basadas en Servidor (Server-Driven UI / SDUI)
 
-Para construir esta arquitectura paso a paso sin romper la estabilidad actual de Aegis-Core:
+Para habilitar a los módulos independientes a renderizar interfaces gráficas interactivas en el shell sin necesidad de recompilar el cliente React o la app móvil, implementamos el estándar de **Server-Driven UI (SDUI)**.
 
-### Fase 1: Protocolo de Descubrimiento Dinámico de Módulos (En Desarrollo)
-*   Crear una carpeta `kernel/modules/` en el repositorio.
-*   Implementar un cargador en Rust que lea los manifiestos `module.json` al arrancar el servidor.
-*   Modificar el `CognitiveRouter` para inyectar automáticamente los esquemas de herramientas de los módulos registrados al contexto del agente en base a su necesidad.
+### A. Estructura Declarativa en el Manifiesto (`module.json`)
+Los manifiestos ahora pueden declarar esquemas de vistas visuales mediante el arreglo `ui_views`. Cada vista especifica el formulario, los campos requeridos, su tipo (`text`, `number`), placeholders y la herramienta gRPC final a invocar:
 
-### Fase 2: Implementación del Bridge de Comunicación (IPC/gRPC)
-*   Definir un canal proto de comunicación universal en `ank-proto` para el redireccionamiento de llamadas a herramientas desde el kernel hacia servicios externos.
-*   Esto permitirá que el módulo de negocios corra en su propio proceso independiente (incluso escrito en otro lenguaje como Python, Go o Node.js) y se comunique de forma ultra-rápida a través de localhost con el kernel Rust.
+```json
+"ui_views": [
+  {
+    "view_id": "add_product_form",
+    "type": "form",
+    "title": "Registrar Producto",
+    "description": "Dar de alta un nuevo producto en el catálogo general",
+    "icon": "Plus",
+    "tool_name": "biz_add_product",
+    "fields": [
+      { "name": "barcode", "label": "Código de Barras", "type": "text", "placeholder": "Ej: 779...", "required": false },
+      { "name": "name", "label": "Nombre del Producto", "type": "text", "placeholder": "Ej: Queso Gouda", "required": true },
+      { "name": "price", "label": "Precio Unitario ($)", "type": "number", "placeholder": "Ej: 450", "required": true }
+    ]
+  }
+]
+```
 
-### Fase 3: Sincronización y Réplica de Datos de Enclaves
-*   Diseñar una API en Aegis Core que permita a aplicaciones móviles o de escritorio externas (como la app del celular) autenticarse de forma segura utilizando llaves criptográficas y realizar réplicas parciales del enclave del inquilino (Tenant DB) para trabajar sin conexión a Internet y sincronizarse al conectarse.
+### B. Endpoints de Enrutamiento REST en el Servidor Axum (`router_api.rs`)
+Para enlazar la interfaz y el microkernel, expusimos tres endpoints dedicados bajo `/api/router`:
+1. **`GET /api/router/modules`**: Retorna el catálogo de módulos y sus esquemas de vistas `ui_views`, además de consultar el enclave criptográfico (`TenantDB`) mediante credenciales Zero-Trust (`CitadelAuthenticated`) para resolver si el módulo está activo para el tenant actual (`module_active:<module_id>`).
+2. **`POST /api/router/modules/:module_id/enable`**: Habilita o deshabilita la persistencia cifrada del módulo en `TenantDB`.
+3. **`POST /api/router/modules/:module_id/execute`**: Recibe argumentos ingresados manualmente desde la interfaz, valida que el módulo esté activo para el inquilino, abre un canal gRPC con el proceso del módulo y ejecuta la acción en el ledger correspondiente.
+
+### C. Panel React Premium (`DynamicModulePanel.tsx`)
+Un componente de UI interactivo, montado en el dashboard general, que realiza las siguientes funciones:
+* **Catálogo de Conmutación:** Panel lateral que lista los módulos descubiertos, sus versiones y un slider animado con Framer Motion para activarlos/desactivarlos en tiempo real.
+* **Form Builder Dinámico:** Genera de manera reactiva formularios con validaciones completas basadas en el esquema del backend.
+* **Consola de Resultados:** Panel de salida donde se imprimen los registros formateados en JSON retornados por el microkernel.
+
+---
+
+## 🗺️ 5. Roadmap de Implementación y Estado de Avance
+
+### ├─ Fase 1: Protocolo de Descubrimiento Dinámico (100% Completado)
+* **Estado:** Totalmente integrado y verificado.
+* **Detalle:** El cargador de Rust escanea dinámicamente `/kernel/modules`, registra los archivos `module.json` y el `CognitiveRouter` inyecta las herramientas semánticamente en el prompt del sistema.
+
+### ├─ Fase 2: Puente de Comunicación IPC/gRPC (100% Completado)
+* **Estado:** Totalmente integrado y verificado.
+* **Detalle:** Redireccionamiento universal de llamadas a herramientas (`SYS_MCP_EXEC`) mediante gRPC (`tonic`) utilizando el contrato proto de `ank-proto`.
+
+### ├─ Fase 4: Interfaces Locales y Vistas Dinámicas - SDUI (100% Completado)
+* **Estado:** Totalmente integrado y verificado en producción.
+* **Detalle:** Renderizado reactivo en el Dashboard de React (`shell/ui`), API de conmutación en base de datos cifrada Zero-Trust (`TenantDB`) y llamadas gRPC manuales desde la interfaz con 0 warnings/errores de TypeScript.
+
+### └─ Fase 3: Sincronización Semisíncrona y Replicación (En Desarrollo)
+* **Estado:** Próximo paso prioritario.
+* **Detalle:** Diseñar la API delta de réplica parcial del Ledger cifrado de inquilino para permitir a las aplicaciones externas satélites operar localmente offline y sincronizarse en caliente al recuperar conexión.
 
 ---
 
 ## 🎯 Conclusión
-Esta visión transforma a Aegis de ser "un simple chatbot con herramientas" a convertirse en un verdadero **Ecosistema de Aplicaciones Inteligentes e Interconectadas (Aegis OS)**. Los usuarios no solo interactuarán con Aegis, sino que vivirán dentro de su ecosistema de miniaplicaciones modulares que resuelven problemas del mundo físico de forma descentralizada y segura.
+Esta arquitectura transforma a Aegis de ser un asistente conversacional a consolidarse como un verdadero **Ecosistema de Aplicaciones Inteligentes e Interconectadas (Aegis OS)**. La implementación del Server-Driven UI (SDUI) permite escalar las capacidades visuales de forma descentralizada y segura manteniendo la privacidad criptográfica provista por Citadel.
