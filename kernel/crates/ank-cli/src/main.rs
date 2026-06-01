@@ -728,56 +728,71 @@ async fn main() -> Result<()> {
         Commands::Keygen { secret, public } => {
             use ed25519_dalek::SigningKey;
             use rand::RngCore;
-            
+
             let mut secret_bytes = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut secret_bytes);
             let signing_key = SigningKey::from_bytes(&secret_bytes);
             let verifying_key = signing_key.verifying_key();
-            
+
             let secret_hex = hex::encode(signing_key.to_bytes());
             let public_hex = hex::encode(verifying_key.to_bytes());
-            
+
             std::fs::write(secret, &secret_hex)
                 .context(format!("Failed to write private key to {}", secret))?;
             std::fs::write(public, &public_hex)
                 .context(format!("Failed to write public key to {}", public))?;
-            
-            println!("{}", "✔ Ed25519 Keypair generated successfully!".green().bold());
+
+            println!(
+                "{}",
+                "✔ Ed25519 Keypair generated successfully!".green().bold()
+            );
             println!("  Private Key saved to: {}", secret.cyan());
             println!("  Public Key saved to : {}", public.cyan());
-            println!("\nTo secure Citadel plugins, set this environment variable in your aegis.env:");
-            println!("  {}", format!("AEGIS_PLUGIN_ROOT_KEY={}", public_hex).bold().yellow());
+            println!(
+                "\nTo secure Citadel plugins, set this environment variable in your aegis.env:"
+            );
+            println!(
+                "  {}",
+                format!("AEGIS_PLUGIN_ROOT_KEY={}", public_hex)
+                    .bold()
+                    .yellow()
+            );
             return Ok(());
         }
         Commands::Sign { plugin, secret } => {
-            use ed25519_dalek::{SigningKey, Signer};
-            
+            use ed25519_dalek::{Signer, SigningKey};
+
             let secret_hex = std::fs::read_to_string(secret)
                 .context(format!("Failed to read private key file: {}", secret))?;
             let secret_bytes = hex::decode(secret_hex.trim())
                 .context("Private key file must contain valid hex bytes")?;
-            
+
             if secret_bytes.len() != 32 {
-                return Err(anyhow!("Private key must be exactly 32 bytes (64 hex characters)"));
+                return Err(anyhow!(
+                    "Private key must be exactly 32 bytes (64 hex characters)"
+                ));
             }
-            
+
             let mut key_arr = [0u8; 32];
             key_arr.copy_from_slice(&secret_bytes);
             let signing_key = SigningKey::from_bytes(&key_arr);
-            
+
             let wasm_path = std::path::Path::new(plugin);
             if !wasm_path.exists() {
                 return Err(anyhow!("WASM plugin file does not exist: {:?}", wasm_path));
             }
-            
+
             let wasm_bytes = std::fs::read(wasm_path)?;
             let signature = signing_key.sign(&wasm_bytes);
-            
+
             let sig_path = wasm_path.with_extension("wasm.sig");
             std::fs::write(&sig_path, signature.to_bytes())?;
-            
+
             println!("{}", "✔ Plugin signed successfully!".green().bold());
-            println!("  Signature saved to: {}", sig_path.display().to_string().cyan());
+            println!(
+                "  Signature saved to: {}",
+                sig_path.display().to_string().cyan()
+            );
             return Ok(());
         }
         Commands::Version => {
