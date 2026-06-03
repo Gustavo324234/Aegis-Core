@@ -16,6 +16,7 @@ const TelemetryDashboard: React.FC = () => {
     const { t } = useTranslation();
     const { system_metrics, status, lastRoutingInfo } = useAegisStore();
     const vramPercentage = (system_metrics.vram_allocated_mb / system_metrics.vram_total_mb) * 100 || 0;
+    const isLoading = system_metrics.vram_total_mb === 0;
 
     return (
         <div className="w-full bg-black/60 backdrop-blur-2xl border-b border-white/10 px-4 sm:px-6 py-3 flex items-center justify-between z-40 relative overflow-hidden shrink-0">
@@ -47,6 +48,7 @@ const TelemetryDashboard: React.FC = () => {
                         value={`${system_metrics.cpu_load.toFixed(1)}%`}
                         percentage={system_metrics.cpu_load}
                         color="cyan"
+                        isLoading={isLoading}
                     />
                     <HorizontalMetric
                         icon={<Database size={15} />}
@@ -54,6 +56,7 @@ const TelemetryDashboard: React.FC = () => {
                         value={`${(system_metrics.vram_allocated_mb / 1024).toFixed(1)}GB`}
                         percentage={vramPercentage}
                         color={vramPercentage > 90 ? "red" : "purple"}
+                        isLoading={isLoading}
                     />
                     <HorizontalMetric
                         icon={<Activity size={15} />}
@@ -62,6 +65,7 @@ const TelemetryDashboard: React.FC = () => {
                         percentage={100}
                         color="steel"
                         hideBar
+                        isLoading={isLoading}
                     />
                 </div>
             </div>
@@ -95,9 +99,10 @@ interface HorizontalMetricProps {
     percentage: number;
     color: 'cyan' | 'purple' | 'red' | 'steel';
     hideBar?: boolean;
+    isLoading?: boolean;
 }
 
-const HorizontalMetric: React.FC<HorizontalMetricProps> = ({ icon, label, value, percentage, color, hideBar }) => {
+const HorizontalMetric: React.FC<HorizontalMetricProps> = ({ icon, label, value, percentage, color, hideBar, isLoading }) => {
     const colorMap = {
         cyan: 'bg-aegis-cyan shadow-[0_0_8px_rgba(0,242,254,0.4)]',
         purple: 'bg-aegis-purple shadow-[0_0_8px_rgba(191,0,255,0.4)]',
@@ -120,16 +125,24 @@ const HorizontalMetric: React.FC<HorizontalMetricProps> = ({ icon, label, value,
             <div className="flex flex-col gap-1 w-full relative">
                 <div className="flex justify-between items-baseline gap-3">
                     <span className="text-[9px] uppercase font-mono text-white/40 tracking-widest">{label}</span>
-                    <span className={cn("text-[11px] font-mono font-bold", textMap[color])}>{value}</span>
+                    {isLoading ? (
+                        <div className="h-3 w-10 bg-white/10 animate-pulse rounded my-0.5" />
+                    ) : (
+                        <span className={cn("text-[11px] font-mono font-bold", textMap[color])}>{value}</span>
+                    )}
                 </div>
                 {!hideBar && (
                     <div className="h-0.5 w-full bg-white/5 rounded-full overflow-hidden absolute -bottom-1">
-                        <motion.div
-                            initial={{ width: 0 }}
-                            animate={{ width: `${Math.min(percentage, 100)}%` }}
-                            transition={{ duration: 1.5, ease: "circOut" }}
-                            className={cn("h-full rounded-full", colorMap[color])}
-                        />
+                        {isLoading ? (
+                            <div className="h-full w-full bg-white/10 animate-pulse rounded-full" />
+                        ) : (
+                            <motion.div
+                                initial={{ width: 0 }}
+                                animate={{ width: `${Math.min(percentage, 100)}%` }}
+                                transition={{ duration: 1.5, ease: "circOut" }}
+                                className={cn("h-full rounded-full", colorMap[color])}
+                            />
+                        )}
                     </div>
                 )}
             </div>

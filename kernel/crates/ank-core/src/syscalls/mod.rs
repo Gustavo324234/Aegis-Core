@@ -1719,7 +1719,7 @@ mod tests {
         let key_pool = Arc::new(crate::router::key_pool::KeyPool::new(Arc::new(
             NoopPersistor,
         )));
-        let mut router = crate::router::CognitiveRouter::new(catalog, key_pool);
+        let router = crate::router::CognitiveRouter::new(catalog, key_pool);
 
         // Load Aegis-Biz manifest
         let manifest = crate::router::modules::ModuleManifest {
