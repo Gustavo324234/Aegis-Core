@@ -174,6 +174,31 @@ const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
         }
     };
 
+    const handleToggle = async (keyId: string, newActive: boolean) => {
+        setKeys(prev => prev.map(k =>
+            k.key_id === keyId ? { ...k, is_active: newActive } : k
+        ));
+        try {
+            const res = await fetch(`/api/router/keys/global/${encodeURIComponent(keyId)}?tenant_id=${encodeURIComponent(tenantId)}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-key': sessionKey,
+                },
+                body: JSON.stringify({ is_active: newActive }),
+            });
+            if (!res.ok) {
+                setKeys(prev => prev.map(k =>
+                    k.key_id === keyId ? { ...k, is_active: !newActive } : k
+                ));
+            }
+        } catch {
+            setKeys(prev => prev.map(k =>
+                k.key_id === keyId ? { ...k, is_active: !newActive } : k
+            ));
+        }
+    };
+
     const handleAdd = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!apiKey.trim()) {
@@ -300,7 +325,6 @@ const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                         <tbody>
                             {keys.map((k) => {
                                 const rateLimitText = getRateLimitText(k.rate_limited_until);
-                                const isAvailable = k.is_active && !rateLimitText;
                                 return (
                                     <tr key={k.key_id} className="border-b border-white/5 hover:bg-white/2">
                                         <td className="py-3 pr-4 text-white/70">{k.label || '—'}</td>
@@ -308,10 +332,18 @@ const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                                         <td className="py-3 pr-4">
                                             {rateLimitText ? (
                                                 <span className="text-yellow-400">{rateLimitText}</span>
-                                            ) : isAvailable ? (
-                                                <span className="text-green-400">{t('available')}</span>
                                             ) : (
-                                                <span className="text-red-400">{t('inactive')}</span>
+                                                <button
+                                                    onClick={() => handleToggle(k.key_id, !k.is_active)}
+                                                    className={`relative w-10 h-5 rounded-full transition-colors duration-300
+                                                        ${k.is_active ? 'bg-green-500/40 border-green-500/50' : 'bg-white/10 border-white/20'}
+                                                        border hover:opacity-80`}
+                                                    title={k.is_active ? t('status_active') : t('status_inactive')}
+                                                >
+                                                    <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all duration-300
+                                                        ${k.is_active ? 'left-5 bg-green-400' : 'left-0.5 bg-white/30'}`}
+                                                    />
+                                                </button>
                                             )}
                                         </td>
                                         <td className="py-3 text-right">
