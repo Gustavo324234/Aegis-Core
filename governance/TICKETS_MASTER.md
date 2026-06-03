@@ -16,7 +16,7 @@
 | EPIC 50 | Agent Inbox: Direct User-Supervisor exchanges | ✅ Completa | 100% |
 | EPIC 51 | Model Intelligence: PinchBench + Ollama Cloud + CMR v2 | ✅ Completa | 100% |
 | EPIC 52 | Voice Quality | ✅ Completa | 100% |
-| EPIC 53 | Stabilization: Agent Loop, Observability & Infrastructure | 🚧 En curso | ~99% — CORE-266 (Windows SCM) abierto |
+| EPIC 53 | Stabilization: Agent Loop, Observability & Infrastructure | ✅ Completa | 100% |
 | EPIC 54 | Aegis Connect: Persistent WebSocket Tunneling | ✅ Completa | 100% |
 | EPIC 55 | Mobile App (Orion ID & Web Redirection) | ✅ Completa | 100% |
 
@@ -96,13 +96,16 @@
 | CORE-258 | feat | CLI: soporte multiplataforma (Windows + Linux) en ank-cli | ✅ Done | Alta | Kernel Engineer |
 | CORE-263 | feat | Comunicación Bottom-Up: herramienta ask_user + estado WaitingUser | ✅ Done | Alta | Kernel Engineer |
 | CORE-265 | fix | ank-server: leer aegis.env antes de buscar variables de entorno | ✅ Done | Crítica | Kernel Engineer |
-| CORE-266 | fix | ank-server: Windows Service Control Manager handshake | 🚧 In Progress | Crítica | Kernel Engineer |
+| CORE-266 | fix | ank-server: Windows Service Control Manager handshake | ✅ Done | Crítica | Kernel Engineer |
 | CORE-281 | fix | Kernel: deduplicación de supervisores + project_name en system prompt | ✅ Done | Alta | Kernel Engineer |
 | CORE-286 | fix | Kernel: timeout en run_agent_loop + cleanup de tasks zombies | ✅ Done | Alta | Kernel Engineer |
 | CORE-303 | feat | Kernel: Defensive Cognitive Loops & Boundary Autocorrection | ✅ Done | Crítica | Kernel Engineer |
 | CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | ✅ Done | Alta | Tavo |
-| CORE-314 | fix | Kernel/Shell: Deshabilitación de proveedores en KeyPool/UI no persiste | 🚧 In Progress | Alta | Tavo + Kernel Engineer + Shell Engineer |
-| CORE-315 | feat | Kernel/Shell: Exportar/importar configuración de llaves cifrada con contraseña | 📥 Todo | Media | Kernel Engineer + UI Engineer |
+| CORE-314 | fix | Kernel/Shell: Deshabilitación de proveedores en KeyPool/UI no persiste | ✅ Done | Alta | Tavo + Kernel Engineer + Shell Engineer |
+| CORE-315 | feat | Kernel/Shell: Exportar/importar configuración de llaves cifrada con contraseña | ✅ Done | Media | Kernel Engineer + UI Engineer |
+| CORE-316 | fix | postcss >= 8.5.10 en shell/ui para mitigar XSS (GHSA-qx2v-qp2m-jg93) | ✅ Done | Alta | UI Engineer |
+| CORE-317 | chore | Clippy fixes: simplificar lógicas booleanas, mut innecesarios y rangos | ✅ Done | Alta | Kernel Engineer |
+| CORE-318 | chore | UX fixes: skeletons de telemetría y accesibilidad ARIA en DynamicModulePanel | ✅ Done | Alta | UI Engineer |
 
 ## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
 
