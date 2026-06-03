@@ -102,6 +102,7 @@ const KeyModal: React.FC<{
     const [models, setModels] = useState<string[]>([]);
     const [selectedModels, setSelectedModels] = useState<string[]>(initialKey?.active_models || []);
     const [isFreeTier, setIsFreeTier] = useState<boolean>(initialKey?.is_free_tier ?? false);
+    const [isActive, setIsActive] = useState<boolean>(initialKey?.is_active ?? true);
     const [verifyError, setVerifyError] = useState<string | null>(null);
     const [step, setStep] = useState<'config' | 'models'>(isEdit ? 'models' : 'config');
 
@@ -173,6 +174,7 @@ const KeyModal: React.FC<{
                     api_url: PROVIDER_PRESETS[selectedProvider].url,
                     models: selectedModels,
                     is_free_tier: isFreeTier,
+                    is_active: isActive,
                     label: label || null,
                 })
             });
@@ -329,23 +331,45 @@ const KeyModal: React.FC<{
                             >
                                 <ModelSelector models={models} selectedModels={selectedModels} onChange={setSelectedModels} />
 
-                                <button
-                                    type="button"
-                                    onClick={() => setIsFreeTier(v => !v)}
-                                    className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${isFreeTier ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-white/5 border-white/10 hover:border-white/20'}`}
-                                >
-                                    <div className="text-left">
-                                        <p className={`text-[10px] font-mono font-bold uppercase tracking-widest ${isFreeTier ? 'text-emerald-400' : 'text-white/40'}`}>
-                                            {isFreeTier ? 'Clave de nivel Gratuito' : 'Clave de nivel Pago'}
-                                        </p>
-                                        <p className="text-[8px] font-mono text-white/20 mt-0.5 uppercase">
-                                            {isFreeTier ? 'Se consume primero' : 'Consumo secundario'}
-                                        </p>
-                                    </div>
-                                    <div className={`w-10 h-5 rounded-full transition-all relative ${isFreeTier ? 'bg-emerald-500/40' : 'bg-white/10'}`}>
-                                        <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${isFreeTier ? 'left-5 bg-emerald-400' : 'left-0.5 bg-white/30'}`} />
-                                    </div>
-                                </button>
+                                <div className="space-y-3">
+                                    {/* Active state toggle */}
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsActive(v => !v)}
+                                        className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${isActive ? 'bg-green-500/10 border-green-500/30' : 'bg-white/5 border-white/10 hover:border-white/20'}`}
+                                    >
+                                        <div className="text-left">
+                                            <p className={`text-[10px] font-mono font-bold uppercase tracking-widest ${isActive ? 'text-green-400' : 'text-white/40'}`}>
+                                                {isActive ? 'Llave Activa' : 'Llave Inactiva'}
+                                            </p>
+                                            <p className="text-[8px] font-mono text-white/20 mt-0.5 uppercase">
+                                                {isActive ? 'Disponible para enrutamiento' : 'Desactivada para enrutamiento'}
+                                            </p>
+                                        </div>
+                                        <div className={`w-10 h-5 rounded-full transition-all relative ${isActive ? 'bg-green-500/40' : 'bg-white/10'}`}>
+                                            <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${isActive ? 'left-5 bg-green-400' : 'left-0.5 bg-white/30'}`} />
+                                        </div>
+                                    </button>
+
+                                    {/* Free tier toggle */}
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsFreeTier(v => !v)}
+                                        className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-all ${isFreeTier ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-white/5 border-white/10 hover:border-white/20'}`}
+                                    >
+                                        <div className="text-left">
+                                            <p className={`text-[10px] font-mono font-bold uppercase tracking-widest ${isFreeTier ? 'text-emerald-400' : 'text-white/40'}`}>
+                                                {isFreeTier ? 'Clave de nivel Gratuito' : 'Clave de nivel Pago'}
+                                            </p>
+                                            <p className="text-[8px] font-mono text-white/20 mt-0.5 uppercase">
+                                                {isFreeTier ? 'Se consume primero' : 'Consumo secundario'}
+                                            </p>
+                                        </div>
+                                        <div className={`w-10 h-5 rounded-full transition-all relative ${isFreeTier ? 'bg-emerald-500/40' : 'bg-white/10'}`}>
+                                            <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${isFreeTier ? 'left-5 bg-emerald-400' : 'left-0.5 bg-white/30'}`} />
+                                        </div>
+                                    </button>
+                                </div>
 
                                 <div className="flex gap-4 pt-4 border-t border-white/10">
                                     <button 
@@ -441,6 +465,31 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
         fetchKeys(); 
         fetchConnectStatus();
     }, [fetchKeys, fetchConnectStatus]);
+
+    const handleToggle = async (keyId: string, newActive: boolean) => {
+        setKeys(prev => prev.map(k =>
+            k.key_id === keyId ? { ...k, is_active: newActive } : k
+        ));
+        try {
+            const res = await fetch(`/api/router/keys/tenant/${encodeURIComponent(keyId)}?tenant_id=${encodeURIComponent(tenantId)}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-key': sessionKey,
+                },
+                body: JSON.stringify({ is_active: newActive }),
+            });
+            if (!res.ok) {
+                setKeys(prev => prev.map(k =>
+                    k.key_id === keyId ? { ...k, is_active: !newActive } : k
+                ));
+            }
+        } catch {
+            setKeys(prev => prev.map(k =>
+                k.key_id === keyId ? { ...k, is_active: !newActive } : k
+            ));
+        }
+    };
 
     const handleDelete = async (keyId: string) => {
         if (!confirm('¿Eliminar esta clave personal?')) return;
@@ -628,7 +677,6 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                                     <tbody>
                                         {keys.map((k) => {
                                             const rateLimitText = getRateLimitText(k.rate_limited_until);
-                                            const isAvailable = k.is_active && !rateLimitText;
                                             return (
                                                 <tr key={k.key_id} className="border-b border-white/5 hover:bg-white/[0.02]">
                                                     <td className="py-3 pr-4 text-white font-bold">{k.label || '—'}</td>
@@ -649,10 +697,19 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                                                     <td className="py-3 pr-4">
                                                         {rateLimitText ? (
                                                             <span className="text-yellow-400 uppercase">{rateLimitText}</span>
-                                                        ) : isAvailable ? (
-                                                            <span className="text-green-400 uppercase font-bold">Activo</span>
                                                         ) : (
-                                                            <span className="text-red-400 uppercase font-bold">Inactivo</span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleToggle(k.key_id, !k.is_active)}
+                                                                className={`relative w-10 h-5 rounded-full transition-colors duration-300
+                                                                    ${k.is_active ? 'bg-green-500/40 border-green-500/50' : 'bg-white/10 border-white/20'}
+                                                                    border hover:opacity-80`}
+                                                                title={k.is_active ? 'Activo' : 'Inactivo'}
+                                                            >
+                                                                <div className={`absolute top-0.5 w-4 h-4 rounded-full transition-all duration-300
+                                                                    ${k.is_active ? 'left-5 bg-green-400' : 'left-0.5 bg-white/30'}`}
+                                                                />
+                                                            </button>
                                                         )}
                                                     </td>
                                                     <td className="py-3 text-right">
