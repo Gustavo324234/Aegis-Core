@@ -587,7 +587,7 @@ impl KeyPool {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct EncryptedKeysBackup {
     pub salt: String,
     pub nonce: String,

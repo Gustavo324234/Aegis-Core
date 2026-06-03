@@ -1107,7 +1107,7 @@ async fn export_keys(
     };
 
     let router = state.router.read().await;
-    let backup = router.key_pool.export_keys_encrypted(tenant_id, &req.password).await
+    let backup = router.key_pool_ref().export_keys_encrypted(tenant_id.as_deref(), &req.password).await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Export failed: {}", e)))?;
 
     Ok(Json(backup))
@@ -1170,11 +1170,13 @@ async fn import_keys(
     };
 
     let router = state.router.read().await;
-    let count = router.key_pool.import_keys_encrypted(tenant_id, &req.password, backup).await
+    let count = router.key_pool_ref().import_keys_encrypted(tenant_id.as_deref(), &req.password, backup).await
         .map_err(|e| AegisHttpError::BadRequest(format!("Import failed: {}", e)))?;
 
-    if let Err(e) = router.catalog.sync_providers(&router.key_pool).await {
-        warn!("Import: catalog sync failed after key import: {}", e);
+    if let Some(syncer) = &state.catalog_syncer {
+        if let Err(e) = syncer.sync_now().await {
+            warn!("Import: catalog sync failed after key import: {}", e);
+        }
     }
 
     Ok(Json(ImportResponse {
