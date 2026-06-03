@@ -30,6 +30,8 @@ pub fn router() -> Router<AppState> {
         // to a key, so the UI can show the actual available list instead of a
         // hand-curated (and inevitably stale) selection.
         .route("/keys/probe-models", post(probe_models))
+        .route("/keys/export", post(export_keys))
+        .route("/keys/import", post(import_keys))
         .route("/models", get(list_router_models))
         .route("/sync", post(sync_router_catalog))
         .route("/status", get(router_status))
@@ -1014,4 +1016,150 @@ async fn execute_module_tool(
             "error": response.result_json
         })))
     }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct KeyExportRequest {
+    pub password: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct KeyImportRequest {
+    pub password: String,
+    pub salt: String,
+    pub nonce: String,
+    pub ciphertext: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ImportResponse {
+    pub success: bool,
+    pub count: usize,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/router/keys/export",
+    tag = "router",
+    request_body = KeyExportRequest,
+    responses(
+        (status = 200, description = "Keys exported successfully"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
+async fn export_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<KeyExportRequest>,
+) -> Result<Json<ank_core::router::key_pool::EncryptedKeysBackup>, AegisHttpError> {
+    let is_master = {
+        if let (Some(tenant_id), Some(key)) = (
+            headers.get("x-citadel-tenant").and_then(|v| v.to_str().ok()),
+            headers.get("x-citadel-key").and_then(|v| v.to_str().ok()),
+        ) {
+            let hash = hash_passphrase(key);
+            let citadel = state.citadel.lock().await;
+            citadel.enclave.authenticate_master(tenant_id, &hash).await.unwrap_or(false)
+        } else {
+            false
+        }
+    };
+
+    let tenant_id = if is_master {
+        None
+    } else {
+        let tenant_id = headers.get("x-citadel-tenant")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        let key = headers.get("x-citadel-key")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        let hash = hash_passphrase(key);
+        {
+            let citadel = state.citadel.lock().await;
+            citadel.enclave.authenticate_tenant(tenant_id, &hash).await
+                .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        }
+        Some(tenant_id)
+    };
+
+    let router = state.router.read().await;
+    let backup = router.key_pool.export_keys_encrypted(tenant_id, &req.password).await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Export failed: {}", e)))?;
+
+    Ok(Json(backup))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/router/keys/import",
+    tag = "router",
+    request_body = KeyImportRequest,
+    responses(
+        (status = 200, description = "Keys imported successfully"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
+async fn import_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<KeyImportRequest>,
+) -> Result<Json<ImportResponse>, AegisHttpError> {
+    let is_master = {
+        if let (Some(tenant_id), Some(key)) = (
+            headers.get("x-citadel-tenant").and_then(|v| v.to_str().ok()),
+            headers.get("x-citadel-key").and_then(|v| v.to_str().ok()),
+        ) {
+            let hash = hash_passphrase(key);
+            let citadel = state.citadel.lock().await;
+            citadel.enclave.authenticate_master(tenant_id, &hash).await.unwrap_or(false)
+        } else {
+            false
+        }
+    };
+
+    let tenant_id = if is_master {
+        None
+    } else {
+        let tenant_id = headers.get("x-citadel-tenant")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        let key = headers.get("x-citadel-key")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        let hash = hash_passphrase(key);
+        {
+            let citadel = state.citadel.lock().await;
+            citadel.enclave.authenticate_tenant(tenant_id, &hash).await
+                .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        }
+        Some(tenant_id)
+    };
+
+    let backup = ank_core::router::key_pool::EncryptedKeysBackup {
+        salt: req.salt,
+        nonce: req.nonce,
+        ciphertext: req.ciphertext,
+    };
+
+    let router = state.router.read().await;
+    let count = router.key_pool.import_keys_encrypted(tenant_id, &req.password, backup).await
+        .map_err(|e| AegisHttpError::BadRequest(format!("Import failed: {}", e)))?;
+
+    if let Err(e) = router.catalog.sync_providers(&router.key_pool).await {
+        warn!("Import: catalog sync failed after key import: {}", e);
+    }
+
+    Ok(Json(ImportResponse {
+        success: true,
+        count,
+    }))
 }
