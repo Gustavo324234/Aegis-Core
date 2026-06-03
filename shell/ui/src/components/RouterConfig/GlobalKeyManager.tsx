@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, RefreshCw, Key } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Key, Download, Upload } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from '../../i18n';
 
@@ -46,6 +46,133 @@ const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
     }, [tenantId, sessionKey]);
 
     useEffect(() => { fetchKeys(); }, [fetchKeys]);
+
+    const [passwordPromptType, setPasswordPromptType] = useState<'export' | 'import' | null>(null);
+    const [promptPassword, setPromptPassword] = useState('');
+    const [importFileContent, setImportFileContent] = useState<any>(null);
+    const [modalError, setModalError] = useState<string | null>(null);
+    const [isProcessingBackup, setIsProcessingBackup] = useState(false);
+
+    const initiateExport = () => {
+        setPromptPassword('');
+        setModalError(null);
+        setPasswordPromptType('export');
+    };
+
+    const initiateImport = () => {
+        const fileInput = document.getElementById('import-keys-file');
+        if (fileInput) {
+            fileInput.click();
+        }
+    };
+
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            try {
+                const json = JSON.parse(event.target?.result as string);
+                if (!json.salt || !json.nonce || !json.ciphertext) {
+                    alert('Archivo de backup inválido. Debe contener salt, nonce y ciphertext.');
+                    return;
+                }
+                setImportFileContent(json);
+                setPromptPassword('');
+                setModalError(null);
+                setPasswordPromptType('import');
+            } catch (err) {
+                alert('Error al leer el archivo: no es un JSON válido.');
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    };
+
+    const handleExportConfirm = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!promptPassword.trim()) {
+            setModalError('Se requiere una contraseña para encriptar el backup.');
+            return;
+        }
+        setIsProcessingBackup(true);
+        setModalError(null);
+        try {
+            const res = await fetch('/api/router/keys/export', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                },
+                body: JSON.stringify({ password: promptPassword })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `aegis_keys_global_${Date.now()}.aegiskey`;
+                a.click();
+                URL.revokeObjectURL(url);
+                setPasswordPromptType(null);
+            } else {
+                const d = await res.json();
+                setModalError(d.detail || 'Falló la exportación de llaves.');
+            }
+        } catch (err) {
+            setModalError(err instanceof Error ? err.message : 'Error desconocido.');
+        } finally {
+            setIsProcessingBackup(false);
+        }
+    };
+
+    const handleImportConfirm = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!promptPassword.trim()) {
+            setModalError('Ingrese la contraseña de descifrado.');
+            return;
+        }
+        if (!importFileContent) {
+            setModalError('No se encontró el contenido del archivo de importación.');
+            return;
+        }
+        setIsProcessingBackup(true);
+        setModalError(null);
+        try {
+            const res = await fetch('/api/router/keys/import', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                },
+                body: JSON.stringify({
+                    password: promptPassword,
+                    salt: importFileContent.salt,
+                    nonce: importFileContent.nonce,
+                    ciphertext: importFileContent.ciphertext
+                })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                alert(`Importación exitosa: se restauraron ${data.count} llaves.`);
+                setPasswordPromptType(null);
+                await fetchKeys();
+            } else {
+                const d = await res.json();
+                setModalError(d.detail || 'Contraseña incorrecta o backup corrupto.');
+            }
+        } catch (err) {
+            setModalError(err instanceof Error ? err.message : 'Error desconocido.');
+        } finally {
+            setIsProcessingBackup(false);
+        }
+    };
 
     const handleAdd = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -121,8 +248,23 @@ const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                     <button
                         onClick={fetchKeys}
                         className="p-2 border border-white/10 rounded-lg hover:bg-white/5 transition-colors"
+                        title="Actualizar llaves"
                     >
                         <RefreshCw className="w-4 h-4 text-white/40" />
+                    </button>
+                    <button
+                        onClick={initiateExport}
+                        className="flex items-center gap-2 px-3 py-2 border border-white/10 rounded-lg hover:bg-white/5 transition-colors text-xs font-mono text-white/60"
+                        title="Exportar llaves (encriptadas)"
+                    >
+                        <Download className="w-4 h-4" /> Exportar
+                    </button>
+                    <button
+                        onClick={initiateImport}
+                        className="flex items-center gap-2 px-3 py-2 border border-white/10 rounded-lg hover:bg-white/5 transition-colors text-xs font-mono text-white/60"
+                        title="Importar llaves (encriptadas)"
+                    >
+                        <Upload className="w-4 h-4" /> Importar
                     </button>
                     <button
                         onClick={() => setShowModal(true)}
@@ -130,6 +272,13 @@ const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                     >
                         <Plus className="w-4 h-4" /> {t('add_key')}
                     </button>
+                    <input
+                        type="file"
+                        id="import-keys-file"
+                        className="hidden"
+                        accept=".aegiskey"
+                        onChange={handleFileSelect}
+                    />
                 </div>
             </div>
 
@@ -257,6 +406,59 @@ const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                             </form>
                         </div>
                     </motion.div>
+                )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+                {passwordPromptType && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.95, opacity: 0 }}
+                            className="bg-zinc-900 border border-white/10 rounded-2xl p-6 max-w-md w-full shadow-2xl font-mono text-xs"
+                        >
+                            <h4 className="text-sm font-bold tracking-widest uppercase text-white mb-4">
+                                {passwordPromptType === 'export' ? 'Exportar Llaves' : 'Importar Llaves'}
+                            </h4>
+                            <p className="text-white/60 mb-4">
+                                {passwordPromptType === 'export'
+                                    ? 'Establezca una contraseña para proteger y cifrar el archivo de backup (.aegiskey).'
+                                    : 'Ingrese la contraseña para descifrar y restaurar las llaves de este backup.'}
+                            </p>
+                            <form onSubmit={passwordPromptType === 'export' ? handleExportConfirm : handleImportConfirm} className="space-y-4">
+                                <div>
+                                    <label className="block text-white/40 uppercase tracking-widest mb-1 font-bold">Contraseña</label>
+                                    <input
+                                        type="password"
+                                        value={promptPassword}
+                                        onChange={(e) => setPromptPassword(e.target.value)}
+                                        placeholder="••••••••••••"
+                                        className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-white focus:border-aegis-cyan/50 outline-none"
+                                        required
+                                        autoFocus
+                                    />
+                                </div>
+                                {modalError && <p className="text-red-400 font-bold">{modalError}</p>}
+                                <div className="flex gap-3 pt-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setPasswordPromptType(null)}
+                                        className="flex-1 px-4 py-2 border border-white/10 rounded-lg text-white/40 hover:bg-white/5 transition-colors uppercase tracking-widest"
+                                    >
+                                        {t('cancel')}
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={isProcessingBackup}
+                                        className="flex-1 px-4 py-2 bg-aegis-cyan/20 border border-aegis-cyan/30 rounded-lg text-aegis-cyan hover:bg-aegis-cyan/30 transition-colors disabled:opacity-50 uppercase tracking-widest font-bold"
+                                    >
+                                        {isProcessingBackup ? 'Procesando...' : 'Confirmar'}
+                                    </button>
+                                </div>
+                            </form>
+                        </motion.div>
+                    </div>
                 )}
             </AnimatePresence>
         </div>
