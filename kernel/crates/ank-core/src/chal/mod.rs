@@ -994,6 +994,9 @@ impl CognitiveHAL {
                 while let Some(token_result) = raw_stream.next().await {
                     match token_result {
                         Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                            if autocorrect_retries == 0 {
+                                let _ = text_tx.send(Ok(token.clone()));
+                            }
                             let json_str = token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
                             if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str)
                             {
@@ -1111,6 +1114,7 @@ impl CognitiveHAL {
                                     while let Some(tr) = s.next().await {
                                         match tr {
                                             Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                                                let _ = text_tx.send(Ok(token.clone()));
                                                 let json_str = token
                                                     .strip_prefix("__TOOL_CALL__")
                                                     .unwrap_or_default();
@@ -1221,6 +1225,7 @@ impl CognitiveHAL {
                                     while let Some(tr) = s.next().await {
                                         match tr {
                                             Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                                                let _ = text_tx.send(Ok(token.clone()));
                                                 let json_str = token
                                                     .strip_prefix("__TOOL_CALL__")
                                                     .unwrap_or_default();
@@ -1600,6 +1605,9 @@ impl CognitiveHAL {
                 while let Some(token_result) = raw_stream.next().await {
                     match token_result {
                         Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                            if autocorrect_retries == 0 {
+                                let _ = text_tx.send(Ok(token.clone()));
+                            }
                             let json_str = token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
                             if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str)
                             {

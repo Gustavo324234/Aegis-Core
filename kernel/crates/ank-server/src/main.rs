@@ -397,6 +397,7 @@ pub(crate) async fn run_server() -> Result<()> {
                             use ank_core::syscalls::StreamInterceptor;
                             let mut interceptor = StreamInterceptor::new(stream);
                             let mut tokens_emitted = 0;
+                            let mut tool_calls_detected = false;
                             let mut full_output = String::new();
 
                             while let Some(item) = interceptor.next_item().await {
@@ -417,8 +418,12 @@ pub(crate) async fn run_server() -> Result<()> {
                                         // handler can fan them out as `model_selected`
                                         // / `warning` events, but DO NOT count them
                                         // as tokens and DO NOT add them to full_output.
+                                        if token.starts_with("__TOOL_CALL__") {
+                                            tool_calls_detected = true;
+                                        }
                                         let is_meta = token.starts_with("__MODEL_SELECTED__")
-                                            || token.starts_with("__WARNING__");
+                                            || token.starts_with("__WARNING__")
+                                            || token.starts_with("__TOOL_CALL__");
                                         if !is_meta {
                                             tokens_emitted += 1;
                                             full_output.push_str(&token);
@@ -490,7 +495,7 @@ pub(crate) async fn run_server() -> Result<()> {
                             // upstream silently broke vs. the user really sent
                             // an empty request.
                             let output_is_empty =
-                                tokens_emitted == 0 || full_output.trim().is_empty();
+                                (tokens_emitted == 0 && !tool_calls_detected) || (full_output.trim().is_empty() && !tool_calls_detected);
                             if tokens_emitted == 0 {
                                 tracing::warn!(
                                     pid = %pid,
@@ -846,9 +851,11 @@ fn main() -> Result<()> {
 
     #[cfg(windows)]
     {
-        // Si start() tiene éxito, corre el loop del SCM y termina aquí.
-        // Si falla (ej. error 1063 por consola), continúa al modo interactivo.
-        if windows_service_impl::run().is_ok() {
+        if args.contains(&"--service".to_string()) {
+            if let Err(e) = windows_service_impl::run() {
+                eprintln!("[ERROR] Failed to start Windows service: {}", e);
+                std::process::exit(1);
+            }
             return Ok(());
         }
     }

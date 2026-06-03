@@ -122,8 +122,8 @@ impl CloudProxyDriver {
             retry_secs = 60;
         }
         let msg = format!(
-            "Tu plan free de Gemini se agotó. Reintentá en ~{}s o agregá \
-             billing en Google AI Studio para subir el límite.",
+            "Se alcanzó el límite de cuota (rate-limit) de Gemini. Reintentá en ~{}s. \
+             (Si utilizas una clave de nivel gratuito, considera habilitar la facturación para elevar tu límite).",
             retry_secs
         );
         Some((msg, retry_secs))
@@ -155,13 +155,13 @@ impl CloudProxyDriver {
             || err.get("type").and_then(|t| t.as_str()) == Some("tokens");
         let friendly = if is_tpm {
             format!(
-                "Alcanzaste el límite de tokens por minuto del modelo (plan free). \
-                 Reintentá en ~{}s o subí el tier del proveedor.",
+                "Alcanzaste el límite de tokens por minuto (TPM) del modelo. \
+                 Reintentá en ~{}s. (Considera elevar el tier de tu plan si requieres mayor capacidad).",
                 retry_secs
             )
         } else {
             format!(
-                "Alcanzaste el límite de requests del proveedor. Reintentá en ~{}s.",
+                "Alcanzaste el límite de solicitudes (RPM) de tu plan. Reintentá en ~{}s.",
                 retry_secs
             )
         };

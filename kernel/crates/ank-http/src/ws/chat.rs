@@ -725,6 +725,9 @@ async fn stream_with_receiver(
         if let Some(ref payload) = proto_event.payload {
             if let ank_proto::v1::task_event::Payload::Output(ref text) = payload {
                 // CORE-FIX (A2): meta-tokens emitted by the HAL — never reach the user.
+                if text.starts_with("__TOOL_CALL__") {
+                    continue;
+                }
                 if let Some(json_str) = text.strip_prefix("__MODEL_SELECTED__") {
                     if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
                         let _ = socket

@@ -101,6 +101,8 @@
 | CORE-286 | fix | Kernel: timeout en run_agent_loop + cleanup de tasks zombies | ✅ Done | Alta | Kernel Engineer |
 | CORE-303 | feat | Kernel: Defensive Cognitive Loops & Boundary Autocorrection | ✅ Done | Crítica | Kernel Engineer |
 | CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | ✅ Done | Alta | Tavo |
+| CORE-314 | fix | Kernel/Shell: Deshabilitación de proveedores en KeyPool/UI no persiste | 🚧 In Progress | Alta | Tavo + Kernel Engineer + Shell Engineer |
+| CORE-315 | feat | Kernel/Shell: Exportar/importar configuración de llaves cifrada con contraseña | 📥 Todo | Media | Kernel Engineer + UI Engineer |
 
 ## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
 
