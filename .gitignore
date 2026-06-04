@@ -75,3 +75,8 @@ auditorias/
 
 # Claude assistant local settings
 .claude/
+
+# Plugin Signer keys (generated on startup, never commit)
+plugin_signer.key
+plugin_signer.pub
+
