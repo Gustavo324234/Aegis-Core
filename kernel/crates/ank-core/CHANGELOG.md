@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.74](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.73...ank-core-v0.1.74) (2026-06-04)
+
+
+### Features
+
+* **core:** implement encrypted key backup, restore provider persistence, fix windows SCM handshake, and resolve security audits ([#331](https://github.com/Gustavo324234/Aegis-Core/issues/331)) ([ff6b056](https://github.com/Gustavo324234/Aegis-Core/commit/ff6b05621d53ec12a765dbe083ab45a5e0784b99))
+
 ## [0.1.73](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.72...ank-core-v0.1.73) (2026-06-01)
 
 

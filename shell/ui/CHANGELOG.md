@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.27.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.26.0...shell-ui-v1.27.0) (2026-06-04)
+
+
+### Features
+
+* **core:** implement encrypted key backup, restore provider persistence, fix windows SCM handshake, and resolve security audits ([#331](https://github.com/Gustavo324234/Aegis-Core/issues/331)) ([ff6b056](https://github.com/Gustavo324234/Aegis-Core/commit/ff6b05621d53ec12a765dbe083ab45a5e0784b99))
+
 ## [1.26.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.25.0...shell-ui-v1.26.0) (2026-05-31)
 
 
