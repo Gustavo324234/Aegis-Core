@@ -208,7 +208,7 @@ mod tests {
         match outcome {
             RateLimitOutcome::Blocked { retry_after_secs } => {
                 assert!(
-                    retry_after_secs >= 1 && retry_after_secs <= 60,
+                    (1..=60).contains(&retry_after_secs),
                     "retry_after_secs fuera de rango: {}",
                     retry_after_secs
                 );

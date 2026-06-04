@@ -30,6 +30,8 @@ pub fn router() -> Router<AppState> {
         // to a key, so the UI can show the actual available list instead of a
         // hand-curated (and inevitably stale) selection.
         .route("/keys/probe-models", post(probe_models))
+        .route("/keys/export", post(export_keys))
+        .route("/keys/import", post(import_keys))
         .route("/models", get(list_router_models))
         .route("/sync", post(sync_router_catalog))
         .route("/status", get(router_status))
@@ -41,7 +43,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Deserialize, ToSchema)]
 pub struct KeyAddRequest {
     #[schema(example = "openrouter")]
-    pub provider: String,
+    pub provider: Option<String>,
     /// La api_key es requerida al crear (POST). En edición (PUT), si se omite o
     /// viene vacía se preserva la key almacenada — evita sobrescribirla accidentalmente.
     #[serde(default)]
@@ -55,7 +57,10 @@ pub struct KeyAddRequest {
     pub models: Option<Vec<String>>,
     /// Si true, esta clave usa el nivel gratuito — se usa antes que las claves pagas.
     #[serde(default)]
-    pub is_free_tier: bool,
+    pub is_free_tier: Option<bool>,
+    /// Si false, esta clave se desactiva para el enrutamiento.
+    #[serde(default)]
+    pub is_active: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -156,7 +161,11 @@ async fn add_global_key(
 
     // Al crear (POST), la api_key es obligatoria — salvo para providers locales
     // (ollama, custom) que no necesitan autenticación.
-    let api_key = if is_keyless_provider(&req.provider) {
+    let provider_raw = req.provider.as_ref().ok_or_else(|| {
+        AegisHttpError::BadRequest("provider is required when adding a new key".into())
+    })?;
+
+    let api_key = if is_keyless_provider(provider_raw) {
         req.api_key.unwrap_or_default()
     } else {
         req.api_key
@@ -176,7 +185,7 @@ async fn add_global_key(
         Some(ms) if !ms.is_empty() => Some(ms),
         _ => {
             let discovered =
-                auto_discover_models(&req.provider, req.api_url.as_deref(), &api_key).await;
+                auto_discover_models(provider_raw, req.api_url.as_deref(), &api_key).await;
             if discovered.is_empty() {
                 None
             } else {
@@ -191,14 +200,14 @@ async fn add_global_key(
     // "gemini", routing silently fails to find the key on chat.
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
-        provider: ank_core::router::normalize_provider_id(&req.provider),
+        provider: ank_core::router::normalize_provider_id(provider_raw),
         api_key,
         api_url: req.api_url,
         label: req.label,
-        is_active: true,
+        is_active: req.is_active.unwrap_or(true),
         rate_limited_until: None,
         active_models,
-        is_free_tier: req.is_free_tier,
+        is_free_tier: req.is_free_tier.unwrap_or(false),
     };
 
     let router = state.router.read().await;
@@ -321,7 +330,11 @@ async fn add_tenant_key(
     Json(req): Json<KeyAddRequest>,
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
     // Al crear (POST), la api_key es obligatoria — salvo para providers locales.
-    let api_key = if is_keyless_provider(&req.provider) {
+    let provider_raw = req.provider.as_ref().ok_or_else(|| {
+        AegisHttpError::BadRequest("provider is required when adding a new key".into())
+    })?;
+
+    let api_key = if is_keyless_provider(provider_raw) {
         req.api_key.unwrap_or_default()
     } else {
         req.api_key
@@ -337,7 +350,7 @@ async fn add_tenant_key(
         Some(ms) if !ms.is_empty() => Some(ms),
         _ => {
             let discovered =
-                auto_discover_models(&req.provider, req.api_url.as_deref(), &api_key).await;
+                auto_discover_models(provider_raw, req.api_url.as_deref(), &api_key).await;
             if discovered.is_empty() {
                 None
             } else {
@@ -348,14 +361,14 @@ async fn add_tenant_key(
 
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
-        provider: ank_core::router::normalize_provider_id(&req.provider),
+        provider: ank_core::router::normalize_provider_id(provider_raw),
         api_key,
         api_url: req.api_url,
         label: req.label,
-        is_active: true,
+        is_active: req.is_active.unwrap_or(true),
         rate_limited_until: None,
         active_models,
-        is_free_tier: req.is_free_tier,
+        is_free_tier: req.is_free_tier.unwrap_or(false),
     };
 
     let router = state.router.read().await;
@@ -551,27 +564,31 @@ async fn update_global_key(
     let router = state.router.read().await;
 
     // Si api_key viene vacía, preservar la key almacenada para no sobrescribirla
+    let existing_key = router.get_raw_key_by_id(&id, None).await;
+    let existing = existing_key
+        .as_ref()
+        .ok_or_else(|| AegisHttpError::BadRequest(format!("Key '{}' not found", id)))?;
+
+    let provider = match &req.provider {
+        Some(p) => ank_core::router::normalize_provider_id(p),
+        None => existing.provider.clone(),
+    };
+
     let api_key = match req.api_key.filter(|k| !k.trim().is_empty()) {
         Some(k) => k,
-        None => {
-            router
-                .get_raw_key_by_id(&id, None)
-                .await
-                .ok_or_else(|| AegisHttpError::BadRequest(format!("Key '{}' not found", id)))?
-                .api_key
-        }
+        None => existing.api_key.clone(),
     };
 
     let entry = ApiKeyEntry {
         key_id: id,
-        provider: ank_core::router::normalize_provider_id(&req.provider),
+        provider,
         api_key,
-        api_url: req.api_url,
-        label: req.label,
-        is_active: true,
-        rate_limited_until: None,
-        active_models: req.models,
-        is_free_tier: req.is_free_tier,
+        api_url: req.api_url.or(existing.api_url.clone()),
+        label: req.label.or(existing.label.clone()),
+        is_active: req.is_active.unwrap_or(existing.is_active),
+        rate_limited_until: existing.rate_limited_until,
+        active_models: req.models.or(existing.active_models.clone()),
+        is_free_tier: req.is_free_tier.unwrap_or(existing.is_free_tier),
     };
 
     router
@@ -630,27 +647,31 @@ async fn update_tenant_key(
     let router = state.router.read().await;
 
     // Si api_key viene vacía, preservar la key almacenada para no sobrescribirla
+    let existing_key = router.get_raw_key_by_id(&id, Some(&auth.tenant_id)).await;
+    let existing = existing_key
+        .as_ref()
+        .ok_or_else(|| AegisHttpError::BadRequest(format!("Key '{}' not found", id)))?;
+
+    let provider = match &req.provider {
+        Some(p) => ank_core::router::normalize_provider_id(p),
+        None => existing.provider.clone(),
+    };
+
     let api_key = match req.api_key.filter(|k| !k.trim().is_empty()) {
         Some(k) => k,
-        None => {
-            router
-                .get_raw_key_by_id(&id, Some(&auth.tenant_id))
-                .await
-                .ok_or_else(|| AegisHttpError::BadRequest(format!("Key '{}' not found", id)))?
-                .api_key
-        }
+        None => existing.api_key.clone(),
     };
 
     let entry = ApiKeyEntry {
         key_id: id,
-        provider: ank_core::router::normalize_provider_id(&req.provider),
+        provider,
         api_key,
-        api_url: req.api_url,
-        label: req.label,
-        is_active: true,
-        rate_limited_until: None,
-        active_models: req.models,
-        is_free_tier: req.is_free_tier,
+        api_url: req.api_url.or(existing.api_url.clone()),
+        label: req.label.or(existing.label.clone()),
+        is_active: req.is_active.unwrap_or(existing.is_active),
+        rate_limited_until: existing.rate_limited_until,
+        active_models: req.models.or(existing.active_models.clone()),
+        is_free_tier: req.is_free_tier.unwrap_or(existing.is_free_tier),
     };
 
     router
@@ -1014,4 +1035,180 @@ async fn execute_module_tool(
             "error": response.result_json
         })))
     }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct KeyExportRequest {
+    pub password: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct KeyImportRequest {
+    pub password: String,
+    pub salt: String,
+    pub nonce: String,
+    pub ciphertext: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct ImportResponse {
+    pub success: bool,
+    pub count: usize,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/router/keys/export",
+    tag = "router",
+    request_body = KeyExportRequest,
+    responses(
+        (status = 200, description = "Keys exported successfully"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
+async fn export_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<KeyExportRequest>,
+) -> Result<Json<ank_core::router::key_pool::EncryptedKeysBackup>, AegisHttpError> {
+    let is_master = {
+        if let (Some(tenant_id), Some(key)) = (
+            headers
+                .get("x-citadel-tenant")
+                .and_then(|v| v.to_str().ok()),
+            headers.get("x-citadel-key").and_then(|v| v.to_str().ok()),
+        ) {
+            let hash = hash_passphrase(key);
+            let citadel = state.citadel.lock().await;
+            citadel
+                .enclave
+                .authenticate_master(tenant_id, &hash)
+                .await
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    };
+
+    let tenant_id = if is_master {
+        None
+    } else {
+        let tenant_id = headers
+            .get("x-citadel-tenant")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        let key = headers
+            .get("x-citadel-key")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        let hash = hash_passphrase(key);
+        {
+            let citadel = state.citadel.lock().await;
+            citadel
+                .enclave
+                .authenticate_tenant(tenant_id, &hash)
+                .await
+                .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        }
+        Some(tenant_id)
+    };
+
+    let router = state.router.read().await;
+    let backup = router
+        .key_pool_ref()
+        .export_keys_encrypted(tenant_id, &req.password)
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Export failed: {}", e)))?;
+
+    Ok(Json(backup))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/router/keys/import",
+    tag = "router",
+    request_body = KeyImportRequest,
+    responses(
+        (status = 200, description = "Keys imported successfully"),
+        (status = 401, description = "Unauthorized")
+    ),
+    params(
+        ("x-citadel-tenant" = String, Header, description = "Tenant identifier"),
+        ("x-citadel-key" = String, Header, description = "Session key (plaintext)")
+    )
+)]
+async fn import_keys(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<KeyImportRequest>,
+) -> Result<Json<ImportResponse>, AegisHttpError> {
+    let is_master = {
+        if let (Some(tenant_id), Some(key)) = (
+            headers
+                .get("x-citadel-tenant")
+                .and_then(|v| v.to_str().ok()),
+            headers.get("x-citadel-key").and_then(|v| v.to_str().ok()),
+        ) {
+            let hash = hash_passphrase(key);
+            let citadel = state.citadel.lock().await;
+            citadel
+                .enclave
+                .authenticate_master(tenant_id, &hash)
+                .await
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    };
+
+    let tenant_id = if is_master {
+        None
+    } else {
+        let tenant_id = headers
+            .get("x-citadel-tenant")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        let key = headers
+            .get("x-citadel-key")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        let hash = hash_passphrase(key);
+        {
+            let citadel = state.citadel.lock().await;
+            citadel
+                .enclave
+                .authenticate_tenant(tenant_id, &hash)
+                .await
+                .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+        }
+        Some(tenant_id)
+    };
+
+    let backup = ank_core::router::key_pool::EncryptedKeysBackup {
+        salt: req.salt,
+        nonce: req.nonce,
+        ciphertext: req.ciphertext,
+    };
+
+    let router = state.router.read().await;
+    let count = router
+        .key_pool_ref()
+        .import_keys_encrypted(tenant_id, &req.password, backup)
+        .await
+        .map_err(|e| AegisHttpError::BadRequest(format!("Import failed: {}", e)))?;
+
+    if let Some(syncer) = &state.catalog_syncer {
+        if let Err(e) = syncer.sync_now().await {
+            warn!("Import: catalog sync failed after key import: {}", e);
+        }
+    }
+
+    Ok(Json(ImportResponse {
+        success: true,
+        count,
+    }))
 }

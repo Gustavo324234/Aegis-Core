@@ -9,7 +9,7 @@ pub mod syncer;
 pub use siren::{SirenEngine, SirenRouter};
 
 use crate::chal::SystemError;
-use crate::pcb::{TaskType, PCB};
+use crate::pcb::{RoutingPolicy, TaskType, PCB};
 use crate::scheduler::ModelPreference;
 pub use catalog::{ModelCatalog, ModelEntry, ToolUseSupport};
 pub use key_pool::KeyPool;
@@ -370,6 +370,15 @@ impl CognitiveRouter {
             ml
         };
 
+        let history_chars: usize = pcb
+            .message_history
+            .iter()
+            .map(|m| m.content.as_ref().map(|s| s.len()).unwrap_or(0))
+            .sum();
+        let inlined_chars: usize = pcb.inlined_context.values().map(|v| v.len()).sum();
+        let total_chars = pcb.memory_pointers.l1_instruction.len() + history_chars + inlined_chars;
+        let estimated_tokens = (total_chars / 4).max(1);
+
         // For each candidate: if no paid key exists, apply free-tier capacity factor.
         // Models at capacity (factor == 0.0) are hard-excluded; approaching limit
         // get a proportional score penalty so the router prefers models with headroom.
@@ -400,6 +409,8 @@ impl CognitiveRouter {
                 max_latency,
                 observed_latency: self.tracker.observed_latency_ms(&entry.model_id).await,
                 recent_errors: self.tracker.recent_errors(&entry.model_id).await,
+                estimated_tokens,
+                routing_policy: pcb.routing_policy,
             };
             let base = self.compute_score(&entry, task_type, &ctx);
             // Soft penalty: multiply by sqrt(capacity) so a model at 50% headroom
@@ -604,7 +615,7 @@ impl CognitiveRouter {
         };
 
         // ── 4. Context fit (15%) ─────────────────────────────────────
-        let estimated_tokens = (prompt.len() / 4).max(1);
+        let estimated_tokens = ctx.estimated_tokens;
         let context_fit = if entry.context_window as usize > estimated_tokens * 4 {
             1.0
         } else if entry.context_window as usize > estimated_tokens * 2 {
@@ -643,20 +654,17 @@ impl CognitiveRouter {
             }
         };
 
-        // ── 7. Task-aware weights ────────────────────────────────────
-        // CORE-FIX: previously the formula was fixed (quality 40 / cost
-        // 25 / speed 20 / fit 15). For Chat that gave cost too much
-        // pull and rewarded free-but-massive models. Re-weight per
-        // task so:
-        //   - Chat        → fast + cheap matter more than peak quality
-        //   - Code/Plan   → quality dominates, cost matters less
-        //   - Analysis    → quality dominates
-        //   - others      → original balanced weights
-        let (w_quality, w_cost, w_speed, w_fit) = match task_type {
-            TaskType::Chat => (0.30, 0.20, 0.35, 0.15),
-            TaskType::Code | TaskType::Planning => (0.55, 0.15, 0.15, 0.15),
-            TaskType::Analysis => (0.55, 0.15, 0.15, 0.15),
-            _ => (0.40, 0.25, 0.20, 0.15),
+        // ── 7. Policy and Task-aware weights ──────────────────────────
+        let (w_quality, w_cost, w_speed, w_fit) = match ctx.routing_policy {
+            RoutingPolicy::CostOptimized => (0.15, 0.60, 0.10, 0.15),
+            RoutingPolicy::QualityOptimized => (0.70, 0.05, 0.10, 0.15),
+            RoutingPolicy::LatencyOptimized => (0.15, 0.10, 0.60, 0.15),
+            RoutingPolicy::Balanced => match task_type {
+                TaskType::Chat => (0.30, 0.20, 0.35, 0.15),
+                TaskType::Code | TaskType::Planning => (0.55, 0.15, 0.15, 0.15),
+                TaskType::Analysis => (0.55, 0.15, 0.15, 0.15),
+                _ => (0.40, 0.25, 0.20, 0.15),
+            },
         };
 
         let raw =
@@ -685,7 +693,40 @@ impl CognitiveRouter {
             }
         };
 
-        (raw * (1.0 - error_penalty) * (1.0 - oversize_penalty) * tiny_penalty_factor).max(0.0)
+        // ── 8. Chat vs Subagents model routing adjustment ─────────────
+        // "para chat tiene que usar modelos de respaldo y para subagentes los buenos"
+        let chat_subagent_factor = {
+            let is_chat = matches!(task_type, TaskType::Chat);
+            let is_backup = entry.is_local
+                || entry.provider == "ollama_cloud"
+                || entry.cost_input_per_mtok == 0.0
+                || entry.model_id.ends_with(":free");
+
+            if is_chat {
+                if is_backup {
+                    2.0 // Boost backup models for Chat so they always win
+                } else {
+                    0.05 // Heavily penalize premium models for Chat to keep them as last-resort fallbacks
+                }
+            } else {
+                // For subagents/specialist tasks (Coding, Planning, Analysis, etc.)
+                if is_backup {
+                    if entry.supports_tools {
+                        0.5 // Minor penalty for tool-supporting backup models (viable fallbacks)
+                    } else {
+                        0.01 // Heavy penalty for backup models without tool support (subagents need tools)
+                    }
+                } else {
+                    2.0 // Boost premium/good models for subagents
+                }
+            }
+        };
+
+        (raw * (1.0 - error_penalty)
+            * (1.0 - oversize_penalty)
+            * tiny_penalty_factor
+            * chat_subagent_factor)
+            .max(0.0)
     }
 
     /// Busca una entrada en el catálogo por model_id (CORE-237).
@@ -744,6 +785,8 @@ struct ScoreCtx<'a> {
     max_latency: f64,
     observed_latency: Option<u32>,
     recent_errors: u32,
+    estimated_tokens: usize,
+    routing_policy: RoutingPolicy,
 }
 
 /// Canonicalises a provider identifier so downstream matches (catalog lookups,
@@ -1214,6 +1257,8 @@ mod tests {
             max_latency: 1000.0,
             observed_latency: None,
             recent_errors: 0,
+            estimated_tokens: 10,
+            routing_policy: RoutingPolicy::Balanced,
         };
 
         // 1. Scoring for Chat with short prompt (no penalty)
@@ -1223,6 +1268,8 @@ mod tests {
             max_latency: 1000.0,
             observed_latency: None,
             recent_errors: 0,
+            estimated_tokens: 10,
+            routing_policy: RoutingPolicy::Balanced,
         };
         let score_light = router.compute_score(&entry_1b, TaskType::Chat, &ctx_light);
 
@@ -1237,12 +1284,65 @@ mod tests {
             max_latency: 1000.0,
             observed_latency: None,
             recent_errors: 0,
+            estimated_tokens: 10,
+            routing_policy: RoutingPolicy::Balanced,
         };
         let score_complex_prompt = router.compute_score(&entry_1b, TaskType::Chat, &ctx_complex);
 
         // Heavy task score and complex prompt score should be dramatically lower (approx 10% or at least < 50%) compared to base quality
         assert!(score_heavy_task < score_light * 0.5);
         assert!(score_complex_prompt < score_light * 0.5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_routing_policy_scoring() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        // We'll compare gpt-4o (high cost, high quality) vs gemini-2.5-flash (lower cost, lower quality)
+        let expensive = router.catalog_find("openai/gpt-4o").await.unwrap();
+        let cheap = router.catalog_find("gemini-2.5-flash").await.unwrap();
+
+        // Under CostOptimized policy, cheap model should score higher
+        let ctx_cost = ScoreCtx {
+            prompt: "Write a short poem",
+            max_cost: expensive.cost_input_per_mtok + expensive.cost_output_per_mtok,
+            max_latency: 1000.0,
+            observed_latency: None,
+            recent_errors: 0,
+            estimated_tokens: 10,
+            routing_policy: RoutingPolicy::CostOptimized,
+        };
+
+        let score_exp_cost = router.compute_score(&expensive, TaskType::Code, &ctx_cost);
+        let score_cheap_cost = router.compute_score(&cheap, TaskType::Code, &ctx_cost);
+        assert!(
+            score_cheap_cost > score_exp_cost,
+            "Cheap model should win under CostOptimized"
+        );
+
+        // Under QualityOptimized policy, expensive (higher quality) model should win
+        let ctx_quality = ScoreCtx {
+            prompt: "Write a short poem",
+            max_cost: expensive.cost_input_per_mtok + expensive.cost_output_per_mtok,
+            max_latency: 1000.0,
+            observed_latency: None,
+            recent_errors: 0,
+            estimated_tokens: 10,
+            routing_policy: RoutingPolicy::QualityOptimized,
+        };
+
+        let score_exp_qual = router.compute_score(&expensive, TaskType::Code, &ctx_quality);
+        let score_cheap_qual = router.compute_score(&cheap, TaskType::Code, &ctx_quality);
+        assert!(
+            score_exp_qual > score_cheap_qual,
+            "Expensive/high quality model should win under QualityOptimized"
+        );
+
         Ok(())
     }
 }

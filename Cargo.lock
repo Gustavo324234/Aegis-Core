@@ -164,6 +164,7 @@ dependencies = [
 name = "ank-core"
 version = "0.1.73"
 dependencies = [
+ "aes-gcm",
  "ank-mcp",
  "ank-proto",
  "anyhow",

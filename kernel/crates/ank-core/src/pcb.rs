@@ -18,6 +18,15 @@ pub enum TaskType {
     Local,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum RoutingPolicy {
+    #[default]
+    Balanced,
+    CostOptimized,
+    QualityOptimized,
+    LatencyOptimized,
+}
+
 /// Heuristically infer the cognitive nature of a user prompt so the router
 /// can pick a model whose `task_scores` actually match what's being asked.
 ///
@@ -277,6 +286,8 @@ pub struct PCB {
     pub model_pref: ModelPreference,
     #[serde(default)]
     pub task_type: TaskType,
+    #[serde(default)]
+    pub routing_policy: RoutingPolicy,
     /// Archivos o contenido empaquetado para migración (Teleportación)
     #[serde(default)]
     pub inlined_context: HashMap<String, String>,
@@ -392,6 +403,7 @@ impl PCB {
             },
             model_pref: ModelPreference::HybridSmart,
             task_type: TaskType::default(),
+            routing_policy: RoutingPolicy::default(),
             inlined_context: HashMap::new(),
             role: ProcessRole::Standalone,
             tenant_id: None,

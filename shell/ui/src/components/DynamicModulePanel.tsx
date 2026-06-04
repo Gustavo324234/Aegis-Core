@@ -312,12 +312,19 @@ export const DynamicModulePanel: React.FC = () => {
                                                     {module.exposed_tools.length} Herramientas
                                                 </span>
                                                 <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                                                    <span className={`text-[9px] font-mono uppercase ${module.active ? 'text-green-400' : 'text-white/20'}`}>
+                                                    <label
+                                                        htmlFor={`toggle-${module.module_id}`}
+                                                        className={`text-[9px] font-mono uppercase cursor-pointer ${module.active ? 'text-green-400' : 'text-white/20'}`}
+                                                    >
                                                         {module.active ? 'Activo' : 'Inactivo'}
-                                                    </span>
+                                                    </label>
                                                     <button
+                                                        id={`toggle-${module.module_id}`}
                                                         onClick={() => toggleModule(module.module_id as string, module.active)}
                                                         disabled={isLoading}
+                                                        role="switch"
+                                                        aria-checked={module.active}
+                                                        aria-label={`Activar/desactivar m?dulo ${module.display_name}`}
                                                         className={`relative w-8 h-4.5 rounded-full transition-colors flex items-center px-0.5 ${
                                                             module.active ? 'bg-green-500/20 border border-green-500/30' : 'bg-white/5 border border-white/10'
                                                         }`}
@@ -413,11 +420,12 @@ export const DynamicModulePanel: React.FC = () => {
                                                         <div className="space-y-3.5 pt-2">
                                                             {activeView.fields.map(field => (
                                                                 <div key={field.name} className="flex flex-col gap-1.5">
-                                                                    <label className="text-[9px] font-mono uppercase tracking-wider text-white/45 flex items-center gap-1">
+                                                                    <label htmlFor={`input-${field.name}`} className="text-[9px] font-mono uppercase tracking-wider text-white/45 flex items-center gap-1">
                                                                         {field.label}
                                                                         {field.required && <span className="text-red-500">*</span>}
                                                                     </label>
                                                                     <input
+                                                                        id={`input-${field.name}`}
                                                                         type={field.type === 'number' ? 'number' : 'text'}
                                                                         required={field.required}
                                                                         placeholder={field.placeholder || ''}

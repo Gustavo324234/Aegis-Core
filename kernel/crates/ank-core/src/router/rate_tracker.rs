@@ -218,8 +218,8 @@ impl ModelUsageTracker {
         let now = Instant::now();
         let mut pf = self.provider_failures.write().await;
         let queue = pf.entry(provider.to_string()).or_default();
-        // Keep only last 30s of failures.
-        let cutoff = now - Duration::from_secs(30);
+        // Keep last 5 minutes (300s) of failures to track exponential backoff.
+        let cutoff = now - Duration::from_secs(300);
         while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
             queue.pop_front();
         }
@@ -238,16 +238,31 @@ impl ModelUsageTracker {
 
     // ─── CORE-FIX: B3 — circuit breaker per provider ─────────────────────
 
-    /// Number of failures recorded for `provider` in the last 30 seconds.
+    /// Number of failures recorded for `provider` in the dynamic window.
     pub async fn provider_failures_recent(&self, provider: &str) -> u32 {
         let now = Instant::now();
-        let cutoff = now - Duration::from_secs(30);
         let mut map = self.provider_failures.write().await;
         let queue = map.entry(provider.to_string()).or_default();
-        while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
+
+        // Clean up everything older than 5 minutes (300s)
+        let max_cutoff = now - Duration::from_secs(300);
+        while queue.front().map(|t| *t < max_cutoff).unwrap_or(false) {
             queue.pop_front();
         }
-        queue.len() as u32
+
+        // Determine dynamic window based on total failures in the last 5 minutes
+        let total_recent = queue.len();
+        let window = if total_recent < 5 {
+            Duration::from_secs(30)
+        } else if total_recent < 10 {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(300)
+        };
+
+        // Count failures within the dynamic window
+        let cutoff = now - window;
+        queue.iter().filter(|&&t| t >= cutoff).count() as u32
     }
 
     /// Circuit is "open" (i.e. skip this provider) if it has accumulated
@@ -259,7 +274,7 @@ impl ModelUsageTracker {
 
     /// CORE-FIX (inspired by OpenClaw's per-profile cooldown tracking):
     /// returns the number of seconds until this provider's circuit closes
-    /// (i.e. its oldest failure slides out of the 30s window), or None if
+    /// (i.e. its oldest failure in active window slides out), or None if
     /// the circuit is currently closed (provider is OK to try).
     ///
     /// The UI uses this to render "retry in Ns" countdowns instead of just
@@ -267,10 +282,24 @@ impl ModelUsageTracker {
     pub async fn provider_cooldown_remaining_secs(&self, provider: &str) -> Option<u64> {
         let pf = self.provider_failures.read().await;
         let queue = pf.get(provider)?;
-        let oldest = *queue.front()?;
-        // Cooldown closes when the oldest failure ages past the 30s window.
+        if queue.is_empty() {
+            return None;
+        }
+
+        let total_recent = queue.len();
+        let window = if total_recent < 5 {
+            Duration::from_secs(30)
+        } else if total_recent < 10 {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(300)
+        };
+
+        // Find the oldest failure that is within the active window
         let now = Instant::now();
-        let window = Duration::from_secs(30);
+        let cutoff = now - window;
+        let oldest = queue.iter().filter(|&&t| t >= cutoff).copied().next()?;
+
         let age = now.duration_since(oldest);
         if age >= window {
             None
