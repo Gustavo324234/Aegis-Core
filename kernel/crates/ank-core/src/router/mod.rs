@@ -370,7 +370,11 @@ impl CognitiveRouter {
             ml
         };
 
-        let history_chars: usize = pcb.message_history.iter().map(|m| m.content.as_ref().map(|s| s.len()).unwrap_or(0)).sum();
+        let history_chars: usize = pcb
+            .message_history
+            .iter()
+            .map(|m| m.content.as_ref().map(|s| s.len()).unwrap_or(0))
+            .sum();
         let inlined_chars: usize = pcb.inlined_context.values().map(|v| v.len()).sum();
         let total_chars = pcb.memory_pointers.l1_instruction.len() + history_chars + inlined_chars;
         let estimated_tokens = (total_chars / 4).max(1);
@@ -718,7 +722,11 @@ impl CognitiveRouter {
             }
         };
 
-        (raw * (1.0 - error_penalty) * (1.0 - oversize_penalty) * tiny_penalty_factor * chat_subagent_factor).max(0.0)
+        (raw * (1.0 - error_penalty)
+            * (1.0 - oversize_penalty)
+            * tiny_penalty_factor
+            * chat_subagent_factor)
+            .max(0.0)
     }
 
     /// Busca una entrada en el catálogo por model_id (CORE-237).
@@ -1312,7 +1320,10 @@ mod tests {
 
         let score_exp_cost = router.compute_score(&expensive, TaskType::Code, &ctx_cost);
         let score_cheap_cost = router.compute_score(&cheap, TaskType::Code, &ctx_cost);
-        assert!(score_cheap_cost > score_exp_cost, "Cheap model should win under CostOptimized");
+        assert!(
+            score_cheap_cost > score_exp_cost,
+            "Cheap model should win under CostOptimized"
+        );
 
         // Under QualityOptimized policy, expensive (higher quality) model should win
         let ctx_quality = ScoreCtx {
@@ -1327,7 +1338,10 @@ mod tests {
 
         let score_exp_qual = router.compute_score(&expensive, TaskType::Code, &ctx_quality);
         let score_cheap_qual = router.compute_score(&cheap, TaskType::Code, &ctx_quality);
-        assert!(score_exp_qual > score_cheap_qual, "Expensive/high quality model should win under QualityOptimized");
+        assert!(
+            score_exp_qual > score_cheap_qual,
+            "Expensive/high quality model should win under QualityOptimized"
+        );
 
         Ok(())
     }

@@ -491,14 +491,14 @@ impl KeyPool {
             k.rate_limited_until = None;
         }
 
-        let plaintext_json = serde_json::to_string(&export_keys)
-            .context("Failed to serialize keys for export")?;
+        let plaintext_json =
+            serde_json::to_string(&export_keys).context("Failed to serialize keys for export")?;
 
-        use argon2::password_hash::rand_core::{OsRng, RngCore};
         use aes_gcm::{
             aead::{Aead, KeyInit},
             Aes256Gcm, Nonce,
         };
+        use argon2::password_hash::rand_core::{OsRng, RngCore};
         use base64::{prelude::BASE64_STANDARD, Engine};
 
         let mut salt_bytes = [0u8; 16];
@@ -508,13 +508,15 @@ impl KeyPool {
 
         let mut key_bytes = [0u8; 32];
         let argon2 = argon2::Argon2::default();
-        argon2.hash_password_into(password.as_bytes(), &salt_bytes, &mut key_bytes)
+        argon2
+            .hash_password_into(password.as_bytes(), &salt_bytes, &mut key_bytes)
             .map_err(|e| anyhow::anyhow!("Argon2 derivation failed: {}", e))?;
 
         let cipher = Aes256Gcm::new_from_slice(&key_bytes)
             .map_err(|e| anyhow::anyhow!("AES-GCM key initialization failed: {}", e))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let ciphertext_bytes = cipher.encrypt(nonce, plaintext_json.as_bytes())
+        let ciphertext_bytes = cipher
+            .encrypt(nonce, plaintext_json.as_bytes())
             .map_err(|e| anyhow::anyhow!("AES-GCM encryption failed: {}", e))?;
 
         let salt = BASE64_STANDARD.encode(salt_bytes);
@@ -534,32 +536,37 @@ impl KeyPool {
         password: &str,
         backup: EncryptedKeysBackup,
     ) -> anyhow::Result<usize> {
-        use base64::{prelude::BASE64_STANDARD, Engine};
         use aes_gcm::{
             aead::{Aead, KeyInit},
             Aes256Gcm, Nonce,
         };
+        use base64::{prelude::BASE64_STANDARD, Engine};
 
-        let salt_bytes = BASE64_STANDARD.decode(&backup.salt)
+        let salt_bytes = BASE64_STANDARD
+            .decode(&backup.salt)
             .context("Invalid base64 in salt")?;
-        let nonce_bytes = BASE64_STANDARD.decode(&backup.nonce)
+        let nonce_bytes = BASE64_STANDARD
+            .decode(&backup.nonce)
             .context("Invalid base64 in nonce")?;
-        let ciphertext_bytes = BASE64_STANDARD.decode(&backup.ciphertext)
+        let ciphertext_bytes = BASE64_STANDARD
+            .decode(&backup.ciphertext)
             .context("Invalid base64 in ciphertext")?;
 
         let mut key_bytes = [0u8; 32];
         let argon2 = argon2::Argon2::default();
-        argon2.hash_password_into(password.as_bytes(), &salt_bytes, &mut key_bytes)
+        argon2
+            .hash_password_into(password.as_bytes(), &salt_bytes, &mut key_bytes)
             .map_err(|e| anyhow::anyhow!("Argon2 derivation failed: {}", e))?;
 
         let cipher = Aes256Gcm::new_from_slice(&key_bytes)
             .map_err(|e| anyhow::anyhow!("AES-GCM key initialization failed: {}", e))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let plaintext_bytes = cipher.decrypt(nonce, ciphertext_bytes.as_slice())
+        let plaintext_bytes = cipher
+            .decrypt(nonce, ciphertext_bytes.as_slice())
             .map_err(|_| anyhow::anyhow!("Decryption failed: check if the password is correct"))?;
 
-        let plaintext_json = String::from_utf8(plaintext_bytes)
-            .context("Decrypted data is not valid UTF-8")?;
+        let plaintext_json =
+            String::from_utf8(plaintext_bytes).context("Decrypted data is not valid UTF-8")?;
 
         let imported_keys: Vec<ApiKeyEntry> = serde_json::from_str(&plaintext_json)
             .context("Decrypted JSON is not a valid list of API keys")?;
@@ -796,8 +803,13 @@ mod tests {
         let pool2 = KeyPool::new(Arc::new(NoopPersistor));
 
         // Decryption with incorrect password should fail
-        let bad_import = pool2.import_keys_encrypted(None, "wrong_password", backup.clone()).await;
-        assert!(bad_import.is_err(), "Decryption with wrong password must fail");
+        let bad_import = pool2
+            .import_keys_encrypted(None, "wrong_password", backup.clone())
+            .await;
+        assert!(
+            bad_import.is_err(),
+            "Decryption with wrong password must fail"
+        );
 
         // Decryption with correct password should succeed
         let count = pool2.import_keys_encrypted(None, password, backup).await?;
@@ -810,7 +822,10 @@ mod tests {
         assert_eq!(key.key_id, "global-1");
         assert_eq!(key.api_key, "sk-global");
         // State fields like cooldowns/rate limit until should be stripped (None)
-        assert!(key.rate_limited_until.is_none(), "Rate limited until should be stripped in export");
+        assert!(
+            key.rate_limited_until.is_none(),
+            "Rate limited until should be stripped in export"
+        );
 
         Ok(())
     }

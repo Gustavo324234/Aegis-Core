@@ -243,13 +243,13 @@ impl ModelUsageTracker {
         let now = Instant::now();
         let mut map = self.provider_failures.write().await;
         let queue = map.entry(provider.to_string()).or_default();
-        
+
         // Clean up everything older than 5 minutes (300s)
         let max_cutoff = now - Duration::from_secs(300);
         while queue.front().map(|t| *t < max_cutoff).unwrap_or(false) {
             queue.pop_front();
         }
-        
+
         // Determine dynamic window based on total failures in the last 5 minutes
         let total_recent = queue.len();
         let window = if total_recent < 5 {
@@ -259,7 +259,7 @@ impl ModelUsageTracker {
         } else {
             Duration::from_secs(300)
         };
-        
+
         // Count failures within the dynamic window
         let cutoff = now - window;
         queue.iter().filter(|&&t| t >= cutoff).count() as u32
@@ -285,7 +285,7 @@ impl ModelUsageTracker {
         if queue.is_empty() {
             return None;
         }
-        
+
         let total_recent = queue.len();
         let window = if total_recent < 5 {
             Duration::from_secs(30)
@@ -294,12 +294,12 @@ impl ModelUsageTracker {
         } else {
             Duration::from_secs(300)
         };
-        
+
         // Find the oldest failure that is within the active window
         let now = Instant::now();
         let cutoff = now - window;
         let oldest = queue.iter().filter(|&&t| t >= cutoff).copied().next()?;
-        
+
         let age = now.duration_since(oldest);
         if age >= window {
             None

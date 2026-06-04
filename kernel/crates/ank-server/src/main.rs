@@ -494,8 +494,8 @@ pub(crate) async fn run_server() -> Result<()> {
                             // log empty/short output so the operator can tell
                             // upstream silently broke vs. the user really sent
                             // an empty request.
-                            let output_is_empty =
-                                (tokens_emitted == 0 && !tool_calls_detected) || (full_output.trim().is_empty() && !tool_calls_detected);
+                            let output_is_empty = (tokens_emitted == 0 && !tool_calls_detected)
+                                || (full_output.trim().is_empty() && !tool_calls_detected);
                             if tokens_emitted == 0 {
                                 tracing::warn!(
                                     pid = %pid,
