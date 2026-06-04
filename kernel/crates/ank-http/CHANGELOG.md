@@ -26,6 +26,13 @@
 
 
 
+## [0.1.82](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.81...ank-http-v0.1.82) (2026-06-04)
+
+
+### Features
+
+* **core:** implement encrypted key backup, restore provider persistence, fix windows SCM handshake, and resolve security audits ([#331](https://github.com/Gustavo324234/Aegis-Core/issues/331)) ([ff6b056](https://github.com/Gustavo324234/Aegis-Core/commit/ff6b05621d53ec12a765dbe083ab45a5e0784b99))
+
 ## [0.1.80](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.79...ank-http-v0.1.80) (2026-05-31)
 
 
