@@ -1120,7 +1120,7 @@ async fn export_keys(
     let router = state.router.read().await;
     let backup = router
         .key_pool_ref()
-        .export_keys_encrypted(tenant_id.as_deref(), &req.password)
+        .export_keys_encrypted(tenant_id, &req.password)
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Export failed: {}", e)))?;
 
@@ -1197,7 +1197,7 @@ async fn import_keys(
     let router = state.router.read().await;
     let count = router
         .key_pool_ref()
-        .import_keys_encrypted(tenant_id.as_deref(), &req.password, backup)
+        .import_keys_encrypted(tenant_id, &req.password, backup)
         .await
         .map_err(|e| AegisHttpError::BadRequest(format!("Import failed: {}", e)))?;
 

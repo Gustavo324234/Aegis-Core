@@ -16,6 +16,12 @@ interface KeyInfo {
     is_free_tier?: boolean;
 }
 
+interface EncryptedKeysBackup {
+    salt: string;
+    nonce: string;
+    ciphertext: string;
+}
+
 const ModelSelector: React.FC<{ 
     models: string[]; 
     selectedModels: string[]; 
@@ -468,7 +474,7 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
 
     const [passwordPromptType, setPasswordPromptType] = useState<'export' | 'import' | null>(null);
     const [promptPassword, setPromptPassword] = useState('');
-    const [importFileContent, setImportFileContent] = useState<any>(null);
+    const [importFileContent, setImportFileContent] = useState<EncryptedKeysBackup | null>(null);
     const [modalError, setModalError] = useState<string | null>(null);
     const [isProcessingBackup, setIsProcessingBackup] = useState(false);
 

@@ -13,6 +13,12 @@ interface KeyInfo {
     rate_limited_until?: string;
 }
 
+interface EncryptedKeysBackup {
+    salt: string;
+    nonce: string;
+    ciphertext: string;
+}
+
 const PROVIDERS = ['anthropic', 'openai', 'gemini', 'groq', 'deepseek', 'mistral', 'openrouter', 'qwen', 'ollama'];
 
 const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
@@ -49,7 +55,7 @@ const GlobalKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
 
     const [passwordPromptType, setPasswordPromptType] = useState<'export' | 'import' | null>(null);
     const [promptPassword, setPromptPassword] = useState('');
-    const [importFileContent, setImportFileContent] = useState<any>(null);
+    const [importFileContent, setImportFileContent] = useState<EncryptedKeysBackup | null>(null);
     const [modalError, setModalError] = useState<string | null>(null);
     const [isProcessingBackup, setIsProcessingBackup] = useState(false);
 
