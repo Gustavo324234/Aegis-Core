@@ -175,6 +175,13 @@ impl ModelCatalog {
             .filter(|e| e.score_for(task) >= 3)
             .cloned()
             .collect();
+        // CORE-319: graceful degradation — when the whole catalog scores < 3
+        // for this task (e.g. Local profile with only small models, whose
+        // planning/coding scores are 1–2), still route to the best available
+        // model instead of failing ModelNotFound while healthy models sit idle.
+        if candidates.is_empty() {
+            candidates = entries.iter().cloned().collect();
+        }
         candidates.sort_by_key(|b| std::cmp::Reverse(b.score_for(task)));
         candidates
     }
@@ -203,6 +210,22 @@ impl ModelCatalog {
     pub async fn add_entry(&self, entry: ModelEntry) {
         let mut entries = self.entries.write().await;
         entries.push(entry);
+    }
+
+    /// CORE-319: updates a single entry's `tool_use_support` in place under the
+    /// write lock. Replaces the read-modify-write pattern (`all_entries` +
+    /// `replace_all`) that could drop entries added concurrently by the
+    /// CatalogSyncer and falsified `last_synced` as if a sync had happened.
+    /// Returns false when the model is not in the catalog.
+    pub async fn update_tool_support(&self, model_id: &str, support: ToolUseSupport) -> bool {
+        let mut entries = self.entries.write().await;
+        match entries.iter_mut().find(|e| e.model_id == model_id) {
+            Some(entry) => {
+                entry.tool_use_support = support;
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -261,6 +284,60 @@ mod tests {
                 entry.model_id
             );
         }
+        Ok(())
+    }
+
+    /// CORE-319: when no entry reaches score ≥ 3 for the task (Local profile
+    /// only has small models with planning scores 1–2), get_candidates must
+    /// degrade to the full ranked list instead of returning empty — otherwise
+    /// decide() fails ModelNotFound while healthy models sit idle.
+    #[tokio::test]
+    async fn test_get_candidates_relaxed_fallback() -> anyhow::Result<()> {
+        let catalog = ModelCatalog::load_bundled_with_profile(ModelProfile::Local)?;
+        let candidates = catalog.get_candidates(TaskType::Planning).await;
+        assert!(
+            !candidates.is_empty(),
+            "Local profile must still produce Planning candidates via relaxed fallback"
+        );
+        for i in 1..candidates.len() {
+            assert!(
+                candidates[i - 1].score_for(TaskType::Planning)
+                    >= candidates[i].score_for(TaskType::Planning),
+                "relaxed candidates must stay sorted by score"
+            );
+        }
+        Ok(())
+    }
+
+    /// CORE-319: update_tool_support mutates one entry in place — no entry
+    /// loss, no last_synced falsification (both were possible with the old
+    /// all_entries + replace_all pattern).
+    #[tokio::test]
+    async fn test_update_tool_support_inplace() -> anyhow::Result<()> {
+        let catalog = ModelCatalog::load_bundled_with_profile(ModelProfile::Hybrid)?;
+        let before = catalog.all_entries().await.len();
+
+        let updated = catalog
+            .update_tool_support("gemini-2.5-flash", ToolUseSupport::Degraded)
+            .await;
+        assert!(updated, "existing model must report true");
+
+        let entry = catalog.find("gemini-2.5-flash").await.unwrap();
+        assert_eq!(entry.tool_use_support, ToolUseSupport::Degraded);
+        assert_eq!(
+            catalog.all_entries().await.len(),
+            before,
+            "no entries may be lost"
+        );
+        assert!(
+            catalog.last_synced().await.is_none(),
+            "a tool-support update is not a catalog sync"
+        );
+
+        let missing = catalog
+            .update_tool_support("no-such-model", ToolUseSupport::Supported)
+            .await;
+        assert!(!missing, "unknown model must report false");
         Ok(())
     }
 

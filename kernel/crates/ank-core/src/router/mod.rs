@@ -13,7 +13,7 @@ use crate::pcb::{RoutingPolicy, TaskType, PCB};
 use crate::scheduler::ModelPreference;
 pub use catalog::{ModelCatalog, ModelEntry, ToolUseSupport};
 pub use key_pool::KeyPool;
-pub use rate_tracker::ModelUsageTracker;
+pub use rate_tracker::{ModelOutcomes, ModelUsageTracker};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -160,11 +160,17 @@ impl CognitiveRouter {
             };
             if let Some((stamped_at, decision)) = cached {
                 if stamped_at.elapsed() < STICKY_DECISION_TTL {
-                    // Re-validate the model is still healthy before reusing.
+                    // Re-validate health before reusing — provider circuit AND
+                    // per-model circuit (CORE-319: a model returning 401s or
+                    // empty streams must not stay pinned for the whole TTL).
                     if !self
                         .tracker
                         .is_provider_circuit_open(&decision.provider)
                         .await
+                        && !self
+                            .tracker
+                            .is_model_circuit_open(&decision.model_id)
+                            .await
                     {
                         info!(
                             model = %decision.model_id,
@@ -217,7 +223,7 @@ impl CognitiveRouter {
             for entry in &all_candidates {
                 if entry.is_local
                     && !self.tracker.is_provider_circuit_open(&entry.provider).await
-                    && !self.tracker.is_model_circuit_open(&entry.model_id).await
+                    && !self.model_circuit_open_merged(entry).await
                 {
                     has_healthy_local = true;
                     break;
@@ -310,8 +316,9 @@ impl CognitiveRouter {
             // but a specific model on it keeps returning HTTP 200 with zero
             // content (cogito-2.1:671b from the smoke test). Skip just that
             // model so the router promotes a sibling instead of falling
-            // through to a different provider.
-            if self.tracker.is_model_circuit_open(&entry.model_id).await {
+            // through to a different provider. CORE-319: queried under BOTH
+            // id spaces — the chal layer records under the bare API id.
+            if self.model_circuit_open_merged(&entry).await {
                 skipped_by_breaker.push(entry.model_id.clone());
                 continue;
             }
@@ -361,7 +368,7 @@ impl CognitiveRouter {
         let max_latency = {
             let mut ml = 0.0_f64;
             for e in &available {
-                let obs = self.tracker.observed_latency_ms(&e.model_id).await;
+                let obs = self.observed_latency_merged(e).await;
                 let lat = obs.unwrap_or(e.avg_latency_ms.unwrap_or(2000)) as f64;
                 if lat > ml {
                     ml = lat;
@@ -393,8 +400,22 @@ impl CognitiveRouter {
             let capacity = if has_paid {
                 1.0_f64 // Paid key → no meaningful rate limit
             } else {
+                // CORE-320: each free key carries its own provider-side quota
+                // and the KeyPool rotates round-robin between them, so N usable
+                // free keys give N× the model's effective RPM/RPD. Without the
+                // scaling, a tenant with 3 Gemini free keys was self-throttled
+                // to a third of its real capacity.
+                let free_keys = self
+                    .key_pool
+                    .count_available_free_keys(&entry.provider, &entry.model_id, tenant_id)
+                    .await
+                    .max(1) as u32;
                 self.tracker
-                    .capacity_factor(&entry.model_id, entry.free_tier_rpm, entry.free_tier_rpd)
+                    .capacity_factor(
+                        &entry.model_id,
+                        entry.free_tier_rpm.map(|v| v.saturating_mul(free_keys)),
+                        entry.free_tier_rpd.map(|v| v.saturating_mul(free_keys)),
+                    )
                     .await
             };
 
@@ -407,10 +428,11 @@ impl CognitiveRouter {
                 prompt: &pcb.memory_pointers.l1_instruction,
                 max_cost,
                 max_latency,
-                observed_latency: self.tracker.observed_latency_ms(&entry.model_id).await,
-                recent_errors: self.tracker.recent_errors(&entry.model_id).await,
+                observed_latency: self.observed_latency_merged(&entry).await,
+                recent_errors: self.recent_errors_merged(&entry).await,
                 estimated_tokens,
                 routing_policy: pcb.routing_policy,
+                outcomes: self.outcomes_merged(&entry).await,
             };
             let base = self.compute_score(&entry, task_type, &ctx);
             // Soft penalty: multiply by sqrt(capacity) so a model at 50% headroom
@@ -545,15 +567,20 @@ impl CognitiveRouter {
         // CORE-FIX (B4): cache this decision for the next turn from the same tenant.
         // Skipped for model_override flows (those bypass the CMR entirely).
         if pcb.model_override.is_none() {
+            // CORE-319: key by the ORIGINAL request preference — the lookup at
+            // the top of decide() uses pcb.model_pref, so inserting under
+            // effective_pref (light-task override, LocalOnly downgrade) made
+            // the cache unable to ever hit for exactly those flows.
             let sticky_key = StickyKey {
                 tenant_id: tenant_id.to_string(),
                 task_type,
-                model_pref: effective_pref,
+                model_pref: pcb.model_pref,
             };
-            self.sticky
-                .write()
-                .await
-                .insert(sticky_key, (Instant::now(), decision.clone()));
+            let mut sticky = self.sticky.write().await;
+            // CORE-319: sweep expired entries so ephemeral tenants don't
+            // accumulate in the map forever.
+            sticky.retain(|_, (stamped_at, _)| stamped_at.elapsed() < STICKY_DECISION_TTL);
+            sticky.insert(sticky_key, (Instant::now(), decision.clone()));
         }
 
         Ok(decision)
@@ -567,8 +594,84 @@ impl CognitiveRouter {
         sticky.retain(|k, _| k.tenant_id != tenant_id);
     }
 
+    /// CORE-319 (test-only): whether a sticky entry exists for this intent.
+    /// Lets regression tests assert the cache is keyed by the ORIGINAL
+    /// request preference, not the effective (possibly overridden) one.
+    #[cfg(test)]
+    pub(crate) async fn sticky_contains(
+        &self,
+        tenant_id: &str,
+        task_type: TaskType,
+        model_pref: ModelPreference,
+    ) -> bool {
+        let key = StickyKey {
+            tenant_id: tenant_id.to_string(),
+            task_type,
+            model_pref,
+        };
+        self.sticky.read().await.contains_key(&key)
+    }
+
     pub fn tracker_ref(&self) -> &Arc<ModelUsageTracker> {
         &self.tracker
+    }
+
+    // ─── CORE-319: dual id-space tracker queries ─────────────────────────
+    //
+    // The chal layer records runtime signals (latency, errors, outcomes,
+    // per-model circuits) under the API model id it actually called —
+    // `RoutingDecision::model_id`, i.e. WITHOUT the "provider/" prefix —
+    // while the catalog and decide() work with the prefixed catalog id.
+    // For every prefixed model (groq/…, anthropic/…, openai/…) the two ids
+    // differ and a single-id query silently misses the recorded signals,
+    // leaving the router blind to its own telemetry. These helpers query
+    // both id spaces and merge.
+
+    async fn observed_latency_merged(&self, entry: &ModelEntry) -> Option<u32> {
+        match self.tracker.observed_latency_ms(&entry.model_id).await {
+            Some(v) => Some(v),
+            None => {
+                let api_id = bare_model_id(&entry.model_id, &entry.provider);
+                if api_id != entry.model_id {
+                    self.tracker.observed_latency_ms(&api_id).await
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    async fn recent_errors_merged(&self, entry: &ModelEntry) -> u32 {
+        let mut errors = self.tracker.recent_errors(&entry.model_id).await;
+        let api_id = bare_model_id(&entry.model_id, &entry.provider);
+        if api_id != entry.model_id {
+            errors += self.tracker.recent_errors(&api_id).await;
+        }
+        errors
+    }
+
+    async fn model_circuit_open_merged(&self, entry: &ModelEntry) -> bool {
+        if self.tracker.is_model_circuit_open(&entry.model_id).await {
+            return true;
+        }
+        let api_id = bare_model_id(&entry.model_id, &entry.provider);
+        api_id != entry.model_id && self.tracker.is_model_circuit_open(&api_id).await
+    }
+
+    async fn outcomes_merged(&self, entry: &ModelEntry) -> ModelOutcomes {
+        let mut merged = self
+            .tracker
+            .outcomes_for(&entry.model_id)
+            .await
+            .unwrap_or_default();
+        let api_id = bare_model_id(&entry.model_id, &entry.provider);
+        if api_id != entry.model_id {
+            if let Some(o) = self.tracker.outcomes_for(&api_id).await {
+                merged.successes += o.successes;
+                merged.failures += o.failures;
+            }
+        }
+        merged
     }
 
     pub fn catalog_ref(&self) -> Arc<ModelCatalog> {
@@ -701,6 +804,12 @@ impl CognitiveRouter {
                 || entry.provider == "ollama_cloud"
                 || entry.cost_input_per_mtok == 0.0
                 || entry.model_id.ends_with(":free");
+            // CORE-320: fold in the runtime tool-use probe (CORE-237). A model
+            // whose tool_use_support was observed as Degraded has PROVEN it
+            // can't drive the ReAct loop, regardless of what the static
+            // supports_tools flag claims.
+            let effective_tools = entry.supports_tools
+                && entry.tool_use_support != crate::router::catalog::ToolUseSupport::Degraded;
 
             if is_chat {
                 if is_backup {
@@ -711,21 +820,45 @@ impl CognitiveRouter {
             } else {
                 // For subagents/specialist tasks (Coding, Planning, Analysis, etc.)
                 if is_backup {
-                    if entry.supports_tools {
+                    if effective_tools {
                         0.5 // Minor penalty for tool-supporting backup models (viable fallbacks)
                     } else {
                         0.01 // Heavy penalty for backup models without tool support (subagents need tools)
                     }
+                } else if entry.tool_use_support
+                    == crate::router::catalog::ToolUseSupport::Degraded
+                {
+                    // CORE-320: a premium model that FAILED the live tool probe
+                    // is as useless to a subagent as a no-tools backup model.
+                    // (Static supports_tools=false premium models keep the
+                    // boost — Analysis/Planning don't always need tools and
+                    // absence of evidence isn't a proven failure.)
+                    0.05
                 } else {
                     2.0 // Boost premium/good models for subagents
                 }
             }
         };
 
+        // ── 9. CORE-320: observed reliability ─────────────────────────
+        // success/failure outcomes were tracked since D2 but never consumed
+        // by the scorer. With ≥ 3 samples, scale by 0.5 + 0.5·success_rate:
+        // a fully stable model keeps its score, a permanently failing one
+        // keeps half — hard exclusion remains the circuit breakers' job.
+        // Under 3 samples there is no signal: no data must not mean penalty.
+        let reliability_factor = {
+            let total = ctx.outcomes.successes + ctx.outcomes.failures;
+            match ctx.outcomes.success_rate() {
+                Some(rate) if total >= 3 => 0.5 + 0.5 * rate,
+                _ => 1.0,
+            }
+        };
+
         (raw * (1.0 - error_penalty)
             * (1.0 - oversize_penalty)
             * tiny_penalty_factor
-            * chat_subagent_factor)
+            * chat_subagent_factor
+            * reliability_factor)
             .max(0.0)
     }
 
@@ -735,19 +868,20 @@ impl CognitiveRouter {
     }
 
     /// Actualiza el estado de tool_use_support de un modelo en el catálogo (CORE-237).
+    /// CORE-319: delega al update in-place del catálogo. El patrón anterior
+    /// (all_entries + replace_all) perdía entradas agregadas concurrentemente
+    /// por el CatalogSyncer y falsificaba `last_synced`.
     pub async fn update_tool_use_support(
         &self,
         model_id: &str,
         support: crate::router::catalog::ToolUseSupport,
     ) {
-        let mut entries = self.catalog.all_entries().await;
-        for entry in &mut entries {
-            if entry.model_id == model_id {
-                entry.tool_use_support = support;
-                break;
-            }
+        if !self.catalog.update_tool_support(model_id, support).await {
+            warn!(
+                model = %model_id,
+                "update_tool_use_support: model not found in catalog"
+            );
         }
-        self.catalog.replace_all(entries).await;
     }
 
     pub async fn mark_key_rate_limited(&self, key_id: &str, until: chrono::DateTime<chrono::Utc>) {
@@ -787,6 +921,8 @@ struct ScoreCtx<'a> {
     recent_errors: u32,
     estimated_tokens: usize,
     routing_policy: RoutingPolicy,
+    /// CORE-320: merged success/failure outcomes (catalog + API id spaces).
+    outcomes: ModelOutcomes,
 }
 
 /// Canonicalises a provider identifier so downstream matches (catalog lookups,
@@ -1259,6 +1395,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::Balanced,
+            outcomes: ModelOutcomes::default(),
         };
 
         // 1. Scoring for Chat with short prompt (no penalty)
@@ -1270,6 +1407,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::Balanced,
+            outcomes: ModelOutcomes::default(),
         };
         let score_light = router.compute_score(&entry_1b, TaskType::Chat, &ctx_light);
 
@@ -1286,6 +1424,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::Balanced,
+            outcomes: ModelOutcomes::default(),
         };
         let score_complex_prompt = router.compute_score(&entry_1b, TaskType::Chat, &ctx_complex);
 
@@ -1316,6 +1455,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::CostOptimized,
+            outcomes: ModelOutcomes::default(),
         };
 
         let score_exp_cost = router.compute_score(&expensive, TaskType::Code, &ctx_cost);
@@ -1334,6 +1474,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::QualityOptimized,
+            outcomes: ModelOutcomes::default(),
         };
 
         let score_exp_qual = router.compute_score(&expensive, TaskType::Code, &ctx_quality);
@@ -1343,6 +1484,202 @@ mod tests {
             "Expensive/high quality model should win under QualityOptimized"
         );
 
+        Ok(())
+    }
+
+    /// CORE-319: the sticky cache must be keyed by the ORIGINAL request
+    /// preference. The light-task override ("hola" + CloudOnly → LocalOnly)
+    /// used to insert under the effective pref, so the lookup (which uses
+    /// pcb.model_pref) could never hit and every trivial turn re-routed.
+    #[tokio::test]
+    async fn test_sticky_cache_keyed_by_original_pref() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_global_key(ApiKeyEntry {
+                key_id: "test-cloud".to_string(),
+                provider: "anthropic".to_string(),
+                api_key: "sk-ant-test".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: false,
+            })
+            .await?;
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let mut pcb = PCB::new("test".to_string(), 5, "hola".to_string());
+        pcb.task_type = TaskType::Chat;
+        pcb.model_pref = ModelPreference::CloudOnly;
+
+        let first = router.decide(&pcb).await?;
+        assert!(
+            router
+                .sticky_contains("default", TaskType::Chat, ModelPreference::CloudOnly)
+                .await,
+            "sticky entry must live under the request's original preference"
+        );
+
+        // Second identical turn must reuse the cached decision (same model).
+        let second = router.decide(&pcb).await?;
+        assert_eq!(first.model_id, second.model_id);
+        assert_eq!(first.provider, second.provider);
+        Ok(())
+    }
+
+    /// CORE-319: a sticky decision whose model tripped the per-model circuit
+    /// (e.g. hard 401) must be discarded, and the re-route must skip that
+    /// model even though the circuit was recorded under the bare API id
+    /// while the catalog id is prefixed ("anthropic/…").
+    #[tokio::test]
+    async fn test_sticky_and_routing_skip_model_with_open_circuit() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_global_key(ApiKeyEntry {
+                key_id: "test-cloud".to_string(),
+                provider: "anthropic".to_string(),
+                api_key: "sk-ant-test".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: false,
+            })
+            .await?;
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let mut pcb = PCB::new(
+            "test".to_string(),
+            5,
+            "Could you please provide a detailed explanation of the cognitive routing architecture in Aegis Core?".to_string(),
+        );
+        pcb.task_type = TaskType::Chat;
+        pcb.model_pref = ModelPreference::CloudOnly;
+
+        let first = router.decide(&pcb).await?;
+
+        // The chal layer records hard failures under the BARE api id —
+        // exactly what RoutingDecision::model_id carries.
+        router
+            .tracker_ref()
+            .record_model_unavailable(&first.model_id)
+            .await;
+
+        let second = router.decide(&pcb).await?;
+        assert_ne!(
+            second.model_id, first.model_id,
+            "a model with an open per-model circuit must not be re-picked"
+        );
+        Ok(())
+    }
+
+    /// CORE-320: with ≥ 3 recorded samples a flaky model must score below an
+    /// otherwise identical stable one; with < 3 samples there is no signal
+    /// and the score must be unchanged.
+    #[tokio::test]
+    async fn test_reliability_factor_penalises_flaky_model() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        let router = CognitiveRouter::new(catalog, key_pool);
+        let entry = router.catalog_find("openai/gpt-4o").await.unwrap();
+
+        let base_ctx = |outcomes: ModelOutcomes| ScoreCtx {
+            prompt: "Implement a parser in Rust",
+            max_cost: entry.cost_input_per_mtok + entry.cost_output_per_mtok,
+            max_latency: 1000.0,
+            observed_latency: None,
+            recent_errors: 0,
+            estimated_tokens: 10,
+            routing_policy: RoutingPolicy::Balanced,
+            outcomes,
+        };
+
+        let stable = router.compute_score(
+            &entry,
+            TaskType::Code,
+            &base_ctx(ModelOutcomes::default()),
+        );
+        let flaky = router.compute_score(
+            &entry,
+            TaskType::Code,
+            &base_ctx(ModelOutcomes {
+                successes: 1,
+                failures: 5,
+            }),
+        );
+        let insufficient = router.compute_score(
+            &entry,
+            TaskType::Code,
+            &base_ctx(ModelOutcomes {
+                successes: 0,
+                failures: 2,
+            }),
+        );
+
+        assert!(
+            flaky < stable,
+            "flaky model ({}) must score below stable ({})",
+            flaky,
+            stable
+        );
+        assert!(
+            (insufficient - stable).abs() < f64::EPSILON,
+            "fewer than 3 samples must not change the score"
+        );
+        Ok(())
+    }
+
+    /// CORE-320: a premium model that FAILED the live tool-use probe
+    /// (ToolUseSupport::Degraded) must drop to the bottom for subagent
+    /// tasks, while its Chat score stays untouched.
+    #[tokio::test]
+    async fn test_degraded_tool_support_penalised_for_subagents() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let healthy = router.catalog_find("openai/gpt-4o").await.unwrap();
+        let mut degraded = healthy.clone();
+        degraded.tool_use_support = ToolUseSupport::Degraded;
+
+        let ctx = ScoreCtx {
+            prompt: "Implement a parser in Rust",
+            max_cost: healthy.cost_input_per_mtok + healthy.cost_output_per_mtok,
+            max_latency: 1000.0,
+            observed_latency: None,
+            recent_errors: 0,
+            estimated_tokens: 10,
+            routing_policy: RoutingPolicy::Balanced,
+            outcomes: ModelOutcomes::default(),
+        };
+
+        let code_healthy = router.compute_score(&healthy, TaskType::Code, &ctx);
+        let code_degraded = router.compute_score(&degraded, TaskType::Code, &ctx);
+        assert!(
+            code_degraded < code_healthy * 0.1,
+            "degraded tool support must collapse the subagent score ({} vs {})",
+            code_degraded,
+            code_healthy
+        );
+
+        let chat_healthy = router.compute_score(&healthy, TaskType::Chat, &ctx);
+        let chat_degraded = router.compute_score(&degraded, TaskType::Chat, &ctx);
+        assert!(
+            (chat_healthy - chat_degraded).abs() < f64::EPSILON,
+            "Chat scoring must be unaffected by tool degradation"
+        );
         Ok(())
     }
 }

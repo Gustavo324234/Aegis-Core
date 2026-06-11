@@ -67,6 +67,8 @@
 | CORE-300 | feat | Shell: selector de modelo en el chat | ✅ Done | Crítica | Shell Engineer |
 | CORE-301 | feat | CMR v2: scoring contextual + latencia real + fix peso fantasma | ✅ Done | Alta | Kernel Engineer |
 | CORE-305 | feat | Kernel: Arquitectura de Ruteo Cognitivo Asimétrico (Local-First) | ✅ Done | Alta | Arquitecto IA + Kernel Engineer |
+| CORE-319 | fix | Kernel: CMR Router hardening — sticky cache, señales del tracker y catálogo | ✅ Done | Crítica | Kernel Engineer |
+| CORE-320 | feat | Kernel: CMR Scoring v3 — confiabilidad observada, tool-use degradado y pooling multi-key | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 52 — Voice Quality
 
@@ -101,11 +103,7 @@
 | CORE-286 | fix | Kernel: timeout en run_agent_loop + cleanup de tasks zombies | ✅ Done | Alta | Kernel Engineer |
 | CORE-303 | feat | Kernel: Defensive Cognitive Loops & Boundary Autocorrection | ✅ Done | Crítica | Kernel Engineer |
 | CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | ✅ Done | Alta | Tavo |
-| CORE-314 | fix | Kernel/Shell: Deshabilitación de proveedores en KeyPool/UI no persiste | ✅ Done | Alta | Tavo + Kernel Engineer + Shell Engineer |
-| CORE-315 | feat | Kernel/Shell: Exportar/importar configuración de llaves cifrada con contraseña | ✅ Done | Media | Kernel Engineer + UI Engineer |
-| CORE-316 | fix | postcss >= 8.5.10 en shell/ui para mitigar XSS (GHSA-qx2v-qp2m-jg93) | ✅ Done | Alta | UI Engineer |
-| CORE-317 | chore | Clippy fixes: simplificar lógicas booleanas, mut innecesarios y rangos | ✅ Done | Alta | Kernel Engineer |
-| CORE-318 | chore | UX fixes: skeletons de telemetría y accesibilidad ARIA en DynamicModulePanel | ✅ Done | Alta | UI Engineer |
+| CORE-321 | chore | App/Android: deshabilitar el file-watcher nativo de Gradle (crashes JVM en Windows) | ✅ Done | Alta | DevOps Engineer |
 
 ## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
 
@@ -169,8 +167,8 @@
 | CORE-211 | fix | fix(shell): manejo graceful de errores en fetchActiveProjects y connectAgentStream | 📥 Todo | Alta | Shell Engineer |
 | CORE-212 | fix | fix(shell): provider gemini en KeyManager y visibilidad de modelos en CatalogViewer | 📥 Todo | Crítica | Shell Engineer |
 | CORE-213 | fix | Kernel: loguear error en key_pool.load() | ✅ Done | Media | Kernel Engineer |
-| CORE-224 | chore | Limpiar directorios temporales | ⚠️ Revisar | Baja | Tavo |
-| CORE-225 | chore | License field en Cargo.toml → MIT | ⚠️ Revisar | Alta | Kernel Engineer |
+| CORE-224 | chore | Limpiar directorios temporales | ✅ Done | Baja | Tavo |
+| CORE-225 | chore | License field en Cargo.toml → MIT | ✅ Done | Alta | Kernel Engineer |
 | CORE-226 | fix | fix(ank-core): Chat Agent usa SYSTEM_PROMPT_MASTER genérico en lugar de chat_agent.md | ✅ Done | Crítica | Kernel Engineer |
 | CORE-227 | fix | fix(ank-core): SPAWN_INSTRUCTIONS usa sintaxis obsoleta — divergencia con parser | ✅ Done | Crítica | Kernel Engineer |
 | CORE-228 | fix | fix(ank-server): SyscallExecutor se crea sin AgentOrchestrator — SYS_AGENT_SPAWN siempre falla | ✅ Done | Crítica | Kernel Engineer |
@@ -190,6 +188,11 @@
 | CORE-242 | fix | fix(ank-core): eliminar MAKER_INSTRUCTIONS del prompt del Chat Agent | ✅ Done | Alta | Kernel Engineer |
 | CORE-243 | feat | fix(ank-core): SyscallExecutor permite spawn desde Chat Agent (PCB sin agent_id) | ✅ Done | Alta | Kernel Engineer |
 | CORE-244 | fix | HAL Runner: enviar StatusUpdate al event_broker en el path de error | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-314 | fix | Kernel/Shell: Deshabilitación de proveedores en KeyPool/UI no persiste | ✅ Done | Alta | Tavo + Kernel Engineer + Shell Engineer |
+| CORE-315 | feat | Kernel/Shell: Exportar/importar configuración de llaves cifrada con contraseña | ✅ Done | Media | Kernel Engineer + UI Engineer |
+| CORE-316 | fix | postcss >= 8.5.10 en shell/ui para mitigar XSS (GHSA-qx2v-qp2m-jg93) | ✅ Done | Alta | UI Engineer |
+| CORE-317 | chore | Clippy fixes: simplificar lógicas booleanas, mut innecesarios y rangos | ✅ Done | Alta | Kernel Engineer |
+| CORE-318 | chore | UX fixes: skeletons de telemetría y accesibilidad ARIA en DynamicModulePanel | ✅ Done | Alta | UI Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 
