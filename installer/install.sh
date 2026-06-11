@@ -473,8 +473,11 @@ install_native() {
     tar -xzf "/tmp/${bin_file}" -C "/tmp/"
     mv "/tmp/ank-server-linux-${ARCH}" "${BIN_DIR}/ank-server"
     chmod +x "${BIN_DIR}/ank-server"
+    mv "/tmp/ank-cli-linux-${ARCH}" "${BIN_DIR}/ank-cli"
+    chmod +x "${BIN_DIR}/ank-cli"
     rm "/tmp/${bin_file}"
     success "ank-server → ${BIN_DIR}/ank-server"
+    success "ank-cli → ${BIN_DIR}/ank-cli"
 
     log "Downloading UI assets..."
     curl -L --fail --progress-bar \
@@ -524,6 +527,37 @@ install_native() {
     chmod +x "${BIN_DIR}/aegis"
     success "aegis CLI installed → ${BIN_DIR}/aegis"
 
+    # Generate plugin signing keys
+    local keys_dir="${DATA_DIR}/keys"
+    local priv_key_path="${keys_dir}/plugin_signer.key"
+    local pub_key_path="${keys_dir}/plugin_signer.pub"
+    local pub_key=""
+
+    if [[ -x "${BIN_DIR}/ank-cli" ]]; then
+        mkdir -p "${keys_dir}"
+        chown aegis:aegis "${keys_dir}" 2>/dev/null || true
+        chmod 750 "${keys_dir}" 2>/dev/null || true
+        
+        if [[ ! -f "${priv_key_path}" || ! -f "${pub_key_path}" ]]; then
+            log "Generating plugin signing keys via ank-cli..."
+            if "${BIN_DIR}/ank-cli" keygen --secret "${priv_key_path}" --public "${pub_key_path}" >> "$LOG_FILE" 2>&1; then
+                chown aegis:aegis "${priv_key_path}" "${pub_key_path}" 2>/dev/null || true
+                chmod 600 "${priv_key_path}" "${pub_key_path}" 2>/dev/null || true
+                success "Plugin signing keys generated successfully at ${keys_dir}"
+            else
+                warn "Failed to generate plugin keys via ank-cli. Server will auto-generate on first boot."
+            fi
+        else
+            log "Plugin signing keys already exist — skipping generation"
+        fi
+        
+        if [[ -f "${pub_key_path}" ]]; then
+            pub_key=$(cat "${pub_key_path}" | tr -d '\n' | tr -d ' ' || true)
+        fi
+    else
+        warn "ank-cli binary not found or not executable. Key generation skipped."
+    fi
+
     # Generate environment file
     if [[ ! -f "$ENV_FILE" ]]; then
         log "Generating AEGIS_ROOT_KEY..."
@@ -539,13 +573,15 @@ ANK_HTTP_PORT=${AEGIS_HTTP_PORT}
 UI_DIST_PATH=${UI_DIST_PATH}
 HW_PROFILE=${HW_PROFILE:-1}
 DEFAULT_MODEL_PREF=${AEGIS_INIT_PREF:-CloudOnly}
-# Release builds refuse to start without an explicit AEGIS_PLUGIN_ROOT_KEY
-# (hex-encoded ed25519 public key, ≥32 bytes). Until we ship a key-generation
-# command, opt into the unsigned-plugin mode so the installer's first boot
-# doesn't fail. To harden later: generate a real keypair, set
-# AEGIS_PLUGIN_ROOT_KEY=<hex>, and remove the line below.
-AEGIS_ALLOW_INSECURE_PLUGINS=1
 EOF
+        if [[ -n "${pub_key:-}" ]]; then
+            echo "AEGIS_PLUGIN_ROOT_KEY=${pub_key}" >> "$ENV_FILE"
+            success "Plugin root key written to ${ENV_FILE}"
+        else
+            echo "AEGIS_ALLOW_INSECURE_PLUGINS=1" >> "$ENV_FILE"
+            warn "No plugin root key available. Set AEGIS_ALLOW_INSECURE_PLUGINS=1 as fallback."
+        fi
+
         if [[ "$SETUP_HTTPS" == "true" && -n "$AEGIS_DOMAIN" ]]; then
             echo "AEGIS_DOMAIN=${AEGIS_DOMAIN}" >> "$ENV_FILE"
             echo "AEGIS_BASE_URL=https://${AEGIS_DOMAIN}" >> "$ENV_FILE"
@@ -572,13 +608,17 @@ EOF
         grep -q "AEGIS_AGENTS_CONFIG_DIR"   "$ENV_FILE" || echo "AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents"   >> "$ENV_FILE"
         grep -q "AEGIS_HTTP_PORT"           "$ENV_FILE" || echo "AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}"             >> "$ENV_FILE"
         grep -q "ANK_HTTP_PORT"             "$ENV_FILE" || echo "ANK_HTTP_PORT=${AEGIS_HTTP_PORT}"               >> "$ENV_FILE"
-        # Backfill on upgrade: release builds added by PR #277 refuse to start
-        # without AEGIS_PLUGIN_ROOT_KEY. Preserve the previous "no signature
-        # verification" behaviour (the binary used to silently fall back to a
-        # zeroed key, which is no more secure than this flag) so the upgrade
-        # doesn't break running deployments.
-        grep -q "AEGIS_PLUGIN_ROOT_KEY\|AEGIS_ALLOW_INSECURE_PLUGINS" "$ENV_FILE" \
-            || echo "AEGIS_ALLOW_INSECURE_PLUGINS=1"                             >> "$ENV_FILE"
+        
+        # Backfill on upgrade
+        if ! grep -qE "^(AEGIS_PLUGIN_ROOT_KEY|AEGIS_ALLOW_INSECURE_PLUGINS)=" "$ENV_FILE"; then
+            if [[ -n "${pub_key:-}" ]]; then
+                echo "AEGIS_PLUGIN_ROOT_KEY=${pub_key}" >> "$ENV_FILE"
+                success "Backfilled AEGIS_PLUGIN_ROOT_KEY from generated keypair"
+            else
+                echo "AEGIS_ALLOW_INSECURE_PLUGINS=1" >> "$ENV_FILE"
+                warn "Backfilled AEGIS_ALLOW_INSECURE_PLUGINS=1"
+            fi
+        fi
     fi
 
     # Write mode file
