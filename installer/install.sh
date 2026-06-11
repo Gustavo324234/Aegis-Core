@@ -552,7 +552,7 @@ install_native() {
         fi
         
         if [[ -f "${pub_key_path}" ]]; then
-            pub_key=$(cat "${pub_key_path}" | tr -d '\n' | tr -d ' ' || true)
+            pub_key=$(tr -d ' \n' < "${pub_key_path}" || true)
         fi
     else
         warn "ank-cli binary not found or not executable. Key generation skipped."

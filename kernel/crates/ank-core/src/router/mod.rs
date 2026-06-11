@@ -167,10 +167,7 @@ impl CognitiveRouter {
                         .tracker
                         .is_provider_circuit_open(&decision.provider)
                         .await
-                        && !self
-                            .tracker
-                            .is_model_circuit_open(&decision.model_id)
-                            .await
+                        && !self.tracker.is_model_circuit_open(&decision.model_id).await
                     {
                         info!(
                             model = %decision.model_id,
@@ -825,8 +822,7 @@ impl CognitiveRouter {
                     } else {
                         0.01 // Heavy penalty for backup models without tool support (subagents need tools)
                     }
-                } else if entry.tool_use_support
-                    == crate::router::catalog::ToolUseSupport::Degraded
+                } else if entry.tool_use_support == crate::router::catalog::ToolUseSupport::Degraded
                 {
                     // CORE-320: a premium model that FAILED the live tool probe
                     // is as useless to a subagent as a no-tools backup model.
@@ -1604,11 +1600,8 @@ mod tests {
             outcomes,
         };
 
-        let stable = router.compute_score(
-            &entry,
-            TaskType::Code,
-            &base_ctx(ModelOutcomes::default()),
-        );
+        let stable =
+            router.compute_score(&entry, TaskType::Code, &base_ctx(ModelOutcomes::default()));
         let flaky = router.compute_score(
             &entry,
             TaskType::Code,
