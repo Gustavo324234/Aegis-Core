@@ -52,6 +52,13 @@
 
 
 
+## [0.1.90](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.89...ank-server-v0.1.90) (2026-06-12)
+
+
+### Bug Fixes
+
+* **installer,server:** atomic CLI self-update, working stable channel and product version (CORE-329) ([#341](https://github.com/Gustavo324234/Aegis-Core/issues/341)) ([deebe31](https://github.com/Gustavo324234/Aegis-Core/commit/deebe31397ec0b005e53e3b63728f1e5027e1d31))
+
 ## [0.1.88](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.87...ank-server-v0.1.88) (2026-06-12)
 
 
