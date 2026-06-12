@@ -865,6 +865,16 @@ fn main() -> Result<()> {
             }
             return Ok(());
         }
+        // CORE-326: services registered by pre-#331 installers have a bare
+        // ImagePath (no --service). Under the SCM that used to boot console
+        // mode, never complete the handshake, and get killed at 30s with
+        // ERROR 1053. Try the dispatcher opportunistically: when the SCM
+        // launched us it succeeds (and blocks until service stop); from a
+        // real console it fails instantly with
+        // ERROR_FAILED_SERVICE_CONTROLLER_CONNECT and we fall through.
+        if windows_service_impl::try_dispatch_legacy() {
+            return Ok(());
+        }
     }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -893,6 +903,16 @@ mod windows_service_impl {
     pub fn run() -> Result<()> {
         service_dispatcher::start("AegisOS", ffi_service_main)
             .map_err(|e| anyhow::anyhow!("SCM dispatcher error: {}", e))
+    }
+
+    /// CORE-326: opportunistic dispatch for legacy service registrations
+    /// whose ImagePath lacks `--service`. Returns true when the process ran
+    /// as a Windows service (the dispatcher blocks until service stop);
+    /// false when not launched by the SCM, in which case the caller should
+    /// proceed with console mode. Any dispatcher error is treated as "not
+    /// under the SCM" — the failure mode is identical to the old behavior.
+    pub fn try_dispatch_legacy() -> bool {
+        service_dispatcher::start("AegisOS", ffi_service_main).is_ok()
     }
 
     fn service_main(_args: Vec<std::ffi::OsString>) {
