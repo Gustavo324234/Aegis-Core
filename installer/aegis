@@ -364,9 +364,11 @@ cmd_version() {
 }
 
 cmd_update() {
-    # Default: nightly (único canal activo mientras el proyecto está en desarrollo)
-    local CHANNEL="nightly"
-    local TAG="nightly"
+    # CORE-329: default = stable. Desde v0.2.0 existe un release estable con
+    # todos los assets; nightly queda como canal opt-in para quien quiera el
+    # último build de main.
+    local CHANNEL="stable"
+    local TAG="latest"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -378,19 +380,34 @@ cmd_update() {
 
     local ARCH
     ARCH=$(detect_arch)
-    local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${TAG}"
+    # CORE-329: GitHub's "latest" alias lives at releases/latest/download/…
+    # (orden invertido respecto a un tag concreto). La forma anterior
+    # releases/download/latest/… devolvía 404 — el canal stable nunca
+    # había funcionado.
+    local RELEASE_URL
+    if [[ "$TAG" == "latest" ]]; then
+        RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest/download"
+    else
+        RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${TAG}"
+    fi
     local RAW_URL="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer"
 
     printf '%b%s%b\n' "$CYAN" "--- Aegis OS Upgrade Tool ---" "$NC"
     printf 'Canal: %b%s%b (Tag: %s)\n' "$YELLOW" "$CHANNEL" "$NC" "$TAG"
 
     # CORE-FIX: refresh this very script + the systemd unit BEFORE doing the
-    # rest of the update. Bash loads the script into memory at invocation, so
-    # rewriting the file on disk is safe — the running update continues with
-    # the old logic and the new version takes effect on the NEXT `aegis update`.
-    # This is what makes future installer fixes (env-var backfills, new flags)
-    # actually reach already-deployed users. Without it, any improvement to the
-    # update flow is invisible until the operator manually re-runs install.sh.
+    # rest of the update, so future installer fixes actually reach
+    # already-deployed users.
+    #
+    # CORE-329: the replacement MUST be an atomic rename, never `cp` over the
+    # live file. Bash reads scripts lazily from the open fd; `cp` truncates
+    # and rewrites the SAME inode, so the running instance keeps reading at
+    # its old byte offset inside the new content and executes garbage
+    # (observed in production: `line 596: ho: command not found` — an `echo`
+    # with its first bytes eaten). Staging a `.new` file in the same
+    # directory and `mv`-ing it over is a rename(2): the directory entry now
+    # points to a NEW inode while the running bash finishes cleanly from the
+    # old one. The new CLI takes effect on the next run.
     local self_path="${BASH_SOURCE[0]}"
     local self_tmp="/tmp/aegis-cli-update.$$"
     if curl -sL --fail "${RAW_URL}/aegis" -o "$self_tmp" 2>/dev/null; then
@@ -399,8 +416,9 @@ cmd_update() {
         if head -1 "$self_tmp" | grep -q '^#!.*bash'; then
             if ! cmp -s "$self_tmp" "$self_path"; then
                 printf '  → Self-updating CLI (%s)\n' "$self_path"
-                sudo cp "$self_tmp" "$self_path"
-                sudo chmod +x "$self_path"
+                sudo cp "$self_tmp" "${self_path}.new"
+                sudo chmod +x "${self_path}.new"
+                sudo mv -f "${self_path}.new" "$self_path"
                 printf '%b  → CLI updated. The change takes effect on the next aegis update run.%b\n' "$GREEN" "$NC"
             fi
         else
@@ -426,12 +444,22 @@ cmd_update() {
     printf "Versión actual: "
     cmd_version || true
 
-    local remote_info
-    remote_info=$(curl -s "https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${TAG}")
-    local remote_date
-    remote_date=$(echo "$remote_info" | grep '"published_at"' | head -1 | grep -oP '"\K[^"]+(?=")' || echo "unknown")
+    # CORE-329: `latest` se resuelve vía el endpoint releases/latest; los tags
+    # concretos (nightly) van por releases/tags/. La extracción anterior
+    # (`grep -oP '"\K[^"]+(?=")'`) devolvía TODAS las cadenas de la línea
+    # ("published_at", ": ", la fecha) — imprimía basura.
+    local remote_api
+    if [[ "$TAG" == "latest" ]]; then
+        remote_api="https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest"
+    else
+        remote_api="https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${TAG}"
+    fi
+    local remote_info remote_tag remote_date
+    remote_info=$(curl -s "$remote_api")
+    remote_tag=$(echo "$remote_info" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+    remote_date=$(echo "$remote_info" | grep -oP '"published_at":\s*"\K[^"]+' | head -1)
 
-    printf 'Última disponible: %b%s%b\n\n' "$GREEN" "$remote_date" "$NC"
+    printf 'Última disponible: %b%s%b (%s)\n\n' "$GREEN" "${remote_tag:-unknown}" "$NC" "${remote_date:-unknown}"
 
     printf "  → Deteniendo servicio...\n"
     sudo systemctl stop "$SERVICE_NAME" 2>/dev/null || true
@@ -441,7 +469,7 @@ cmd_update() {
         "${RELEASE_URL}/ank-server-linux-${ARCH}.tar.gz" \
         -o /tmp/ank-update.tar.gz; then
         printf '%bError: No se pudo descargar el binario (canal: %s, tag: %s).%b\n' "$RED" "$CHANNEL" "$TAG" "$NC"
-        printf '%bSugerencia: intentá con '"'"'sudo aegis update'"'"' (usa nightly por defecto).%b\n' "$YELLOW" "$NC"
+        printf '%bSugerencia: probá el canal nightly con '"'"'sudo aegis update --nightly'"'"'.%b\n' "$YELLOW" "$NC"
         sudo systemctl start "$SERVICE_NAME"
         exit 1
     fi
@@ -590,8 +618,8 @@ case "${1:-help}" in
             echo "  trace [OPTS]  Follow filtered model-routing events only (no JSON walls)"
             echo "                  -n N | --pid proc_xxx | --since \"5m ago\" | --no-follow"
             echo "  tunnel           Manually start Cloudflare Tunnel"
-            echo "  update           Update to latest nightly build (installs cloudflared if missing)"
-            echo "  update --stable  Update to latest stable release (installs cloudflared if missing)"
+            echo "  update           Update to latest stable release (installs cloudflared if missing)"
+            echo "  update --nightly Update to latest nightly build from main"
             echo "  token            Get setup URL"
             echo "  uninstall        Remove Aegis from system"
 

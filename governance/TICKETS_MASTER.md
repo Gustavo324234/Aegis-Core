@@ -111,6 +111,7 @@
 | CORE-321 | chore | App/Android: deshabilitar el file-watcher nativo de Gradle (crashes JVM en Windows) | ✅ Done | Alta | DevOps Engineer |
 | CORE-325 | chore | Kernel: deduplicar el feed de señales del fallback walk en chal/mod.rs | ✅ Done | Media | Kernel Engineer |
 | CORE-326 | fix | Kernel: handshake SCM oportunista para ImagePath legacy sin --service | ✅ Done | Alta | Kernel Engineer |
+| CORE-329 | fix | Installer: self-update atómico, canal stable funcional y versión de producto | ✅ Done | Crítica | DevOps Engineer |
 
 ## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
 
