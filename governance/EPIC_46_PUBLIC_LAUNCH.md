@@ -58,7 +58,7 @@ El repo debe ser encontrable, comprensible, contribuible y con infraestructura d
 |---|---|---|---|
 | CORE-220 | Crear release estable en GitHub con release notes | ✅ Done | Release **v0.2.0 — Public Beta** publicada el 2026-06-12 (decisión del Owner: versión honesta 0.x en lugar de v1.0.0). El tag `v*` dispara `publish-native`, que adjunta los binarios de todas las plataformas (incl. `ank-cli`) sin marca de prerelease; marcada `latest` para que `aegis update --stable` la resuelva. |
 | CORE-221 | Agregar topics al repo de GitHub | ✅ Done | Verificado vía API el 2026-06-12: `cognitive-os, rust, ai-agents, axum, llm, multi-agent, opensource, self-hosted, tokio` (los 5 requeridos + 4 extra). |
-| CORE-222 | Social preview image (og:image del repo) | ⚠️ Manual | Setting/asset de GitHub — solo el Owner puede subirla (Settings → Social preview). Único item abierto del epic. |
+| CORE-222 | Social preview image (og:image del repo) | ✅ Done | Subida por el Owner el 2026-06-12 (Settings → Social preview), confirmado el mismo día del lanzamiento v0.2.0. |
 
 ---
 
@@ -82,10 +82,10 @@ El Epic 46 está completo cuando:
 - [x] Repo tiene topics relevantes (cognitive-os, rust, ai-agents, self-hosted, llm) *(verificado vía API)*
 - [x] `license` field en todos los `Cargo.toml` dice `MIT` *(workspace.package + 9 crates explícitos)*
 - [x] No hay directorios de trabajo temporales en el repo publicado *(`scratch/` gitignorado, 0 archivos trackeados)*
-- [ ] Social preview image (og:image) configurada *(CORE-222 — manual del Owner, único item abierto)*
+- [x] Social preview image (og:image) configurada *(subida por el Owner el 2026-06-12)*
 
-**Estado real:** ~95% verificado. Único item abierto: CORE-222 (og:image — Settings → Social preview, acción manual del Owner).
+**Estado real: ✅ 100% — EPIC 46 COMPLETO.** Aegis OS lanzado públicamente como v0.2.0 — Public Beta el 2026-06-12.
 
 ---
 
-*Arquitecto IA — 2026-04-28 · Reconciliado 2026-05-31 · Lanzamiento v0.2.0 Public Beta 2026-06-12*
+*Arquitecto IA — 2026-04-28 · Reconciliado 2026-05-31 · Lanzamiento v0.2.0 Public Beta 2026-06-12 · Epic cerrado 2026-06-12*
