@@ -50,6 +50,13 @@
 
 
 
+## [0.1.87](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.86...ank-server-v0.1.87) (2026-06-12)
+
+
+### Features
+
+* **core:** CMR hardening + scoring v3/v3.1, tracker persistence, stats endpoint and stabilization criticals (CORE-319..325) ([#333](https://github.com/Gustavo324234/Aegis-Core/issues/333)) ([a4707e0](https://github.com/Gustavo324234/Aegis-Core/commit/a4707e0b1d5f864a3ac6c1061d18700755c004cf))
+
 ## [0.1.86](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.85...ank-server-v0.1.86) (2026-06-04)
 
 
