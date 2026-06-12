@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.76](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.75...ank-core-v0.1.76) (2026-06-12)
+
+
+### Features
+
+* **core,http:** conversation-scoped sticky routing and task-aware reliability (CORE-327, CORE-328) ([#337](https://github.com/Gustavo324234/Aegis-Core/issues/337)) ([5c985c6](https://github.com/Gustavo324234/Aegis-Core/commit/5c985c661e8015484cfeda94674f50b5972e65ee))
+
 ## [0.1.75](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.74...ank-core-v0.1.75) (2026-06-12)
 
 

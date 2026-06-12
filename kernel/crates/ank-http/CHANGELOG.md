@@ -26,6 +26,13 @@
 
 
 
+## [0.1.84](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.83...ank-http-v0.1.84) (2026-06-12)
+
+
+### Features
+
+* **core,http:** conversation-scoped sticky routing and task-aware reliability (CORE-327, CORE-328) ([#337](https://github.com/Gustavo324234/Aegis-Core/issues/337)) ([5c985c6](https://github.com/Gustavo324234/Aegis-Core/commit/5c985c661e8015484cfeda94674f50b5972e65ee))
+
 ## [0.1.83](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.82...ank-http-v0.1.83) (2026-06-12)
 
 
