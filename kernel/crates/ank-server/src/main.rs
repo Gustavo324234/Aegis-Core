@@ -268,6 +268,12 @@ pub(crate) async fn run_server() -> Result<()> {
         catalog.clone(),
         key_pool.clone(),
     )));
+    // CORE-322: restore free-tier daily counters + reliability outcomes and
+    // keep persisting them so a restart doesn't reset the router's memory.
+    router
+        .read()
+        .await
+        .spawn_tracker_persistence(Arc::clone(&persistence) as Arc<dyn StatePersistor>);
     hal.set_router(router.clone()).await;
     hal.set_router_ref(router.clone()).await;
 

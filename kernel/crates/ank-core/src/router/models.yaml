@@ -15,9 +15,9 @@
     analysis: 5
     summarization: 4
     extraction: 5
-- model_id: anthropic/claude-opus-4-6
+- model_id: anthropic/claude-opus-4-8
   provider: anthropic
-  display_name: Claude Opus 4.6
+  display_name: Claude Opus 4.8
   context_window: 200000
   cost_input_per_mtok: 15.0
   cost_output_per_mtok: 75.0
@@ -32,6 +32,23 @@
     analysis: 5
     summarization: 5
     extraction: 5
+- model_id: anthropic/claude-haiku-4-5
+  provider: anthropic
+  display_name: Claude Haiku 4.5
+  context_window: 200000
+  cost_input_per_mtok: 1.0
+  cost_output_per_mtok: 5.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 800
+  task_scores:
+    chat: 5
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
 - model_id: openai/gpt-4o
   provider: openai
   display_name: GPT-4o
@@ -66,10 +83,10 @@
     analysis: 3
     summarization: 4
     extraction: 4
-- model_id: openai/o3-mini
+- model_id: openai/o4-mini
   provider: openai
-  display_name: O3 Mini
-  context_window: 128000
+  display_name: o4-mini
+  context_window: 200000
   cost_input_per_mtok: 1.1
   cost_output_per_mtok: 4.4
   supports_tools: true
@@ -83,6 +100,23 @@
     analysis: 5
     summarization: 3
     extraction: 4
+- model_id: openai/gpt-4.1
+  provider: openai
+  display_name: GPT-4.1
+  context_window: 1047576
+  cost_input_per_mtok: 2.0
+  cost_output_per_mtok: 8.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1500
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 4
+    analysis: 5
+    summarization: 4
+    extraction: 5
 - model_id: gemini-3.1-pro-preview
   provider: gemini
   display_name: Gemini 3.1 Pro (Preview)
@@ -233,40 +267,6 @@
     analysis: 3
     summarization: 3
     extraction: 3
-- model_id: gemini-1.5-pro
-  provider: gemini
-  display_name: Gemini 1.5 Pro
-  context_window: 2097152
-  cost_input_per_mtok: 1.25
-  cost_output_per_mtok: 5.0
-  supports_tools: true
-  supports_json_mode: true
-  is_local: false
-  avg_latency_ms: 1500
-  task_scores:
-    chat: 4
-    coding: 4
-    planning: 4
-    analysis: 4
-    summarization: 4
-    extraction: 4
-- model_id: gemini-1.5-flash
-  provider: gemini
-  display_name: Gemini 1.5 Flash
-  context_window: 1048576
-  cost_input_per_mtok: 0.075
-  cost_output_per_mtok: 0.3
-  supports_tools: true
-  supports_json_mode: true
-  is_local: false
-  avg_latency_ms: 600
-  task_scores:
-    chat: 4
-    coding: 3
-    planning: 3
-    analysis: 3
-    summarization: 4
-    extraction: 4
 - model_id: groq/llama-3.3-70b-versatile
   provider: groq
   display_name: Llama 3.3 70B (Groq)
@@ -284,23 +284,23 @@
     analysis: 4
     summarization: 4
     extraction: 4
-- model_id: groq/mixtral-8x7b
+- model_id: qwen/qwen3-32b
   provider: groq
-  display_name: Mixtral 8x7B (Groq)
-  context_window: 32768
-  cost_input_per_mtok: 0.27
-  cost_output_per_mtok: 0.27
-  supports_tools: false
-  supports_json_mode: false
+  display_name: Qwen3 32B (Groq)
+  context_window: 131072
+  cost_input_per_mtok: 0.29
+  cost_output_per_mtok: 0.59
+  supports_tools: true
+  supports_json_mode: true
   is_local: false
-  avg_latency_ms: 350
+  avg_latency_ms: 400
   task_scores:
-    chat: 3
-    coding: 3
-    planning: 3
-    analysis: 3
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
     summarization: 4
-    extraction: 3
+    extraction: 4
 - model_id: deepseek/deepseek-r1
   provider: deepseek
   display_name: DeepSeek R1
@@ -405,23 +405,6 @@
     analysis: 4
     summarization: 4
     extraction: 3
-- model_id: meta-llama/llama-3.1-70b-instruct
-  provider: openrouter
-  display_name: Llama 3.1 70B (OpenRouter)
-  context_window: 131072
-  cost_input_per_mtok: 0.4
-  cost_output_per_mtok: 0.4
-  supports_tools: true
-  supports_json_mode: false
-  is_local: false
-  avg_latency_ms: 1500
-  task_scores:
-    chat: 1
-    coding: 1
-    planning: 1
-    analysis: 1
-    summarization: 1
-    extraction: 1
 - model_id: meta-llama/llama-3.3-70b-instruct:free
   provider: openrouter
   display_name: Llama 3.3 70B (free)

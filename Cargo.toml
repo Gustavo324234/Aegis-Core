@@ -13,6 +13,9 @@ members = [
     "kernel/plugins_src",
 ]
 
+[workspace.package]
+license = "MIT"
+
 [workspace.dependencies]
 # Async runtime
 tokio              = { version = "1.41", features = ["full", "tracing"] }

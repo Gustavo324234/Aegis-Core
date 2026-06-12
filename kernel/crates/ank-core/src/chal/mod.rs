@@ -460,6 +460,38 @@ impl CognitiveHAL {
         *r = Some(router);
     }
 
+    /// CORE-325: single point for feeding a model failure into the router's
+    /// tracker. Every branch of the fallback walk (primary call, key
+    /// rotation, fallback chain — HTTP-error and retry variants) used to
+    /// inline this block with small inconsistencies; one helper keeps the
+    /// signals uniform: scoring window + provider circuit always, and the
+    /// per-model circuit on deterministic failures (401 / tier-0 quota,
+    /// see `is_permanent_model_failure`).
+    async fn note_model_failure(&self, model_id: &str, provider: &str, err: Option<&SystemError>) {
+        if let Some(r) = self.router_ref.read().await.clone() {
+            let router = r.read().await;
+            let tracker = router.tracker_ref();
+            tracker.record_failure(model_id, provider).await;
+            if let Some(e) = err {
+                if is_permanent_model_failure(e) {
+                    tracker.record_model_unavailable(model_id).await;
+                }
+            }
+        }
+    }
+
+    /// CORE-325: a 200-OK stream with zero content tokens is an implicit
+    /// failure — feed both the per-model empty-response circuit and the
+    /// failure window so decide() reranks away from the silent model.
+    async fn note_empty_response(&self, model_id: &str, provider: &str) {
+        if let Some(r) = self.router_ref.read().await.clone() {
+            let router = r.read().await;
+            let tracker = router.tracker_ref();
+            tracker.record_empty_response(model_id).await;
+            tracker.record_failure(model_id, provider).await;
+        }
+    }
+
     /// CORE-261: Registra el AgentOrchestrator para uso en el bucle ReAct.
     pub async fn set_orchestrator(
         &self,
@@ -722,20 +754,12 @@ impl CognitiveHAL {
                         Ok(s) => s,
                         Err(primary_err) => {
                             let tracker = self.router_ref.read().await.clone();
-                            if let Some(r) = &tracker {
-                                let tr = r.read().await;
-                                tr.tracker_ref()
-                                    .record_failure(&active_model_id, &active_provider)
-                                    .await;
-                                // CORE-FIX (F): a 401 / tier-0 quota is permanent for
-                                // this model — trip its circuit so decide() reranks
-                                // away from it next request instead of re-picking it.
-                                if is_permanent_model_failure(&primary_err) {
-                                    tr.tracker_ref()
-                                        .record_model_unavailable(&active_model_id)
-                                        .await;
-                                }
-                            }
+                            self.note_model_failure(
+                                &active_model_id,
+                                &active_provider,
+                                Some(&primary_err),
+                            )
+                            .await;
                             warn!(
                                 pid = %pid,
                                 primary = %active_model_id,
@@ -814,11 +838,12 @@ impl CognitiveHAL {
                                             break;
                                         }
                                         Err(e) => {
-                                            r.read()
-                                                .await
-                                                .tracker_ref()
-                                                .record_failure(&active_model_id, &active_provider)
-                                                .await;
+                                            self.note_model_failure(
+                                                &active_model_id,
+                                                &active_provider,
+                                                Some(&e),
+                                            )
+                                            .await;
                                             warn!(
                                                 pid = %pid,
                                                 provider = %active_provider,
@@ -897,17 +922,12 @@ impl CognitiveHAL {
                                         break;
                                     }
                                     Err(e) => {
-                                        if let Some(r) = &tracker {
-                                            let tr = r.read().await;
-                                            tr.tracker_ref()
-                                                .record_failure(&fb.model_id, &fb.provider)
-                                                .await;
-                                            if is_permanent_model_failure(&e) {
-                                                tr.tracker_ref()
-                                                    .record_model_unavailable(&fb.model_id)
-                                                    .await;
-                                            }
-                                        }
+                                        self.note_model_failure(
+                                            &fb.model_id,
+                                            &fb.provider,
+                                            Some(&e),
+                                        )
+                                        .await;
                                         warn!(
                                             pid = %pid,
                                             fallback = %fb.model_id,
@@ -974,13 +994,8 @@ impl CognitiveHAL {
                     {
                         Ok(s) => s,
                         Err(e) => {
-                            if let Some(r) = self.router_ref.read().await.clone() {
-                                r.read()
-                                    .await
-                                    .tracker_ref()
-                                    .record_failure(&active_model_id, &active_provider)
-                                    .await;
-                            }
+                            self.note_model_failure(&active_model_id, &active_provider, Some(&e))
+                                .await;
                             return Err(e);
                         }
                     }
@@ -1049,15 +1064,8 @@ impl CognitiveHAL {
                     && tool_calls.is_empty();
 
                 if stream_was_empty {
-                    if let Some(r) = self.router_ref.read().await.clone() {
-                        let tr = r.read().await;
-                        tr.tracker_ref()
-                            .record_empty_response(&active_model_id)
-                            .await;
-                        tr.tracker_ref()
-                            .record_failure(&active_model_id, &active_provider)
-                            .await;
-                    }
+                    self.note_empty_response(&active_model_id, &active_provider)
+                        .await;
                     warn!(
                         pid = %pid,
                         model = %active_model_id,
@@ -1163,12 +1171,11 @@ impl CognitiveHAL {
                                         break;
                                     } else {
                                         // Alt key also empty — record + try next.
-                                        if let Some(r2) = self.router_ref.read().await.clone() {
-                                            let tr2 = r2.read().await;
-                                            tr2.tracker_ref()
-                                                .record_empty_response(&active_model_id)
-                                                .await;
-                                        }
+                                        self.note_empty_response(
+                                            &active_model_id,
+                                            &active_provider,
+                                        )
+                                        .await;
                                         warn!(
                                             pid = %pid,
                                             provider = %active_provider,
@@ -1179,13 +1186,12 @@ impl CognitiveHAL {
                                     }
                                 }
                                 Err(e) => {
-                                    if let Some(r2) = self.router_ref.read().await.clone() {
-                                        r2.read()
-                                            .await
-                                            .tracker_ref()
-                                            .record_failure(&active_model_id, &active_provider)
-                                            .await;
-                                    }
+                                    self.note_model_failure(
+                                        &active_model_id,
+                                        &active_provider,
+                                        Some(&e),
+                                    )
+                                    .await;
                                     warn!(
                                         pid = %pid,
                                         provider = %active_provider,
@@ -1277,15 +1283,7 @@ impl CognitiveHAL {
                                         break;
                                     } else {
                                         // Fallback also returned empty. Record and try next.
-                                        if let Some(r) = self.router_ref.read().await.clone() {
-                                            let tr = r.read().await;
-                                            tr.tracker_ref()
-                                                .record_empty_response(&fb.model_id)
-                                                .await;
-                                            tr.tracker_ref()
-                                                .record_failure(&fb.model_id, &fb.provider)
-                                                .await;
-                                        }
+                                        self.note_empty_response(&fb.model_id, &fb.provider).await;
                                         warn!(
                                             pid = %pid,
                                             fallback = %fb.model_id,
@@ -1294,17 +1292,8 @@ impl CognitiveHAL {
                                     }
                                 }
                                 Err(e) => {
-                                    if let Some(r) = self.router_ref.read().await.clone() {
-                                        let tr = r.read().await;
-                                        tr.tracker_ref()
-                                            .record_failure(&fb.model_id, &fb.provider)
-                                            .await;
-                                        if is_permanent_model_failure(&e) {
-                                            tr.tracker_ref()
-                                                .record_model_unavailable(&fb.model_id)
-                                                .await;
-                                        }
-                                    }
+                                    self.note_model_failure(&fb.model_id, &fb.provider, Some(&e))
+                                        .await;
                                     warn!(
                                         pid = %pid,
                                         fallback = %fb.model_id,

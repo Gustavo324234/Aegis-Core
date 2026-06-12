@@ -35,6 +35,10 @@ pub fn router() -> Router<AppState> {
         .route("/models", get(list_router_models))
         .route("/sync", post(sync_router_catalog))
         .route("/status", get(router_status))
+        // CORE-322: routing telemetry — outcomes, open circuits, observed
+        // latency and sticky decisions, so the UI can answer "why did the
+        // router pick X?" instead of digging through server logs.
+        .route("/stats", get(router_stats))
         .route("/modules", get(list_modules))
         .route("/modules/:module_id/enable", post(enable_module))
         .route("/modules/:module_id/execute", post(execute_module_tool))
@@ -719,6 +723,18 @@ async fn router_status() -> Json<RouterStatusResponse> {
         status: "operational".to_string(),
         catalog_syncer: "active".to_string(),
     })
+}
+
+/// CORE-322: routing telemetry for the UI — per-model success/failure
+/// outcomes, observed latency, currently-open circuits (with retry
+/// countdowns) and the active sticky decisions. Secrets-free by
+/// construction (`CognitiveRouter::stats` exposes ids and counters only).
+async fn router_stats(
+    State(state): State<AppState>,
+    _auth: CitadelAuthenticated,
+) -> Result<Json<ank_core::router::RouterStats>, AegisHttpError> {
+    let router = state.router.read().await;
+    Ok(Json(router.stats().await))
 }
 
 /// Providers that don't require an API key (local / unauthenticated endpoints).

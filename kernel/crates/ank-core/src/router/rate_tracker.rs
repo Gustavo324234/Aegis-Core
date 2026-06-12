@@ -1,5 +1,7 @@
 use chrono::{Local, NaiveDate};
-use std::collections::{HashMap, VecDeque};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -30,12 +32,43 @@ pub struct ModelUsageTracker {
     /// never succeed on retry, so re-picking the same model every request just
     /// burns time and keys. One hit → skip the model for 5 minutes.
     model_unavailable: Arc<RwLock<HashMap<String, VecDeque<Instant>>>>,
+    /// CORE-324: last half-open probe per provider. While a provider circuit
+    /// is open but its failures have gone quiet, one candidate is allowed
+    /// through as a canary every few seconds instead of blocking all traffic
+    /// until the window slides.
+    half_open_probes: Arc<RwLock<HashMap<String, Instant>>>,
+    /// CORE-322: set whenever durable state (daily counts / outcomes) changes,
+    /// consumed by the persistence loop so it only writes when needed.
+    dirty: AtomicBool,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+/// EWMA (α = 0.3) over a sample window, oldest → newest. None when empty.
+fn ewma_ms(samples: &VecDeque<u32>) -> Option<u32> {
+    const ALPHA: f64 = 0.3;
+    let mut ewma: Option<f64> = None;
+    for &v in samples.iter() {
+        ewma = Some(match ewma {
+            Some(prev) => ALPHA * v as f64 + (1.0 - ALPHA) * prev,
+            None => v as f64,
+        });
+    }
+    ewma.map(|v| v.round() as u32)
+}
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct ModelOutcomes {
     pub successes: u64,
     pub failures: u64,
+}
+
+/// CORE-322: durable subset of the tracker state. The sliding minute/error
+/// windows are intentionally ephemeral, but losing the daily counters on
+/// restart meant the router could blow a free tier's RPD right after boot,
+/// and losing outcomes reset the observed-reliability signal to zero.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct TrackerSnapshot {
+    pub daily_counts: HashMap<String, (u32, NaiveDate)>,
+    pub outcomes: HashMap<String, ModelOutcomes>,
 }
 
 impl ModelOutcomes {
@@ -66,6 +99,53 @@ impl ModelUsageTracker {
             provider_failures: Arc::new(RwLock::new(HashMap::new())),
             empty_responses: Arc::new(RwLock::new(HashMap::new())),
             model_unavailable: Arc::new(RwLock::new(HashMap::new())),
+            half_open_probes: Arc::new(RwLock::new(HashMap::new())),
+            dirty: AtomicBool::new(false),
+        }
+    }
+
+    // ─── CORE-322: persistence of durable state ──────────────────────────
+
+    /// Whether durable state changed since the last `take_dirty()`. Clears
+    /// the flag — the persistence loop calls this once per tick.
+    pub fn take_dirty(&self) -> bool {
+        self.dirty.swap(false, Ordering::Relaxed)
+    }
+
+    /// Serializable copy of the durable state (daily counters + outcomes).
+    pub async fn snapshot(&self) -> TrackerSnapshot {
+        TrackerSnapshot {
+            daily_counts: self.daily_counts.read().await.clone(),
+            outcomes: self.outcomes.read().await.clone(),
+        }
+    }
+
+    /// Restore a snapshot at boot. Daily counters are only honoured for
+    /// today's date (a snapshot from yesterday must not throttle today);
+    /// outcomes are merged additively so a restore never loses in-memory
+    /// counts recorded before it ran.
+    pub async fn restore(&self, snap: TrackerSnapshot) {
+        let today = Local::now().date_naive();
+        {
+            let mut map = self.daily_counts.write().await;
+            for (model, (count, date)) in snap.daily_counts {
+                if date == today {
+                    let entry = map.entry(model).or_insert((0, today));
+                    if entry.1 == today {
+                        entry.0 += count;
+                    } else {
+                        *entry = (count, today);
+                    }
+                }
+            }
+        }
+        {
+            let mut map = self.outcomes.write().await;
+            for (model, o) in snap.outcomes {
+                let entry = map.entry(model).or_default();
+                entry.successes += o.successes;
+                entry.failures += o.failures;
+            }
         }
     }
 
@@ -93,6 +173,7 @@ impl ModelUsageTracker {
                 entry.0 += 1;
             }
         }
+        self.dirty.store(true, Ordering::Relaxed);
     }
 
     async fn requests_last_minute(&self, model_id: &str) -> u32 {
@@ -168,15 +249,13 @@ impl ModelUsageTracker {
         queue.push_back(now);
     }
 
-    /// Returns the average observed latency, or None if no samples exist yet.
+    /// Returns the observed latency estimate, or None if no samples exist yet.
+    /// CORE-324: EWMA (α = 0.3, newest weighted highest) instead of a plain
+    /// mean — reacts to a degrading provider within a few samples while a
+    /// single outlier only nudges the estimate.
     pub async fn observed_latency_ms(&self, model_id: &str) -> Option<u32> {
         let map = self.latency_samples.read().await;
-        let samples = map.get(model_id)?;
-        if samples.is_empty() {
-            return None;
-        }
-        let avg = samples.iter().map(|&v| v as u64).sum::<u64>() / samples.len() as u64;
-        Some(avg as u32)
+        ewma_ms(map.get(model_id)?)
     }
 
     /// Returns the number of errors recorded in the last 5 minutes.
@@ -197,6 +276,7 @@ impl ModelUsageTracker {
     pub async fn record_success(&self, model_id: &str) {
         let mut map = self.outcomes.write().await;
         map.entry(model_id.to_string()).or_default().successes += 1;
+        self.dirty.store(true, Ordering::Relaxed);
     }
 
     /// Increment the failure counter for a model and tally a provider-level
@@ -214,6 +294,7 @@ impl ModelUsageTracker {
             let mut map = self.outcomes.write().await;
             map.entry(model_id.to_string()).or_default().failures += 1;
         }
+        self.dirty.store(true, Ordering::Relaxed);
         // Also count this against the provider — feeds the circuit breaker.
         let now = Instant::now();
         let mut pf = self.provider_failures.write().await;
@@ -234,6 +315,57 @@ impl ModelUsageTracker {
     /// Full snapshot of all model outcomes — for /stats or telemetry endpoints.
     pub async fn all_outcomes(&self) -> HashMap<String, ModelOutcomes> {
         self.outcomes.read().await.clone()
+    }
+
+    /// CORE-322: observed latency estimate per model (same EWMA the scorer
+    /// uses) — for /stats.
+    pub async fn all_observed_latencies(&self) -> HashMap<String, u32> {
+        let map = self.latency_samples.read().await;
+        map.iter()
+            .filter_map(|(model, samples)| ewma_ms(samples).map(|v| (model.clone(), v)))
+            .collect()
+    }
+
+    /// CORE-322: providers whose circuit is currently open, with the seconds
+    /// remaining until it closes — for /stats and UI countdowns.
+    pub async fn open_provider_circuits(&self) -> HashMap<String, u64> {
+        let providers: Vec<String> = {
+            let pf = self.provider_failures.read().await;
+            pf.keys().cloned().collect()
+        };
+        let mut open = HashMap::new();
+        for provider in providers {
+            if self.is_provider_circuit_open(&provider).await {
+                let secs = self
+                    .provider_cooldown_remaining_secs(&provider)
+                    .await
+                    .unwrap_or(0);
+                open.insert(provider, secs);
+            }
+        }
+        open
+    }
+
+    /// CORE-322: models whose per-model circuit is currently open, with the
+    /// seconds remaining until the empty-response window closes (0 when the
+    /// circuit is held open by a hard-unavailable event instead).
+    pub async fn open_model_circuits(&self) -> HashMap<String, u64> {
+        let models: HashSet<String> = {
+            let empty = self.empty_responses.read().await;
+            let unavail = self.model_unavailable.read().await;
+            empty.keys().chain(unavail.keys()).cloned().collect()
+        };
+        let mut open = HashMap::new();
+        for model in models {
+            if self.is_model_circuit_open(&model).await {
+                let secs = self
+                    .model_cooldown_remaining_secs(&model)
+                    .await
+                    .unwrap_or(0);
+                open.insert(model, secs);
+            }
+        }
+        open
     }
 
     // ─── CORE-FIX: B3 — circuit breaker per provider ─────────────────────
@@ -270,6 +402,34 @@ impl ModelUsageTracker {
     /// once the window slides past.
     pub async fn is_provider_circuit_open(&self, provider: &str) -> bool {
         self.provider_failures_recent(provider).await >= 3
+    }
+
+    /// CORE-324: half-open canary. While the circuit is open, once the
+    /// provider has been quiet for ≥ 15s, allow ONE candidate through every
+    /// 10s as a probe instead of blocking all traffic until the window
+    /// slides. A failing probe refreshes the failure window (the next probe
+    /// waits another 15s); a successful one lets the circuit age out
+    /// naturally with traffic already flowing.
+    pub async fn provider_circuit_allows_probe(&self, provider: &str) -> bool {
+        let newest_failure = {
+            let pf = self.provider_failures.read().await;
+            pf.get(provider).and_then(|q| q.back().copied())
+        };
+        let Some(newest) = newest_failure else {
+            return false;
+        };
+        if newest.elapsed() < Duration::from_secs(15) {
+            return false;
+        }
+        let mut probes = self.half_open_probes.write().await;
+        let now = Instant::now();
+        match probes.get(provider) {
+            Some(last) if now.duration_since(*last) < Duration::from_secs(10) => false,
+            _ => {
+                probes.insert(provider.to_string(), now);
+                true
+            }
+        }
     }
 
     /// CORE-FIX (inspired by OpenClaw's per-profile cooldown tracking):
@@ -434,5 +594,98 @@ mod tests {
             t.record_failure("m", "ollama_cloud").await;
         }
         assert!(t.is_provider_circuit_open("ollama_cloud").await);
+    }
+
+    /// CORE-324: EWMA must weight recent samples — a latency spike at the end
+    /// of the window moves the estimate well above the old samples, and a
+    /// single early outlier barely registers once newer samples arrive.
+    #[tokio::test]
+    async fn observed_latency_is_recency_weighted() {
+        let t = ModelUsageTracker::new();
+        for _ in 0..10 {
+            t.record_latency("m", 500).await;
+        }
+        let stable = t.observed_latency_ms("m").await.unwrap();
+        assert_eq!(stable, 500);
+
+        // Provider degrades: two slow samples land.
+        t.record_latency("m", 5000).await;
+        t.record_latency("m", 5000).await;
+        let degraded = t.observed_latency_ms("m").await.unwrap();
+        assert!(
+            degraded > 2500,
+            "EWMA must react to recent degradation (got {})",
+            degraded
+        );
+    }
+
+    /// CORE-324: the half-open probe must stay CLOSED while failures are
+    /// fresh (< 15s) and when the provider has no failure history at all.
+    #[tokio::test]
+    async fn half_open_probe_blocked_while_failures_fresh() {
+        let t = ModelUsageTracker::new();
+        assert!(
+            !t.provider_circuit_allows_probe("groq").await,
+            "no failure history → nothing to probe"
+        );
+        for _ in 0..3 {
+            t.record_failure("m", "groq").await;
+        }
+        assert!(t.is_provider_circuit_open("groq").await);
+        assert!(
+            !t.provider_circuit_allows_probe("groq").await,
+            "failures seconds old → probe must wait out the quiet period"
+        );
+    }
+
+    /// CORE-322: durable state must round-trip through snapshot/restore —
+    /// today's RPD counters and the outcome tallies survive, stale-dated
+    /// counters are dropped, and the dirty flag tracks mutations.
+    #[tokio::test]
+    async fn snapshot_restore_roundtrip() {
+        let t = ModelUsageTracker::new();
+        assert!(!t.take_dirty(), "fresh tracker must not be dirty");
+
+        t.record_request("gemini-2.5-flash").await;
+        t.record_request("gemini-2.5-flash").await;
+        t.record_success("gemini-2.5-flash").await;
+        t.record_failure("groq/llama", "groq").await;
+        assert!(t.take_dirty(), "mutations must mark the tracker dirty");
+        assert!(!t.take_dirty(), "take_dirty must clear the flag");
+
+        let mut snap = t.snapshot().await;
+        // Inject a stale-dated counter — must be dropped on restore.
+        snap.daily_counts.insert(
+            "stale-model".to_string(),
+            (99, Local::now().date_naive() - chrono::Duration::days(1)),
+        );
+
+        let restored = ModelUsageTracker::new();
+        restored.restore(snap).await;
+
+        // RPD: 2 of 4 used → capacity 0.5 for today's model, stale one untouched.
+        assert_eq!(
+            restored
+                .capacity_factor("gemini-2.5-flash", None, Some(4))
+                .await,
+            0.5
+        );
+        assert_eq!(
+            restored
+                .capacity_factor("stale-model", None, Some(100))
+                .await,
+            1.0,
+            "yesterday's counter must not throttle today"
+        );
+        let outcomes = restored.outcomes_for("groq/llama").await.unwrap();
+        assert_eq!(outcomes.failures, 1);
+        assert_eq!(
+            restored
+                .outcomes_for("gemini-2.5-flash")
+                .await
+                .unwrap()
+                .successes,
+            1
+        );
     }
 }

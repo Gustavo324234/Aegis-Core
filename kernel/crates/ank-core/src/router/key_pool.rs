@@ -123,7 +123,12 @@ impl KeyPool {
             if let Some(rest) = pcb.pid.strip_prefix("keypool:global:") {
                 let _ = rest; // key_id embedded in pid
                 match serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction) {
-                    Ok(entry) => {
+                    Ok(mut entry) => {
+                        // CORE-212: keys persisted before the HTTP layer started
+                        // normalising provider ids may carry aliases ("google");
+                        // the router looks up the canonical id ("gemini"), so
+                        // normalise on load or those keys are never matched.
+                        entry.provider = crate::router::normalize_provider_id(&entry.provider);
                         global.push(entry);
                     }
                     Err(e) => {
@@ -139,7 +144,9 @@ impl KeyPool {
                 if parts.len() == 2 {
                     let tid = parts[0].to_string();
                     match serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction) {
-                        Ok(entry) => {
+                        Ok(mut entry) => {
+                            // CORE-212: normalise legacy provider aliases (see above).
+                            entry.provider = crate::router::normalize_provider_id(&entry.provider);
                             tenants.entry(tid).or_default().push(entry);
                         }
                         Err(e) => {
@@ -404,6 +411,39 @@ impl KeyPool {
         drop(global);
         let tenants = self.tenant_keys.read().await;
         tenants.values().any(|keys| keys.iter().any(&model_ok))
+    }
+
+    /// CORE-320: number of distinct free-tier keys currently usable for this
+    /// (provider, model) by this tenant — its own keys plus the global pool.
+    /// Each key carries its own provider-side quota and `get_available_key`
+    /// rotates round-robin between them, so N usable free keys give N× the
+    /// model's effective free-tier RPM/RPD. The router scales the limits it
+    /// passes to `capacity_factor` by this count.
+    pub async fn count_available_free_keys(
+        &self,
+        provider: &str,
+        model_id: &str,
+        tenant_id: &str,
+    ) -> usize {
+        let model_matches = |k: &ApiKeyEntry| -> bool {
+            k.provider == provider
+                && k.is_free_tier
+                && k.is_available()
+                && k.active_models
+                    .as_ref()
+                    .map(|m| m.iter().any(|s| model_id_matches(model_id, s)))
+                    .unwrap_or(true)
+        };
+
+        let tenant_keys = self.tenant_keys.read().await;
+        let global_keys = self.global_keys.read().await;
+
+        let tenant_count = tenant_keys
+            .get(tenant_id)
+            .map(|keys| keys.iter().filter(|k| model_matches(k)).count())
+            .unwrap_or(0);
+        let global_count = global_keys.iter().filter(|k| model_matches(k)).count();
+        tenant_count + global_count
     }
 
     /// Check if at least one key is available for a given provider and model
@@ -771,6 +811,62 @@ mod tests {
             "Model not in active_models should be rejected"
         );
 
+        Ok(())
+    }
+
+    /// CORE-320: count_available_free_keys must count exactly the free-tier
+    /// keys usable by the tenant (own + global), skipping paid, inactive and
+    /// rate-limited ones — the router scales free-tier RPM/RPD by this count.
+    #[tokio::test]
+    async fn test_count_available_free_keys() -> anyhow::Result<()> {
+        let pool = KeyPool::new(Arc::new(NoopPersistor));
+
+        let make_key = |id: &str, free: bool| ApiKeyEntry {
+            key_id: id.to_string(),
+            provider: "gemini".to_string(),
+            api_key: format!("AIza-{}", id),
+            api_url: None,
+            label: None,
+            is_active: true,
+            rate_limited_until: None,
+            active_models: None,
+            is_free_tier: free,
+        };
+
+        pool.add_global_key(make_key("free-1", true)).await?;
+        pool.add_global_key(make_key("free-2", true)).await?;
+        pool.add_global_key(make_key("paid-1", false)).await?;
+        pool.add_tenant_key("tenant-a", make_key("tenant-free", true))
+            .await?;
+
+        assert_eq!(
+            pool.count_available_free_keys("gemini", "gemini-2.5-flash", "tenant-a")
+                .await,
+            3,
+            "tenant sees its own free key plus the two global ones"
+        );
+        assert_eq!(
+            pool.count_available_free_keys("gemini", "gemini-2.5-flash", "default")
+                .await,
+            2,
+            "other tenants only see the global free keys"
+        );
+
+        // A rate-limited free key must stop counting until the limit expires.
+        pool.mark_rate_limited("free-1", Utc::now() + chrono::Duration::hours(1))
+            .await;
+        assert_eq!(
+            pool.count_available_free_keys("gemini", "gemini-2.5-flash", "default")
+                .await,
+            1
+        );
+
+        // Different provider → zero.
+        assert_eq!(
+            pool.count_available_free_keys("openai", "gpt-4o", "default")
+                .await,
+            0
+        );
         Ok(())
     }
 

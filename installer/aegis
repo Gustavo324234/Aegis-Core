@@ -572,24 +572,39 @@ case "${1:-help}" in
     token)     shift; cmd_token "$@" ;;
     uninstall) shift; cmd_uninstall "$@" ;;
     help|*)
-        echo "Aegis OS Unified CLI"
-        echo ""
-        echo "Usage: aegis {command} [args]"
-        echo ""
-        echo "Commands:"
-        echo "  start         Start Aegis service"
-        echo "  stop          Stop Aegis service"
-        echo "  restart       Restart Aegis service"
-        echo "  status        Check status and health"
-        echo "  diag          Run deep diagnostic report"
-        echo "  version       Show installed core version"
-        echo "  logs [N]      Follow logs (default 100)"
-        echo "  trace [OPTS]  Follow filtered model-routing events only (no JSON walls)"
-        echo "                  -n N | --pid proc_xxx | --since \"5m ago\" | --no-follow"
-        echo "  tunnel           Manually start Cloudflare Tunnel"
-        echo "  update           Update to latest nightly build (installs cloudflared if missing)"
-        echo "  update --stable  Update to latest stable release (installs cloudflared if missing)"
-        echo "  token            Get setup URL"
-        echo "  uninstall        Remove Aegis from system"
+        if [[ "${1:-help}" != "help" && -x "/usr/local/bin/ank-cli" ]]; then
+            exec "/usr/local/bin/ank-cli" "$@"
+        else
+            echo "Aegis OS Unified CLI"
+            echo ""
+            echo "Usage: aegis {command} [args]"
+            echo ""
+            echo "Service Commands:"
+            echo "  start         Start Aegis service"
+            echo "  stop          Stop Aegis service"
+            echo "  restart       Restart Aegis service"
+            echo "  status        Check status and health"
+            echo "  diag          Run deep diagnostic report"
+            echo "  version       Show installed core version"
+            echo "  logs [N]      Follow logs (default 100)"
+            echo "  trace [OPTS]  Follow filtered model-routing events only (no JSON walls)"
+            echo "                  -n N | --pid proc_xxx | --since \"5m ago\" | --no-follow"
+            echo "  tunnel           Manually start Cloudflare Tunnel"
+            echo "  update           Update to latest nightly build (installs cloudflared if missing)"
+            echo "  update --stable  Update to latest stable release (installs cloudflared if missing)"
+            echo "  token            Get setup URL"
+            echo "  uninstall        Remove Aegis from system"
+
+            if [[ -x "/usr/local/bin/ank-cli" ]]; then
+                echo ""
+                echo "Administrative Commands (forwarded to ank-cli):"
+                echo "  keygen        Generate Ed25519 keypair for signing Wasm plugins"
+                echo "  sign          Sign a WASM plugin using private key"
+                echo "  ps            List active processes in the Kernel"
+                echo "  run [prompt]  Send prompt to the AI and stream output"
+                echo "  admin         Advanced administration commands"
+                echo "  grpcstatus    Render system telemetry via gRPC"
+            fi
+        fi
         ;;
 esac
