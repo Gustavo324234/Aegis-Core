@@ -54,6 +54,39 @@ struct StickyKey {
     model_pref: ModelPreference,
 }
 
+/// CORE-322: pid of the synthetic PCB that stores the tracker's durable
+/// state (same persistence channel the KeyPool uses for API keys).
+const TRACKER_STATE_PID: &str = "router_tracker:global";
+
+/// CORE-322: routing telemetry aggregate for the `/api/router/stats`
+/// endpoint. Contains NO secrets — model/provider ids and counters only.
+#[derive(Debug, serde::Serialize)]
+pub struct RouterStats {
+    pub outcomes: Vec<ModelOutcomeStat>,
+    pub observed_latency_ms: HashMap<String, u32>,
+    pub open_provider_circuits: HashMap<String, u64>,
+    pub open_model_circuits: HashMap<String, u64>,
+    pub sticky_decisions: Vec<StickyDecisionStat>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ModelOutcomeStat {
+    pub model_id: String,
+    pub successes: u64,
+    pub failures: u64,
+    pub success_rate: Option<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct StickyDecisionStat {
+    pub tenant_id: String,
+    pub task_type: String,
+    pub model_pref: String,
+    pub model_id: String,
+    pub provider: String,
+    pub age_secs: u64,
+}
+
 pub struct CognitiveRouter {
     catalog: Arc<ModelCatalog>,
     key_pool: Arc<KeyPool>,
@@ -304,9 +337,23 @@ impl CognitiveRouter {
                 }
             }
             if self.tracker.is_provider_circuit_open(&entry.provider).await {
-                skipped_by_breaker.push(entry.model_id.clone());
-                providers_in_cooldown.insert(entry.provider.clone());
-                continue;
+                // CORE-324: half-open — once the provider has been quiet for
+                // a while, let one candidate through as a canary instead of
+                // blocking everything until the failure window slides.
+                if !self
+                    .tracker
+                    .provider_circuit_allows_probe(&entry.provider)
+                    .await
+                {
+                    skipped_by_breaker.push(entry.model_id.clone());
+                    providers_in_cooldown.insert(entry.provider.clone());
+                    continue;
+                }
+                info!(
+                    provider = %entry.provider,
+                    model = %entry.model_id,
+                    "CMR: half-open probe — letting one candidate through an open circuit"
+                );
             }
             // CORE-FIX (D): per-model circuit. The provider may be perfectly
             // healthy overall (e.g. ollama_cloud responds for gpt-oss:120b)
@@ -360,7 +407,7 @@ impl CognitiveRouter {
         // Two passes to avoid the order-dependent bias of incremental normalization.
         let max_cost = available
             .iter()
-            .map(|e| e.cost_input_per_mtok + e.cost_output_per_mtok)
+            .map(|e| task_weighted_cost(e, task_type))
             .fold(0.0_f64, f64::max);
         let max_latency = {
             let mut ml = 0.0_f64;
@@ -613,6 +660,101 @@ impl CognitiveRouter {
         &self.tracker
     }
 
+    /// CORE-322: restore the tracker's durable state (free-tier daily
+    /// counters + reliability outcomes) from disk and keep persisting it in
+    /// the background. Without this a restart silently reset the RPD
+    /// counters — the router could blow a free tier's daily quota right
+    /// after boot — and wiped the observed-reliability signal.
+    pub fn spawn_tracker_persistence(
+        &self,
+        persistor: Arc<dyn crate::scheduler::persistence::StatePersistor>,
+    ) {
+        let tracker = Arc::clone(&self.tracker);
+        tokio::spawn(async move {
+            // Restore once at boot.
+            match persistor.load_all_pcbs().await {
+                Ok(pcbs) => {
+                    if let Some(pcb) = pcbs.into_iter().find(|p| p.pid == TRACKER_STATE_PID) {
+                        match serde_json::from_str::<rate_tracker::TrackerSnapshot>(
+                            &pcb.memory_pointers.l1_instruction,
+                        ) {
+                            Ok(snap) => {
+                                tracker.restore(snap).await;
+                                info!("CORE-322: router tracker state restored from disk");
+                            }
+                            Err(e) => warn!(
+                                error = %e,
+                                "CORE-322: persisted tracker state is corrupt — starting fresh"
+                            ),
+                        }
+                    }
+                }
+                Err(e) => warn!(error = %e, "CORE-322: could not load tracker state"),
+            }
+
+            // Persist on a fixed cadence, only when something changed.
+            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                if !tracker.take_dirty() {
+                    continue;
+                }
+                let snap = tracker.snapshot().await;
+                match serde_json::to_string(&snap) {
+                    Ok(json) => {
+                        let mut pcb = crate::pcb::PCB::new(TRACKER_STATE_PID.to_string(), 0, json);
+                        pcb.pid = TRACKER_STATE_PID.to_string();
+                        if let Err(e) = persistor.save_pcb(&pcb).await {
+                            warn!(error = %e, "CORE-322: failed to persist tracker state");
+                        }
+                    }
+                    Err(e) => warn!(error = %e, "CORE-322: failed to serialize tracker state"),
+                }
+            }
+        });
+    }
+
+    /// CORE-322: telemetry aggregate for `/api/router/stats`. Secrets-free.
+    pub async fn stats(&self) -> RouterStats {
+        let mut outcomes: Vec<ModelOutcomeStat> = self
+            .tracker
+            .all_outcomes()
+            .await
+            .into_iter()
+            .map(|(model_id, o)| ModelOutcomeStat {
+                success_rate: o.success_rate(),
+                successes: o.successes,
+                failures: o.failures,
+                model_id,
+            })
+            .collect();
+        outcomes.sort_by(|a, b| a.model_id.cmp(&b.model_id));
+
+        let sticky_decisions: Vec<StickyDecisionStat> = {
+            let sticky = self.sticky.read().await;
+            sticky
+                .iter()
+                .map(|(k, (stamped_at, d))| StickyDecisionStat {
+                    tenant_id: k.tenant_id.clone(),
+                    task_type: format!("{:?}", k.task_type),
+                    model_pref: format!("{:?}", k.model_pref),
+                    model_id: d.model_id.clone(),
+                    provider: d.provider.clone(),
+                    age_secs: stamped_at.elapsed().as_secs(),
+                })
+                .collect()
+        };
+
+        RouterStats {
+            outcomes,
+            observed_latency_ms: self.tracker.all_observed_latencies().await,
+            open_provider_circuits: self.tracker.open_provider_circuits().await,
+            open_model_circuits: self.tracker.open_model_circuits().await,
+            sticky_decisions,
+        }
+    }
+
     // ─── CORE-319: dual id-space tracker queries ─────────────────────────
     //
     // The chal layer records runtime signals (latency, errors, outcomes,
@@ -698,7 +840,8 @@ impl CognitiveRouter {
         let quality = (base_quality * (1.0 + content_boost)).min(1.0);
 
         // ── 2. Cost (25%) ────────────────────────────────────────────
-        let total_cost = entry.cost_input_per_mtok + entry.cost_output_per_mtok;
+        // CORE-324: task-weighted — long-output tasks amplify output cost.
+        let total_cost = task_weighted_cost(entry, task_type);
         let cost_inv = if max_cost > 0.0 {
             1.0 - (total_cost / max_cost)
         } else {
@@ -971,6 +1114,19 @@ pub fn normalize_provider_id(raw: &str) -> String {
         // consistently for whatever the user typed.
         _ => stripped,
     }
+}
+
+/// CORE-324: blended per-Mtok cost of a model for a given task type.
+/// Code/Planning/Creative turns generate several times more output tokens
+/// than input, so a flat in+out sum systematically understated expensive-
+/// output models (e.g. Opus at $75/Mtok out vs $15 in). Weight output 3×
+/// for long-output tasks; everything else keeps the flat sum.
+fn task_weighted_cost(entry: &ModelEntry, task: TaskType) -> f64 {
+    let out_weight = match task {
+        TaskType::Code | TaskType::Planning | TaskType::Creative => 3.0,
+        _ => 1.0,
+    };
+    entry.cost_input_per_mtok + entry.cost_output_per_mtok * out_weight
 }
 
 /// Analyses the prompt with lexical signals and returns a boost (0.0–0.30)
@@ -1442,10 +1598,11 @@ mod tests {
         let expensive = router.catalog_find("openai/gpt-4o").await.unwrap();
         let cheap = router.catalog_find("gemini-2.5-flash").await.unwrap();
 
-        // Under CostOptimized policy, cheap model should score higher
+        // Under CostOptimized policy, cheap model should score higher.
+        // max_cost mirrors decide(): task-weighted over the candidate set.
         let ctx_cost = ScoreCtx {
             prompt: "Write a short poem",
-            max_cost: expensive.cost_input_per_mtok + expensive.cost_output_per_mtok,
+            max_cost: task_weighted_cost(&expensive, TaskType::Code),
             max_latency: 1000.0,
             observed_latency: None,
             recent_errors: 0,
@@ -1464,7 +1621,7 @@ mod tests {
         // Under QualityOptimized policy, expensive (higher quality) model should win
         let ctx_quality = ScoreCtx {
             prompt: "Write a short poem",
-            max_cost: expensive.cost_input_per_mtok + expensive.cost_output_per_mtok,
+            max_cost: task_weighted_cost(&expensive, TaskType::Code),
             max_latency: 1000.0,
             observed_latency: None,
             recent_errors: 0,

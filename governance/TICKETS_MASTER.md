@@ -43,7 +43,7 @@
 | CORE-278 | feat + fix | Shell: TTS en modo texto + simplificar configuración de voz | ✅ Done | Alta | Shell Engineer |
 | CORE-279 | fix | Kernel: WebSocket keepalive (ping cada 30s) | ✅ Done | Crítica | Kernel Engineer |
 | CORE-280 | feat | Installer: Caddy HTTPS automático | ✅ Done | Alta | Kernel Engineer (modificación del installer) |
-| CORE-282 | fix | chat_agent.md: eliminar instrucciones de token parser legacy | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-282 | fix | chat_agent.md: eliminar instrucciones de token parser legacy | ✅ Done | Crítica | Kernel Engineer |
 | CORE-283 | fix | chat_agent: honestidad cuando el supervisor no retorna datos | ✅ Done | Alta | Kernel Engineer (modificación de chat_agent.md) |
 | CORE-284 | fix | Shell: botón de reply al supervisor — fix envío | ✅ Done | Alta | Shell Engineer |
 | CORE-285 | feat | Installer: configuración obligatoria de modelo antes de arrancar | ✅ Done | Crítica | Kernel Engineer (installer) |
@@ -69,6 +69,9 @@
 | CORE-305 | feat | Kernel: Arquitectura de Ruteo Cognitivo Asimétrico (Local-First) | ✅ Done | Alta | Arquitecto IA + Kernel Engineer |
 | CORE-319 | fix | Kernel: CMR Router hardening — sticky cache, señales del tracker y catálogo | ✅ Done | Crítica | Kernel Engineer |
 | CORE-320 | feat | Kernel: CMR Scoring v3 — confiabilidad observada, tool-use degradado y pooling multi-key | ✅ Done | Alta | Kernel Engineer |
+| CORE-322 | feat | Kernel: persistencia del ModelUsageTracker y endpoint /api/router/stats | ✅ Done | Alta | Kernel Engineer |
+| CORE-323 | chore | Catálogo: curaduría de models.yaml (modelos retirados y IDs corregidos) | ✅ Done | Media | Arquitecto IA |
+| CORE-324 | feat | Kernel: CMR scoring v3.1 — EWMA de latencia, half-open breaker y costo ponderado por tarea | ✅ Done | Media | Kernel Engineer |
 
 ## EPIC 52 — Voice Quality
 
@@ -104,6 +107,7 @@
 | CORE-303 | feat | Kernel: Defensive Cognitive Loops & Boundary Autocorrection | ✅ Done | Crítica | Kernel Engineer |
 | CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | ✅ Done | Alta | Tavo |
 | CORE-321 | chore | App/Android: deshabilitar el file-watcher nativo de Gradle (crashes JVM en Windows) | ✅ Done | Alta | DevOps Engineer |
+| CORE-325 | chore | Kernel: deduplicar el feed de señales del fallback walk en chal/mod.rs | ✅ Done | Media | Kernel Engineer |
 
 ## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
 
@@ -158,14 +162,14 @@
 | CORE-186 | feat | feat: TTS engine local con espeak-ng — sintetizar voz sin API key | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-187 | feat | feat: Wake Word Detection — activación por voz "Aegis" sin botón | ✅ Done | Media | Kernel Engineer (backend) + Shell Engineer (frontend) |
 | CORE-188 | fix | fix: Onboarding extrae nombre completo literal en lugar de solo el nombre | 📥 Todo | Alta | Kernel Engineer |
-| CORE-189 | fix | fix: Enclave se reinicializa cada 126 segundos — session keep-alive abre conexión SQLCipher innecesariamente | 📥 Todo | Alta | Kernel Engineer |
+| CORE-189 | fix | fix: Enclave se reinicializa cada 126 segundos — session keep-alive abre conexión SQLCipher innecesariamente | ✅ Done | Alta | Kernel Engineer |
 | CORE-202 | feat | feat: AgentActivityPanel — indicador colapsable en ChatTerminal | 📥 Todo | Alta | Shell Engineer |
 | CORE-203 | feat | feat: AgentTreeView + ProjectList — panel en Dashboard | 📥 Todo | Media | Shell Engineer |
 | CORE-204 | feat | feat: useAegisStore — agentTree state + connectAgentStream | 📥 Todo | Alta | Shell Engineer |
-| CORE-209 | fix | fix(ank-http): montar /ws/agents y agregar GET /api/agents/projects en router | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-209 | fix | fix(ank-http): montar /ws/agents y agregar GET /api/agents/projects en router | ✅ Done | Crítica | Kernel Engineer |
 | CORE-210 | fix | fix(chat_agent): declarar ausencia de contexto cuando no hay proyecto activo | 📥 Todo | Alta | Kernel Engineer |
 | CORE-211 | fix | fix(shell): manejo graceful de errores en fetchActiveProjects y connectAgentStream | 📥 Todo | Alta | Shell Engineer |
-| CORE-212 | fix | fix(shell): provider gemini en KeyManager y visibilidad de modelos en CatalogViewer | 📥 Todo | Crítica | Shell Engineer |
+| CORE-212 | fix | fix(shell): provider gemini en KeyManager y visibilidad de modelos en CatalogViewer | ✅ Done | Crítica | Shell Engineer |
 | CORE-213 | fix | Kernel: loguear error en key_pool.load() | ✅ Done | Media | Kernel Engineer |
 | CORE-224 | chore | Limpiar directorios temporales | ✅ Done | Baja | Tavo |
 | CORE-225 | chore | License field en Cargo.toml → MIT | ✅ Done | Alta | Kernel Engineer |
@@ -187,7 +191,7 @@
 | CORE-241 | feat | fix(ank-core): filtrar __TOOL_CALL__ del output antes de enviarlo al frontend | ✅ Done | Alta | Kernel Engineer |
 | CORE-242 | fix | fix(ank-core): eliminar MAKER_INSTRUCTIONS del prompt del Chat Agent | ✅ Done | Alta | Kernel Engineer |
 | CORE-243 | feat | fix(ank-core): SyscallExecutor permite spawn desde Chat Agent (PCB sin agent_id) | ✅ Done | Alta | Kernel Engineer |
-| CORE-244 | fix | HAL Runner: enviar StatusUpdate al event_broker en el path de error | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-244 | fix | HAL Runner: enviar StatusUpdate al event_broker en el path de error | ✅ Done | Crítica | Kernel Engineer |
 | CORE-314 | fix | Kernel/Shell: Deshabilitación de proveedores en KeyPool/UI no persiste | ✅ Done | Alta | Tavo + Kernel Engineer + Shell Engineer |
 | CORE-315 | feat | Kernel/Shell: Exportar/importar configuración de llaves cifrada con contraseña | ✅ Done | Media | Kernel Engineer + UI Engineer |
 | CORE-316 | fix | postcss >= 8.5.10 en shell/ui para mitigar XSS (GHSA-qx2v-qp2m-jg93) | ✅ Done | Alta | UI Engineer |
