@@ -89,7 +89,7 @@
 | CORE-245 | feat | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | ✅ Done | Alta | Shell Engineer |
 | CORE-246 | feat | Tenant: visualización de modelos disponibles por provider en tab Motor | ✅ Done | Alta | Shell Engineer |
 | CORE-247 | feat | Historial de chat persistente: cargar al conectar y unificar entre IP y Cloudflare | ✅ Done | Crítica | Kernel + Shell |
-| CORE-248 | feat | Chat: indicador de estado enriquecido (modelo, provider, error amigable) | 📥 Todo | Crítica | Shell Engineer |
+| CORE-248 | feat | Chat: indicador de estado enriquecido (modelo, provider, error amigable) | ✅ Done | Crítica | Shell Engineer |
 | CORE-249 | feat | Dashboard: reemplazar MOCK_TICKETS con Kanban real del tenant | ✅ Done | Alta | Shell Engineer |
 | CORE-250 | feat | Dashboard: FinancialWidget con datos reales (API Cost) | ✅ Done | Media | Shell Engineer |
 | CORE-251 | feat | Dashboard: Chronos widget honesto (sin eventos ficticios) | ✅ Done | Media | Shell Engineer |
@@ -108,6 +108,7 @@
 | CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | ✅ Done | Alta | Tavo |
 | CORE-321 | chore | App/Android: deshabilitar el file-watcher nativo de Gradle (crashes JVM en Windows) | ✅ Done | Alta | DevOps Engineer |
 | CORE-325 | chore | Kernel: deduplicar el feed de señales del fallback walk en chal/mod.rs | ✅ Done | Media | Kernel Engineer |
+| CORE-326 | fix | Kernel: handshake SCM oportunista para ImagePath legacy sin --service | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
 
@@ -128,18 +129,18 @@
 | CORE-152 | feat | Feat: Plugins de Dominios (Ledger & Chronos) | ✅ Done | Media | Kernel Engineer |
 | CORE-153 | feat | Feat: Dashboard Dinámico & Kanban UI | ✅ Done | Alta | UI Engineer |
 | CORE-154 | feat | Feat: Orquestación de Sub-Agentes Especializados | ✅ Done | Baja | Kernel Engineer |
-| CORE-155 | feat | feat: AgentNode, AgentRole y AgentState — Tipos Base del Sistema Multiagente | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-155 | feat | feat: AgentNode, AgentRole y AgentState — Tipos Base del Sistema Multiagente | ✅ Done | Crítica | Kernel Engineer |
 | CORE-156 | feat | feat: AgentTree — Estructura en Memoria y Operaciones | ✅ Done | Crítica | Kernel Engineer |
 | CORE-157 | feat | feat: AgentMessage — Protocolo de Comunicación Inter-Agente | ✅ Done | Crítica | Kernel Engineer |
-| CORE-158 | feat | feat: AgentOrchestrator — Ciclo de Vida y Coordinación | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-158 | feat | feat: AgentOrchestrator — Ciclo de Vida y Coordinación | ✅ Done | Crítica | Kernel Engineer |
 | CORE-159 | feat | feat: ProjectRegistry — Gestión de Proyectos y Supervisores Raíz | ✅ Done | Alta | Kernel Engineer |
-| CORE-160 | feat | feat: PCB Extension — Campo agent_id en ProcessControlBlock | 📥 Todo | Alta | Kernel Engineer |
-| CORE-161 | feat | feat: DagNode Extension — Campo agent_id en DagNode | 📥 Todo | Alta | Kernel Engineer |
+| CORE-160 | feat | feat: PCB Extension — Campo agent_id en ProcessControlBlock | ✅ Done | Alta | Kernel Engineer |
+| CORE-161 | feat | feat: DagNode Extension — Campo agent_id en DagNode | ✅ Done | Alta | Kernel Engineer |
 | CORE-162 | feat | feat: SYS_AGENT_SPAWN — Spawn Dinámico de Agentes desde Syscall | ✅ Done | Alta | Kernel Engineer |
-| CORE-163 | feat | feat: HTTP Routes /api/agents/* — Árbol de Agentes y Estado | 📥 Todo | Media | Kernel Engineer |
+| CORE-163 | feat | feat: HTTP Routes /api/agents/* — Árbol de Agentes y Estado | ✅ Done | Media | Kernel Engineer |
 | CORE-164 | feat | feat: AgentTreeView + AgentCard — Visualización del Árbol en Shell | ✅ Done | Media | Shell Engineer |
 | CORE-165 | feat | feat: Model-per-Agent — Integración CMR con TaskType por AgentNode | ✅ Done | Alta | Kernel Engineer |
-| CORE-166 | feat | feat: Agent Tree Widget — Visualización del Árbol de Agentes en Dashboard del Tenant | 📥 Todo | Alta | Shell Engineer |
+| CORE-166 | feat | feat: Agent Tree Widget — Visualización del Árbol de Agentes en Dashboard del Tenant | ✅ Done | Alta | Shell Engineer |
 | CORE-167 | feat | feat: workspace_config — Tabla SQLCipher y Endpoint de Configuración | ✅ Done | Crítica (fundacional de la épica) | Kernel Engineer |
 | CORE-168 | feat | feat: TerminalExecutor — Ejecución de Comandos con Streaming | ✅ Done | Crítica | Kernel Engineer |
 | CORE-169 | feat | feat: SYS_EXEC — Syscall de Terminal para Agentes | ✅ Done | Alta | Kernel Engineer |
@@ -147,28 +148,28 @@
 | CORE-171 | feat | feat: GitHubBridge — Identidad del Bot, Branch, Commit, Push y PR | ✅ Done | Crítica | Kernel Engineer |
 | CORE-172 | feat | feat: SYS_GIT_* — Syscalls Git para Agentes | ✅ Done | Alta | Kernel Engineer |
 | CORE-173 | feat | feat: PR Manager — Ciclo de Vida de PRs con Polling de CI | ✅ Done | Crítica | Kernel Engineer |
-| CORE-174 | feat | feat: Auto-fix CI — Proceso Cognitivo Disparado por Fallo de CI | 📥 Todo | Alta | Kernel Engineer |
+| CORE-174 | feat | feat: Auto-fix CI — Proceso Cognitivo Disparado por Fallo de CI | ✅ Done | Alta | Kernel Engineer |
 | CORE-175 | feat | feat: Eventos WebSocket — terminal_output, pr_update, pr_merged, git_push, ci_fix_attempt | ✅ Done | Crítica | Kernel Engineer |
 | CORE-176 | feat | feat: TerminalPanel — UI de Terminal en Dashboard del Tenant | ✅ Done | Alta | Shell Engineer |
-| CORE-177 | feat | feat: CodeViewer — Árbol de Archivos y Contenido en Dashboard | 📥 Todo | Alta | Shell Engineer |
-| CORE-178 | feat | feat: GitTimeline — Branches, Commits y Estado de CI en Dashboard | 📥 Todo | Alta | Shell Engineer |
+| CORE-177 | feat | feat: CodeViewer — Árbol de Archivos y Contenido en Dashboard | ✅ Done | Alta | Shell Engineer |
+| CORE-178 | feat | feat: GitTimeline — Branches, Commits y Estado de CI en Dashboard | ✅ Done | Alta | Shell Engineer |
 | CORE-179 | feat | feat: PRManager UI — Lista de PRs con Controles Auto/Manual | ✅ Done | Alta | Shell Engineer |
 | CORE-180 | feat | feat: WorkspaceSettings — Configuración de Token, Repo y Opciones | ✅ Done | Alta | Shell Engineer |
 | CORE-181 | fix | fix: MakerExecutor — Boa Engine context sin top-level return ni CommonJS | ✅ Done | Alta | Kernel Engineer |
-| CORE-182 | fix | fix: TTS ausente en modo local — invocar voiceService.speak en WebSocket onDone | 📥 Todo | Alta | Shell Engineer |
-| CORE-183 | feat | feat: Input Mode Selector — Texto / Audio / Conversación en shell web | 📥 Todo | Alta | Shell Engineer |
-| CORE-184 | fix | fix: modo conversación — sirenWs persistente + TTS loop sin botón | 📥 Todo | Crítica | Shell Engineer |
-| CORE-185 | feat | feat: TTS pipeline en WebSocket Siren — sintetizar respuesta y enviar chunks al frontend | 📥 Todo | Crítica | Kernel Engineer |
-| CORE-186 | feat | feat: TTS engine local con espeak-ng — sintetizar voz sin API key | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-182 | fix | fix: TTS ausente en modo local — invocar voiceService.speak en WebSocket onDone | ✅ Done | Alta | Shell Engineer |
+| CORE-183 | feat | feat: Input Mode Selector — Texto / Audio / Conversación en shell web | ✅ Done | Alta | Shell Engineer |
+| CORE-184 | fix | fix: modo conversación — sirenWs persistente + TTS loop sin botón | ✅ Done | Crítica | Shell Engineer |
+| CORE-185 | feat | feat: TTS pipeline en WebSocket Siren — sintetizar respuesta y enviar chunks al frontend | ✅ Done | Crítica | Kernel Engineer |
+| CORE-186 | feat | feat: TTS engine local con espeak-ng — sintetizar voz sin API key | ✅ Done | Crítica | Kernel Engineer |
 | CORE-187 | feat | feat: Wake Word Detection — activación por voz "Aegis" sin botón | ✅ Done | Media | Kernel Engineer (backend) + Shell Engineer (frontend) |
-| CORE-188 | fix | fix: Onboarding extrae nombre completo literal en lugar de solo el nombre | 📥 Todo | Alta | Kernel Engineer |
+| CORE-188 | fix | fix: Onboarding extrae nombre completo literal en lugar de solo el nombre | ✅ Done | Alta | Kernel Engineer |
 | CORE-189 | fix | fix: Enclave se reinicializa cada 126 segundos — session keep-alive abre conexión SQLCipher innecesariamente | ✅ Done | Alta | Kernel Engineer |
-| CORE-202 | feat | feat: AgentActivityPanel — indicador colapsable en ChatTerminal | 📥 Todo | Alta | Shell Engineer |
-| CORE-203 | feat | feat: AgentTreeView + ProjectList — panel en Dashboard | 📥 Todo | Media | Shell Engineer |
-| CORE-204 | feat | feat: useAegisStore — agentTree state + connectAgentStream | 📥 Todo | Alta | Shell Engineer |
+| CORE-202 | feat | feat: AgentActivityPanel — indicador colapsable en ChatTerminal | ✅ Done | Alta | Shell Engineer |
+| CORE-203 | feat | feat: AgentTreeView + ProjectList — panel en Dashboard | ✅ Done | Media | Shell Engineer |
+| CORE-204 | feat | feat: useAegisStore — agentTree state + connectAgentStream | ✅ Done | Alta | Shell Engineer |
 | CORE-209 | fix | fix(ank-http): montar /ws/agents y agregar GET /api/agents/projects en router | ✅ Done | Crítica | Kernel Engineer |
-| CORE-210 | fix | fix(chat_agent): declarar ausencia de contexto cuando no hay proyecto activo | 📥 Todo | Alta | Kernel Engineer |
-| CORE-211 | fix | fix(shell): manejo graceful de errores en fetchActiveProjects y connectAgentStream | 📥 Todo | Alta | Shell Engineer |
+| CORE-210 | fix | fix(chat_agent): declarar ausencia de contexto cuando no hay proyecto activo | ✅ Done | Alta | Kernel Engineer |
+| CORE-211 | fix | fix(shell): manejo graceful de errores en fetchActiveProjects y connectAgentStream | ✅ Done | Alta | Shell Engineer |
 | CORE-212 | fix | fix(shell): provider gemini en KeyManager y visibilidad de modelos en CatalogViewer | ✅ Done | Crítica | Shell Engineer |
 | CORE-213 | fix | Kernel: loguear error en key_pool.load() | ✅ Done | Media | Kernel Engineer |
 | CORE-224 | chore | Limpiar directorios temporales | ✅ Done | Baja | Tavo |
@@ -180,7 +181,7 @@
 | CORE-230 | fix | fix(shell): Dashboard crashea al montar y dispara AegisErrorBoundary ("Session Error") | ✅ Done | Crítica | Shell Engineer |
 | CORE-231 | fix | fix(shell): Micrófono falla silenciosamente en HTTP — falta feedback al usuario | ✅ Done | Crítica | Shell Engineer |
 | CORE-232 | fix | fix(shell): IP vs Cloudflare producen chats separados — misma sesión, contexto diferente | ✅ Done | Alta | Shell Engineer |
-| CORE-233 | feat (refactor UX) | feat(shell+kernel): Settings del tenant — simplificar y unificar configuración | 📥 Todo | Alta | Shell Engineer |
+| CORE-233 | feat (refactor UX) | feat(shell+kernel): Settings del tenant — simplificar y unificar configuración | ✅ Done | Alta | Shell Engineer |
 | CORE-234 | feat | feat(ank-core): AgentOrchestrator — migrar de token parsing a tool use dispatch | ✅ Done | Alta | Kernel Engineer |
 | CORE-235 | feat | feat(ank-core): SyscallExecutor — mapear tool call results a AgentMessage internos | ✅ Done | Alta | Kernel Engineer |
 | CORE-236 | feat | feat(ank-core): ToolRegistry — definición de herramientas + schema por proveedor | ✅ Done | Alta | Kernel Engineer |
@@ -210,7 +211,7 @@
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-313 | chore | Reconciliación completa de TICKETS_MASTER + script anti-drift | 📥 Todo | Media | DevOps + Arquitecto IA |
+| CORE-313 | chore | Reconciliación completa de TICKETS_MASTER + script anti-drift | ✅ Done | Media | DevOps + Arquitecto IA |
 
 ---
 
