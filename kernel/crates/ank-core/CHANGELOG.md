@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.75](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.74...ank-core-v0.1.75) (2026-06-12)
+
+
+### Features
+
+* **core:** CMR hardening + scoring v3/v3.1, tracker persistence, stats endpoint and stabilization criticals (CORE-319..325) ([#333](https://github.com/Gustavo324234/Aegis-Core/issues/333)) ([a4707e0](https://github.com/Gustavo324234/Aegis-Core/commit/a4707e0b1d5f864a3ac6c1061d18700755c004cf))
+
 ## [0.1.74](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.73...ank-core-v0.1.74) (2026-06-04)
 
 
