@@ -38,7 +38,7 @@
 | CORE-273 | feat | ProjectLedger: registro de avance persistente por proyecto | ✅ Done | Alta | Kernel Engineer |
 | CORE-274 | feat | WebSocket: evento `agent_event` en el protocolo existente | ✅ Done | Crítica — prerrequisito de CORE-268 | Kernel Engineer + Shell Engineer |
 | CORE-275 | feat | Specialist: tools de filesystem (`read_file`, `write_file`, `list_files`) | ✅ Done | Crítica — desbloquea trabajo real de specialists | Kernel Engineer |
-| CORE-276 | feat | Specialist: aprobación de paths externos por el usuario | 📥 Todo | Alta | Kernel Engineer |
+| CORE-276 | feat | Specialist: aprobación de paths externos por el usuario | ✅ Done | Alta | Kernel Engineer |
 | CORE-277 | feat | Specialist: tool `web_search` | ✅ Done | Alta | Kernel Engineer |
 | CORE-278 | feat + fix | Shell: TTS en modo texto + simplificar configuración de voz | ✅ Done | Alta | Shell Engineer |
 | CORE-279 | fix | Kernel: WebSocket keepalive (ping cada 30s) | ✅ Done | Crítica | Kernel Engineer |
@@ -72,6 +72,8 @@
 | CORE-322 | feat | Kernel: persistencia del ModelUsageTracker y endpoint /api/router/stats | ✅ Done | Alta | Kernel Engineer |
 | CORE-323 | chore | Catálogo: curaduría de models.yaml (modelos retirados y IDs corregidos) | ✅ Done | Media | Arquitecto IA |
 | CORE-324 | feat | Kernel: CMR scoring v3.1 — EWMA de latencia, half-open breaker y costo ponderado por tarea | ✅ Done | Media | Kernel Engineer |
+| CORE-327 | feat | Kernel: conversation_id en el PCB + sticky cache por conversación | ✅ Done | Media | Kernel Engineer |
+| CORE-328 | feat | Kernel: confiabilidad task-aware — outcomes por (modelo, tarea) | ✅ Done | Media | Kernel Engineer |
 
 ## EPIC 52 — Voice Quality
 

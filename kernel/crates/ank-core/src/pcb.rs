@@ -319,6 +319,14 @@ pub struct PCB {
     /// CORE-299: Override directo del modelo, bypasea el CMR si está presente.
     #[serde(default)]
     pub model_override: Option<String>,
+
+    /// CORE-327: identidad estable de la conversación que originó este PCB
+    /// (un UUID por conexión WebSocket de chat). El sticky cache del CMR la
+    /// usa para que dos conversaciones paralelas del mismo tenant no se
+    /// pisen la decisión de modelo. None para procesos no conversacionales
+    /// (agentes, tareas internas) — esos siguen con la clave por tenant.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
 }
 
 use std::cmp::Ordering;
@@ -414,6 +422,7 @@ impl PCB {
             agent_id: None,
             message_history: Vec::new(),
             model_override: None,
+            conversation_id: None,
         }
     }
 

@@ -1,3 +1,4 @@
+use crate::pcb::TaskType;
 use chrono::{Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -277,6 +278,44 @@ impl ModelUsageTracker {
         let mut map = self.outcomes.write().await;
         map.entry(model_id.to_string()).or_default().successes += 1;
         self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    // ─── CORE-328: task-aware outcomes ───────────────────────────────────
+    //
+    // The reliability signal (CORE-320) was global per model, but a model
+    // can be rock-solid at Chat while consistently failing tool-heavy Code
+    // turns. Recording a second outcome entry under a composite key lets
+    // the scorer prefer the task-specific signal when it has enough
+    // samples. Composite entries live in the same `outcomes` map, so they
+    // persist through TrackerSnapshot (CORE-322) and show up in /stats
+    // with a self-describing key.
+
+    /// Composite outcomes key for a (model, task) pair.
+    pub fn task_outcome_key(model_id: &str, task: TaskType) -> String {
+        format!("{}::task::{:?}", model_id, task)
+    }
+
+    /// Success for both the global and the (model, task) outcome entries.
+    pub async fn record_success_for_task(&self, model_id: &str, task: TaskType) {
+        {
+            let mut map = self.outcomes.write().await;
+            map.entry(model_id.to_string()).or_default().successes += 1;
+            map.entry(Self::task_outcome_key(model_id, task))
+                .or_default()
+                .successes += 1;
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Failure for both the global and the (model, task) outcome entries —
+    /// delegates to `record_failure` for the scoring window and provider
+    /// circuit, then tallies the composite entry.
+    pub async fn record_failure_for_task(&self, model_id: &str, provider: &str, task: TaskType) {
+        self.record_failure(model_id, provider).await;
+        let mut map = self.outcomes.write().await;
+        map.entry(Self::task_outcome_key(model_id, task))
+            .or_default()
+            .failures += 1;
     }
 
     /// Increment the failure counter for a model and tally a provider-level
@@ -636,6 +675,41 @@ mod tests {
             !t.provider_circuit_allows_probe("groq").await,
             "failures seconds old → probe must wait out the quiet period"
         );
+    }
+
+    /// CORE-328: task-aware outcomes must tally BOTH the global and the
+    /// composite (model, task) entries, and both must survive a
+    /// snapshot/restore roundtrip (they share the persisted outcomes map).
+    #[tokio::test]
+    async fn task_outcomes_tally_global_and_composite() {
+        let t = ModelUsageTracker::new();
+        t.record_success_for_task("m", TaskType::Chat).await;
+        t.record_success_for_task("m", TaskType::Chat).await;
+        t.record_failure_for_task("m", "prov", TaskType::Code).await;
+
+        let global = t.outcomes_for("m").await.unwrap();
+        assert_eq!(global.successes, 2);
+        assert_eq!(global.failures, 1, "record_failure feeds the global entry");
+
+        let chat = t
+            .outcomes_for(&ModelUsageTracker::task_outcome_key("m", TaskType::Chat))
+            .await
+            .unwrap();
+        assert_eq!((chat.successes, chat.failures), (2, 0));
+
+        let code = t
+            .outcomes_for(&ModelUsageTracker::task_outcome_key("m", TaskType::Code))
+            .await
+            .unwrap();
+        assert_eq!((code.successes, code.failures), (0, 1));
+
+        // Composite entries persist through the CORE-322 snapshot.
+        let restored = ModelUsageTracker::new();
+        restored.restore(t.snapshot().await).await;
+        assert!(restored
+            .outcomes_for(&ModelUsageTracker::task_outcome_key("m", TaskType::Code))
+            .await
+            .is_some());
     }
 
     /// CORE-322: durable state must round-trip through snapshot/restore —
