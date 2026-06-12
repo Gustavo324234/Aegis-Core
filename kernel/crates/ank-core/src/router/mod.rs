@@ -45,11 +45,16 @@ pub struct FallbackDecision {
     pub api_key: String,
 }
 
-/// Key for the sticky-routing cache. The triple identifies the conversation
-/// intent — same tenant, same task class, same hardware preference.
+/// Key for the sticky-routing cache. Identifies the conversation intent —
+/// same tenant, same conversation (CORE-327: None for non-conversational
+/// flows), same task class, same hardware preference.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct StickyKey {
     tenant_id: String,
+    /// CORE-327: a WS chat connection id. Two parallel chats from the same
+    /// tenant used to share one sticky slot and overwrite each other's
+    /// model decision; keying by conversation isolates them.
+    conversation_id: Option<String>,
     task_type: TaskType,
     model_pref: ModelPreference,
 }
@@ -80,6 +85,8 @@ pub struct ModelOutcomeStat {
 #[derive(Debug, serde::Serialize)]
 pub struct StickyDecisionStat {
     pub tenant_id: String,
+    /// CORE-327: conversation the decision is pinned to (None = tenant-wide).
+    pub conversation_id: Option<String>,
     pub task_type: String,
     pub model_pref: String,
     pub model_id: String,
@@ -184,6 +191,7 @@ impl CognitiveRouter {
         if pcb.model_override.is_none() {
             let sticky_key = StickyKey {
                 tenant_id: tenant_id.to_string(),
+                conversation_id: pcb.conversation_id.clone(),
                 task_type,
                 model_pref,
             };
@@ -476,7 +484,7 @@ impl CognitiveRouter {
                 recent_errors: self.recent_errors_merged(&entry).await,
                 estimated_tokens,
                 routing_policy: pcb.routing_policy,
-                outcomes: self.outcomes_merged(&entry).await,
+                outcomes: self.outcomes_merged_for_task(&entry, task_type).await,
             };
             let base = self.compute_score(&entry, task_type, &ctx);
             // Soft penalty: multiply by sqrt(capacity) so a model at 50% headroom
@@ -617,6 +625,7 @@ impl CognitiveRouter {
             // the cache unable to ever hit for exactly those flows.
             let sticky_key = StickyKey {
                 tenant_id: tenant_id.to_string(),
+                conversation_id: pcb.conversation_id.clone(),
                 task_type,
                 model_pref: pcb.model_pref,
             };
@@ -645,11 +654,13 @@ impl CognitiveRouter {
     pub(crate) async fn sticky_contains(
         &self,
         tenant_id: &str,
+        conversation_id: Option<&str>,
         task_type: TaskType,
         model_pref: ModelPreference,
     ) -> bool {
         let key = StickyKey {
             tenant_id: tenant_id.to_string(),
+            conversation_id: conversation_id.map(|s| s.to_string()),
             task_type,
             model_pref,
         };
@@ -737,6 +748,7 @@ impl CognitiveRouter {
                 .iter()
                 .map(|(k, (stamped_at, d))| StickyDecisionStat {
                     tenant_id: k.tenant_id.clone(),
+                    conversation_id: k.conversation_id.clone(),
                     task_type: format!("{:?}", k.task_type),
                     model_pref: format!("{:?}", k.model_pref),
                     model_id: d.model_id.clone(),
@@ -811,6 +823,35 @@ impl CognitiveRouter {
             }
         }
         merged
+    }
+
+    /// CORE-328: task-aware reliability. Prefer the (model, task) outcome
+    /// signal when it has enough samples (≥ 3, same threshold the scorer
+    /// uses) — a model can be solid at Chat while consistently failing
+    /// tool-heavy Code turns. Falls back to the global per-model outcomes
+    /// when the task-specific entry is too thin to mean anything.
+    async fn outcomes_merged_for_task(&self, entry: &ModelEntry, task: TaskType) -> ModelOutcomes {
+        let mut task_specific = self
+            .tracker
+            .outcomes_for(&ModelUsageTracker::task_outcome_key(&entry.model_id, task))
+            .await
+            .unwrap_or_default();
+        let api_id = bare_model_id(&entry.model_id, &entry.provider);
+        if api_id != entry.model_id {
+            if let Some(o) = self
+                .tracker
+                .outcomes_for(&ModelUsageTracker::task_outcome_key(&api_id, task))
+                .await
+            {
+                task_specific.successes += o.successes;
+                task_specific.failures += o.failures;
+            }
+        }
+        if task_specific.successes + task_specific.failures >= 3 {
+            task_specific
+        } else {
+            self.outcomes_merged(entry).await
+        }
     }
 
     pub fn catalog_ref(&self) -> Arc<ModelCatalog> {
@@ -1672,7 +1713,7 @@ mod tests {
         let first = router.decide(&pcb).await?;
         assert!(
             router
-                .sticky_contains("default", TaskType::Chat, ModelPreference::CloudOnly)
+                .sticky_contains("default", None, TaskType::Chat, ModelPreference::CloudOnly)
                 .await,
             "sticky entry must live under the request's original preference"
         );
@@ -1734,6 +1775,72 @@ mod tests {
         Ok(())
     }
 
+    /// CORE-327: two parallel conversations from the same tenant must get
+    /// independent sticky slots — before this, the second chat overwrote the
+    /// first one's pinned model and both kept flip-flopping.
+    #[tokio::test]
+    async fn test_sticky_isolated_per_conversation() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_global_key(ApiKeyEntry {
+                key_id: "test-cloud".to_string(),
+                provider: "anthropic".to_string(),
+                api_key: "sk-ant-test".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: false,
+            })
+            .await?;
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let mut pcb_a = PCB::new("test".to_string(), 5, "hola".to_string());
+        pcb_a.task_type = TaskType::Chat;
+        pcb_a.model_pref = ModelPreference::CloudOnly;
+        pcb_a.conversation_id = Some("conv-a".to_string());
+
+        let mut pcb_b = pcb_a.clone();
+        pcb_b.conversation_id = Some("conv-b".to_string());
+
+        router.decide(&pcb_a).await?;
+        router.decide(&pcb_b).await?;
+
+        assert!(
+            router
+                .sticky_contains(
+                    "default",
+                    Some("conv-a"),
+                    TaskType::Chat,
+                    ModelPreference::CloudOnly
+                )
+                .await,
+            "conversation A must keep its own sticky slot"
+        );
+        assert!(
+            router
+                .sticky_contains(
+                    "default",
+                    Some("conv-b"),
+                    TaskType::Chat,
+                    ModelPreference::CloudOnly
+                )
+                .await,
+            "conversation B must have a separate sticky slot"
+        );
+        assert!(
+            !router
+                .sticky_contains("default", None, TaskType::Chat, ModelPreference::CloudOnly)
+                .await,
+            "no tenant-wide slot should exist when conversations carry ids"
+        );
+        Ok(())
+    }
+
     /// CORE-320: with ≥ 3 recorded samples a flaky model must score below an
     /// otherwise identical stable one; with < 3 samples there is no signal
     /// and the score must be unchanged.
@@ -1786,6 +1893,49 @@ mod tests {
             (insufficient - stable).abs() < f64::EPSILON,
             "fewer than 3 samples must not change the score"
         );
+        Ok(())
+    }
+
+    /// CORE-328: with ≥ 3 task-specific samples the scorer must use the
+    /// (model, task) signal; tasks without enough samples fall back to the
+    /// global outcomes.
+    #[tokio::test]
+    async fn test_task_aware_outcomes_override_global() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        let router = CognitiveRouter::new(catalog, key_pool);
+        let entry = router.catalog_find("openai/gpt-4o").await.unwrap();
+        let tracker = router.tracker_ref();
+
+        // Globally healthy (many successes), but Code keeps failing.
+        for _ in 0..10 {
+            tracker
+                .record_success_for_task(&entry.model_id, TaskType::Chat)
+                .await;
+        }
+        for _ in 0..4 {
+            tracker
+                .record_failure_for_task(&entry.model_id, &entry.provider, TaskType::Code)
+                .await;
+        }
+
+        let code = router
+            .outcomes_merged_for_task(&entry, TaskType::Code)
+            .await;
+        assert_eq!(
+            code.successes, 0,
+            "Code must use its own (failing) signal, not the global one"
+        );
+        assert_eq!(code.failures, 4);
+
+        // Planning has no task samples → falls back to global outcomes
+        // (10 successes + 4 failures fed into the global entry).
+        let planning = router
+            .outcomes_merged_for_task(&entry, TaskType::Planning)
+            .await;
+        assert_eq!(planning.successes, 10);
         Ok(())
     }
 

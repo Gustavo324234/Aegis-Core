@@ -467,11 +467,21 @@ impl CognitiveHAL {
     /// signals uniform: scoring window + provider circuit always, and the
     /// per-model circuit on deterministic failures (401 / tier-0 quota,
     /// see `is_permanent_model_failure`).
-    async fn note_model_failure(&self, model_id: &str, provider: &str, err: Option<&SystemError>) {
+    async fn note_model_failure(
+        &self,
+        model_id: &str,
+        provider: &str,
+        task: crate::pcb::TaskType,
+        err: Option<&SystemError>,
+    ) {
         if let Some(r) = self.router_ref.read().await.clone() {
             let router = r.read().await;
             let tracker = router.tracker_ref();
-            tracker.record_failure(model_id, provider).await;
+            // CORE-328: tally under the (model, task) composite too, so the
+            // scorer can learn that a model fails THIS kind of task.
+            tracker
+                .record_failure_for_task(model_id, provider, task)
+                .await;
             if let Some(e) = err {
                 if is_permanent_model_failure(e) {
                     tracker.record_model_unavailable(model_id).await;
@@ -483,12 +493,19 @@ impl CognitiveHAL {
     /// CORE-325: a 200-OK stream with zero content tokens is an implicit
     /// failure — feed both the per-model empty-response circuit and the
     /// failure window so decide() reranks away from the silent model.
-    async fn note_empty_response(&self, model_id: &str, provider: &str) {
+    async fn note_empty_response(
+        &self,
+        model_id: &str,
+        provider: &str,
+        task: crate::pcb::TaskType,
+    ) {
         if let Some(r) = self.router_ref.read().await.clone() {
             let router = r.read().await;
             let tracker = router.tracker_ref();
             tracker.record_empty_response(model_id).await;
-            tracker.record_failure(model_id, provider).await;
+            tracker
+                .record_failure_for_task(model_id, provider, task)
+                .await;
         }
     }
 
@@ -757,6 +774,7 @@ impl CognitiveHAL {
                             self.note_model_failure(
                                 &active_model_id,
                                 &active_provider,
+                                pcb.task_type,
                                 Some(&primary_err),
                             )
                             .await;
@@ -841,6 +859,7 @@ impl CognitiveHAL {
                                             self.note_model_failure(
                                                 &active_model_id,
                                                 &active_provider,
+                                                pcb.task_type,
                                                 Some(&e),
                                             )
                                             .await;
@@ -925,6 +944,7 @@ impl CognitiveHAL {
                                         self.note_model_failure(
                                             &fb.model_id,
                                             &fb.provider,
+                                            pcb.task_type,
                                             Some(&e),
                                         )
                                         .await;
@@ -994,8 +1014,13 @@ impl CognitiveHAL {
                     {
                         Ok(s) => s,
                         Err(e) => {
-                            self.note_model_failure(&active_model_id, &active_provider, Some(&e))
-                                .await;
+                            self.note_model_failure(
+                                &active_model_id,
+                                &active_provider,
+                                pcb.task_type,
+                                Some(&e),
+                            )
+                            .await;
                             return Err(e);
                         }
                     }
@@ -1064,7 +1089,7 @@ impl CognitiveHAL {
                     && tool_calls.is_empty();
 
                 if stream_was_empty {
-                    self.note_empty_response(&active_model_id, &active_provider)
+                    self.note_empty_response(&active_model_id, &active_provider, pcb.task_type)
                         .await;
                     warn!(
                         pid = %pid,
@@ -1174,6 +1199,7 @@ impl CognitiveHAL {
                                         self.note_empty_response(
                                             &active_model_id,
                                             &active_provider,
+                                            pcb.task_type,
                                         )
                                         .await;
                                         warn!(
@@ -1189,6 +1215,7 @@ impl CognitiveHAL {
                                     self.note_model_failure(
                                         &active_model_id,
                                         &active_provider,
+                                        pcb.task_type,
                                         Some(&e),
                                     )
                                     .await;
@@ -1283,7 +1310,12 @@ impl CognitiveHAL {
                                         break;
                                     } else {
                                         // Fallback also returned empty. Record and try next.
-                                        self.note_empty_response(&fb.model_id, &fb.provider).await;
+                                        self.note_empty_response(
+                                            &fb.model_id,
+                                            &fb.provider,
+                                            pcb.task_type,
+                                        )
+                                        .await;
                                         warn!(
                                             pid = %pid,
                                             fallback = %fb.model_id,
@@ -1292,8 +1324,13 @@ impl CognitiveHAL {
                                     }
                                 }
                                 Err(e) => {
-                                    self.note_model_failure(&fb.model_id, &fb.provider, Some(&e))
-                                        .await;
+                                    self.note_model_failure(
+                                        &fb.model_id,
+                                        &fb.provider,
+                                        pcb.task_type,
+                                        Some(&e),
+                                    )
+                                    .await;
                                     warn!(
                                         pid = %pid,
                                         fallback = %fb.model_id,
@@ -1501,11 +1538,12 @@ impl CognitiveHAL {
 
         // CORE-FIX (D2): mark this model as successful so future routing
         // decisions can reflect its real-world success rate.
+        // CORE-328: tallied under the (model, task) composite too.
         if let Some(r) = self.router_ref.read().await.clone() {
             r.read()
                 .await
                 .tracker_ref()
-                .record_success(&active_model_id)
+                .record_success_for_task(&active_model_id, pcb.task_type)
                 .await;
         }
 

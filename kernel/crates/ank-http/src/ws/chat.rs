@@ -211,6 +211,11 @@ async fn handle_chat(
         tokio::sync::Mutex<std::collections::VecDeque<ChatMessage>>,
     > = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new()));
 
+    // CORE-327: una conversación = una conexión WebSocket. Cada PCB que
+    // origine este socket lleva este id para que el sticky cache del CMR
+    // mantenga el mismo modelo dentro del hilo sin mezclar chats paralelos.
+    let conversation_id = uuid::Uuid::new_v4().to_string();
+
     // 3. Subscribe to workspace events (CORE-175)
     let mut workspace_rx = state.workspace_events.subscribe();
 
@@ -522,6 +527,10 @@ async fn handle_chat(
             pcb.tenant_id = Some(tenant_id.clone());
             pcb.session_key = Some(hash.clone());
             pcb.model_override = validated_override;
+            // CORE-327: identidad de conversación = esta conexión WS. El CMR
+            // la usa para que el sticky cache no mezcle dos chats paralelos
+            // del mismo tenant.
+            pcb.conversation_id = Some(conversation_id.clone());
             // CORE-FIX: Inferir TaskType del prompt para que el CMR puntúe por el tipo
             // de tarea real (Code/Planning/Analysis/Creative) y no siempre por Chat.
             // Sin esto, un pedido de coding eligía gemini-flash-lite en lugar de claude-sonnet.
