@@ -50,6 +50,13 @@
 
 
 
+## [0.1.88](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.87...ank-server-v0.1.88) (2026-06-12)
+
+
+### Bug Fixes
+
+* **server:** legacy Windows service SCM dispatch + CORE-313 governance drift audit (CORE-326, CORE-313) ([#335](https://github.com/Gustavo324234/Aegis-Core/issues/335)) ([669fcfc](https://github.com/Gustavo324234/Aegis-Core/commit/669fcfc36e08cd18beeda272b40647e8b4d6dfbc))
+
 ## [0.1.87](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.86...ank-server-v0.1.87) (2026-06-12)
 
 
