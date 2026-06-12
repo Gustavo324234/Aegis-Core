@@ -852,7 +852,16 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     if args.contains(&"--version".to_string()) || args.contains(&"-v".to_string()) {
-        println!("Aegis Core v{}", env!("CARGO_PKG_VERSION"));
+        // CORE-329: CI builds inject the PRODUCT version (the release tag,
+        // e.g. "v0.2.0", or "nightly") so users can tell which release
+        // they're running — the crate version alone confused the v0.2.0
+        // launch ("aegis update said v0.1.89, not 0.2.0").
+        match option_env!("AEGIS_PRODUCT_VERSION") {
+            Some(product) if !product.is_empty() => {
+                println!("Aegis Core v{} ({})", env!("CARGO_PKG_VERSION"), product)
+            }
+            _ => println!("Aegis Core v{}", env!("CARGO_PKG_VERSION")),
+        }
         return Ok(());
     }
 
