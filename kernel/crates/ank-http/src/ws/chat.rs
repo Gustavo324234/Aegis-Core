@@ -37,6 +37,15 @@ static MUSIC_CTRL_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap_or_else(|_| panic!("FATAL: music control regex is invalid"))
 });
 
+/// CORE-189: tenants whose onboarding state is already settled (persona or
+/// step persisted). Lets reconnecting WebSocket sessions skip the SQLCipher
+/// enclave open during the onboarding check — the enclave init costs ~600ms
+/// and was being re-triggered every ~2 minutes by idle client reconnects.
+/// Bounded by the number of distinct tenants, never invalidated (the
+/// "has persona/step" fact is monotonic).
+static ONBOARDING_SETTLED_TENANTS: LazyLock<std::sync::RwLock<std::collections::HashSet<String>>> =
+    LazyLock::new(|| std::sync::RwLock::new(std::collections::HashSet::new()));
+
 pub fn router() -> Router<AppState> {
     Router::new().route("/:tenant_id", get(ws_chat_handler))
 }
@@ -157,14 +166,33 @@ async fn handle_chat(
         .await;
 
     // 2.5 Onboarding check
+    // CORE-189: opening the SQLCipher enclave costs ~600ms and logs
+    // "Secure Enclave initialized" — doing it on EVERY (re)connect meant a
+    // client that reconnects every couple of minutes re-initialized the
+    // enclave for hours with zero tasks processed. Once a tenant has a
+    // persona or an onboarding step recorded that fact never reverts, so
+    // remember it in-process and skip the enclave entirely on reconnects.
     let should_onboard = {
-        match ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-            Ok(db) => {
-                let has_persona = db.get_persona().ok().flatten().is_some();
-                let has_step = db.get_onboarding_step().ok().flatten().is_some();
-                !has_persona && !has_step
+        let cached = ONBOARDING_SETTLED_TENANTS
+            .read()
+            .map(|s| s.contains(&tenant_id))
+            .unwrap_or(false);
+        if cached {
+            false
+        } else {
+            match ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
+                Ok(db) => {
+                    let has_persona = db.get_persona().ok().flatten().is_some();
+                    let has_step = db.get_onboarding_step().ok().flatten().is_some();
+                    if has_persona || has_step {
+                        if let Ok(mut s) = ONBOARDING_SETTLED_TENANTS.write() {
+                            s.insert(tenant_id.clone());
+                        }
+                    }
+                    !has_persona && !has_step
+                }
+                Err(_) => false,
             }
-            Err(_) => false,
         }
     };
 

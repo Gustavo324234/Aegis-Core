@@ -123,7 +123,12 @@ impl KeyPool {
             if let Some(rest) = pcb.pid.strip_prefix("keypool:global:") {
                 let _ = rest; // key_id embedded in pid
                 match serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction) {
-                    Ok(entry) => {
+                    Ok(mut entry) => {
+                        // CORE-212: keys persisted before the HTTP layer started
+                        // normalising provider ids may carry aliases ("google");
+                        // the router looks up the canonical id ("gemini"), so
+                        // normalise on load or those keys are never matched.
+                        entry.provider = crate::router::normalize_provider_id(&entry.provider);
                         global.push(entry);
                     }
                     Err(e) => {
@@ -139,7 +144,9 @@ impl KeyPool {
                 if parts.len() == 2 {
                     let tid = parts[0].to_string();
                     match serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction) {
-                        Ok(entry) => {
+                        Ok(mut entry) => {
+                            // CORE-212: normalise legacy provider aliases (see above).
+                            entry.provider = crate::router::normalize_provider_id(&entry.provider);
                             tenants.entry(tid).or_default().push(entry);
                         }
                         Err(e) => {
