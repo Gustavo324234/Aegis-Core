@@ -9,7 +9,7 @@
 | EPIC 43 | Hierarchical Multi-Agent Orchestration | ✅ Completa | 100% |
 | EPIC 44 | Developer Workspace | ✅ Completa | 100% |
 | EPIC 45 | Cognitive Agent Architecture (CAA) | ✅ Completa | 100% |
-| EPIC 46 | Public Launch | ⚠️ Ver nota | ~70% — items abiertos (ver EPIC_46 doc) |
+| EPIC 46 | Public Launch | ⚠️ Ver nota | ~95% — v0.2.0 Public Beta publicada; solo og:image (CORE-222, manual) abierto |
 | EPIC 47 | Agent Protocol v2: Tool Use | ✅ Completa | 100% |
 | EPIC 48 | Shell Observability | ✅ Completa | 100% |
 | EPIC 49 | Cognitive Loop: Memory layers & latency | ✅ Completa | 100% |

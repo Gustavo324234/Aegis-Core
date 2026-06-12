@@ -48,7 +48,7 @@ El repo debe ser encontrable, comprensible, contribuible y con infraestructura d
 
 | ID | Título | Estado | Evidencia |
 |---|---|---|---|
-| CORE-219 | Habilitar GitHub Sponsors + redactar sponsor page | ✅ Done (entregables) | `.github/FUNDING.yml` + `docs/SPONSOR_PAGE.md` presentes. Habilitación de la cuenta Sponsors = acción manual del Owner en GitHub. |
+| CORE-219 | Habilitar GitHub Sponsors + redactar sponsor page | ✅ Done | `.github/FUNDING.yml` + `docs/SPONSOR_PAGE.md` presentes. Habilitación de la cuenta Sponsors confirmada por el Owner el 2026-06-12. |
 
 ---
 
@@ -56,9 +56,9 @@ El repo debe ser encontrable, comprensible, contribuible y con infraestructura d
 
 | ID | Título | Estado | Nota |
 |---|---|---|---|
-| CORE-220 | Crear release v1.0.0 en GitHub con release notes | ⚠️ Verificar | No verificable desde el repo. El installer baja `nightly` por default → confirmar si existe una release `v1.0.0` estable en GitHub Releases. |
-| CORE-221 | Agregar topics al repo de GitHub | ⚠️ Verificar | Setting de GitHub (manual) — no verificable desde archivos. |
-| CORE-222 | Social preview image (og:image del repo) | ⚠️ Verificar | Setting/asset de GitHub (manual) — no verificable desde archivos. |
+| CORE-220 | Crear release estable en GitHub con release notes | ✅ Done | Release **v0.2.0 — Public Beta** publicada el 2026-06-12 (decisión del Owner: versión honesta 0.x en lugar de v1.0.0). El tag `v*` dispara `publish-native`, que adjunta los binarios de todas las plataformas (incl. `ank-cli`) sin marca de prerelease; marcada `latest` para que `aegis update --stable` la resuelva. |
+| CORE-221 | Agregar topics al repo de GitHub | ✅ Done | Verificado vía API el 2026-06-12: `cognitive-os, rust, ai-agents, axum, llm, multi-agent, opensource, self-hosted, tokio` (los 5 requeridos + 4 extra). |
+| CORE-222 | Social preview image (og:image del repo) | ⚠️ Manual | Setting/asset de GitHub — solo el Owner puede subirla (Settings → Social preview). Único item abierto del epic. |
 
 ---
 
@@ -67,8 +67,8 @@ El repo debe ser encontrable, comprensible, contribuible y con infraestructura d
 | ID | Título | Estado | Nota |
 |---|---|---|---|
 | CORE-223 | .github/CODEOWNERS — definir owner para cada área | ✅ Done | `.github/CODEOWNERS` presente |
-| CORE-224 | Archivar rama scratch/ y limpiar target_verify_fix/ | ❌ No hecho | `scratch/` **sigue presente** en el repo. Revisar y cerrar. |
-| CORE-225 | Sincronizar licencia: README menciona MIT, verificar Cargo.toml | ⚠️ Verificar | El `Cargo.toml` raíz **no tiene** campo `license` ni `[workspace.package]`. Confirmar si cada crate declara `license = "MIT"` o agregarlo a nivel workspace con `license.workspace = true`. |
+| CORE-224 | Archivar rama scratch/ y limpiar target_verify_fix/ | ✅ Done | Verificado 2026-06-12: `scratch/` está en `.gitignore` con **0 archivos trackeados** (`git ls-files scratch` vacío) — no existe en el repo publicado; es solo un workspace local. |
+| CORE-225 | Sincronizar licencia: README menciona MIT, verificar Cargo.toml | ✅ Done | Verificado 2026-06-12: `[workspace.package] license = "MIT"` en el Cargo.toml raíz (PR #333) y los 9 crates declaran `license = "MIT"` explícito. |
 
 ---
 
@@ -77,14 +77,15 @@ El repo debe ser encontrable, comprensible, contribuible y con infraestructura d
 El Epic 46 está completo cuando:
 - [x] `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CONTRIBUTING.md` presentes en raíz
 - [x] Issue templates activos en `.github/ISSUE_TEMPLATE/`
-- [~] GitHub Sponsors habilitado con descripción del proyecto *(entregables listos; habilitación manual del Owner)*
-- [ ] Release v1.0.0 publicada en GitHub Releases con release notes *(⚠️ verificar)*
-- [ ] Repo tiene topics relevantes (cognitive-os, rust, ai-agents, self-hosted, llm) *(⚠️ verificar — manual)*
-- [ ] `license` field en todos los `Cargo.toml` dice `MIT` *(⚠️ verificar — falta a nivel workspace)*
-- [ ] No hay directorios de trabajo temporales en raíz del repo *(❌ `scratch/` presente)*
+- [x] GitHub Sponsors habilitado con descripción del proyecto *(habilitación confirmada por el Owner el 2026-06-12)*
+- [x] Release pública estable publicada en GitHub Releases con release notes *(v0.2.0 — Public Beta, 2026-06-12; decisión de versión honesta 0.x en lugar de v1.0.0)*
+- [x] Repo tiene topics relevantes (cognitive-os, rust, ai-agents, self-hosted, llm) *(verificado vía API)*
+- [x] `license` field en todos los `Cargo.toml` dice `MIT` *(workspace.package + 9 crates explícitos)*
+- [x] No hay directorios de trabajo temporales en el repo publicado *(`scratch/` gitignorado, 0 archivos trackeados)*
+- [ ] Social preview image (og:image) configurada *(CORE-222 — manual del Owner, único item abierto)*
 
-**Estado real:** ~70% verificado. Items abiertos: CORE-220, CORE-221, CORE-222, CORE-224, CORE-225.
+**Estado real:** ~95% verificado. Único item abierto: CORE-222 (og:image — Settings → Social preview, acción manual del Owner).
 
 ---
 
-*Arquitecto IA — 2026-04-28 · Reconciliado 2026-05-31*
+*Arquitecto IA — 2026-04-28 · Reconciliado 2026-05-31 · Lanzamiento v0.2.0 Public Beta 2026-06-12*
