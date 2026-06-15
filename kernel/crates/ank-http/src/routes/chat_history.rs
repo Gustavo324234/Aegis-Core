@@ -143,9 +143,9 @@ async fn clear_chat_history(
         .join("workspace")
         .join("chat_history.log");
 
-    tokio::fs::write(&log_path, "")
-        .await
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to truncate chat history: {}", e)))?;
+    tokio::fs::write(&log_path, "").await.map_err(|e| {
+        AegisHttpError::Internal(anyhow::anyhow!("Failed to truncate chat history: {}", e))
+    })?;
 
     Ok(Json(json!({ "success": true })))
 }
@@ -164,9 +164,9 @@ async fn clear_agent_traces(
         .join("workspace")
         .join("agent_traces.log");
 
-    tokio::fs::write(&log_path, "")
-        .await
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to truncate agent traces: {}", e)))?;
+    tokio::fs::write(&log_path, "").await.map_err(|e| {
+        AegisHttpError::Internal(anyhow::anyhow!("Failed to truncate agent traces: {}", e))
+    })?;
 
     Ok(Json(json!({ "success": true })))
 }
