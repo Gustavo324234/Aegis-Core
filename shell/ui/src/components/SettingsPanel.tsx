@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info, Search, RefreshCw, Copy, FileText } from 'lucide-react';
+import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info, Search, RefreshCw, Copy, FileText, Trash2 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -653,11 +653,23 @@ interface ChatMessage {
 
 const LogsTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
+    const { clearHistory, clearAgentTraces } = useAegisStore();
     const [subTab, setSubTab] = useState<'history' | 'traces'>('history');
     const [logs, setLogs] = useState<(ChatMessage | string)[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [copied, setCopied] = useState(false);
+
+    const handleClear = async () => {
+        if (!window.confirm(t('logs_clear_confirm'))) return;
+        setIsLoading(true);
+        if (subTab === 'history') {
+            await clearHistory();
+        } else {
+            await clearAgentTraces();
+        }
+        await fetchLogs();
+    };
 
     const getHeaders = useCallback(() => ({
         'Content-Type': 'application/json',
@@ -790,6 +802,14 @@ const LogsTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId,
                                 <span>{t('logs_copy')}</span>
                             </>
                         )}
+                    </button>
+                    <button
+                        onClick={handleClear}
+                        disabled={isLoading || logs.length === 0}
+                        className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 disabled:opacity-50 text-red-400 hover:text-red-300 rounded-lg transition-all text-xs font-mono uppercase tracking-wider"
+                    >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>{t('logs_clear')}</span>
                     </button>
                 </div>
             </div>

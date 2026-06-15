@@ -148,7 +148,8 @@ interface AegisState {
     sendMessage: (prompt: string, modelOverride?: string | null) => void;
     appendToken: (msgId: string, token: string, type: MessageType) => void;
     setStatus: (status: SystemStatus) => void;
-    clearHistory: () => void;
+    clearHistory: () => Promise<void>;
+    clearAgentTraces: () => Promise<void>;
     addSystemMessage: (content: string) => void;
     startTelemetryPolling: (tenantId: string) => void;
     fetchSystemState: () => Promise<void>;
@@ -834,7 +835,43 @@ export const useAegisStore = create<AegisState>()(
             setStatus: (status) => set({ status }),
 
             // CORE-124: clearHistory es acción explícita del usuario — borra mensajes intencionalmente
-            clearHistory: () => set({ messages: [] }),
+            clearHistory: async () => {
+                const { tenantId, sessionKey, socket } = get();
+                if (tenantId && sessionKey) {
+                    try {
+                        await fetch('/api/chat/history', {
+                            method: 'DELETE',
+                            headers: {
+                                'x-citadel-tenant': tenantId,
+                                'x-citadel-key': sessionKey,
+                            }
+                        });
+                    } catch (e) {
+                        console.error('Failed to clear backend chat history:', e);
+                    }
+                }
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ action: 'clear_history' }));
+                }
+                set({ messages: [] });
+            },
+
+            clearAgentTraces: async () => {
+                const { tenantId, sessionKey } = get();
+                if (tenantId && sessionKey) {
+                    try {
+                        await fetch('/api/chat/traces', {
+                            method: 'DELETE',
+                            headers: {
+                                'x-citadel-tenant': tenantId,
+                                'x-citadel-key': sessionKey,
+                            }
+                        });
+                    } catch (e) {
+                        console.error('Failed to clear backend agent traces:', e);
+                    }
+                }
+            },
 
             addSystemMessage: (content: string) => {
                 set({ messages: [...get().messages, { id: `sys-${Date.now()}`, role: 'system', content, type: 'system', timestamp: Date.now() }] });
