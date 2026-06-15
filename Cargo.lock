@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "ank-server"
-version = "0.1.89"
+version = "0.1.90"
 dependencies = [
  "ank-core",
  "ank-http",
