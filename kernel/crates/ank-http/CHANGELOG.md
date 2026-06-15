@@ -26,6 +26,13 @@
 
 
 
+## [0.1.85](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.84...ank-http-v0.1.85) (2026-06-15)
+
+
+### Features
+
+* **kernel,shell:** clear chat history/traces and fix installer stable update ([#343](https://github.com/Gustavo324234/Aegis-Core/issues/343)) ([8c76899](https://github.com/Gustavo324234/Aegis-Core/commit/8c7689935bebc947008795b219b53470b755c068))
+
 ## [0.1.84](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.83...ank-http-v0.1.84) (2026-06-12)
 
 
