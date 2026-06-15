@@ -67,13 +67,6 @@
 | CORE-300 | feat | Shell: selector de modelo en el chat | ✅ Done | Crítica | Shell Engineer |
 | CORE-301 | feat | CMR v2: scoring contextual + latencia real + fix peso fantasma | ✅ Done | Alta | Kernel Engineer |
 | CORE-305 | feat | Kernel: Arquitectura de Ruteo Cognitivo Asimétrico (Local-First) | ✅ Done | Alta | Arquitecto IA + Kernel Engineer |
-| CORE-319 | fix | Kernel: CMR Router hardening — sticky cache, señales del tracker y catálogo | ✅ Done | Crítica | Kernel Engineer |
-| CORE-320 | feat | Kernel: CMR Scoring v3 — confiabilidad observada, tool-use degradado y pooling multi-key | ✅ Done | Alta | Kernel Engineer |
-| CORE-322 | feat | Kernel: persistencia del ModelUsageTracker y endpoint /api/router/stats | ✅ Done | Alta | Kernel Engineer |
-| CORE-323 | chore | Catálogo: curaduría de models.yaml (modelos retirados y IDs corregidos) | ✅ Done | Media | Arquitecto IA |
-| CORE-324 | feat | Kernel: CMR scoring v3.1 — EWMA de latencia, half-open breaker y costo ponderado por tarea | ✅ Done | Media | Kernel Engineer |
-| CORE-327 | feat | Kernel: conversation_id en el PCB + sticky cache por conversación | ✅ Done | Media | Kernel Engineer |
-| CORE-328 | feat | Kernel: confiabilidad task-aware — outcomes por (modelo, tarea) | ✅ Done | Media | Kernel Engineer |
 
 ## EPIC 52 — Voice Quality
 
@@ -108,10 +101,6 @@
 | CORE-286 | fix | Kernel: timeout en run_agent_loop + cleanup de tasks zombies | ✅ Done | Alta | Kernel Engineer |
 | CORE-303 | feat | Kernel: Defensive Cognitive Loops & Boundary Autocorrection | ✅ Done | Crítica | Kernel Engineer |
 | CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | ✅ Done | Alta | Tavo |
-| CORE-321 | chore | App/Android: deshabilitar el file-watcher nativo de Gradle (crashes JVM en Windows) | ✅ Done | Alta | DevOps Engineer |
-| CORE-325 | chore | Kernel: deduplicar el feed de señales del fallback walk en chal/mod.rs | ✅ Done | Media | Kernel Engineer |
-| CORE-326 | fix | Kernel: handshake SCM oportunista para ImagePath legacy sin --service | ✅ Done | Alta | Kernel Engineer |
-| CORE-329 | fix | Installer: self-update atómico, canal stable funcional y versión de producto | ✅ Done | Crítica | DevOps Engineer |
 
 ## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
 
@@ -201,6 +190,18 @@
 | CORE-316 | fix | postcss >= 8.5.10 en shell/ui para mitigar XSS (GHSA-qx2v-qp2m-jg93) | ✅ Done | Alta | UI Engineer |
 | CORE-317 | chore | Clippy fixes: simplificar lógicas booleanas, mut innecesarios y rangos | ✅ Done | Alta | Kernel Engineer |
 | CORE-318 | chore | UX fixes: skeletons de telemetría y accesibilidad ARIA en DynamicModulePanel | ✅ Done | Alta | UI Engineer |
+| CORE-319 | fix | Kernel: CMR Router hardening — sticky cache, señales del tracker y catálogo | ✅ Done | Crítica | Kernel Engineer |
+| CORE-320 | feat | Kernel: CMR Scoring v3 — confiabilidad observada, tool-use degradado y pooling multi-key | ✅ Done | Alta | Kernel Engineer |
+| CORE-321 | chore | App/Android: deshabilitar el file-watcher nativo de Gradle (crashes JVM en Windows) | ✅ Done | Alta | DevOps Engineer |
+| CORE-322 | feat | Kernel: persistencia del ModelUsageTracker y endpoint /api/router/stats | ✅ Done | Alta | Kernel Engineer |
+| CORE-323 | chore | Catálogo: curaduría de models.yaml (modelos retirados y IDs corregidos) | ✅ Done | Media | Arquitecto IA |
+| CORE-324 | feat | Kernel: CMR scoring v3.1 — EWMA de latencia, half-open breaker y costo ponderado por tarea | ✅ Done | Media | Kernel Engineer |
+| CORE-325 | chore | Kernel: deduplicar el feed de señales del fallback walk en chal/mod.rs | ✅ Done | Media | Kernel Engineer |
+| CORE-326 | fix | Kernel: handshake SCM oportunista para ImagePath legacy sin --service | ✅ Done | Alta | Kernel Engineer |
+| CORE-327 | feat | Kernel: conversation_id en el PCB + sticky cache por conversación | ✅ Done | Media | Kernel Engineer |
+| CORE-328 | feat | Kernel: confiabilidad task-aware — outcomes por (modelo, tarea) | ✅ Done | Media | Kernel Engineer |
+| CORE-329 | fix | Installer: self-update atómico, canal stable funcional y versión de producto | ✅ Done | Crítica | DevOps Engineer |
+| CORE-330 | feat | Kernel/Shell: Clear logs and history via UI button | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

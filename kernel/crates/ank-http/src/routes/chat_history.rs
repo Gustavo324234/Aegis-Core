@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/history", get(get_chat_history))
-        .route("/traces", get(get_agent_traces))
+        .route("/history", get(get_chat_history).delete(clear_chat_history))
+        .route("/traces", get(get_agent_traces).delete(clear_agent_traces))
 }
 
 #[derive(Deserialize)]
@@ -127,4 +127,46 @@ async fn get_agent_traces(
     }
 
     Ok(Json(json!({ "traces": traces })))
+}
+
+// ── DELETE /api/chat/history ───────────────────────────────────────────────
+
+async fn clear_chat_history(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> Result<Json<Value>, AegisHttpError> {
+    let log_path = state
+        .config
+        .data_dir
+        .join("users")
+        .join(&auth.tenant_id)
+        .join("workspace")
+        .join("chat_history.log");
+
+    tokio::fs::write(&log_path, "")
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to truncate chat history: {}", e)))?;
+
+    Ok(Json(json!({ "success": true })))
+}
+
+// ── DELETE /api/chat/traces ────────────────────────────────────────────────
+
+async fn clear_agent_traces(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> Result<Json<Value>, AegisHttpError> {
+    let log_path = state
+        .config
+        .data_dir
+        .join("users")
+        .join(&auth.tenant_id)
+        .join("workspace")
+        .join("agent_traces.log");
+
+    tokio::fs::write(&log_path, "")
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to truncate agent traces: {}", e)))?;
+
+    Ok(Json(json!({ "success": true })))
 }

@@ -334,7 +334,20 @@ async fn handle_chat(
             }
         };
 
-        if action.action == "watch" {
+        if action.action == "clear_history" {
+            let mut history = session_history.lock().await;
+            history.clear();
+            let _ = socket
+                .send(Message::Text(
+                    json!({
+                        "event": "syslog",
+                        "data": "Historial de sesión en memoria limpiado con éxito."
+                    })
+                    .to_string(),
+                ))
+                .await;
+            continue;
+        } else if action.action == "watch" {
             if let Some(pid) = action.pid {
                 let _ = socket
                     .send(Message::Text(
