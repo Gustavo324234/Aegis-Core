@@ -380,16 +380,6 @@ cmd_update() {
 
     local ARCH
     ARCH=$(detect_arch)
-    # CORE-329: GitHub's "latest" alias lives at releases/latest/download/…
-    # (orden invertido respecto a un tag concreto). La forma anterior
-    # releases/download/latest/… devolvía 404 — el canal stable nunca
-    # había funcionado.
-    local RELEASE_URL
-    if [[ "$TAG" == "latest" ]]; then
-        RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest/download"
-    else
-        RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${TAG}"
-    fi
     local RAW_URL="https://raw.githubusercontent.com/${GITHUB_ORG}/${GITHUB_REPO}/main/installer"
 
     printf '%b%s%b\n' "$CYAN" "--- Aegis OS Upgrade Tool ---" "$NC"
@@ -407,7 +397,10 @@ cmd_update() {
     # with its first bytes eaten). Staging a `.new` file in the same
     # directory and `mv`-ing it over is a rename(2): the directory entry now
     # points to a NEW inode while the running bash finishes cleanly from the
-    # old one. The new CLI takes effect on the next run.
+    # old one.
+    #
+    # We now immediately re-exec the updated CLI script so the rest of the
+    # update runs with any new logic/fixes right away.
     local self_path="${BASH_SOURCE[0]}"
     local self_tmp="/tmp/aegis-cli-update.$$"
     if curl -sL --fail "${RAW_URL}/aegis" -o "$self_tmp" 2>/dev/null; then
@@ -419,7 +412,9 @@ cmd_update() {
                 sudo cp "$self_tmp" "${self_path}.new"
                 sudo chmod +x "${self_path}.new"
                 sudo mv -f "${self_path}.new" "$self_path"
-                printf '%b  → CLI updated. The change takes effect on the next aegis update run.%b\n' "$GREEN" "$NC"
+                printf '%b  → CLI updated. Re-executing update...%b\n' "$GREEN" "$NC"
+                rm -f "$self_tmp"
+                exec "$self_path" "$@"
             fi
         else
             printf '%b  → Skipped self-update: downloaded file is not a bash script%b\n' "$YELLOW" "$NC"
@@ -448,16 +443,48 @@ cmd_update() {
     # concretos (nightly) van por releases/tags/. La extracción anterior
     # (`grep -oP '"\K[^"]+(?=")'`) devolvía TODAS las cadenas de la línea
     # ("published_at", ": ", la fecha) — imprimía basura.
+    #
+    # FIX: monorepo releases for individual crates (e.g. `ank-server-vX.Y.Z`)
+    # pollute GitHub's `/releases/latest` endpoint, which does not contain the
+    # Aegis Core OS assets (only `v*` tags have them). We fetch the list of
+    # releases and find the latest non-prerelease tag starting with 'v'.
     local remote_api
+    local remote_info
+    local remote_tag=""
+    local remote_date=""
+
     if [[ "$TAG" == "latest" ]]; then
-        remote_api="https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/latest"
+        remote_api="https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases"
+        remote_info=$(curl -s "$remote_api")
+        remote_tag=$(echo "$remote_info" | \
+            grep -oP '"tag_name":\s*"\K[^"]+|"prerelease":\s*\K[a-z]+' | \
+            awk '
+            NR % 2 == 1 { tag = $1 }
+            NR % 2 == 0 {
+                if (tag ~ /^v/ && $1 == "false") {
+                    print tag
+                    exit
+                }
+            }
+            ')
+        if [[ -n "$remote_tag" ]]; then
+            TAG="$remote_tag"
+        else
+            TAG="v0.2.0" # absolute fallback
+        fi
+        
+        # Now resolve the specific release's metadata for tag info and date
+        remote_api="https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${TAG}"
+        remote_info=$(curl -s "$remote_api")
     else
         remote_api="https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/releases/tags/${TAG}"
+        remote_info=$(curl -s "$remote_api")
+        remote_tag=$(echo "$remote_info" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
     fi
-    local remote_info remote_tag remote_date
-    remote_info=$(curl -s "$remote_api")
-    remote_tag=$(echo "$remote_info" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
+
     remote_date=$(echo "$remote_info" | grep -oP '"published_at":\s*"\K[^"]+' | head -1)
+
+    local RELEASE_URL="https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/releases/download/${TAG}"
 
     printf 'Última disponible: %b%s%b (%s)\n\n' "$GREEN" "${remote_tag:-unknown}" "$NC" "${remote_date:-unknown}"
 
