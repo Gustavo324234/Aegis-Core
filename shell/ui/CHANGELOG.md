@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.28.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.27.0...shell-ui-v1.28.0) (2026-06-15)
+
+
+### Features
+
+* **kernel,shell:** clear chat history/traces and fix installer stable update ([#343](https://github.com/Gustavo324234/Aegis-Core/issues/343)) ([8c76899](https://github.com/Gustavo324234/Aegis-Core/commit/8c7689935bebc947008795b219b53470b755c068))
+
 ## [1.27.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.26.0...shell-ui-v1.27.0) (2026-06-04)
 
 
