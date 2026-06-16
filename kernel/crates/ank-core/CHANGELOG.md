@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.77](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.76...ank-core-v0.1.77) (2026-06-16)
+
+
+### Bug Fixes
+
+* **core:** resolve supervisor spawn block, add agent Jaccard deduplic… ([#345](https://github.com/Gustavo324234/Aegis-Core/issues/345)) ([30a89d3](https://github.com/Gustavo324234/Aegis-Core/commit/30a89d3ab189372c3fef34aebe71bb1339e151b7))
+
 ## [0.1.76](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.75...ank-core-v0.1.76) (2026-06-12)
 
 
