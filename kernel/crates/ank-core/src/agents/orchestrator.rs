@@ -1886,8 +1886,14 @@ fn are_scopes_similar(s1: &str, s2: &str) -> bool {
     if s1_clean == s2_clean || s1_clean.contains(&s2_clean) || s2_clean.contains(&s1_clean) {
         return true;
     }
-    let w1: std::collections::HashSet<&str> = s1_clean.split_whitespace().filter(|w| w.len() > 3).collect();
-    let w2: std::collections::HashSet<&str> = s2_clean.split_whitespace().filter(|w| w.len() > 3).collect();
+    let w1: std::collections::HashSet<&str> = s1_clean
+        .split_whitespace()
+        .filter(|w| w.len() > 3)
+        .collect();
+    let w2: std::collections::HashSet<&str> = s2_clean
+        .split_whitespace()
+        .filter(|w| w.len() > 3)
+        .collect();
     if !w1.is_empty() && !w2.is_empty() {
         let common = w1.intersection(&w2).count();
         let union = w1.union(&w2).count();

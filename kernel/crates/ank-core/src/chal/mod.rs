@@ -1961,17 +1961,13 @@ impl CognitiveHAL {
                                         description: scope.clone(),
                                     }
                                 }
-                                "supervisor" => {
-                                    crate::agents::node::AgentRole::Supervisor {
-                                        name: name.clone().unwrap_or_else(|| scope.clone()),
-                                        scope: scope.clone(),
-                                    }
-                                }
-                                _ => {
-                                    crate::agents::node::AgentRole::Specialist {
-                                        scope: scope.clone(),
-                                    }
-                                }
+                                "supervisor" => crate::agents::node::AgentRole::Supervisor {
+                                    name: name.clone().unwrap_or_else(|| scope.clone()),
+                                    scope: scope.clone(),
+                                },
+                                _ => crate::agents::node::AgentRole::Specialist {
+                                    scope: scope.clone(),
+                                },
                             };
 
                             let call = crate::agents::message::AgentToolCall::Spawn {
