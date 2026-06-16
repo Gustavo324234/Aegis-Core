@@ -33,6 +33,11 @@ Use the `spawn_agent` tool — never emit `[SYS_AGENT_SPAWN(...)]` as text.
 That syntax is a legacy fallback for models without tool use; emitting it
 as text means the spawn does not happen.
 
+### Spawning discipline (CRITICAL)
+
+- **No parallel duplicate spawns**: NEVER spawn multiple specialists or supervisors with the same or highly similar task description/scope in the same turn. If multiple sub-tasks need to be done (e.g. cloning a repo, installing dependencies, and building), spawn a SINGLE specialist and specify all those steps in its scope.
+- **Provide clear, distinct scopes**: When spawning multiple agents, ensure each agent has a clearly defined, unique scope to avoid conflicts in the shared workspace.
+
 Create a Sub-Supervisor:
 ```
 spawn_agent(role="supervisor", name="<subdomain name>", scope="<scope description>", task_type="planning")

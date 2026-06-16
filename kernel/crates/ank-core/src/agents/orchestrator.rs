@@ -914,6 +914,51 @@ impl AgentOrchestrator {
                     },
                 };
 
+                // Deduplicar sub-supervisores y especialistas del mismo llamador.
+                // Si el llamador ya tiene un hijo activo con el mismo rol y scope similar,
+                // devolvemos ese ID en vez de crear uno duplicado.
+                let existing_child_id = {
+                    let tree = self.tree.read().await;
+                    if let Some(caller_node) = tree.get(&caller_id) {
+                        caller_node.children.iter().find_map(|&child_id| {
+                            if let Some(child_node) = tree.get(&child_id) {
+                                let active = !matches!(
+                                    child_node.state,
+                                    AgentState::Complete | AgentState::Failed { .. }
+                                );
+                                if active {
+                                    let matches = match (&child_node.role, &agent_role) {
+                                        (
+                                            AgentRole::Supervisor { scope: s1, .. },
+                                            AgentRole::Supervisor { scope: s2, .. },
+                                        ) => are_scopes_similar(s1, s2),
+                                        (
+                                            AgentRole::Specialist { scope: s1 },
+                                            AgentRole::Specialist { scope: s2 },
+                                        ) => are_scopes_similar(s1, s2),
+                                        _ => false,
+                                    };
+                                    if matches {
+                                        return Some(child_id);
+                                    }
+                                }
+                            }
+                            None
+                        })
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(child_id) = existing_child_id {
+                    return Ok(serde_json::json!({
+                        "status": "already_active",
+                        "agent_id": child_id.to_string(),
+                        "message": "Un agente idéntico o similar ya está activo para este scope."
+                    })
+                    .to_string());
+                }
+
                 let tt = task_type.unwrap_or(crate::pcb::TaskType::Code);
                 let agent_id = self
                     .spawn_agent(agent_role, project_id, caller_id, None, tt)
@@ -1832,6 +1877,30 @@ impl AgentOrchestrator {
                 })
                 .await;
         }
+    }
+}
+
+fn are_scopes_similar(s1: &str, s2: &str) -> bool {
+    let s1_clean = s1.to_lowercase();
+    let s2_clean = s2.to_lowercase();
+    if s1_clean == s2_clean || s1_clean.contains(&s2_clean) || s2_clean.contains(&s1_clean) {
+        return true;
+    }
+    let w1: std::collections::HashSet<&str> = s1_clean
+        .split_whitespace()
+        .filter(|w| w.len() > 3)
+        .collect();
+    let w2: std::collections::HashSet<&str> = s2_clean
+        .split_whitespace()
+        .filter(|w| w.len() > 3)
+        .collect();
+    if !w1.is_empty() && !w2.is_empty() {
+        let common = w1.intersection(&w2).count();
+        let union = w1.union(&w2).count();
+        let similarity = (common as f32) / (union as f32);
+        similarity > 0.5
+    } else {
+        false
     }
 }
 

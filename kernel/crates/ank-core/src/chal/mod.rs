@@ -1947,52 +1947,81 @@ impl CognitiveHAL {
                 match orchestrator_opt {
                     None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
                     Some(orchestrator) => {
-                        if pcb.agent_id.is_some() {
-                            return "{\"error\":\"spawn_agent solo aplica al Chat Agent (sin agent_id)\"}".to_string();
-                        }
                         let name = args["name"].as_str().map(String::from);
                         let scope = args["scope"].as_str().unwrap_or("").to_string();
-                        let project_name = name
-                            .clone()
-                            .unwrap_or_else(|| scope.chars().take(40).collect());
                         let task_type_str = args["task_type"].as_str().unwrap_or("planning");
                         let task_type = Some(crate::syscalls::parse_task_type(task_type_str));
 
-                        match orchestrator
-                            .create_project(
-                                project_name.clone(),
-                                scope,
-                                task_type,
-                                pcb.tenant_id.clone(),
-                            )
-                            .await
-                        {
-                            Ok(agent_id) => {
-                                let task = pcb.memory_pointers.l1_instruction.clone();
-                                if !task.is_empty() {
-                                    if let Err(e) =
-                                        orchestrator.dispatch(agent_id, task, vec![]).await
-                                    {
-                                        tracing::warn!(
-                                            agent = %agent_id,
-                                            "CORE-264: dispatch post-spawn falló: {}",
-                                            e
-                                        );
-                                    } else {
-                                        tracing::info!(
-                                            agent = %agent_id,
-                                            project = %project_name,
-                                            "CORE-264: Dispatch automático enviado al supervisor recién creado."
-                                        );
+                        if let Some(caller_id) = pcb.agent_id {
+                            let role_str = args["role"].as_str().unwrap_or("").to_string();
+                            let agent_role = match role_str.to_lowercase().as_str() {
+                                "project_supervisor" => {
+                                    crate::agents::node::AgentRole::ProjectSupervisor {
+                                        name: name.clone().unwrap_or_else(|| scope.clone()),
+                                        description: scope.clone(),
                                     }
                                 }
-                                format!(
-                                    "{{\"status\":\"spawned\",\"project\":\"{}\",\"agent_id\":\"{}\"}}",
-                                    project_name,
-                                    agent_id
-                                )
+                                "supervisor" => crate::agents::node::AgentRole::Supervisor {
+                                    name: name.clone().unwrap_or_else(|| scope.clone()),
+                                    scope: scope.clone(),
+                                },
+                                _ => crate::agents::node::AgentRole::Specialist {
+                                    scope: scope.clone(),
+                                },
+                            };
+
+                            let call = crate::agents::message::AgentToolCall::Spawn {
+                                role: agent_role,
+                                name,
+                                scope,
+                                task_type,
+                            };
+
+                            match orchestrator.handle_tool_call(caller_id, call).await {
+                                Ok(result) => result,
+                                Err(e) => format!("{{\"error\":\"{}\"}}", e),
                             }
-                            Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                        } else {
+                            let project_name = name
+                                .clone()
+                                .unwrap_or_else(|| scope.chars().take(40).collect());
+
+                            match orchestrator
+                                .create_project(
+                                    project_name.clone(),
+                                    scope,
+                                    task_type,
+                                    pcb.tenant_id.clone(),
+                                )
+                                .await
+                            {
+                                Ok(agent_id) => {
+                                    let task = pcb.memory_pointers.l1_instruction.clone();
+                                    if !task.is_empty() {
+                                        if let Err(e) =
+                                            orchestrator.dispatch(agent_id, task, vec![]).await
+                                        {
+                                            tracing::warn!(
+                                                agent = %agent_id,
+                                                "CORE-264: dispatch post-spawn falló: {}",
+                                                e
+                                            );
+                                        } else {
+                                            tracing::info!(
+                                                agent = %agent_id,
+                                                project = %project_name,
+                                                "CORE-264: Dispatch automático enviado al supervisor recién creado."
+                                            );
+                                        }
+                                    }
+                                    format!(
+                                        "{{\"status\":\"spawned\",\"project\":\"{}\",\"agent_id\":\"{}\"}}",
+                                        project_name,
+                                        agent_id
+                                    )
+                                }
+                                Err(e) => format!("{{\"error\":\"{}\"}}", e),
+                            }
                         }
                     }
                 }

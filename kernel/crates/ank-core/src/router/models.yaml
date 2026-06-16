@@ -568,6 +568,74 @@
     analysis: 2
     summarization: 3
     extraction: 2
+- model_id: ollama/qwen-3.6-27b-instruct
+  provider: ollama
+  display_name: Qwen 3.6 27B (local)
+  context_window: 131072
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: true
+  avg_latency_ms: 800
+  task_scores:
+    chat: 5
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+- model_id: ollama/qwen-3.6-35b-a3b-instruct
+  provider: ollama
+  display_name: Qwen 3.6 35B MoE (local)
+  context_window: 131072
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: true
+  avg_latency_ms: 400
+  task_scores:
+    chat: 5
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 5
+    extraction: 5
+- model_id: ollama/aegis-assistant-mini
+  provider: ollama
+  display_name: Aegis Assistant Mini (3.8B local)
+  context_window: 131072
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: true
+  avg_latency_ms: 250
+  task_scores:
+    chat: 4
+    coding: 3
+    planning: 3
+    analysis: 3
+    summarization: 4
+    extraction: 4
+- model_id: ollama/aegis-assistant-max
+  provider: ollama
+  display_name: Aegis Assistant Max (35B MoE local)
+  context_window: 131072
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: true
+  avg_latency_ms: 350
+  task_scores:
+    chat: 5
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 5
+    extraction: 5
 - model_id: ollama_cloud/gpt-oss:120b-cloud
   provider: ollama_cloud
   display_name: GPT-OSS 120B (Ollama Cloud)
