@@ -643,6 +643,8 @@ pub(crate) async fn run_server() -> Result<()> {
         tokio::sync::broadcast::channel::<ank_core::agents::event::AgentEvent>(512);
     let agent_event_tx = Arc::new(agent_event_tx);
 
+    let training_manager = Arc::new(ank_core::trainer::TrainingManager::new(data_dir.clone()));
+
     let state = AppState {
         scheduler_tx: scheduler_tx.clone(),
         event_broker: Arc::clone(&event_broker),
@@ -660,6 +662,7 @@ pub(crate) async fn run_server() -> Result<()> {
         agent_orchestrator: Arc::clone(&agent_orchestrator),
         workspace_events: Arc::clone(&workspace_events),
         agent_event_tx: Arc::clone(&agent_event_tx),
+        training_manager,
     };
 
     // 12. Tonic Server

@@ -22,11 +22,13 @@ pub mod swarm; // Added pub mod swarm;
 pub mod syscalls;
 pub mod telemetry;
 pub mod tunnel;
+pub mod trainer;
 pub mod vcm;
 pub mod workspace;
 
 // Re-exportar para fácil acceso
 pub use chal::{CognitiveHAL, InferenceDriver, SystemError};
+pub use trainer::{TrainingManager, TrainingConfig, TrainingStatus, TrainingProgress};
 pub use chronos::ChronosDaemon;
 pub use citadel::identity::Citadel;
 pub use dag::{DagNode, DagNodeStatus, ExecutionGraph, GraphManager, NodeResult};
