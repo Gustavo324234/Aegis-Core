@@ -80,7 +80,7 @@ rusqlite           = { version = "0.33.0", features = ["bundled-sqlcipher-vendor
 
 # System
 sysinfo            = "0.38"
-git2               = { version = "0.20", features = ["vendored-openssl"] }
+git2               = { version = "0.21", features = ["vendored-openssl"] }
 notify             = "6.1.1"
 notify-debouncer-mini = "0.4.1"
 mdns-sd            = "0.11"
