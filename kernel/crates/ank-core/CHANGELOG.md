@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.78](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.77...ank-core-v0.1.78) (2026-06-19)
+
+
+### Features
+
+* **shell:** implement native training engine UI, pre-flight checks and VRAM telemetry (CORE-331) ([#347](https://github.com/Gustavo324234/Aegis-Core/issues/347)) ([53025eb](https://github.com/Gustavo324234/Aegis-Core/commit/53025ebe15c98b0be1057419227c26795004bc21))
+
 ## [0.1.77](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.76...ank-core-v0.1.77) (2026-06-16)
 
 

@@ -56,6 +56,13 @@
 
 
 
+## [0.1.93](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.92...ank-server-v0.1.93) (2026-06-19)
+
+
+### Features
+
+* **shell:** implement native training engine UI, pre-flight checks and VRAM telemetry (CORE-331) ([#347](https://github.com/Gustavo324234/Aegis-Core/issues/347)) ([53025eb](https://github.com/Gustavo324234/Aegis-Core/commit/53025ebe15c98b0be1057419227c26795004bc21))
+
 ## [0.1.90](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.89...ank-server-v0.1.90) (2026-06-12)
 
 
