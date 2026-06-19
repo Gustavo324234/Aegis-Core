@@ -235,7 +235,8 @@ impl TrainingManager {
         let mut reader = BufReader::new(stdout).lines();
 
         // Expresión para buscar la pérdida: "Paso 10: Pérdida (Loss) = 0.5432"
-        let re = regex::Regex::new(r"Paso\s+(\d+):\s+Pérdida\s+\(Loss\)\s+=\s+([\d\.]+)").unwrap();
+        let re = regex::Regex::new(r"Paso\s+(\d+):\s+Pérdida\s+\(Loss\)\s+=\s+([\d\.]+)")
+            .map_err(|e| format!("Error al compilar regex de pérdida: {}", e))?;
 
         while let Ok(Some(line)) = reader.next_line().await {
             self.append_log(&line).await;
