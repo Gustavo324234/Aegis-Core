@@ -33,4 +33,6 @@ pub struct AppState {
     pub workspace_events: Arc<broadcast::Sender<WorkspaceWsEvent>>,
     /// CORE-200 (Epic 45): Broadcast channel para AgentEvent stream (ws/agents/{tenant_id}).
     pub agent_event_tx: Arc<broadcast::Sender<AgentEvent>>,
+    /// Motor de Entrenamiento Nativo de Aegis OS.
+    pub training_manager: Arc<ank_core::trainer::TrainingManager>,
 }

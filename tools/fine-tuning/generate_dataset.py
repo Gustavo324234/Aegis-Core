@@ -162,7 +162,38 @@ def main():
 
     all_sessions = []
     
-    # Buscar en todas las carpetas de tenants el archivo chat_history.log
+    # 1. Cargar sesiones plantilla de Aegis (Q&A y formato de herramientas) si existe
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    template_path = os.path.join(script_dir, "dataset_template.jsonl")
+    template_sessions_count = 0
+    
+    if os.path.exists(template_path):
+        print(f"Cargando plantilla de sistema y Q&A de Aegis: {template_path}")
+        with open(template_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                    if "messages" in data:
+                        # Descartar system prompt de la plantilla (lo inyectamos al compilar al final)
+                        messages = data["messages"]
+                        session_msgs = []
+                        for m in messages:
+                            if m["role"] == "system":
+                                continue
+                            session_msgs.append({
+                                "role": m["role"],
+                                "content": m["content"],
+                                "timestamp": None
+                            })
+                        if len(session_msgs) >= 2:
+                            all_sessions.append(session_msgs)
+                            template_sessions_count += 1
+                except Exception as e:
+                    print(f"⚠️ Error al leer línea de plantilla: {e}")
+        print(f"Loaded {template_sessions_count} template sessions.")
+
+    # 2. Buscar en todas las carpetas de tenants el archivo chat_history.log
+    user_sessions_count = 0
     for tenant_id in os.listdir(users_dir):
         tenant_path = os.path.join(users_dir, tenant_id)
         if os.path.isdir(tenant_path):
@@ -170,11 +201,14 @@ def main():
             if os.path.exists(log_path):
                 sessions = process_log_file(log_path, args.threshold_minutes)
                 all_sessions.extend(sessions)
+                user_sessions_count += len(sessions)
 
     if not all_sessions:
-        print("\n⚠️  No se encontraron logs de conversación válidos con al menos 2 turnos.")
-        print("El archivo 'dataset.jsonl' no ha sido generado. Chatea un poco en la UI de Aegis primero.")
+        print("\n⚠️ No se encontraron logs de conversación ni plantillas válidas.")
+        print("El archivo 'dataset.jsonl' no ha sido generado.")
         sys.exit(0)
+
+    print(f"Mezcla de datos completada: {template_sessions_count} plantillas de Aegis + {user_sessions_count} sesiones del usuario.")
 
     # Escribir el dataset a formato JSONL listo para Fine-Tuning
     valid_sessions_count = 0

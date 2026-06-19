@@ -50,6 +50,34 @@ export type AgentEventPayload =
     | { type: 'Restored'; project_id: string; node_count: number }
     | { type: 'TreeSnapshot'; tree: AgentNodeSummary[] };
 
+export type TrainingStatus =
+    | 'Idle'
+    | 'Preparing'
+    | 'Training'
+    | 'Exporting'
+    | 'Completed'
+    | { Failed: string }
+    | 'Cancelled';
+
+export interface TrainingProgress {
+    status: TrainingStatus;
+    epoch: number;
+    step: number;
+    loss: number;
+    eta_seconds: number;
+    log_snippet: string;
+}
+
+export interface TrainingConfig {
+    mode: 'local' | 'cloud';
+    model_id: string;
+    dataset_path: string;
+    epochs: number;
+    learning_rate: number;
+    batch_size: number;
+    cloud_api_key?: string | null;
+}
+
 export type MessageType = 'text' | 'thought' | 'system' | 'error';
 export type SystemStatus = 'disconnected' | 'connecting' | 'idle' | 'thinking' | 'executing_syscall' | 'error' | 'listening' | 'transcribing';
 export type TaskTypeValue = 'chat' | 'coding' | 'planning' | 'analysis' | 'summarization';
@@ -127,6 +155,17 @@ interface AegisState {
     agentSocket: WebSocket | null;
     isAgentStreamConnected: boolean;
     agentStreamError: string | null;
+
+    // CORE-331 — native training engine state
+    trainingProgress: TrainingProgress | null;
+    trainingLogs: string[];
+    trainingSocket: WebSocket | null;
+
+    startTraining: (config: TrainingConfig) => Promise<boolean>;
+    cancelTraining: () => Promise<boolean>;
+    fetchTrainingStatus: () => Promise<void>;
+    connectTrainingStream: () => void;
+    disconnectTrainingStream: () => void;
 
     connectAgentStream: () => void;
     disconnectAgentStream: () => void;
@@ -250,6 +289,11 @@ export const useAegisStore = create<AegisState>()(
             agentSocket: null,
             isAgentStreamConnected: false,
             agentStreamError: null,
+
+            // CORE-331 — initial training values
+            trainingProgress: null,
+            trainingLogs: [],
+            trainingSocket: null,
 
             setHydrated: (val) => set({ _hydrated: val }),
             setCurrentView: (view) => set({ currentView: view }),
@@ -803,7 +847,11 @@ export const useAegisStore = create<AegisState>()(
                 socket.onerror = () => set({ status: 'error' });
             },
 
-            disconnect: () => get().socket?.close(),
+            disconnect: () => {
+                get().socket?.close();
+                get().disconnectAgentStream();
+                get().disconnectTrainingStream();
+            },
 
             sendMessage: (prompt, modelOverride) => {
                 const { socket, messages } = get();
@@ -905,6 +953,7 @@ export const useAegisStore = create<AegisState>()(
                 if (socket) socket.close();
                 if (sirenSocket) sirenSocket.close();
                 get().disconnectAgentStream();
+                get().disconnectTrainingStream();
                 set({
                     isAuthenticated: false,
                     isAdmin: false,
@@ -915,6 +964,8 @@ export const useAegisStore = create<AegisState>()(
                     needsPasswordReset: false,
                     adminActiveTab: 'users',
                     status: 'disconnected',
+                    trainingProgress: null,
+                    trainingLogs: [],
                 });
                 if (telemetryInterval) { clearInterval(telemetryInterval); telemetryInterval = null; }
             },
@@ -1580,6 +1631,131 @@ export const useAegisStore = create<AegisState>()(
             setEngineConfigured: (configured: boolean) => set({ isEngineConfigured: configured }),
             setTaskType: (taskType) => set({ taskType }),
             setLastRoutingInfo: (info) => set({ lastRoutingInfo: info }),
+
+            // CORE-331 — native training engine methods
+            fetchTrainingStatus: async () => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return;
+                try {
+                    const res = await fetch('/api/train/status', {
+                        headers: {
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        }
+                    });
+                    if (res.ok) {
+                        const data = await res.json() as TrainingProgress;
+                        set({ trainingProgress: data });
+                    }
+                } catch (err) {
+                    console.error('Fetch training status error:', err);
+                }
+            },
+
+            startTraining: async (config) => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return false;
+                try {
+                    const res = await fetch('/api/train/start', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        },
+                        body: JSON.stringify(config)
+                    });
+                    if (res.ok) {
+                        set({ trainingLogs: ['[Aegis] Solicitud de entrenamiento enviada...'] });
+                        get().connectTrainingStream();
+                        return true;
+                    } else {
+                        const err = await res.json().catch(() => ({ detail: 'Fallo al iniciar el entrenamiento' }));
+                        set({ trainingLogs: [`[Error] ${err.detail || 'Fallo al iniciar el entrenamiento'}`] });
+                        return false;
+                    }
+                } catch (err) {
+                    console.error('Start training error:', err);
+                    set({ trainingLogs: ['[Error] Fallo en la conexión de red al arrancar el entrenamiento'] });
+                    return false;
+                }
+            },
+
+            cancelTraining: async () => {
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return false;
+                try {
+                    const res = await fetch('/api/train/cancel', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        }
+                    });
+                    if (res.ok) {
+                        set(state => ({
+                            trainingLogs: [...state.trainingLogs, '[Aegis] Enviada señal de cancelación...']
+                        }));
+                        return true;
+                    }
+                    return false;
+                } catch (err) {
+                    console.error('Cancel training error:', err);
+                    return false;
+                }
+            },
+
+            connectTrainingStream: () => {
+                const { trainingSocket, tenantId, sessionKey } = get();
+                if (trainingSocket) {
+                    trainingSocket.close();
+                }
+                if (!tenantId || !sessionKey) return;
+
+                const wsUrl = buildWsUrl('/api/train/progress');
+                const socket = new WebSocket(wsUrl);
+
+                socket.onopen = () => {
+                    console.log('[TrainWS] Connected to progress stream');
+                    set({ trainingSocket: socket });
+                };
+
+                socket.onmessage = (event) => {
+                    try {
+                        const progress = JSON.parse(event.data as string) as TrainingProgress;
+                        set({ trainingProgress: progress });
+                        if (progress.log_snippet && progress.log_snippet.trim()) {
+                            set(state => {
+                                const logs = state.trainingLogs;
+                                if (logs[logs.length - 1] === progress.log_snippet) {
+                                    return {};
+                                }
+                                return { trainingLogs: [...logs, progress.log_snippet] };
+                            });
+                        }
+                    } catch (err) {
+                        console.error('[TrainWS] Error parsing progress payload:', err);
+                    }
+                };
+
+                socket.onclose = () => {
+                    console.log('[TrainWS] Progress stream closed');
+                    set({ trainingSocket: null });
+                };
+
+                socket.onerror = (err) => {
+                    console.error('[TrainWS] error:', err);
+                };
+            },
+
+            disconnectTrainingStream: () => {
+                const { trainingSocket } = get();
+                if (trainingSocket) {
+                    trainingSocket.close();
+                }
+                set({ trainingSocket: null });
+            },
 
             configureEngine: async (apiUrl, model, apiKey, provider = 'custom') => {
                 const { tenantId, sessionKey } = get();

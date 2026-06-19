@@ -15,6 +15,7 @@ pub mod siren_api;
 pub mod status;
 pub mod stt_download;
 pub mod system_config_api;
+pub mod train;
 pub mod workspace;
 
 use crate::static_files;
@@ -56,6 +57,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/persona", persona_api::router())
         .nest("/api/agents", agents::router())
         .nest("/api/music", music_api::router())
+        .nest("/api/train", train::router())
         // WebSocket Routes
         .nest("/ws/chat", ws::chat::router())
         .nest("/ws/siren", ws::siren::router())

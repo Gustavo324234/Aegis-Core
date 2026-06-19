@@ -21,6 +21,7 @@ pub mod speaker_id;
 pub mod swarm; // Added pub mod swarm;
 pub mod syscalls;
 pub mod telemetry;
+pub mod trainer;
 pub mod tunnel;
 pub mod vcm;
 pub mod workspace;
@@ -38,4 +39,5 @@ pub use scheduler::{CognitiveScheduler, SchedulerEvent, SchedulerStats, SharedSc
 pub use scribe::diagnostic::DiagnosticLogger;
 pub use swarm::SwarmManager;
 pub use syscalls::{parse_syscall, Syscall}; // Added re-export for SwarmManager
+pub use trainer::{TrainingConfig, TrainingManager, TrainingProgress, TrainingStatus};
 pub use tunnel::TunnelClient;

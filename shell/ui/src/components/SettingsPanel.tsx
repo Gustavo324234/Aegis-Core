@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info, Search, RefreshCw, Copy, FileText, Trash2 } from 'lucide-react';
+import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info, Search, RefreshCw, Copy, FileText, Trash2, TrendingUp } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
 import TenantKeyManager from './RouterConfig/TenantKeyManager';
 import UserPasswordChange from './UserPasswordChange';
 import ConnectedAccountsTab from './ConnectedAccountsTab';
+import TrainingPanel from './TrainingPanel';
 
 interface SettingsPanelProps {
     onClose: () => void;
@@ -14,11 +15,12 @@ interface SettingsPanelProps {
     sessionKey: string;
 }
 
-type TabId = 'perfil' | 'motor' | 'voz' | 'logs' | 'cuenta';
+type TabId = 'perfil' | 'motor' | 'voz' | 'logs' | 'cuenta' | 'entrenamiento';
 
 const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: React.ReactNode }[] => [
     { id: 'perfil', label: t('tab_persona'), icon: <Sparkles className="w-4 h-4" /> },
     { id: 'motor', label: t('tab_motor'), icon: <Cpu className="w-4 h-4" /> },
+    { id: 'entrenamiento', label: 'Entrenamiento', icon: <TrendingUp className="w-4 h-4" /> },
     { id: 'voz', label: t('tab_voz'), icon: <Volume2 className="w-4 h-4" /> },
     { id: 'logs', label: t('tab_logs'), icon: <Terminal className="w-4 h-4" /> },
     { id: 'cuenta', label: 'Cuenta', icon: <Globe className="w-4 h-4" /> },
@@ -943,7 +945,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, tenantId, sessio
                     ))}
                 </div>
 
-       <div className="p-6 overflow-y-auto flex-1">
+        <div className="p-6 overflow-y-auto flex-1">
                     <AnimatePresence mode="wait">
                         <motion.div
                             key={activeTab}
@@ -951,9 +953,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, tenantId, sessio
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -10 }}
                             transition={{ duration: 0.15 }}
+                            className="h-full"
                         >
                             {activeTab === 'perfil' && <PersonaTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'motor' && <MotorTab tenantId={tenantId} sessionKey={sessionKey} />}
+                            {activeTab === 'entrenamiento' && <TrainingPanel tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'voz' && <VozTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'logs' && <LogsTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'cuenta' && <CuentaTab tenantId={tenantId} sessionKey={sessionKey} />}

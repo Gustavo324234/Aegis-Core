@@ -67,6 +67,7 @@
 | CORE-300 | feat | Shell: selector de modelo en el chat | ✅ Done | Crítica | Shell Engineer |
 | CORE-301 | feat | CMR v2: scoring contextual + latencia real + fix peso fantasma | ✅ Done | Alta | Kernel Engineer |
 | CORE-305 | feat | Kernel: Arquitectura de Ruteo Cognitivo Asimétrico (Local-First) | ✅ Done | Alta | Arquitecto IA + Kernel Engineer |
+| CORE-331 | feat | Shell: Native Training Engine UI & Progress Stream | ✅ Done | Alta | UI/Shell Engineer + AI Architect |
 
 ## EPIC 52 — Voice Quality
 
