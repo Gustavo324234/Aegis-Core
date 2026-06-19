@@ -1,10 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{broadcast, Mutex, RwLock};
-use serde::{Serialize, Deserialize};
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TrainingStatus {
@@ -143,7 +143,10 @@ impl TrainingManager {
         });
 
         tokio::spawn(async move {
-            if let Err(e) = manager_clone.run_training_pipeline(config, active_process).await {
+            if let Err(e) = manager_clone
+                .run_training_pipeline(config, active_process)
+                .await
+            {
                 error!("Error en el pipeline de entrenamiento: {}", e);
                 manager_clone.update_status(TrainingStatus::Failed(e)).await;
             }
@@ -169,18 +172,23 @@ impl TrainingManager {
 
         // Paso 1: Ejecutar la generación del dataset
         info!("Ejecutando generación de dataset...");
-        self.append_log("Generando dataset desde el historial de chat...").await;
+        self.append_log("Generando dataset desde el historial de chat...")
+            .await;
 
         let generate_script = fine_tuning_dir.join("generate_dataset.py");
         let mut gen_cmd = Command::new("python");
-        gen_cmd.arg(&generate_script)
+        gen_cmd
+            .arg(&generate_script)
             .arg("--output_file")
             .arg(fine_tuning_dir.join("dataset.jsonl"));
 
-        let mut gen_child = gen_cmd.spawn()
+        let mut gen_child = gen_cmd
+            .spawn()
             .map_err(|e| format!("Fallo al arrancar generate_dataset.py: {}", e))?;
 
-        let gen_status = gen_child.wait().await
+        let gen_status = gen_child
+            .wait()
+            .await
             .map_err(|e| format!("Fallo al esperar generate_dataset.py: {}", e))?;
 
         if !gen_status.success() {
@@ -189,11 +197,13 @@ impl TrainingManager {
 
         // Paso 2: Arrancar entrenamiento local
         self.update_status(TrainingStatus::Training).await;
-        self.append_log("Cargando modelo y arrancando entrenamiento de pesos...").await;
+        self.append_log("Cargando modelo y arrancando entrenamiento de pesos...")
+            .await;
 
         let train_script = fine_tuning_dir.join("fine_tune.py");
         let mut train_cmd = Command::new("python");
-        train_cmd.arg(&train_script)
+        train_cmd
+            .arg(&train_script)
             .arg("--model_id")
             .arg(&config.model_id)
             .arg("--dataset_path")
@@ -209,11 +219,12 @@ impl TrainingManager {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let mut child = train_cmd.spawn()
+        let mut child = train_cmd
+            .spawn()
             .map_err(|e| format!("Fallo al arrancar fine_tune.py: {}", e))?;
 
         let stdout = child.stdout.take().ok_or("No se pudo capturar stdout")?;
-        
+
         // Guardar el proceso hijo activo para permitir cancelaciones
         {
             let mut proc = active_process.lock().await;
@@ -222,7 +233,7 @@ impl TrainingManager {
 
         // Leer stdout de forma asíncrona línea por línea para capturar la pérdida (loss)
         let mut reader = BufReader::new(stdout).lines();
-        
+
         // Expresión para buscar la pérdida: "Paso 10: Pérdida (Loss) = 0.5432"
         let re = regex::Regex::new(r"Paso\s+(\d+):\s+Pérdida\s+\(Loss\)\s+=\s+([\d\.]+)").unwrap();
 
@@ -238,11 +249,15 @@ impl TrainingManager {
         // Esperar la finalización del proceso
         let mut proc_lock = active_process.lock().await;
         if let Some(mut child) = proc_lock.take() {
-            let exit_status = child.wait().await
+            let exit_status = child
+                .wait()
+                .await
                 .map_err(|e| format!("Fallo al esperar fine_tune.py: {}", e))?;
 
             if !exit_status.success() {
-                return Err("El entrenamiento falló (fine_tune.py retornó código de error)".to_string());
+                return Err(
+                    "El entrenamiento falló (fine_tune.py retornó código de error)".to_string(),
+                );
             }
         } else {
             // El proceso fue cancelado manualmente
@@ -251,13 +266,17 @@ impl TrainingManager {
 
         // Paso 3: Exportar el modelo
         self.update_status(TrainingStatus::Exporting).await;
-        self.append_log("Entrenamiento completado. Exportando y cuantizando pesos a GGUF...").await;
-        
+        self.append_log("Entrenamiento completado. Exportando y cuantizando pesos a GGUF...")
+            .await;
+
         // Simulamos la cuantización rápida o post-procesamiento
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
         self.update_status(TrainingStatus::Completed).await;
-        self.append_log("Evolución completada. El modelo asistente ha sido personalizado con éxito.").await;
+        self.append_log(
+            "Evolución completada. El modelo asistente ha sido personalizado con éxito.",
+        )
+        .await;
 
         Ok(())
     }
@@ -268,7 +287,8 @@ impl TrainingManager {
             info!("Cancelando entrenamiento activo (PID: {:?})...", child.id());
             let _ = child.kill().await;
             self.update_status(TrainingStatus::Cancelled).await;
-            self.append_log("Entrenamiento cancelado por el usuario.").await;
+            self.append_log("Entrenamiento cancelado por el usuario.")
+                .await;
             Ok(())
         } else {
             Err("No hay ningún proceso de entrenamiento activo para cancelar".to_string())
@@ -295,13 +315,13 @@ mod tests {
     async fn test_training_manager_metrics_parsing() {
         let dir = std::env::temp_dir();
         let manager = TrainingManager::new(dir);
-        
+
         // Simular actualizaciones de métricas
         manager.update_metrics(10, 0.8542).await;
         let progress = manager.get_progress().await;
         assert_eq!(progress.step, 10);
         assert_eq!(progress.loss, 0.8542);
-        
+
         manager.update_metrics(50, 0.3542).await;
         let progress2 = manager.get_progress().await;
         assert_eq!(progress2.step, 50);

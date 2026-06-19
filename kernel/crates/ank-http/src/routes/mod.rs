@@ -15,8 +15,8 @@ pub mod siren_api;
 pub mod status;
 pub mod stt_download;
 pub mod system_config_api;
-pub mod workspace;
 pub mod train;
+pub mod workspace;
 
 use crate::static_files;
 use crate::ws;

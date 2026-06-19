@@ -27,9 +27,15 @@ async fn start_train(
     _auth: CitadelAuthenticated,
     Json(config): Json<TrainingConfig>,
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
-    info!("Iniciando petición de entrenamiento para: {}", config.model_id);
-    
-    state.training_manager.start_training(config).await
+    info!(
+        "Iniciando petición de entrenamiento para: {}",
+        config.model_id
+    );
+
+    state
+        .training_manager
+        .start_training(config)
+        .await
         .map_err(|e| AegisHttpError::BadRequest(e))?;
 
     Ok(Json(json!({
@@ -45,7 +51,10 @@ async fn cancel_train(
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
     info!("Petición para cancelar el entrenamiento activo...");
 
-    state.training_manager.cancel_training().await
+    state
+        .training_manager
+        .cancel_training()
+        .await
         .map_err(|e| AegisHttpError::BadRequest(e))?;
 
     Ok(Json(json!({
