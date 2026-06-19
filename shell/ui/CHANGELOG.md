@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.29.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.28.0...shell-ui-v1.29.0) (2026-06-19)
+
+
+### Features
+
+* **shell:** implement native training engine UI, pre-flight checks and VRAM telemetry (CORE-331) ([#347](https://github.com/Gustavo324234/Aegis-Core/issues/347)) ([53025eb](https://github.com/Gustavo324234/Aegis-Core/commit/53025ebe15c98b0be1057419227c26795004bc21))
+
 ## [1.28.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.27.0...shell-ui-v1.28.0) (2026-06-15)
 
 
