@@ -267,8 +267,8 @@ mod tests {
         let head = repo.head().context("Failed to get HEAD")?;
         let commit = head.peel_to_commit().context("Failed to peel to commit")?;
 
-        assert_eq!(commit.message(), Some("Initial test commit"));
-        assert_eq!(commit.author().name(), Some("ANK Scribe"));
+        assert_eq!(commit.message(), Ok("Initial test commit"));
+        assert_eq!(commit.author().name(), Ok("ANK Scribe"));
 
         // Check file exists
         let content = std::fs::read_to_string(Path::new(&tenant_path).join("test.txt"))
