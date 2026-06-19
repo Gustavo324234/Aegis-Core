@@ -36,7 +36,7 @@ async fn start_train(
         .training_manager
         .start_training(config)
         .await
-        .map_err(|e| AegisHttpError::BadRequest(e))?;
+        .map_err(AegisHttpError::BadRequest)?;
 
     Ok(Json(json!({
         "success": true,
@@ -55,7 +55,7 @@ async fn cancel_train(
         .training_manager
         .cancel_training()
         .await
-        .map_err(|e| AegisHttpError::BadRequest(e))?;
+        .map_err(AegisHttpError::BadRequest)?;
 
     Ok(Json(json!({
         "success": true,
