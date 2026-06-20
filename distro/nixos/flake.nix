@@ -28,6 +28,20 @@
             }
           ];
         };
+
+        aegis-kiosk = nixpkgs.lib.nixosSystem {
+          inherit system;
+          modules = [
+            ./configuration.nix
+            ./hardware-configuration.nix
+            ./aegis-service.nix
+            ./profile-kiosk.nix
+            {
+              # Inject our locally built ank-server package into the service module
+              services.aegis.package = self.packages.${system}.ank-server;
+            }
+          ];
+        };
       };
     };
 }
