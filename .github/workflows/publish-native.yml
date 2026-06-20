@@ -195,6 +195,7 @@ jobs:
       OPENSSL_LIB_DIR: C:\vcpkg\installed\x64-windows-static\lib
       OPENSSL_INCLUDE_DIR: C:\vcpkg\installed\x64-windows-static\include
       OPENSSL_STATIC: "1"
+      OPENSSL_NO_VENDOR: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install OpenSSL via vcpkg
