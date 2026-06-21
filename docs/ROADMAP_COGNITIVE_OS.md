@@ -69,18 +69,20 @@ La configuración en [distro/nixos/](file:///e:/Aegis/Aegis-Core/distro/nixos) s
 
 ## 5. Fases de Implementación del Roadmap
 
-### Fase 1: Estabilización del Servidor y Lanzamiento del MVP (Foco Actual)
+### Fase 1: Estabilización del Servidor y Lanzamiento del MVP (Completada)
 * **Objetivo:** Pulir y lanzar el servidor Aegis (`ank-server`) como un software instalable sobre sistemas operativos existentes (Windows, Linux, macOS).
-* **Entregables:** Documentación del MVP, pruebas de integración estables y benchmarks de enrutamiento cognitivo de modelos.
+* **Estado:** **COMPLETO**. Toda la base de código compila limpiamente, se implementó el backend en Rust (`ank-core` / `ank-http`) y la interfaz React (`shell/ui`). Además, se repararon y optimizaron los flujos de integración continua (CI) en GitHub Actions para plataformas nativas (incluyendo Windows con enlaces estáticos de OpenSSL vía vcpkg).
 
-### Fase 2: Virtualización y Generación de la Distro
+### Fase 2: Virtualización y Generación de la Distro (Completada)
 * **Objetivo:** Crear la infraestructura de compilación de NixOS.
-* **Entregables:** Scripts para compilar una imagen ISO de Aegis OS y pruebas de funcionamiento del Kiosco gráfico dentro de una máquina virtual (QEMU/KVM).
+* **Estado:** **COMPLETO**. 
+  * Se modularizó la distro NixOS agregando el perfil gráfico de quiosco ([profile-kiosk.nix](file:///e:/Aegis/Aegis-Core/distro/nixos/profile-kiosk.nix)) con soporte para Cage Wayland, auto-inicio de Chromium a pantalla completa y configuración de audio local con PipeWire.
+  * Se diseñó el entorno declarativo de Machine Learning ([shell.nix](file:///e:/Aegis/Aegis-Core/tools/fine-tuning/shell.nix) y [requirements.txt](file:///e:/Aegis/Aegis-Core/tools/fine-tuning/requirements.txt)) para encapsular de forma limpia dependencias dinámicas como PyTorch, PEFT y drivers OpenGL/NVIDIA.
 
-### Fase 3: Despliegue en Hardware Real (Laptop Vieja)
-* **Objetivo:** Instalación física de la distro en la laptop.
-* **Entregables:** Optimización de la gestión de energía (tapa cerrada/abierta), configuración de drivers de audio y Wi-Fi nativos, y pruebas de estabilidad del daemon funcionando 24/7.
+### Fase 3: Despliegue en Hardware Real - Laptop Vieja (En Desarrollo / Foco Actual)
+* **Objetivo:** Instalación física de la distro en la laptop de pruebas.
+* **Entregables:** Optimización de la gestión de energía al cerrar la tapa de la laptop (suspensión selectiva del panel gráfico sin apagar el daemon en segundo plano), configuración fina de adaptadores de red y drivers Wi-Fi de hardware real, y pruebas de estabilidad del daemon funcionando 24/7.
 
-### Fase 4: Integración de Sensores como Herramientas (Cognitive Tools)
+### Fase 4: Integración de Sensores como Herramientas (Planeado)
 * **Objetivo:** Exponer el hardware de la laptop directamente al kernel de agentes.
-* **Entregables:** Desarrollo de herramientas de sistema en Rust (`ank-core`) que permitan a los agentes leer el nivel de batería, silenciar el micrófono físico, cambiar el brillo de la pantalla o tomar fotografías con la webcam local bajo autorización del Citadel Protocol.
+* **Entregables:** Desarrollo de herramientas de sistema en Rust (`ank-core`) que permitan a los agentes interactuar con el entorno físico del dispositivo (leer carga de batería, silenciar/desmutear micrófonos, ajustar brillo de la pantalla o tomar fotos de verificación con la webcam local mediante autorización del protocolo Citadel).

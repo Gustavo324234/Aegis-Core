@@ -115,8 +115,23 @@ Transmite tramas binarias o de texto con las métricas en tiempo real:
 
 ---
 
-## 5. Próximos Pasos Técnicos para la Implementación
+## 5. Estado de la Implementación (MVP Completado)
 
-1. **Creación de la API en Rust:** Programar los controladores de ruta en `ank-http` y los modelos de datos en `ank-core` para gestionar el ciclo de vida del entrenamiento.
-2. **Desarrollo del Gestor de Subprocesos:** Implementar la lógica en Rust para hacer `spawn` de comandos en Python de forma segura, con límites de recursos y control de salida en tiempo real.
-3. **Construcción de la Interfaz Web:** Diseñar el panel gráfico React en el Shell para configurar y controlar el motor de entrenamiento.
+El motor de entrenamiento nativo ha sido completamente implementado y estabilizado en el monorepo bajo las siguientes características:
+1. **API y Enrutamiento en Rust (`ank-http` / `ank-core`):** Endpoints completamente funcionales para iniciar, cancelar y consultar estado del entrenamiento. El core expone la lógica para invocar dinámicamente scripts de Python bajo demanda.
+2. **Pre-flight Checks (Validación de Entorno):** El backend en Rust ejecuta validaciones síncronas rápidas (`python -c "import torch, peft..."`) antes de lanzar el entrenamiento principal. Si el entorno carece de librerías o falla la configuración, se interrumpe y se notifica con un mensaje legible a la interfaz.
+3. **Interfaz Gráfica de Usuario (`shell/ui`):** 
+   - Panel de control interactivo con campos de hiperparámetros (épocas, batch size, learning rate, tipo de modelo y entorno local vs nube).
+   - Consola negra interactiva con scroll automático para logs en vivo del subproceso.
+   - Gráfico dinámico SVG para seguir en tiempo real la curva de pérdida de pasos de entrenamiento.
+   - Telemetría en tiempo real de uso de memoria de video (VRAM Widget) con alertas automáticas de color en caso de consumo crítico (>85%) para mitigar desbordamientos.
+4. **Entorno Aislado para NixOS:** Inclusión de [shell.nix](file:///e:/Aegis/Aegis-Core/tools/fine-tuning/shell.nix) para enlazar los drivers OpenGL del anfitrión, CUDA, C++ Standard Libraries y construir el entorno virtual `.venv` de forma reproducible.
+
+---
+
+## 6. Visión de Futuro y Próximos Pasos
+
+El motor cognitivo evolucionará en las siguientes áreas planificadas:
+1. **Auto-conversión y Registro Automatizado (Hot-Reload):** Automatizar el script que ejecuta `llama.cpp` tras finalizar el entrenamiento para empaquetar el modelo en formato GGUF, registrarlo en la instancia local de Ollama e indicarle al enrutador cognitivo de Aegis (`CognitiveRouter`) que empiece a redirigir consultas al modelo recién personalizado sin reiniciar el daemon de Rust.
+2. **Entrenamiento en Nube Serverless:** Completar la integración remota con proveedores como RunPod o Replicate mediante envío encriptado del dataset curado para dispositivos locales que no posean GPUs dedicadas.
+3. **Evaluación de Dataset con Citadels:** Incorporar un agente auditor en el protocolo Citadel que filtre la información sensible del usuario (claves, tokens, datos personales) en `chat_history.log` antes de compilar el dataset JSON Lines.
