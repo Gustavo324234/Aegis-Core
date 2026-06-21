@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.29.1](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.29.0...shell-ui-v1.29.1) (2026-06-21)
+
+
+### Bug Fixes
+
+* **server:** document NixOS environment variable initialization (CORE-331) ([#356](https://github.com/Gustavo324234/Aegis-Core/issues/356)) ([97f85df](https://github.com/Gustavo324234/Aegis-Core/commit/97f85dfb17db0961b4bf79ddf589fb64390b6b08))
+
 ## [1.29.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.28.0...shell-ui-v1.29.0) (2026-06-19)
 
 
