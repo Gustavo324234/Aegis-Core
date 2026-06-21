@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/Gustavo324234/Aegis-Core/compare/ank-mcp-v0.1.5...ank-mcp-v0.1.6) (2026-06-21)
+
+
+### Bug Fixes
+
+* **server:** document NixOS environment variable initialization (CORE-331) ([#356](https://github.com/Gustavo324234/Aegis-Core/issues/356)) ([97f85df](https://github.com/Gustavo324234/Aegis-Core/commit/97f85dfb17db0961b4bf79ddf589fb64390b6b08))
+
 ## [0.1.5](https://github.com/Gustavo324234/Aegis-Core/compare/ank-mcp-v0.1.4...ank-mcp-v0.1.5) (2026-05-14)
 
 
