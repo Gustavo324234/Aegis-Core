@@ -25,7 +25,7 @@ mod server;
 use server::{auth_interceptor, AnkRpcServer};
 /// Carga las variables de entorno desde un archivo `.env` o la ruta por defecto del sistema.
 /// Nota: En entornos NixOS usando la configuración Kiosk o de entrenamiento local,
-/// asegúrese de que el entorno esté configurado de antemano.
+/// asegúrese de que las variables de entorno requeridas estén correctamente inicializadas.
 fn load_env_file() {
     let mut candidates: Vec<std::path::PathBuf> = vec![];
 
