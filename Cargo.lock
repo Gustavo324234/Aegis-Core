@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-connect-relay"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-sdk"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "serde",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-supervisor"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "ank-cli"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "ank-proto",
  "anyhow",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "ank-core"
-version = "0.1.78"
+version = "0.1.79"
 dependencies = [
  "aes-gcm",
  "ank-mcp",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "ank-http"
-version = "0.1.87"
+version = "0.1.88"
 dependencies = [
  "ank-core",
  "ank-proto",
@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "ank-mcp"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "ank-proto"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "prost",
  "prost-build",
@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "ank-server"
-version = "0.1.94"
+version = "0.1.95"
 dependencies = [
  "ank-core",
  "ank-http",
@@ -4188,7 +4188,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "plugins_src"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "aegis-sdk",
  "anyhow",

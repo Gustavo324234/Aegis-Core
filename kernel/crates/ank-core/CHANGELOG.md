@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.79](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.78...ank-core-v0.1.79) (2026-06-21)
+
+
+### Bug Fixes
+
+* **server:** document NixOS environment variable initialization (CORE-331) ([#356](https://github.com/Gustavo324234/Aegis-Core/issues/356)) ([97f85df](https://github.com/Gustavo324234/Aegis-Core/commit/97f85dfb17db0961b4bf79ddf589fb64390b6b08))
+
 ## [0.1.78](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.77...ank-core-v0.1.78) (2026-06-19)
 
 

@@ -2,6 +2,13 @@
 
 
 
+## [0.1.10](https://github.com/Gustavo324234/Aegis-Core/compare/ank-cli-v0.1.9...ank-cli-v0.1.10) (2026-06-21)
+
+
+### Bug Fixes
+
+* **server:** document NixOS environment variable initialization (CORE-331) ([#356](https://github.com/Gustavo324234/Aegis-Core/issues/356)) ([97f85df](https://github.com/Gustavo324234/Aegis-Core/commit/97f85dfb17db0961b4bf79ddf589fb64390b6b08))
+
 ## [0.1.9](https://github.com/Gustavo324234/Aegis-Core/compare/ank-cli-v0.1.8...ank-cli-v0.1.9) (2026-06-01)
 
 
