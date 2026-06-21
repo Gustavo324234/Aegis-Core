@@ -56,6 +56,13 @@
 
 
 
+## [0.1.94](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.93...ank-server-v0.1.94) (2026-06-21)
+
+
+### Bug Fixes
+
+* **server:** document NixOS environment variable initialization (CORE-331) ([#354](https://github.com/Gustavo324234/Aegis-Core/issues/354)) ([a6bf380](https://github.com/Gustavo324234/Aegis-Core/commit/a6bf3805cb5437ed01a4e12662daa8b83848d82d))
+
 ## [0.1.93](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.92...ank-server-v0.1.93) (2026-06-19)
 
 
