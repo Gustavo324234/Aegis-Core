@@ -226,6 +226,7 @@
 | CORE-338 | docs | B8 — Transparencia: Publicación de notas honestas de dogfooding y uso diario | 📥 Todo | Media | Arquitecto IA |
 | CORE-339 | fix | Instalador Windows: CLI roto en PowerShell 5.1, canal de update divergente y docs de CLI desactualizadas | ✅ Done | Crítica | DevOps Engineer |
 | CORE-340 | fix | Windows: `aegis update` canal stable descargaba de un tag "latest" inexistente (404) | ✅ Done | Alta | DevOps Engineer |
+| CORE-341 | fix | Release pipeline: build Windows roto por CMake 4.x y fallos de plataforma silenciados | ✅ Done | Crítica | DevOps Engineer |
 
 ## Governance & Tooling
 

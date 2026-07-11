@@ -120,7 +120,8 @@ jobs:
   build-macos-arm64:
     name: "macOS ARM64"
     runs-on: macos-latest
-    continue-on-error: true
+    # See build-windows-x86_64: platform failures must paint the run red;
+    # the release job still publishes whatever platforms succeeded.
     steps:
       - uses: actions/checkout@v4
       - name: System dependencies
@@ -152,7 +153,8 @@ jobs:
   build-macos-x86_64:
     name: "macOS x86_64"
     runs-on: macos-latest
-    continue-on-error: true
+    # See build-windows-x86_64: platform failures must paint the run red;
+    # the release job still publishes whatever platforms succeeded.
     steps:
       - uses: actions/checkout@v4
       - name: System dependencies
@@ -188,9 +190,18 @@ jobs:
   build-windows-x86_64:
     name: "Windows x86_64"
     runs-on: windows-latest
-    continue-on-error: true
+    # NO continue-on-error here: it painted the whole run green while the
+    # Windows build failed, shipping releases with no Windows binaries and
+    # nobody noticing. The release job below still publishes the platforms
+    # that did build (its `if` only hard-requires ui + linux-x86_64), but a
+    # failed platform must show up as a red run.
     env:
       VCPKG_ROOT: C:\vcpkg
+      # windows-latest now ships CMake 4.x, which refuses the ancient
+      # cmake_minimum_required declared by audiopus_sys's bundled Opus.
+      # This env var (honored by CMake >= 4.0) restores the 3.5 policy
+      # floor so the Opus build keeps working.
+      CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       OPENSSL_DIR: C:\vcpkg\installed\x64-windows-static
       OPENSSL_LIB_DIR: C:\vcpkg\installed\x64-windows-static\lib
       OPENSSL_INCLUDE_DIR: C:\vcpkg\installed\x64-windows-static\include
