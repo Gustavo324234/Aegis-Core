@@ -1,13 +1,13 @@
 {
   "kernel/crates/ank-proto": "0.1.7",
-  "kernel/crates/ank-core": "0.1.79",
-  "kernel/crates/ank-http": "0.1.88",
-  "kernel/crates/ank-server": "0.1.95",
+  "kernel/crates/ank-core": "0.1.80",
+  "kernel/crates/ank-http": "0.1.89",
+  "kernel/crates/ank-server": "0.1.96",
   "kernel/crates/ank-cli": "0.1.10",
   "kernel/crates/ank-mcp": "0.1.6",
   "kernel/crates/aegis-supervisor": "0.1.6",
   "kernel/crates/aegis-sdk": "0.1.6",
   "kernel/crates/aegis-connect-relay": "0.1.2",
   "kernel/plugins_src": "0.1.7",
-  "shell/ui": "1.29.1"
+  "shell/ui": "1.29.2"
 }
