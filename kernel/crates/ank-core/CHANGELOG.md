@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.80](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.79...ank-core-v0.1.80) (2026-07-11)
+
+
+### Bug Fixes
+
+* **installer:** secure plugin defaults, Windows CLI PS 5.1 compatibility and CLI docs (CORE-337, CORE-339) ([#359](https://github.com/Gustavo324234/Aegis-Core/issues/359)) ([e8471cc](https://github.com/Gustavo324234/Aegis-Core/commit/e8471cc83fb398385362cb3f63476e4819df134f))
+
 ## [0.1.79](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.78...ank-core-v0.1.79) (2026-06-21)
 
 
