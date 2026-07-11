@@ -1435,7 +1435,6 @@ impl AgentOrchestrator {
                 AgentMessage::Dispatch {
                     task_description,
                     context,
-                    reply_to: _,
                     ..
                 } => {
                     // CORE-288: ignorar Dispatch tardío si ya completamos con síntesis
