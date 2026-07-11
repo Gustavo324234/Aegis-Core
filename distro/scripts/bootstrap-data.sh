@@ -112,7 +112,6 @@ ANK_HTTP_PORT=8000
 UI_DIST_PATH=/usr/share/aegis/ui
 HW_PROFILE=1
 DEFAULT_MODEL_PREF=CloudOnly
-AEGIS_ALLOW_INSECURE_PLUGINS=1
 EOF
     chmod 600 "$ENV_FILE"
     success "Citadel configuration envelope written: $ENV_FILE"

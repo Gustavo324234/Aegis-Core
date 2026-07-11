@@ -578,8 +578,7 @@ EOF
             echo "AEGIS_PLUGIN_ROOT_KEY=${pub_key}" >> "$ENV_FILE"
             success "Plugin root key written to ${ENV_FILE}"
         else
-            echo "AEGIS_ALLOW_INSECURE_PLUGINS=1" >> "$ENV_FILE"
-            warn "No plugin root key available. Set AEGIS_ALLOW_INSECURE_PLUGINS=1 as fallback."
+            log "No plugin root key available yet. Server will auto-generate it on first boot."
         fi
 
         if [[ "$SETUP_HTTPS" == "true" && -n "$AEGIS_DOMAIN" ]]; then
@@ -615,8 +614,7 @@ EOF
                 echo "AEGIS_PLUGIN_ROOT_KEY=${pub_key}" >> "$ENV_FILE"
                 success "Backfilled AEGIS_PLUGIN_ROOT_KEY from generated keypair"
             else
-                echo "AEGIS_ALLOW_INSECURE_PLUGINS=1" >> "$ENV_FILE"
-                warn "Backfilled AEGIS_ALLOW_INSECURE_PLUGINS=1"
+                log "No plugin root key found. Server will auto-generate it on first boot."
             fi
         fi
     fi

@@ -21,7 +21,7 @@ services:
       # explicit). To harden: set AEGIS_PLUGIN_ROOT_KEY to a hex-encoded
       # ed25519 public key in your compose .env and remove the fallback.
       AEGIS_PLUGIN_ROOT_KEY: ${AEGIS_PLUGIN_ROOT_KEY:-}
-      AEGIS_ALLOW_INSECURE_PLUGINS: ${AEGIS_ALLOW_INSECURE_PLUGINS:-1}
+      AEGIS_ALLOW_INSECURE_PLUGINS: ${AEGIS_ALLOW_INSECURE_PLUGINS:-0}
     healthcheck:
       test: ["CMD-SHELL", "curl -f -k https://localhost:8000/health || curl -f http://localhost:8000/health"]
       interval: 10s

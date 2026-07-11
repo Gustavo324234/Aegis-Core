@@ -322,19 +322,14 @@ function New-AegisEnvFile {
             $line
         }
 
-        # Release builds added by PR #277 refuse to start without an explicit
-        # plugin signer key. Backfill the insecure-mode flag if neither it
-        # nor AEGIS_PLUGIN_ROOT_KEY is present, so the upgrade doesn't break
-        # running deployments. Mirrors the install.sh upgrade-path fix.
-        # The line is appended to $newLines (not the file directly) so it
-        # survives the Set-Content rewrite below.
+        # Release builds require a plugin signer key. The server auto-generates
+        # a local ed25519 keypair on first boot and persists it in the data
+        # directory, so no backfill is needed — just inform the operator.
         $hasPluginKey = $lines | Where-Object {
-            $_ -match "^(AEGIS_PLUGIN_ROOT_KEY|AEGIS_ALLOW_INSECURE_PLUGINS)="
+            $_ -match "^AEGIS_PLUGIN_ROOT_KEY="
         }
         if (-not $hasPluginKey) {
-            $newLines += "AEGIS_ALLOW_INSECURE_PLUGINS=1"
-            Write-OK "Backfilled AEGIS_ALLOW_INSECURE_PLUGINS=1 (required by release builds since PR #277)."
-            $changed = $true
+            Write-OK "No plugin root key found. Server will auto-generate it on first boot."
         }
 
         # Backfill port if missing
@@ -367,12 +362,8 @@ DEFAULT_MODEL_PREF=CloudOnly
 RUST_LOG=info
 AEGIS_HTTP_PORT=$AEGIS_HTTP_PORT
 ANK_HTTP_PORT=$AEGIS_HTTP_PORT
-# Release builds refuse to start without an explicit AEGIS_PLUGIN_ROOT_KEY
-# (hex-encoded ed25519 public key, >=32 bytes). Until a key-generation
-# command ships, opt into the unsigned-plugin mode so the installer's
-# first boot doesn't fail. To harden later: generate a real keypair, set
-# AEGIS_PLUGIN_ROOT_KEY=<hex>, and remove the line below.
-AEGIS_ALLOW_INSECURE_PLUGINS=1
+# Release builds require a plugin signer key (hex-encoded ed25519 public key, >=32 bytes).
+# Server will automatically generate a real local keypair and configure it on first boot.
 "@
 
     Set-Content -Path $envPath -Value $envContent -Encoding UTF8
