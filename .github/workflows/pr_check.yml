@@ -77,3 +77,36 @@ jobs:
         run: |
           shellcheck installer/*.sh
           shellcheck installer/aegis
+
+  installer-windows:
+    name: Installer — PowerShell 5.1 parse check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # aegis.cmd invokes powershell.exe (Windows PowerShell 5.1), so the
+      # scripts must parse under 5.1 — PS7-only syntax like `??` or a missing
+      # UTF-8 BOM (5.1 decodes BOM-less files as ANSI) breaks every install.
+      - name: Parse .ps1 scripts under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem installer -Filter *.ps1 | ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+            $hasNonAscii = $null -ne ($bytes | Where-Object { $_ -gt 127 } | Select-Object -First 1)
+            if ($hasNonAscii -and -not $hasBom) {
+              $failed = $true
+              Write-Host "::error file=installer/$($_.Name)::non-ASCII content without UTF-8 BOM (PS 5.1 will decode as ANSI)"
+            }
+            $tokens = $null; $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errs) | Out-Null
+            if ($errs.Count -gt 0) {
+              $failed = $true
+              Write-Host "::error file=installer/$($_.Name)::$($errs.Count) parse errors under PowerShell 5.1"
+              $errs | ForEach-Object { Write-Host "  L$($_.Extent.StartLineNumber): $($_.Message)" }
+            } else {
+              Write-Host "Parse OK: $($_.Name)"
+            }
+          }
+          if ($failed) { exit 1 }

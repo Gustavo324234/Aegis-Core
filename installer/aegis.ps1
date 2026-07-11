@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # AEGIS OS CLI — Windows (PowerShell)
 # ==============================================================================
 # Instalado en: C:\Program Files\Aegis\aegis.ps1
@@ -8,6 +8,7 @@
 param(
     [Parameter(Position=0)] [string]$Command = "help",
     [Parameter(Position=1)] [string]$Arg1 = "",
+    [Parameter(Position=2)] [string]$Arg2 = "",
     [switch]$Stable,
     [switch]$Nightly
 )
@@ -17,8 +18,10 @@ $INSTALL_DIR  = "$env:ProgramFiles\Aegis"
 $DATA_DIR     = "$env:ProgramData\Aegis"
 $HTTP_PORT    = 8000
 $envPath = "$DATA_DIR\aegis.env"
-if (Test-Path $envPath) {
-    $envContent = Get-Content $envPath
+# aegis.env has admin-only ACLs; degrade gracefully (default port) when the
+# CLI runs unelevated instead of spilling an access-denied error.
+if (Test-Path $envPath -ErrorAction SilentlyContinue) {
+    $envContent = Get-Content $envPath -ErrorAction SilentlyContinue
     foreach ($line in $envContent) {
         if ($line -match "^(?:AEGIS_HTTP_PORT|ANK_HTTP_PORT)=(.*)$") {
             $HTTP_PORT = [int]($matches[1].Trim('"').Trim())
@@ -122,7 +125,9 @@ function cmd_logs {
 # on Linux, so this just streams ank-server.log if present and applies the
 # same regex filters as the bash version.
 function cmd_trace {
-    param([int]$n = 500, [string]$Pid = "")
+    # NOTE: the filter parameter must NOT be named $Pid — that collides with
+    # PowerShell's read-only automatic variable and fails at invocation time.
+    param([int]$n = 500, [string]$PidFilter = "")
     $logFile = "C:\ProgramData\Aegis\logs\ank-server.log"
     if (-not (Test-Path $logFile)) {
         Write-Red "Log file not found at $logFile"
@@ -145,7 +150,7 @@ function cmd_trace {
         'LLM execution failed'
     ) -join '|'
     Get-Content $logFile -Tail $n -Wait |
-        Where-Object { $_ -match $keep -and ($Pid -eq "" -or $_ -match $Pid) } |
+        Where-Object { $_ -match $keep -and ($PidFilter -eq "" -or $_ -match $PidFilter) } |
         ForEach-Object {
             if ($_ -match 'key marcada como rate-limited') { Write-Host -ForegroundColor Yellow $_ }
             elseif ($_ -match 'Cloud API returned error|0 content tokens|LLM execution failed') { Write-Host -ForegroundColor Red $_ }
@@ -254,8 +259,14 @@ function cmd_diag {
 
 # ── update ─────────────────────────────────────────────────────────────────────
 function cmd_update {
-    $tag = if ($Stable) { "latest" } else { "nightly" }
-    $channel = if ($Stable) { "stable" } else { "nightly" }
+    # CORE-329 parity with the Linux wrapper: default = stable, nightly is
+    # opt-in. Accepts both PowerShell switches (-Nightly / -Stable) and
+    # bash-style flags (--nightly / --beta / --stable), which PowerShell
+    # binds as positional args instead of switches.
+    $wantsNightly = $Nightly -or ($Arg1 -in @('--nightly', '--beta'))
+    if ($Stable -or $Arg1 -eq '--stable') { $wantsNightly = $false }
+    $tag     = if ($wantsNightly) { "nightly" } else { "latest" }
+    $channel = if ($wantsNightly) { "nightly" } else { "stable" }
 
     Write-Cyan "--- Aegis OS Update ---"
     Write-Host "  Channel: " -NoNewline; Write-Yellow $channel
@@ -341,8 +352,8 @@ function cmd_help {
     Write-Host "  version            Show installed version"
     Write-Host "  token              Get setup URL with fresh token"
     Write-Host "  diag               Full diagnostic report"
-    Write-Host "  update             Update to latest nightly"
-    Write-Host "  update --stable    Update to latest stable release"
+    Write-Host "  update             Update to latest stable release"
+    Write-Host "  update --nightly   Update to latest nightly build from main"
     Write-Host "  uninstall          Remove Aegis from system"
     Write-Host ""
 }
@@ -354,7 +365,14 @@ switch ($Command.ToLower()) {
     "restart"   { cmd_restart }
     "status"    { cmd_status }
     "logs"      { $n = if ($Arg1 -match '^\d+$') { [int]$Arg1 } else { 100 }; cmd_logs $n }
-    "trace"     { $n = if ($Arg1 -match '^\d+$') { [int]$Arg1 } else { 500 }; cmd_trace -n $n -Pid ($Arg2 ?? "") }
+    "trace"     {
+        # `??` is PS7-only and powershell.exe (5.1) runs this script via
+        # aegis.cmd, so stick to 5.1-compatible syntax here.
+        $n = 500; $pidFilter = ""
+        if ($Arg1 -match '^\d+$') { $n = [int]$Arg1 } elseif ($Arg1) { $pidFilter = $Arg1 }
+        if ($Arg2) { $pidFilter = $Arg2 }
+        cmd_trace -n $n -PidFilter $pidFilter
+    }
     "version"   { cmd_version }
     "token"     { cmd_token }
     "diag"      { cmd_diag }
