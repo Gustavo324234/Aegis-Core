@@ -27,6 +27,7 @@ ACTIVE_SECTIONS = [
     "EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling",
     "Otras Características Consolidadas",
     "EPIC 55 — Mobile App (Orion ID & Web Redirection)",
+    "EPIC 56 — Public MVP / Thesis Validation",
     "Governance & Tooling"
 ]
 
@@ -124,6 +125,8 @@ def get_target_section(ticket):
         return "EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling"
     elif "EPIC 55" in epic or "Mobile App" in epic:
         return "EPIC 55 — Mobile App (Orion ID & Web Redirection)"
+    elif "EPIC 56" in epic or "Public MVP" in epic or "Thesis Validation" in epic:
+        return "EPIC 56 — Public MVP / Thesis Validation"
     elif "Governance" in epic or "Tooling" in epic or ticket_id == "CORE-313":
         return "Governance & Tooling"
     elif ticket_id in ["CORE-150", "CORE-151"]:
@@ -141,6 +144,8 @@ def get_target_section(ticket):
         return "EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling"
     elif 310 <= num <= 312:
         return "EPIC 55 — Mobile App (Orion ID & Web Redirection)"
+    elif 332 <= num <= 338:
+        return "EPIC 56 — Public MVP / Thesis Validation"
     elif num == 313:
         return "Governance & Tooling"
     elif 245 <= num <= 258:
