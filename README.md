@@ -110,7 +110,10 @@ Run PowerShell **as Administrator**:
 irm https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.ps1 | iex
 ```
 
-Aegis installs as a Windows Service (`AegisOS`) and starts automatically. Manage it with standard PowerShell service commands:
+Aegis installs as a Windows Service (`AegisOS`) and starts automatically. The installer
+also adds the `aegis` CLI to your `PATH` (open a new terminal), so the same commands from
+the Linux CLI work — `aegis status`, `aegis logs`, `aegis diag`, `aegis update`. Standard
+PowerShell service commands work too:
 
 ```powershell
 Start-Service AegisOS
@@ -139,9 +142,9 @@ All releases are available at [github.com/Gustavo324234/Aegis-Core/releases](htt
 
 ## Aegis CLI
 
-After installation on **Linux/macOS**, the `aegis` command is available system-wide.
+After installation, the `aegis` command is available system-wide on **Linux/macOS and Windows**.
 
-> **Windows:** No separate CLI is installed. Use PowerShell to manage the `AegisOS` Windows Service. See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for the full equivalents table.
+> **Windows:** the installer deploys `aegis.ps1` plus an `aegis.cmd` wrapper and adds them to the system `PATH` (open a new terminal after installing). PowerShell service commands remain available as an alternative — see [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for the full equivalents table.
 
 ### Status & Info
 
@@ -166,8 +169,8 @@ aegis tunnel          # Manually start Cloudflare Tunnel
 ### Updates
 
 ```bash
-aegis update          # Update to latest nightly build
-aegis update --stable # Update to latest stable release
+aegis update           # Update to latest stable release (default)
+aegis update --nightly # Update to latest nightly build from main
 ```
 
 See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) for full command reference and Windows equivalents.
@@ -212,6 +215,7 @@ aegis-core/
 │   │   ├── ank-mcp          Model Context Protocol client
 │   │   ├── aegis-supervisor Rust-based process manager
 │   │   ├── aegis-sdk        Wasm plugin SDK
+│   │   ├── aegis-connect-relay  Aegis Connect relay — persistent WebSocket tunnels
 │   │   └── ank-proto        Protobuf contracts & generated Rust code
 │   └── proto/       Protobuf contracts (gRPC & Siren audio protocol)
 ├── shell/ui/        Web interface — React 18 / Vite / TypeScript / Tailwind

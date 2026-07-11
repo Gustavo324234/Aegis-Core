@@ -15,8 +15,6 @@ ignore = [
     "RUSTSEC-2026-0099",
     # webrtc: rustls-webpki vulnerability CRL parsing panic.
     "RUSTSEC-2026-0104",
-    # wasmtime: WASI path open write bypass vulnerability.
-    "RUSTSEC-2026-0149",
     # opus: audiopus_sys unmaintained. No safe upgrade available.
     "RUSTSEC-2026-0150",
     # webrtc-dtls: bincode unmaintained. No safe upgrade available.

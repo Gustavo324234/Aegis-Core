@@ -19,6 +19,7 @@
 | EPIC 53 | Stabilization: Agent Loop, Observability & Infrastructure | ✅ Completa | 100% |
 | EPIC 54 | Aegis Connect: Persistent WebSocket Tunneling | ✅ Completa | 100% |
 | EPIC 55 | Mobile App (Orion ID & Web Redirection) | ✅ Completa | 100% |
+| EPIC 56 | Public MVP / Thesis Validation | 🚧 In Progress | 14% |
 
 ## EPIC 49 — Cognitive Loop
 
@@ -48,7 +49,7 @@
 | CORE-284 | fix | Shell: botón de reply al supervisor — fix envío | ✅ Done | Alta | Shell Engineer |
 | CORE-285 | feat | Installer: configuración obligatoria de modelo antes de arrancar | ✅ Done | Crítica | Kernel Engineer (installer) |
 | CORE-287 | fix | Kernel: fix project_id usa scope en lugar de nombre | ✅ Done | Alta | Kernel Engineer |
-| CORE-288 | fix | Kernel: fix síntesis de reportes hijos (loop infinito potencial) | 📥 Todo | Alta | Kernel Engineer |
+| CORE-288 | fix | Kernel: fix síntesis de reportes hijos (loop infinito potencial) | ✅ Done | Alta | Kernel Engineer |
 | CORE-289 | feat | Kernel: herramienta `get_agent_status` para el chat_agent | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 51 — Model Intelligence
@@ -67,7 +68,6 @@
 | CORE-300 | feat | Shell: selector de modelo en el chat | ✅ Done | Crítica | Shell Engineer |
 | CORE-301 | feat | CMR v2: scoring contextual + latencia real + fix peso fantasma | ✅ Done | Alta | Kernel Engineer |
 | CORE-305 | feat | Kernel: Arquitectura de Ruteo Cognitivo Asimétrico (Local-First) | ✅ Done | Alta | Arquitecto IA + Kernel Engineer |
-| CORE-331 | feat | Shell: Native Training Engine UI & Progress Stream | ✅ Done | Alta | UI/Shell Engineer + AI Architect |
 
 ## EPIC 52 — Voice Quality
 
@@ -203,6 +203,7 @@
 | CORE-328 | feat | Kernel: confiabilidad task-aware — outcomes por (modelo, tarea) | ✅ Done | Media | Kernel Engineer |
 | CORE-329 | fix | Installer: self-update atómico, canal stable funcional y versión de producto | ✅ Done | Crítica | DevOps Engineer |
 | CORE-330 | feat | Kernel/Shell: Clear logs and history via UI button | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
+| CORE-331 | feat | Shell: Native Training Engine UI & Progress Stream | ✅ Done | Alta | UI/Shell Engineer + AI Architect |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 
@@ -211,6 +212,19 @@
 | CORE-310 | fix | Fix TypeScript Icon type compiler error (Spotify icon) | ✅ Done | Alta | UI Engineer |
 | CORE-311 | feat | Orion ID login tab and automatic domain resolution | ✅ Done | Alta | App Developer |
 | CORE-312 | feat | connected-accounts Web redirect button via expo-web-browser | ✅ Done | Alta | App Developer |
+
+## EPIC 56 — Public MVP / Thesis Validation
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-332 | docs | B1 — Asset de prueba: Grabación de video demostrativo/GIF interactivo | 📥 Todo | Alta | UI/Shell Engineer + AI Architect |
+| CORE-333 | chore | B2 — Benchmarks: Publicación de resultados reales y reproducibles de PinchBench | 📥 Todo | Alta | Arquitecto IA |
+| CORE-334 | docs | B3 — Credibilidad: Incorporación de diagramas e insignias de tests en README | 📥 Todo | Alta | Kernel Engineer |
+| CORE-335 | docs | B4 — Honestidad de alcance: Clarificación de características en desarrollo | 📥 Todo | Alta | Arquitecto IA |
+| CORE-336 | chore | B5 — On-ramp: Instalador robusto, releases taggeadas y verificación SHA256 | 📥 Todo | Alta | DevOps Engineer |
+| CORE-337 | feat | B6 — Citadel: Generación de firmas ed25519 automáticas al arranque local (keygen) | ✅ Done | Crítica | Kernel Engineer |
+| CORE-338 | docs | B8 — Transparencia: Publicación de notas honestas de dogfooding y uso diario | 📥 Todo | Media | Arquitecto IA |
+| CORE-339 | fix | Instalador Windows: CLI roto en PowerShell 5.1, canal de update divergente y docs de CLI desactualizadas | ✅ Done | Crítica | DevOps Engineer |
 
 ## Governance & Tooling
 

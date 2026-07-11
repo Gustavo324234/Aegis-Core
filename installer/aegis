@@ -545,8 +545,7 @@ cmd_update() {
     # AEGIS_PLUGIN_ROOT_KEY=<hex>, and remove the insecure flag.
     if [[ -f /etc/aegis/aegis.env ]]; then
         if ! grep -qE "^(AEGIS_PLUGIN_ROOT_KEY|AEGIS_ALLOW_INSECURE_PLUGINS)=" /etc/aegis/aegis.env; then
-            echo "AEGIS_ALLOW_INSECURE_PLUGINS=1" | sudo tee -a /etc/aegis/aegis.env > /dev/null
-            printf '%b  → Backfilled AEGIS_ALLOW_INSECURE_PLUGINS=1 (required by release builds since PR #277)%b\n' "$YELLOW" "$NC"
+            printf '%b  → No plugin root key found. Server will auto-generate it on first boot.%b\n' "$GREEN" "$NC"
         fi
     fi
 

@@ -110,7 +110,10 @@ Ejecutá PowerShell **como Administrador**:
 irm https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.ps1 | iex
 ```
 
-Aegis se instala como un Servicio de Windows (`AegisOS`) y arranca automáticamente. Gestionalo con comandos estándar de PowerShell:
+Aegis se instala como un Servicio de Windows (`AegisOS`) y arranca automáticamente. El
+instalador también agrega el CLI `aegis` al `PATH` (abrí una terminal nueva), así que los
+mismos comandos del CLI de Linux funcionan — `aegis status`, `aegis logs`, `aegis diag`,
+`aegis update`. Los comandos estándar de PowerShell también sirven:
 
 ```powershell
 Start-Service AegisOS
@@ -139,9 +142,9 @@ Todos los releases están disponibles en [github.com/Gustavo324234/Aegis-Core/re
 
 ## Aegis CLI
 
-Después de la instalación en **Linux/macOS**, el comando `aegis` está disponible en todo el sistema.
+Después de la instalación, el comando `aegis` está disponible en todo el sistema en **Linux/macOS y Windows**.
 
-> **Windows:** No se instala CLI separado. Usá PowerShell para gestionar el Servicio de Windows `AegisOS`. Ver [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) para la tabla de equivalencias completa.
+> **Windows:** el instalador despliega `aegis.ps1` más un wrapper `aegis.cmd` y los agrega al `PATH` del sistema (abrí una terminal nueva después de instalar). Los comandos de servicio de PowerShell siguen disponibles como alternativa — ver [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) para la tabla de equivalencias completa.
 
 ### Estado e información
 
@@ -166,8 +169,8 @@ aegis tunnel          # Iniciar manualmente el túnel Cloudflare
 ### Actualizaciones
 
 ```bash
-aegis update          # Actualizar al último build nightly
-aegis update --stable # Actualizar al último release estable
+aegis update           # Actualizar al último release estable (default)
+aegis update --nightly # Actualizar al último build nightly de main
 ```
 
 Ver [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md) para referencia completa y equivalentes Windows.
@@ -204,6 +207,7 @@ aegis-core/
 │   │   ├── ank-mcp          Cliente Model Context Protocol
 │   │   ├── aegis-supervisor Process manager basado en Rust
 │   │   ├── aegis-sdk        SDK de plugins en Wasm
+│   │   ├── aegis-connect-relay  Relay de Aegis Connect — túneles WebSocket persistentes
 │   │   └── ank-proto        Contratos Protobuf y stubs de Rust generados
 │   └── proto/       Contratos Protobuf (gRPC y protocolo de audio Siren)
 ├── shell/ui/        Interfaz web — React 18 / Vite / TypeScript / Tailwind
