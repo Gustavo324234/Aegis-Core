@@ -225,6 +225,7 @@
 | CORE-337 | feat | B6 — Citadel: Generación de firmas ed25519 automáticas al arranque local (keygen) | ✅ Done | Crítica | Kernel Engineer |
 | CORE-338 | docs | B8 — Transparencia: Publicación de notas honestas de dogfooding y uso diario | 📥 Todo | Media | Arquitecto IA |
 | CORE-339 | fix | Instalador Windows: CLI roto en PowerShell 5.1, canal de update divergente y docs de CLI desactualizadas | ✅ Done | Crítica | DevOps Engineer |
+| CORE-340 | fix | Windows: `aegis update` canal stable descargaba de un tag "latest" inexistente (404) | ✅ Done | Alta | DevOps Engineer |
 
 ## Governance & Tooling
 
