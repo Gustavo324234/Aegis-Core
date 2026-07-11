@@ -101,7 +101,8 @@ aegis-core/
 │   │   ├── ank-cli/          CLI administrativa
 │   │   ├── ank-mcp/          cliente MCP
 │   │   ├── aegis-supervisor/ process manager
-│   │   └── aegis-sdk/        SDK plugins Wasm
+│   │   ├── aegis-sdk/        SDK plugins Wasm
+│   │   └── aegis-connect-relay/ relay de Aegis Connect (túneles WebSocket persistentes)
 │   └── proto/
 │       ├── kernel.proto      contrato gRPC externo
 │       └── siren.proto       contrato audio

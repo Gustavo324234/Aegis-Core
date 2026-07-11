@@ -2,8 +2,11 @@
 
 The `aegis` command is the primary management interface for a running Aegis OS installation.
 
-> **Platform availability:** The `aegis` CLI is a Bash script available on **Linux and macOS**.
-> On **Windows**, Aegis runs as a Windows Service managed via PowerShell — see the [Windows section](#windows-powershell-equivalents) below.
+> **Platform availability:** On **Linux and macOS** the `aegis` CLI is a Bash script.
+> On **Windows** it is a PowerShell script (`aegis.ps1` + `aegis.cmd` wrapper) installed to
+> `%ProgramFiles%\Aegis` and added to the system `PATH`, so `aegis <command>` works from any
+> terminal. Aegis itself runs as the `AegisOS` Windows Service — native PowerShell
+> equivalents are listed in the [Windows section](#windows-powershell-equivalents) below.
 
 ---
 
@@ -19,7 +22,9 @@ curl -fsSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/insta
 
 ### Windows
 
-On Windows, Aegis is installed as a Windows Service via `install.ps1`. There is no separate CLI binary — use PowerShell to manage the service directly.
+On Windows, Aegis is installed as a Windows Service via `install.ps1`, which also installs
+the `aegis` CLI (`aegis.ps1` + `aegis.cmd`) into `%ProgramFiles%\Aegis` and adds it to the
+system `PATH`. Open a **new** terminal after installing so the updated `PATH` is picked up.
 
 ```powershell
 # Run as Administrator
@@ -59,6 +64,20 @@ sudo aegis logs 200      # last 200 lines, then follow
 ```
 
 Equivalent to `journalctl -u aegis -n N -f` (native) or `docker compose logs -f` (Docker).
+
+---
+
+### `aegis trace [OPTS]`
+Follow **filtered model-routing events only** — no raw JSON walls. Useful for
+watching which model handles each request in real time.
+
+```bash
+sudo aegis trace                     # follow routing events (last 500 lines)
+sudo aegis trace -n 100              # start from the last 100 lines
+sudo aegis trace --pid proc_xxx      # only events for a specific process
+sudo aegis trace --since "5m ago"    # passthrough to journalctl --since
+sudo aegis trace --no-follow         # print and exit, don't tail
+```
 
 ---
 
@@ -132,8 +151,9 @@ sudo aegis tunnel
 ## Updates
 
 ### `aegis update`
-Update to the latest **nightly** build. Downloads the new binary, replaces the
-existing one, updates UI assets and agent instruction files, and restarts the service.
+Update to the latest **stable** release (the default channel). Downloads the new
+binary, replaces the existing one, updates UI assets and agent instruction files,
+and restarts the service.
 
 ```bash
 sudo aegis update
@@ -141,17 +161,18 @@ sudo aegis update
 
 ---
 
-### `aegis update --beta`
-Alias for `--nightly`. Same behavior as `aegis update`.
+### `aegis update --nightly`
+Update to the latest **nightly** build from `main`. `--beta` is accepted as an
+alias for `--nightly`.
 
 ```bash
-sudo aegis update --beta
+sudo aegis update --nightly
 ```
 
 ---
 
 ### `aegis update --stable`
-Update to the latest **stable** release. Use this to pin back to stable after
+Explicitly select the stable channel. Use this to pin back to stable after
 running a nightly.
 
 ```bash
@@ -172,19 +193,58 @@ The data directory (`/var/lib/aegis/`) is preserved by default.
 
 ---
 
+## Administrative Commands (via `ank-cli`)
+
+When `ank-cli` is installed at `/usr/local/bin/ank-cli`, the `aegis` wrapper
+forwards these additional commands to it:
+
+### `aegis keygen`
+Generate an Ed25519 keypair for signing Wasm plugins (Citadel Protocol).
+
+```bash
+aegis keygen                                  # writes plugin_signer.key / plugin_signer.pub
+aegis keygen --secret my.key --public my.pub  # custom output paths
+```
+
+> The server also auto-generates a local keypair in `<data-dir>/keys/` on first
+> boot if no `AEGIS_PLUGIN_ROOT_KEY` is configured, so manual keygen is only
+> needed for custom signing workflows.
+
+### `aegis sign <plugin.wasm>`
+Sign a Wasm plugin with a private key. Produces the `.wasm.sig` file required
+by the Citadel Protocol to load the plugin.
+
+```bash
+aegis sign my_plugin.wasm                     # uses ./plugin_signer.key
+aegis sign my_plugin.wasm --secret my.key     # custom private key
+```
+
+### `aegis ps`
+List active processes (PCBs) in the kernel.
+
+### `aegis run <prompt>`
+Send a prompt to the AI and stream the output to the terminal.
+
+### `aegis admin create-tenant <name>`
+Create a new tenant/enclave (requires Master Admin credentials).
+
+---
+
 ## Windows PowerShell Equivalents
 
-On Windows, Aegis runs as the `AegisOS` Windows Service. Use these PowerShell
-commands as equivalents to the Linux CLI:
+On Windows, Aegis runs as the `AegisOS` Windows Service and the same `aegis` commands
+(`start`, `stop`, `restart`, `status`, `logs [N]`, `trace [N] [PID]`, `version`, `token`,
+`diag`, `update [--nightly|--stable]`, `uninstall`) are available from any elevated
+terminal. If you prefer, these native PowerShell equivalents also work:
 
-| Linux CLI | Windows PowerShell |
+| Aegis CLI | Windows PowerShell equivalent |
 |---|---|
-| `sudo aegis start` | `Start-Service AegisOS` |
-| `sudo aegis stop` | `Stop-Service AegisOS` |
-| `sudo aegis restart` | `Restart-Service AegisOS` |
-| `sudo aegis status` | `Get-Service AegisOS` |
-| `sudo aegis logs` | `Get-EventLog -LogName Application -Source AegisOS -Newest 100` |
-| `sudo aegis update` | Re-run `install.ps1` as Administrator |
+| `aegis start` | `Start-Service AegisOS` |
+| `aegis stop` | `Stop-Service AegisOS` |
+| `aegis restart` | `Restart-Service AegisOS` |
+| `aegis status` | `Get-Service AegisOS` |
+| `aegis logs` | `Get-EventLog -LogName Application -Source AegisOS -Newest 100` |
+| `aegis update` | Re-run `install.ps1` as Administrator |
 | `aegis version` | `& "$env:ProgramFiles\Aegis\ank-server.exe" --version` |
 
 **Update on Windows:**
@@ -205,6 +265,8 @@ Aegis reads its configuration from the environment file generated at install tim
 | Variable | Description | Example |
 |---|---|---|
 | `AEGIS_ROOT_KEY` | Master authentication key (auto-generated at install) | `a3f8...` |
+| `AEGIS_PLUGIN_ROOT_KEY` | Ed25519 public key (hex) that anchors plugin-signature trust. Auto-generated in `<data-dir>/keys/` on first boot if absent | `9f2c...` |
+| `AEGIS_ALLOW_INSECURE_PLUGINS` | Set to `1` to load unsigned Wasm plugins (dev/CI only — disables Citadel signature checks) | `0` |
 | `AEGIS_DATA_DIR` | Data directory | `/var/lib/aegis` |
 | `AEGIS_AGENTS_CONFIG_DIR` | Agent instruction files directory | `/etc/aegis/agents` |
 | `AEGIS_MODEL_PROFILE` | Inference profile | `cloud` / `local` / `hybrid` |

@@ -57,7 +57,7 @@ aegis status
 
 ### Step 3.2 — Workaround: Automated Key Backup & Restore Script
 
-For automated SRE operations, you can use the following utility script located in `C:\Users\Tavo\.gemini\antigravity\scratch\re_register_keys.py` (or `/var/lib/aegis/scratch/` on Linux) to bulk-register fallback API keys using the REST API directly.
+For automated SRE operations, save the utility script below as `re_register_keys.py` anywhere on the host to bulk-register fallback API keys using the REST API directly.
 
 Create the recovery payload file `keys_backup.json`:
 ```json
