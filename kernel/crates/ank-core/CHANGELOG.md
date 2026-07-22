@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.81](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.80...ank-core-v0.1.81) (2026-07-22)
+
+
+### Bug Fixes
+
+* **installer:** rescue Windows release channel — stable-tag resolution and CMake 4.x build (CORE-340, CORE-341) ([#361](https://github.com/Gustavo324234/Aegis-Core/issues/361)) ([f6f0623](https://github.com/Gustavo324234/Aegis-Core/commit/f6f06230e7a3f93320a11488cc35f176c1fa5c94))
+
 ## [0.1.80](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.79...ank-core-v0.1.80) (2026-07-11)
 
 
