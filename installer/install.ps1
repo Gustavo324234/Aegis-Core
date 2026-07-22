@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # AEGIS OS — Windows Installer (PowerShell)
 # ==============================================================================
 # Requiere: PowerShell 5.1+ o PowerShell Core 7+
@@ -21,7 +21,7 @@
 param(
     [string]$DataDir     = "$env:ProgramData\Aegis",
     [string]$InstallDir  = "$env:ProgramFiles\Aegis",
-    [string]$ReleaseTag  = "nightly",
+    [string]$ReleaseTag  = "latest",
     [switch]$NoService,
     [switch]$Silent,
     [switch]$Repair,

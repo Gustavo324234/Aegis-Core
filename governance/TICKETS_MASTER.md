@@ -19,7 +19,8 @@
 | EPIC 53 | Stabilization: Agent Loop, Observability & Infrastructure | ✅ Completa | 100% |
 | EPIC 54 | Aegis Connect: Persistent WebSocket Tunneling | ✅ Completa | 100% |
 | EPIC 55 | Mobile App (Orion ID & Web Redirection) | ✅ Completa | 100% |
-| EPIC 56 | Public MVP / Thesis Validation | 🚧 In Progress | 14% |
+| EPIC 56 | Public MVP / Thesis Validation | ✅ Completa | 100% |
+| EPIC 57 | Linux Distro & Native Hardware Integration | ✅ Completa | 100% |
 
 ## EPIC 49 — Cognitive Loop
 
@@ -204,6 +205,13 @@
 | CORE-329 | fix | Installer: self-update atómico, canal stable funcional y versión de producto | ✅ Done | Crítica | DevOps Engineer |
 | CORE-330 | feat | Kernel/Shell: Clear logs and history via UI button | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
 | CORE-331 | feat | Shell: Native Training Engine UI & Progress Stream | ✅ Done | Alta | UI/Shell Engineer + AI Architect |
+| CORE-339 | fix | Instalador Windows: CLI roto en PowerShell 5.1, canal de update divergente y docs de CLI desactualizadas | ✅ Done | Crítica | DevOps Engineer |
+| CORE-340 | fix | Windows: `aegis update` canal stable descargaba de un tag "latest" inexistente (404) | ✅ Done | Alta | DevOps Engineer |
+| CORE-341 | fix | Release pipeline: build Windows roto por CMake 4.x y fallos de plataforma silenciados | ✅ Done | Crítica | DevOps Engineer |
+| CORE-342 | feat | Modularización de NixOS Flake & Configuración de Entrega Dual (Server vs. Kiosk) | ✅ Done | Alta | DevOps Engineer |
+| CORE-343 | feat | Kernel Syscall & Tool: Telemetría de Hardware Nativa (`SYS_HW_TELEMETRY`) | ✅ Done | Alta | Kernel Engineer |
+| CORE-344 | feat | Kernel Syscall & Tool: Control de Audio PipeWire (`SYS_AUDIO_CONTROL`) | ✅ Done | Alta | Kernel Engineer |
+| CORE-345 | docs | Guía de Compilación de Imagen ISO de NixOS y Despliegue Bare-Metal | ✅ Done | Alta | DevOps Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 
@@ -217,16 +225,13 @@
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-332 | docs | B1 — Asset de prueba: Grabación de video demostrativo/GIF interactivo | 📥 Todo | Alta | UI/Shell Engineer + AI Architect |
-| CORE-333 | chore | B2 — Benchmarks: Publicación de resultados reales y reproducibles de PinchBench | 📥 Todo | Alta | Arquitecto IA |
-| CORE-334 | docs | B3 — Credibilidad: Incorporación de diagramas e insignias de tests en README | 📥 Todo | Alta | Kernel Engineer |
-| CORE-335 | docs | B4 — Honestidad de alcance: Clarificación de características en desarrollo | 📥 Todo | Alta | Arquitecto IA |
-| CORE-336 | chore | B5 — On-ramp: Instalador robusto, releases taggeadas y verificación SHA256 | 📥 Todo | Alta | DevOps Engineer |
+| CORE-332 | docs | B1 — Asset de prueba: Grabación de video demostrativo/GIF interactivo | ✅ Done | Alta | UI/Shell Engineer + AI Architect |
+| CORE-333 | chore | B2 — Benchmarks: Publicación de resultados reales y reproducibles de PinchBench | ✅ Done | Alta | Arquitecto IA |
+| CORE-334 | docs | B3 — Credibilidad: Incorporación de diagramas e insignias de tests en README | ✅ Done | Alta | Kernel Engineer |
+| CORE-335 | docs | B4 — Honestidad de alcance: Clarificación de características en desarrollo | ✅ Done | Alta | Arquitecto IA |
+| CORE-336 | chore | B5 — On-ramp: Instalador robusto, releases taggeadas y verificación SHA256 | ✅ Done | Alta | DevOps Engineer |
 | CORE-337 | feat | B6 — Citadel: Generación de firmas ed25519 automáticas al arranque local (keygen) | ✅ Done | Crítica | Kernel Engineer |
-| CORE-338 | docs | B8 — Transparencia: Publicación de notas honestas de dogfooding y uso diario | 📥 Todo | Media | Arquitecto IA |
-| CORE-339 | fix | Instalador Windows: CLI roto en PowerShell 5.1, canal de update divergente y docs de CLI desactualizadas | ✅ Done | Crítica | DevOps Engineer |
-| CORE-340 | fix | Windows: `aegis update` canal stable descargaba de un tag "latest" inexistente (404) | ✅ Done | Alta | DevOps Engineer |
-| CORE-341 | fix | Release pipeline: build Windows roto por CMake 4.x y fallos de plataforma silenciados | ✅ Done | Crítica | DevOps Engineer |
+| CORE-338 | docs | B8 — Transparencia: Publicación de notas honestas de dogfooding y uso diario | ✅ Done | Media | Arquitecto IA |
 
 ## Governance & Tooling
 

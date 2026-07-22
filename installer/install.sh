@@ -19,7 +19,7 @@ INSTALL_ROOT="/opt/aegis"
 
 GITHUB_ORG="Gustavo324234"
 GITHUB_REPO="Aegis-Core"
-RELEASE_TAG="nightly"
+RELEASE_TAG="latest"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
