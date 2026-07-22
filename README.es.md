@@ -3,7 +3,9 @@
 > **Un sistema operativo cognitivo.** Un binario. Sin dependencias de runtime. LLMs como ALUs bajo un motor de ejecución determinístico.
 
 [![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
-[![Build](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
+[![Build & Test](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
+[![Rust Version](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
+[![Arquitectura: Zero--Panic](https://img.shields.io/badge/Kernel-Zero--Panic-green.svg)](ARCHITECTURE.md)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/Gustavo324234)
 
 ---
@@ -15,6 +17,37 @@ Aegis es un sistema operativo cognitivo self-hosted — una plataforma donde los
 El propósito fundamental de Aegis es ser el **asistente personal definitivo que gestiona un ecosistema de agentes especializados, actuando como el "CIO (Chief Information Officer) de la empresa de tu vida"**. Está diseñado para instalarse localmente en tu propia máquina o servidor, garantizando seguridad absoluta (local-first con datos cifrados por inquilino) para albergar toda tu información personal o corporativa, permitiendo que cualquier persona o empresa tenga su propio asistente autónomo e independiente.
 
 No es un wrapper de chatbot. No es un pipeline de LangChain. Es un runtime a nivel de kernel para cargas de trabajo cognitivas autónomas.
+
+---
+
+## 🎬 Demostración del Sistema y Flujo de Ejecución
+
+```
+[ Prompt del Usuario ] ──> "Desarrollar y probar feature web para ticket CORE-280"
+                                │
+                                ▼
+                       ┌─────────────────┐
+                       │   Chat Maestro  │ (Proceso Supervisor Raíz)
+                       └────────┬────────┘
+                                │  (Spawnea Agente Especialista)
+                                ▼
+                    ┌───────────────────────┐
+                    │ Especialista: Web Dev │ (Process ID: agent-8823)
+                    └───────────┬───────────┘
+                                │
+      ┌─────────────────────────┼─────────────────────────┐
+      ▼                         ▼                         ▼
+ [ Filesystem ]            [ Terminal ]             [ Git Manager ]
+ (Lectura/Escritura)       (Ejecuta `npm test`)     (Commit y Push)
+      │                         │                         │
+      └─────────────────────────┼─────────────────────────┘
+                                │
+                                ▼
+                      ┌───────────────────┐
+                      │ Árbol en Tiempo   │ (Telemetría en Vivo en Dashboard UI)
+                      │ Real de Procesos  │
+                      └───────────────────┘
+```
 
 **Ideas centrales:**
 
@@ -38,6 +71,33 @@ Browser / App Mobile
         ├── ank-http    HTTP :8000  — API REST, WebSocket, UI React embebida
         ├── ank-core    Motor cognitivo — scheduler, VCM, agentes, DAG, plugins
         └── gRPC :50051 — comunicación interna, federación multi-nodo
+```
+
+### Bucle de Ejecución Cognitivo
+
+El siguiente diagrama detalla cómo las interacciones de los clientes fluyen determinísticamente a través del gateway HTTP/WebSocket, el scheduler cognitivo (`ank-core`), el enclave cifrado de base de datos multi-tenant (Citadel SQLCipher) y los proveedores externos de inferencia LLM:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Usuario as Usuario / UI Cliente
+    participant Server as ank-http (Axum :8000)
+    participant Core as ank-core (CognitiveHAL)
+    participant Orch as AgentOrchestrator
+    participant Enclave as Enclave Citadel (SQLCipher)
+    participant LLM as Proveedor / LLM (CMR)
+
+    Usuario->>Server: Petición HTTP / Frame WebSocket
+    Server->>Core: Autenticar y Autorizar (Token Citadel)
+    Core->>Enclave: Cargar Contexto de Sesión y Capas de Memoria (L1/L2/L3)
+    Enclave-->>Core: Retornar Contexto de Tenant y Vectores de Memoria
+    Core->>Orch: Spawnear / Reanudar Árbol de Tareas del Agente
+    Orch->>LLM: Ingestar Prompt de Sistema y Despachar Llamada a Tool
+    LLM-->>Orch: Ejecución de Llamada a Tool / Stream de Respuesta
+    Orch->>Core: Ejecutar Syscall del Kernel (FS/Git/Terminal/DB)
+    Core->>Server: Emitir Eventos en Vivo por WebSocket
+    Server-->>Usuario: Renderizar Output en Tiempo Real en la UI
+    Orch->>Enclave: Persistir Libro Mayor del Proyecto e Historial
 ```
 
 El sistema es multi-tenant: cada tenant tiene un entorno cognitivo aislado con sus propias capas de memoria (L1/L2/L3), árbol de agentes y almacenamiento cifrado (SQLCipher).
@@ -121,6 +181,17 @@ Stop-Service AegisOS
 Restart-Service AegisOS
 Get-Service AegisOS
 ```
+
+### Docker Compose (Despliegue Contenerizado en 1-Click)
+
+Si preferís ejecutar Aegis en un contenedor aislado sin modificar dependencias ni paquetes del sistema operativo host:
+
+```bash
+curl -fsSL -o docker-compose.yml https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/docker-compose.yml
+docker compose up -d
+```
+
+Aegis arrancará en `http://localhost:8000` con persistencia de datos aislada en el volumen `aegis_data`.
 
 ---
 
@@ -223,25 +294,36 @@ aegis-core/
 
 Creemos en la honestidad de ingeniería absoluta. El núcleo cognitivo, la arquitectura de binario único y el protocolo Citadel están completamente validados y listos para producción. Las extensiones de última generación (como la transmisión de voz WebRTC en tiempo real y el cliente móvil) se mantienen actualmente como capas de investigación y desarrollo experimentales activas para no comprometer la estabilidad del sistema.
 
-| Epic / Componente Central | Descripción | Estado |
+| Epic / Componente Central | Descripción | Madurez / Estado |
 |---|---|---|
-| Epic 32 | Unificación — binario único Rust | ✅ Listo (Producción) |
-| Epic 42 | Realignment — auth, OAuth, router de modelos | ✅ Listo (Producción) |
-| Epic 43 | Orquestación Jerárquica Multi-Agente | ✅ Listo (Producción) |
-| Epic 44 | Developer Workspace (terminal, explorador de archivos, Git, PR manager) | ✅ Listo (Producción) |
-| Epic 45 | Arquitectura de Agentes Cognitivos | ✅ Listo (Producción) |
-| Epic 47 | Protocolo de Agente v2 (Paradigma Tool Use reemplaza parsing de texto) | ✅ Listo (Producción) |
-| Epic 48 | Observabilidad de Shell (Widgets del Dashboard en tiempo real y pestaña Sistema) | ✅ Listo (Producción) |
-| Epic 49 | Bucle Cognitivo (Loop ReAct multi-agente y capas de memoria semántica) | ✅ Listo (Producción) |
-| Epic 50 | Inbox de Agente (Intercambios directos Usuario-Supervisor en hilos) | ✅ Listo (Producción) |
-| Epic 51 | Inteligencia de Modelos (Ollama Cloud, scoring de contexto CMR v2) | ✅ Listo (Producción) |
-| Epic 53 | Estabilización (loop real de agentes LLM, panel de observabilidad, correcciones SRE) | ✅ Listo (Producción) |
-| Epic 54 | Aegis Connect (Túneles WebSocket persistentes mapeados a Orion ID) | ✅ Listo (Producción) |
-| CORE-150 | Scripting en Sandbox (Maker Capability - sandbox JS autónomo) | ✅ Listo (Producción) |
-| CORE-151 | Integración de contexto de proyecto (VCM y seguimiento de Git) | ✅ Listo (Producción) |
-| Epic 46 | Lanzamiento Público (docs, comunidad, salud open source) | 🚧 En Enfoque Pre-Lanzamiento |
-| Epic 52 | Calidad de Voz (estabilización de stream Siren WebRTC y feedback de silenciar mic) | 🧪 Experimental (I+D Activo) |
-| Epic 55 | App Móvil (modos Satélite y Cloud con integración Orion ID y Web) | 🧪 Experimental (I+D Activo) |
+| Epic 32 | Unificación — binario único Rust | `[Core / Estable]` ✅ Listo |
+| Epic 42 | Realignment — auth, OAuth, router de modelos | `[Core / Estable]` ✅ Listo |
+| Epic 43 | Orquestación Jerárquica Multi-Agente | `[Core / Estable]` ✅ Listo |
+| Epic 44 | Developer Workspace (terminal, explorador de archivos, Git, PR manager) | `[Core / Estable]` ✅ Listo |
+| Epic 45 | Arquitectura de Agentes Cognitivos | `[Core / Estable]` ✅ Listo |
+| Epic 47 | Protocolo de Agente v2 (Paradigma Tool Use reemplaza parsing de texto) | `[Core / Estable]` ✅ Listo |
+| Epic 48 | Observabilidad de Shell (Widgets del Dashboard en tiempo real y pestaña Sistema) | `[Core / Estable]` ✅ Listo |
+| Epic 49 | Bucle Cognitivo (Loop ReAct multi-agente y capas de memoria semántica) | `[Core / Estable]` ✅ Listo |
+| Epic 50 | Inbox de Agente (Intercambios directos Usuario-Supervisor en hilos) | `[Core / Estable]` ✅ Listo |
+| Epic 51 | Inteligencia de Modelos (Ollama Cloud, scoring de contexto CMR v2) | `[Core / Estable]` ✅ Listo |
+| Epic 53 | Estabilización (loop real de agentes LLM, panel de observabilidad, correcciones SRE) | `[Core / Estable]` ✅ Listo |
+| Epic 54 | Aegis Connect (Túneles WebSocket persistentes mapeados a Orion ID) | `[Core / Estable]` ✅ Listo |
+| CORE-150 | Scripting en Sandbox (Maker Capability - sandbox JS autónomo) | `[Core / Estable]` ✅ Listo |
+| CORE-151 | Integración de contexto de proyecto (VCM y seguimiento de Git) | `[Core / Estable]` ✅ Listo |
+| Epic 46 | Lanzamiento Público (docs, comunidad, salud open source) | `[Core / Activo]` 🚧 Pre-Lanzamiento |
+| Epic 52 | Calidad de Voz (estabilización de stream Siren WebRTC y feedback de silenciar mic) | `[Experimental / I+D]` 🧪 I+D Activo |
+| Epic 55 | App Móvil (modos Satélite y Cloud con integración Orion ID y Web) | `[Experimental / I+D]` 🧪 I+D Activo |
+
+---
+
+### Limitaciones Conocidas y Alcance de I+D
+
+Para mantener una total honestidad de ingeniería, diferenciamos claramente entre el núcleo determinístico probado en batalla y las funcionalidades experimentales en fase de I+D:
+
+* **Núcleo y Motor del Kernel (`ank-server`, `ank-core`, `ank-http`)**: Completamente estable, verificado mediante suites de pruebas unitarias/integración, con garantía de Zero-Panic en producción.
+* **Protocolo de Voz Siren (`Epic 52`)**: El streaming de audio WebRTC en tiempo real es funcional pero se considera `[Experimental]`. La calidad del audio y la latencia dependen de los códecs del navegador del cliente y la disponibilidad del motor local STT/TTS.
+* **Cliente Móvil (`Epic 55` / `app/`)**: La app en React Native Expo soporta autenticación mediante Orion ID y redirección web del workspace, pero la sincronización nativa en segundo plano se mantiene como `[Experimental]`.
+* **Sandbox Maker Capability (`CORE-150`)**: La ejecución de scripts en sandbox opera en un entorno restringido, pero el soporte multihilo avanzado en plugins WASM es un módulo activo de I+D.
 
 ---
 
@@ -299,6 +381,10 @@ Cuando un agente genera un árbol de tareas, el kernel analiza el bloque de ejec
 3. **Escudo de Privacidad Local-First:** Para enclaves de datos altamente sensibles, el planificador restringe el enrutamiento exclusivamente a hardware local (`gpt-oss-120b` o modelos Gemma/Llama locales), manteniendo soberanía absoluta sobre los datos.
 
 Esta estrategia adaptativa garantiza una estabilidad operativa de grado SRE, reduciendo los costos totales de API hasta en un **80%** sin sacrificar las capacidades contextuales del asistente.
+
+Para instrucciones completas de reproducibilidad y detalles de benchmarks, ver [docs/BENCHMARKS_PINCHBENCH.md](docs/BENCHMARKS_PINCHBENCH.md).
+
+Para notas operativas del mundo real y experiencias de resiliencia SRE, ver [docs/DOGFOODING.md](docs/DOGFOODING.md).
 
 ---
 

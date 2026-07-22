@@ -21,7 +21,7 @@
 param(
     [string]$DataDir     = "$env:ProgramData\Aegis",
     [string]$InstallDir  = "$env:ProgramFiles\Aegis",
-    [string]$ReleaseTag  = "nightly",
+    [string]$ReleaseTag  = "latest",
     [switch]$NoService,
     [switch]$Silent,
     [switch]$Repair,

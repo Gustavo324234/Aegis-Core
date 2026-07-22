@@ -3,7 +3,9 @@
 > **A cognitive operating system.** One binary. Zero runtime dependencies. LLMs as ALUs under a deterministic execution engine.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Build](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
+[![Build & Test](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
+[![Rust Version](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
+[![Architecture: Zero--Panic](https://img.shields.io/badge/Kernel-Zero--Panic-green.svg)](ARCHITECTURE.md)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/Gustavo324234)
 
 ---
@@ -15,6 +17,36 @@ Aegis is a self-hosted cognitive operating system — a platform where AI agents
 The core mission of Aegis is to be the **ultimate personal assistant that manages a comprehensive ecosystem of specialized agents, acting as the "CIO (Chief Information Officer) of the company of your life."** It is built to be run locally or on a private server, ensuring absolute security (local-first with tenant-encrypted storage) so it can safely hold your personal or corporate data, allowing anyone—from individuals to entire organizations—to have their own private, autonomous assistant.
 
 It is not a chatbot wrapper. It is not a LangChain pipeline. It is a kernel-level runtime for autonomous cognitive workloads.
+
+---
+
+## 🎬 System Showcase & Execution Flow
+
+```
+[ User Prompt ] ──> "Build & test web app feature for ticket CORE-280"
+                        │
+                        ▼
+               ┌─────────────────┐
+               │   Chat Maestro  │ (Root Supervisor Process)
+               └────────┬────────┘
+                        │  (Spawns Specialized Sub-Agent)
+                        ▼
+            ┌───────────────────────┐
+            │ Specialist: Web Dev   │ (Process ID: agent-8823)
+            └───────────┬───────────┘
+                        │
+      ┌─────────────────┼─────────────────┐
+      ▼                 ▼                 ▼
+ [ Filesystem ]    [ Terminal ]      [ Git Manager ]
+ (Read/Write Code) (Run `npm test`)  (Commit & Push)
+      │                 │                 │
+      └─────────────────┼─────────────────┘
+                        │
+                        ▼
+              ┌───────────────────┐
+              │ Live Process Tree │ (Dashboard UI Real-time Telemetry)
+              └───────────────────┘
+```
 
 **Core ideas:**
 
@@ -38,6 +70,33 @@ Browser / Mobile App
         ├── ank-http    HTTP :8000  — REST API, WebSocket, embedded React UI
         ├── ank-core    Cognitive engine — scheduler, VCM, agents, DAG, plugins
         └── gRPC :50051 — internal communication, multi-node federation
+```
+
+### Cognitive Execution Loop
+
+The diagram below illustrates how client interactions flow deterministically through the HTTP/WebSocket gateway, the cognitive scheduler (`ank-core`), the multi-tenant encrypted database enclave (Citadel SQLCipher), and external LLM inference providers:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as User / Client UI
+    participant Server as ank-http (Axum :8000)
+    participant Core as ank-core (CognitiveHAL)
+    participant Orch as AgentOrchestrator
+    participant Enclave as Citadel Enclave (SQLCipher)
+    participant LLM as Provider / LLM (CMR)
+
+    User->>Server: HTTP Request / WS Frame
+    Server->>Core: Authenticate & Authorize (Citadel Token)
+    Core->>Enclave: Load Session Context & Memory Layers (L1/L2/L3)
+    Enclave-->>Core: Return Tenant Context & Memory Vectors
+    Core->>Orch: Spawn / Resume Agent Task Tree
+    Orch->>LLM: Ingest System Prompt & Dispatch Tool Call
+    LLM-->>Orch: Tool Call Execution / Response Stream
+    Orch->>Core: Run Kernel Syscall (FS/Git/Terminal/DB)
+    Core->>Server: Push Live Event Stream via WebSocket
+    Server-->>User: Render Streamed Output in UI
+    Orch->>Enclave: Persist Project Ledger & Conversation State
 ```
 
 The system is multi-tenant: each tenant gets an isolated cognitive environment with its own memory layers (L1/L2/L3), agent tree, and encrypted data store (SQLCipher).
@@ -121,6 +180,17 @@ Stop-Service AegisOS
 Restart-Service AegisOS
 Get-Service AegisOS
 ```
+
+### Docker Compose (1-Click Containerized Mode)
+
+If you prefer running Aegis in an isolated container without installing host system packages:
+
+```bash
+curl -fsSL -o docker-compose.yml https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/docker-compose.yml
+docker compose up -d
+```
+
+Aegis will spin up on `http://localhost:8000` with isolated data persistence in the `aegis_data` volume.
 
 ---
 
@@ -231,25 +301,36 @@ aegis-core/
 
 We believe in absolute engineering honesty. The core cognitive kernel, single-binary architecture, and Citadel protocol are fully validated and production-ready. Cutting-edge extensions (like real-time WebRTC voice streaming and the mobile app client) are currently active, functional experimental R&D layers to prevent technical bloat.
 
-| Epic / Core Component | Description | Status |
+| Epic / Core Component | Description | Maturity / Status |
 |---|---|---|
-| Epic 32 | Unification — single Rust binary | ✅ Done (Production) |
-| Epic 42 | Realignment — auth, OAuth, model router | ✅ Done (Production) |
-| Epic 43 | Hierarchical Multi-Agent Orchestration | ✅ Done (Production) |
-| Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) | ✅ Done (Production) |
-| Epic 45 | Cognitive Agent Architecture | ✅ Done (Production) |
-| Epic 47 | Agent Protocol v2 (Tool Use paradigm replacing text parsing) | ✅ Done (Production) |
-| Epic 48 | Shell Observability (Dashboard real-time widgets & service tab) | ✅ Done (Production) |
-| Epic 49 | Cognitive Loop (Multi-agent ReAct loop & memory layers) | ✅ Done (Production) |
-| Epic 50 | Agent Inbox (Direct User-Supervisor thread exchanges) | ✅ Done (Production) |
-| Epic 51 | Model Intelligence (Ollama Cloud, CMR v2 context scoring) | ✅ Done (Production) |
-| Epic 53 | Stabilization (Real LLM agent loop, observability dashboard, SRE fixes) | ✅ Done (Production) |
-| Epic 54 | Aegis Connect (Persistent WebSocket tunneling mapped to Orion ID) | ✅ Done (Production) |
-| CORE-150 | Sandbox scripting (Maker Capability - autonomous JS sandbox) | ✅ Done (Production) |
-| CORE-151 | Project context integration (Git/VCM active context tracking) | ✅ Done (Production) |
-| Epic 46 | Public Launch (docs, community, open source health) | 🚧 Pre-Launch Focus |
-| Epic 52 | Voice Quality (Siren WebRTC stream stabilization & mic-mute feedback) | 🧪 Experimental (Active R&D) |
-| Epic 55 | Mobile App (Satellite and Cloud modes with Orion ID & Web integration) | 🧪 Experimental (Active R&D) |
+| Epic 32 | Unification — single Rust binary | `[Core / Stable]` ✅ Done |
+| Epic 42 | Realignment — auth, OAuth, model router | `[Core / Stable]` ✅ Done |
+| Epic 43 | Hierarchical Multi-Agent Orchestration | `[Core / Stable]` ✅ Done |
+| Epic 44 | Developer Workspace (terminal, file browser, Git, PR manager) | `[Core / Stable]` ✅ Done |
+| Epic 45 | Cognitive Agent Architecture | `[Core / Stable]` ✅ Done |
+| Epic 47 | Agent Protocol v2 (Tool Use paradigm replacing text parsing) | `[Core / Stable]` ✅ Done |
+| Epic 48 | Shell Observability (Dashboard real-time widgets & service tab) | `[Core / Stable]` ✅ Done |
+| Epic 49 | Cognitive Loop (Multi-agent ReAct loop & memory layers) | `[Core / Stable]` ✅ Done |
+| Epic 50 | Agent Inbox (Direct User-Supervisor thread exchanges) | `[Core / Stable]` ✅ Done |
+| Epic 51 | Model Intelligence (Ollama Cloud, CMR v2 context scoring) | `[Core / Stable]` ✅ Done |
+| Epic 53 | Stabilization (Real LLM agent loop, observability dashboard, SRE fixes) | `[Core / Stable]` ✅ Done |
+| Epic 54 | Aegis Connect (Persistent WebSocket tunneling mapped to Orion ID) | `[Core / Stable]` ✅ Done |
+| CORE-150 | Sandbox scripting (Maker Capability - autonomous JS sandbox) | `[Core / Stable]` ✅ Done |
+| CORE-151 | Project context integration (Git/VCM active context tracking) | `[Core / Stable]` ✅ Done |
+| Epic 46 | Public Launch (docs, community, open source health) | `[Core / Active]` 🚧 Pre-Launch |
+| Epic 52 | Voice Quality (Siren WebRTC stream stabilization & mic-mute feedback) | `[Experimental / R&D]` 🧪 Active R&D |
+| Epic 55 | Mobile App (Satellite and Cloud modes with Orion ID & Web integration) | `[Experimental / R&D]` 🧪 Active R&D |
+
+---
+
+### Known Limitations & Active R&D Boundaries
+
+To maintain engineering honesty, we clearly distinguish between our battle-tested deterministic core and experimental R&D features:
+
+* **Core & Kernel Engine (`ank-server`, `ank-core`, `ank-http`)**: Fully stable, tested with unit/integration suites, and enforced Zero-Panic in production.
+* **Siren Voice Protocol (`Epic 52`)**: Real-time WebRTC audio streaming is functional but considered `[Experimental]`. Audio quality and latency depend heavily on client browser WebSockets/WebRTC codecs and local STT/TTS engine availability.
+* **Mobile Client (`Epic 55` / `app/`)**: The React Native Expo client supports Orion ID authentication and workspace web redirection, but native background sync remains `[Experimental]`.
+* **Maker Capability (`CORE-150`)**: Script sandbox execution operates in a restricted environment, but advanced multi-threading within custom WASM plugins is an evolving R&D module.
 
 ---
 
@@ -307,6 +388,10 @@ When an agent spawns a task tree, the kernel parses the execution block and assi
 3. **Local-First Privacy Guard:** For highly sensitive enclaves, the scheduler restricts routing entirely to local hardware (`gpt-oss-120b` or local Gemma/Llama models), maintaining absolute data sovereignty.
 
 This adaptive strategy ensures SRE-grade operational stability, bringing down overall API costs by up to **80%** without sacrificing the agent's contextual capabilities.
+
+For full reproducibility instructions and benchmarking details, see [docs/BENCHMARKS_PINCHBENCH.md](docs/BENCHMARKS_PINCHBENCH.md).
+
+For real-world operational notes and SRE resilience experiences, see [docs/DOGFOODING.md](docs/DOGFOODING.md).
 
 ---
 

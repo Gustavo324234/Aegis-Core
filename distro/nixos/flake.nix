@@ -16,14 +16,14 @@
       };
 
       nixosConfigurations = {
-        aegis-node = nixpkgs.lib.nixosSystem {
+        aegis-server = nixpkgs.lib.nixosSystem {
           inherit system;
           modules = [
             ./configuration.nix
             ./hardware-configuration.nix
             ./aegis-service.nix
+            ./profile-server.nix
             {
-              # Inject our locally built ank-server package into the service module
               services.aegis.package = self.packages.${system}.ank-server;
             }
           ];
@@ -37,7 +37,19 @@
             ./aegis-service.nix
             ./profile-kiosk.nix
             {
-              # Inject our locally built ank-server package into the service module
+              services.aegis.package = self.packages.${system}.ank-server;
+            }
+          ];
+        };
+
+        aegis-iso = nixpkgs.lib.nixosSystem {
+          inherit system;
+          modules = [
+            "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-minimal.nix"
+            ./configuration.nix
+            ./aegis-service.nix
+            ./profile-server.nix
+            {
               services.aegis.package = self.packages.${system}.ank-server;
             }
           ];

@@ -265,11 +265,28 @@ function cmd_update {
     # binds as positional args instead of switches.
     $wantsNightly = $Nightly -or ($Arg1 -in @('--nightly', '--beta'))
     if ($Stable -or $Arg1 -eq '--stable') { $wantsNightly = $false }
-    $tag     = if ($wantsNightly) { "nightly" } else { "latest" }
     $channel = if ($wantsNightly) { "nightly" } else { "stable" }
 
+    $tag = "nightly"
+    if (-not $wantsNightly) {
+        # There is no literal "latest" tag: GitHub's /releases/latest endpoint
+        # is polluted by per-crate release-please releases (ank-server-vX.Y.Z)
+        # that carry no OS binaries — only v* tags do. Mirror the bash
+        # wrapper: pick the newest non-prerelease v* tag, with a pinned
+        # fallback if the API is unreachable or rate-limited.
+        $tag = "v0.2.0"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$GITHUB_ORG/$GITHUB_REPO/releases" -UseBasicParsing
+            $stable = $releases | Where-Object { -not $_.prerelease -and $_.tag_name -like 'v*' } | Select-Object -First 1
+            if ($stable) { $tag = $stable.tag_name }
+        } catch {
+            Write-Yellow "  Could not resolve latest stable release from GitHub API - falling back to $tag"
+        }
+    }
+
     Write-Cyan "--- Aegis OS Update ---"
-    Write-Host "  Channel: " -NoNewline; Write-Yellow $channel
+    Write-Host "  Channel: " -NoNewline; Write-Yellow "$channel (tag: $tag)"
     Write-Host "  Current: " -NoNewline; & $BIN_PATH --version 2>&1 | Write-Host
 
     Write-Cyan "`n  Stopping service..."
