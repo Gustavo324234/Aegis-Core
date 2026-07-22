@@ -597,7 +597,9 @@ impl SyscallExecutor {
                     "ram_pressure": "normal"
                 });
 
-                if let Ok(capacity) = std::fs::read_to_string("/sys/class/power_supply/BAT0/capacity") {
+                if let Ok(capacity) =
+                    std::fs::read_to_string("/sys/class/power_supply/BAT0/capacity")
+                {
                     if let Ok(val) = capacity.trim().parse::<u8>() {
                         status["battery_percentage"] = serde_json::json!(val);
                     }
