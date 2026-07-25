@@ -367,7 +367,9 @@ impl MasterEnclave {
         // SECURITY (Tenant Isolation): Purge physical user directory on disk
         // to prevent data leaks or residual session state inheritance upon tenant re-creation.
         let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let tenant_dir = std::path::Path::new(&base_dir).join("users").join(tenant_id);
+        let tenant_dir = std::path::Path::new(&base_dir)
+            .join("users")
+            .join(tenant_id);
         if tenant_dir.exists() {
             if let Err(e) = std::fs::remove_dir_all(&tenant_dir) {
                 tracing::error!(
