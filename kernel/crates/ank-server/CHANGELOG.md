@@ -60,6 +60,13 @@
 
 
 
+## [0.1.98](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.97...ank-server-v0.1.98) (2026-07-25)
+
+
+### Bug Fixes
+
+* **security:** purge physical tenant directory on delete to prevent data leaks (CORE-346) ([#363](https://github.com/Gustavo324234/Aegis-Core/issues/363)) ([950e3eb](https://github.com/Gustavo324234/Aegis-Core/commit/950e3eb04e24908a98d564d1d9e75f3922aa0b17))
+
 ## [0.1.95](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.94...ank-server-v0.1.95) (2026-06-21)
 
 
