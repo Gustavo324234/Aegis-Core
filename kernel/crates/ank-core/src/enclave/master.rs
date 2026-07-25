@@ -351,16 +351,42 @@ impl MasterEnclave {
 
     pub async fn delete_tenant(&self, tenant_id: &str) -> Result<()> {
         use anyhow::Context;
-        let conn = self.connection.lock().await;
-        let rows = conn
-            .execute(
-                "DELETE FROM tenants WHERE tenant_id = ?1",
-                rusqlite::params![tenant_id],
-            )
-            .context("Failed to delete tenant")?;
-        if rows == 0 {
-            anyhow::bail!("Tenant {} not found.", tenant_id);
+        {
+            let conn = self.connection.lock().await;
+            let rows = conn
+                .execute(
+                    "DELETE FROM tenants WHERE tenant_id = ?1",
+                    rusqlite::params![tenant_id],
+                )
+                .context("Failed to delete tenant")?;
+            if rows == 0 {
+                anyhow::bail!("Tenant {} not found.", tenant_id);
+            }
         }
+
+        // SECURITY (Tenant Isolation): Purge physical user directory on disk
+        // to prevent data leaks or residual session state inheritance upon tenant re-creation.
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let tenant_dir = std::path::Path::new(&base_dir)
+            .join("users")
+            .join(tenant_id);
+        if tenant_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&tenant_dir) {
+                tracing::error!(
+                    tenant_id = %tenant_id,
+                    "Failed to delete tenant directory on disk at {}: {}",
+                    tenant_dir.display(),
+                    e
+                );
+            } else {
+                info!(
+                    tenant_id = %tenant_id,
+                    "Purged tenant physical directory at {}",
+                    tenant_dir.display()
+                );
+            }
+        }
+
         info!("Tenant {} successfully deleted from master.", tenant_id);
         Ok(())
     }

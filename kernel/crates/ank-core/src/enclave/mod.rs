@@ -887,4 +887,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_delete_tenant_purges_physical_directory() -> Result<()> {
+        use sha2::Digest;
+        let master = MasterEnclave::new_in_memory().await?;
+
+        let tenant_id = "test_purge_tenant";
+        let (port, temp_pass) = master.create_tenant(tenant_id).await?;
+        assert!(port > 0);
+
+        let pass_hash = format!("{:x}", sha2::Sha256::digest(temp_pass.as_bytes()));
+        let session_key = format!("sk_{}", pass_hash);
+
+        // Open tenant DB to force physical file creation on disk
+        let tenant_db = TenantDB::open(tenant_id, &session_key)?;
+        tenant_db.set_kv("test_key", "test_val")?;
+
+        let tenant_dir = std::path::Path::new("./users").join(tenant_id);
+        assert!(
+            tenant_dir.exists(),
+            "Tenant physical directory should exist after open"
+        );
+
+        // Execute tenant deletion
+        master.delete_tenant(tenant_id).await?;
+
+        // Verify physical directory is completely purged
+        assert!(
+            !tenant_dir.exists(),
+            "Tenant physical directory must be purged on delete"
+        );
+
+        Ok(())
+    }
 }

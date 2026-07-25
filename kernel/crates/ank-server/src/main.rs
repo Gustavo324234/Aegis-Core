@@ -671,10 +671,15 @@ pub(crate) async fn run_server() -> Result<()> {
     let ank_rpc = AnkRpcServer::from_state(&state);
     let tonic_svc = KernelServiceServer::with_interceptor(ank_rpc, auth_interceptor);
 
-    let grpc_addr = "0.0.0.0:50051".parse()?;
+    let grpc_port: u16 = std::env::var("AEGIS_GRPC_PORT")
+        .or_else(|_| std::env::var("GRPC_PORT"))
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50051);
+    let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()?;
     let mut tonic_builder = Server::builder();
 
-    warn!("gRPC running in INSECURE mode (h2c)");
+    warn!("gRPC running in INSECURE mode (h2c) on port {}", grpc_port);
 
     tokio::spawn(async move {
         if let Err(e) = tonic_builder.add_service(tonic_svc).serve(grpc_addr).await {
