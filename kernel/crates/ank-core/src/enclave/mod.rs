@@ -891,8 +891,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete_tenant_purges_physical_directory() -> Result<()> {
         use sha2::Digest;
-        let master = MasterEnclave::new_in_memory()?;
-        master.initialize_tables()?;
+        let master = MasterEnclave::new_in_memory().await?;
+        master.initialize_tables().await?;
 
         let tenant_id = "test_purge_tenant";
         let (port, temp_pass) = master.create_tenant(tenant_id).await?;
