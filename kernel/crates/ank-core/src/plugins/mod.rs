@@ -717,6 +717,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_wasm_execution_trap_handling() -> anyhow::Result<()> {
         let _guard = crate::enclave::acquire_test_lock();
         use ed25519_dalek::SigningKey;
@@ -763,6 +764,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_domain_plugin_execution() -> anyhow::Result<()> {
         let _guard = crate::enclave::acquire_test_lock();
         let manager = PluginManager::new()?;
