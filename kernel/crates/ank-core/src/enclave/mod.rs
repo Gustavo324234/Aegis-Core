@@ -900,15 +900,17 @@ mod tests {
         let pass_hash = format!("{:x}", sha2::Sha256::digest(temp_pass.as_bytes()));
         let session_key = format!("sk_{}", pass_hash);
 
-        // Open tenant DB to force physical file creation on disk
-        let tenant_db = TenantDB::open(tenant_id, &session_key)?;
-        tenant_db.set_kv("test_key", "test_val")?;
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let tenant_dir = std::path::Path::new(&base_dir).join("users").join(tenant_id);
 
-        let tenant_dir = std::path::Path::new("./users").join(tenant_id);
-        assert!(
-            tenant_dir.exists(),
-            "Tenant physical directory should exist after open"
-        );
+        {
+            let tenant_db = TenantDB::open(tenant_id, &session_key)?;
+            tenant_db.set_kv("test_key", "test_val")?;
+            assert!(
+                tenant_dir.exists(),
+                "Tenant physical directory should exist after open"
+            );
+        }
 
         // Execute tenant deletion
         master.delete_tenant(tenant_id).await?;
