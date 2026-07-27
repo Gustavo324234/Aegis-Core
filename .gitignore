@@ -43,6 +43,11 @@ pr_body.txt
 
 # Scratch / temp
 scratch/
+test_env_run/
+data_updated_test/
+data/
+ank-server-updated.exe
+*.exe
 
 # Compiled WASM plugins (build artifacts)
 kernel/plugins_src/target/

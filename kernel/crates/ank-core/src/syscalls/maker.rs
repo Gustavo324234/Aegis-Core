@@ -251,6 +251,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_maker_js_execution() {
         let _guard = crate::enclave::acquire_test_lock();
         let maker = MakerExecutor::new();
@@ -260,6 +261,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_maker_params_injection() {
         let _guard = crate::enclave::acquire_test_lock();
         let maker = MakerExecutor::new();
@@ -270,6 +272,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn test_maker_filesystem_jail() {
         let _guard = crate::enclave::acquire_test_lock();
         let dir = tempdir().unwrap();
