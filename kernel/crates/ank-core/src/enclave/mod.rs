@@ -901,7 +901,9 @@ mod tests {
         let session_key = format!("sk_{}", pass_hash);
 
         let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let tenant_dir = std::path::Path::new(&base_dir).join("users").join(tenant_id);
+        let tenant_dir = std::path::Path::new(&base_dir)
+            .join("users")
+            .join(tenant_id);
 
         {
             let tenant_db = TenantDB::open(tenant_id, &session_key)?;
