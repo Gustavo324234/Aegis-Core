@@ -786,7 +786,6 @@ async fn probe_models(
     _auth: CitadelAuthenticated,
     Json(req): Json<ProbeModelsRequest>,
 ) -> Result<Json<ProbeModelsResponse>, AegisHttpError> {
-
     let api_key = if is_keyless_provider(&req.provider) {
         req.api_key.unwrap_or_default()
     } else {

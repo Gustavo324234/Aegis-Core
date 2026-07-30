@@ -442,7 +442,9 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                 try {
                     const errJson = await res.json();
                     errText = errJson.detail || errJson.error || errText;
-                } catch {}
+                } catch {
+                    // Ignore JSON parse failure on non-JSON error response
+                }
                 setKeyHealthState(prev => ({ ...prev, [key.key_id]: { status: 'invalid', error: errText } }));
             }
         } catch (err) {
