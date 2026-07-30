@@ -34,6 +34,8 @@
 
 
 
+
+
 ## [0.1.88](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.87...ank-http-v0.1.88) (2026-06-21)
 
 

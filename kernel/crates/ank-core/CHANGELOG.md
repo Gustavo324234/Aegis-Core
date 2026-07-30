@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.83](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.82...ank-core-v0.1.83) (2026-07-27)
+
+
+### Bug Fixes
+
+* **router:** update Gemini catalog with official 3.5/3.6 Flash production IDs (CORE-348) ([#365](https://github.com/Gustavo324234/Aegis-Core/issues/365)) ([275860a](https://github.com/Gustavo324234/Aegis-Core/commit/275860a11e1668427b472e603a33bc070e94be17))
+
 ## [0.1.82](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.81...ank-core-v0.1.82) (2026-07-25)
 
 
