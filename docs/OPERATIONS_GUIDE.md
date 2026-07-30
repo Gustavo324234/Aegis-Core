@@ -55,9 +55,18 @@ aegis status
 
 ---
 
-### Step 3.2 — Workaround: Automated Key Backup & Restore Script
+### Step 3.3 — API Key Health Probe & Admin Playground
 
-For automated SRE operations, save the utility script below as `re_register_keys.py` anywhere on the host to bulk-register fallback API keys using the REST API directly.
+Aegis OS provides live health probing and interactive testing directly within the Admin Panel (`IA TOOLS` tab) and the Router API:
+
+1. **⚡ Live Health Probe (Zap Button):**
+   - Click **Probar Salud** on any `ProviderCard` or Key entry to send a model discovery request to `/api/router/keys/probe-models`.
+   - Returns instantaneous validation: 🟢 **OK (N modelos detectados)** or 🔴 **Error (Rechazada o inalcanzable)**.
+
+2. **💬 Admin API Playground:**
+   - Interactive drawer at the bottom of the Admin Panel.
+   - Allows administrators to send test prompts directly to any configured API key/provider and measure real-time latency in milliseconds (ms).
+
 
 Create the recovery payload file `keys_backup.json`:
 ```json

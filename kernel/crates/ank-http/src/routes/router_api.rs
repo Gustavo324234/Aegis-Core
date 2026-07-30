@@ -782,11 +782,10 @@ pub struct ProbeModelsResponse {
     )
 )]
 async fn probe_models(
-    State(state): State<AppState>,
-    headers: HeaderMap,
+    State(_state): State<AppState>,
+    _auth: CitadelAuthenticated,
     Json(req): Json<ProbeModelsRequest>,
 ) -> Result<Json<ProbeModelsResponse>, AegisHttpError> {
-    require_master_auth(&state, &headers).await?;
 
     let api_key = if is_keyless_provider(&req.provider) {
         req.api_key.unwrap_or_default()
