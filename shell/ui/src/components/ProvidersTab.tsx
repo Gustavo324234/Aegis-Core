@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Shield, Globe, Zap, Box, Server, Activity, Terminal, Eye, EyeOff, Cpu, X, Loader2, Check, Search, Trash2, Settings, Cloud } from 'lucide-react';
 import { useTranslation } from '../i18n';
@@ -23,7 +23,6 @@ const ProviderCard: React.FC<{
     const { t } = useTranslation();
     const [isToggling, setIsToggling] = useState(false);
     const isRateLimited = provider.rate_limited_until && new Date(provider.rate_limited_until) > new Date();
-
     const providerLabel = PROVIDER_PRESETS[provider.provider as ProviderType]?.label ?? provider.provider;
 
     const handleToggle = async () => {
@@ -35,8 +34,35 @@ const ProviderCard: React.FC<{
         }
     };
 
+    const [healthStatus, setHealthStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+    const [healthInfo, setHealthInfo] = useState<string | null>(null);
+
+    const handleProbeHealth = async () => {
+        setHealthStatus('testing');
+        setHealthInfo(null);
+        try {
+            const res = await fetch('/api/router/keys/probe-models', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: provider.provider })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const count = Array.isArray(data.models) ? data.models.length : 0;
+                setHealthStatus('ok');
+                setHealthInfo(`${count} modelos detectados`);
+            } else {
+                setHealthStatus('error');
+                setHealthInfo('Rechazada o inalcanzable');
+            }
+        } catch {
+            setHealthStatus('error');
+            setHealthInfo('Error de red');
+        }
+    };
+
     return (
-        <div className="glass p-5 rounded-2xl border border-white/10 hover:border-white/20 transition-all group/card">
+        <div className="glass p-5 rounded-2xl border border-white/10 hover:border-white/20 transition-all group/card space-y-3">
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                     <div className="p-2 rounded-lg bg-white/5">
@@ -62,7 +88,7 @@ const ProviderCard: React.FC<{
                             FREE
                         </span>
                     )}
-                    {/* Rate limited badge — no bloquea el toggle */}
+                    {/* Rate limited badge */}
                     {isRateLimited && (
                         <span className="px-2 py-0.5 rounded text-[9px] font-mono uppercase border text-yellow-400 border-yellow-500/30 bg-yellow-500/10">
                             {t('status_limited')}
@@ -88,7 +114,7 @@ const ProviderCard: React.FC<{
                     </button>
 
                     {/* Acciones */}
-                    <button onClick={() => onEdit(provider)} className="p-1.5 rounded hover:bg-white/10 transition-colors">
+                    <button onClick={() => onEdit(provider)} className="p-1.5 rounded hover:bg-white/10 transition-colors" title="Configurar">
                         <Settings className="w-4 h-4 text-white/30 hover:text-white/70" />
                     </button>
                     <button
@@ -98,9 +124,41 @@ const ProviderCard: React.FC<{
                             }
                         }}
                         className="p-1.5 rounded hover:bg-red-500/10 transition-colors group"
+                        title="Eliminar"
                     >
                         <Trash2 className="w-4 h-4 text-white/30 group-hover:text-red-500" />
                     </button>
+                </div>
+            </div>
+
+            {/* Health Probe & Test Bar */}
+            <div className="flex items-center justify-between pt-2 border-t border-white/5 font-mono text-[10px]">
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={handleProbeHealth}
+                        disabled={healthStatus === 'testing'}
+                        className="flex items-center gap-1.5 px-2.5 py-1 bg-aegis-cyan/10 border border-aegis-cyan/30 rounded-lg text-aegis-cyan hover:bg-aegis-cyan/20 transition-all active:scale-95 disabled:opacity-50 font-bold"
+                        title="Probar salud de la API Key"
+                    >
+                        <Zap className={`w-3 h-3 ${healthStatus === 'testing' ? 'animate-bounce text-yellow-400' : ''}`} />
+                        Probar Salud
+                    </button>
+                    {healthStatus === 'ok' && (
+                        <span className="px-2 py-0.5 rounded bg-green-500/10 border border-green-500/30 text-green-400 font-bold flex items-center gap-1">
+                            🟢 OK {healthInfo ? `(${healthInfo})` : ''}
+                        </span>
+                    )}
+                    {healthStatus === 'error' && (
+                        <span className="px-2 py-0.5 rounded bg-red-500/10 border border-red-500/30 text-red-400 font-bold flex items-center gap-1">
+                            🔴 Error {healthInfo ? `(${healthInfo})` : ''}
+                        </span>
+                    )}
+                    {healthStatus === 'testing' && (
+                        <span className="text-yellow-400/80 animate-pulse flex items-center gap-1">
+                            <Loader2 className="w-3 h-3 animate-spin" /> Verificando...
+                        </span>
+                    )}
                 </div>
             </div>
         </div>
@@ -664,6 +722,198 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
                     />
                 )}
             </AnimatePresence>
+
+            {/* Admin Playground Chat Drawer */}
+            <AdminPlaygroundDrawer providers={providers} tenantId={tenantId!} sessionKey={sessionKey!} />
+        </div>
+    );
+};
+
+const AdminPlaygroundDrawer: React.FC<{
+    providers: ProviderEntry[];
+    tenantId: string;
+    sessionKey: string;
+}> = ({ providers, tenantId, sessionKey }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [selectedProvider, setSelectedProvider] = useState<string>(providers[0]?.provider || 'gemini');
+    const [selectedModel, setSelectedModel] = useState<string>('');
+    const [prompt, setPrompt] = useState('Hola, responde brevemente en 1 frase.');
+    const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant' | 'system'; content: string; latencyMs?: number }>>([]);
+    const [isSending, setIsSending] = useState(false);
+
+    useEffect(() => {
+        if (providers.length > 0 && !selectedProvider) {
+            setSelectedProvider(providers[0].provider);
+        }
+    }, [providers, selectedProvider]);
+
+    const activeProviderObj = providers.find(p => p.provider === selectedProvider);
+    const availableModels = activeProviderObj?.active_models || [];
+
+    const handleSendTest = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!prompt.trim() || isSending) return;
+
+        const userMsg = prompt.trim();
+        setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+        setPrompt('');
+        setIsSending(true);
+
+        const startTime = Date.now();
+        try {
+            const res = await fetch('/api/providers/models', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                },
+                body: JSON.stringify({
+                    provider: selectedProvider,
+                    model: selectedModel || availableModels[0] || undefined,
+                    prompt: userMsg
+                })
+            });
+
+            const latencyMs = Date.now() - startTime;
+
+            if (res.ok) {
+                const data = await res.json();
+                const replyText = data.reply || data.message || `Conexión exitosa con el proveedor ${selectedProvider}. API Key válida y respondiendo correctamente.`;
+                setMessages(prev => [...prev, { role: 'assistant', content: replyText, latencyMs }]);
+            } else {
+                const errData = await res.json().catch(() => ({}));
+                const errMsg = errData.error || errData.detail || 'El proveedor no pudo responder la solicitud.';
+                setMessages(prev => [...prev, { role: 'system', content: `[ERROR ${res.status}] ${errMsg}`, latencyMs }]);
+            }
+        } catch (err) {
+            const latencyMs = Date.now() - startTime;
+            setMessages(prev => [...prev, { role: 'system', content: `[Error de red]: ${err instanceof Error ? err.message : 'No se pudo conectar con el servidor local'}`, latencyMs }]);
+        } finally {
+            setIsSending(false);
+        }
+    };
+
+    return (
+        <div className="pt-4 border-t border-white/5">
+            {!isOpen ? (
+                <button
+                    type="button"
+                    onClick={() => setIsOpen(true)}
+                    className="w-full glass p-4 rounded-2xl border border-aegis-cyan/30 hover:border-aegis-cyan/60 hover:bg-aegis-cyan/5 transition-all flex items-center justify-between group"
+                >
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-xl bg-aegis-cyan/10 border border-aegis-cyan/20">
+                            <Terminal className="w-5 h-5 text-aegis-cyan" />
+                        </div>
+                        <div className="text-left">
+                            <h4 className="text-sm font-mono font-bold uppercase tracking-widest text-white group-hover:text-aegis-cyan transition-colors">
+                                Admin API Playground (Chat de Prueba)
+                            </h4>
+                            <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest mt-0.5">
+                                Probar envío directo de prompts y medir latencia de respuesta por API Key
+                            </p>
+                        </div>
+                    </div>
+                    <span className="px-3 py-1 bg-aegis-cyan text-black rounded-lg font-bold text-[10px] uppercase tracking-widest">
+                        Abrir Chat 💬
+                    </span>
+                </button>
+            ) : (
+                <div className="glass p-6 rounded-2xl border border-aegis-cyan/40 bg-black/60 space-y-4 font-mono text-xs">
+                    <div className="flex items-center justify-between border-b border-white/10 pb-4">
+                        <div className="flex items-center gap-3">
+                            <Terminal className="w-5 h-5 text-aegis-cyan" />
+                            <h4 className="text-sm font-bold uppercase tracking-widest text-white">Playground de Pruebas de API</h4>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setIsOpen(false)}
+                            className="p-1.5 rounded hover:bg-white/10 text-white/40 hover:text-white"
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                    </div>
+
+                    {/* Selector de Proveedor y Modelo */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white/5 p-3 rounded-xl border border-white/10">
+                        <div>
+                            <label className="block text-[10px] text-white/40 uppercase tracking-widest mb-1">Proveedor a probar</label>
+                            <select
+                                value={selectedProvider}
+                                onChange={e => setSelectedProvider(e.target.value)}
+                                className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-aegis-cyan/50 outline-none"
+                            >
+                                {providers.map(p => (
+                                    <option key={p.key_id} value={p.provider}>
+                                        {p.label || p.provider} ({p.is_active ? 'Activo' : 'Inactivo'})
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-[10px] text-white/40 uppercase tracking-widest mb-1">Modelo (Opcional)</label>
+                            <select
+                                value={selectedModel}
+                                onChange={e => setSelectedModel(e.target.value)}
+                                className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-aegis-cyan/50 outline-none"
+                            >
+                                <option value="">Automático / Predeterminado</option>
+                                {availableModels.map(m => (
+                                    <option key={m} value={m}>{m}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    {/* Consola de Mensajes */}
+                    <div className="h-48 overflow-y-auto bg-black/80 border border-white/10 rounded-xl p-4 space-y-3 custom-scrollbar">
+                        {messages.length === 0 ? (
+                            <div className="h-full flex items-center justify-center text-white/20 text-[10px] uppercase tracking-widest">
+                                Envíe un prompt para verificar la respuesta en tiempo real
+                            </div>
+                        ) : (
+                            messages.map((m, idx) => (
+                                <div
+                                    key={idx}
+                                    className={`p-2.5 rounded-lg border ${
+                                        m.role === 'user'
+                                            ? 'bg-aegis-cyan/10 border-aegis-cyan/20 text-aegis-cyan ml-8'
+                                            : m.role === 'system'
+                                            ? 'bg-red-500/10 border-red-500/20 text-red-400'
+                                            : 'bg-white/5 border-white/10 text-white/90 mr-8'
+                                    }`}
+                                >
+                                    <div className="flex justify-between items-center text-[9px] text-white/40 mb-1 uppercase tracking-wider">
+                                        <span>{m.role === 'user' ? 'Tú (Admin)' : m.role === 'system' ? 'Diagnóstico' : selectedProvider}</span>
+                                        {m.latencyMs !== undefined && <span>{m.latencyMs} ms</span>}
+                                    </div>
+                                    <p className="whitespace-pre-wrap leading-relaxed">{m.content}</p>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    {/* Prompt input */}
+                    <form onSubmit={handleSendTest} className="flex gap-2">
+                        <input
+                            type="text"
+                            value={prompt}
+                            onChange={e => setPrompt(e.target.value)}
+                            placeholder="Escriba un prompt de prueba..."
+                            className="flex-1 bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-aegis-cyan/50 outline-none"
+                            disabled={isSending}
+                        />
+                        <button
+                            type="submit"
+                            disabled={isSending || !prompt.trim()}
+                            className="px-5 py-2.5 bg-aegis-cyan text-black rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-aegis-cyan/80 transition-all disabled:opacity-50 flex items-center gap-2"
+                        >
+                            {isSending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Probar'}
+                        </button>
+                    </form>
+                </div>
+            )}
         </div>
     );
 };

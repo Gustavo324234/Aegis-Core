@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Trash2, RefreshCw, Key, Info, Globe, Zap, Box, Server, Activity, Terminal, Eye, EyeOff, Loader2, Check, Search, X, Shield, Settings, Cloud, Download, Upload } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Key, Info, Globe, Zap, Box, Server, Activity, Terminal, Eye, EyeOff, Loader2, Check, Search, X, Shield, Settings, Cloud, Download, Upload, CheckCircle, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from '../../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../../constants/enginePresets';
@@ -411,6 +411,46 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
     const [isLoading, setIsLoading] = useState(false);
     const [showModal, setShowModal] = useState(false);
     const [editingKey, setEditingKey] = useState<KeyInfo | null>(null);
+    // Key Health Verification State
+    const [keyHealthState, setKeyHealthState] = useState<Record<string, { status: 'testing' | 'valid' | 'invalid'; error?: string; count?: number }>>({});
+
+    const handleTestKeyHealth = async (key: KeyInfo) => {
+        setKeyHealthState(prev => ({ ...prev, [key.key_id]: { status: 'testing' } }));
+        try {
+            const providerKey = (key.provider as ProviderType) || 'openai';
+            const presetUrl = PROVIDER_PRESETS[providerKey]?.url;
+            const res = await fetch('/api/router/keys/probe-models', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                },
+                body: JSON.stringify({
+                    provider: key.provider,
+                    api_key: key.api_key || undefined,
+                    api_url: key.api_url || presetUrl
+                })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                const count = Array.isArray(data.models) ? data.models.length : 0;
+                setKeyHealthState(prev => ({ ...prev, [key.key_id]: { status: 'valid', count } }));
+            } else {
+                let errText = 'Clave rechazada por la API';
+                try {
+                    const errJson = await res.json();
+                    errText = errJson.detail || errJson.error || errText;
+                } catch {
+                    // Ignore JSON parse failure on non-JSON error response
+                }
+                setKeyHealthState(prev => ({ ...prev, [key.key_id]: { status: 'invalid', error: errText } }));
+            }
+        } catch (err) {
+            setKeyHealthState(prev => ({ ...prev, [key.key_id]: { status: 'invalid', error: 'Error de red al verificar clave' } }));
+        }
+    };
 
     // Aegis Connect state
     const [activeTab, setActiveTab] = useState<'keys' | 'connect'>('keys');
@@ -826,6 +866,7 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                                             <th className="text-left py-2 pr-4">Proveedor</th>
                                             <th className="text-left py-2 pr-4">Clasificación</th>
                                             <th className="text-left py-2 pr-4">Modelos Habilitados</th>
+                                            <th className="text-left py-2 pr-4">Salud API</th>
                                             <th className="text-left py-2 pr-4">Estado</th>
                                             <th className="text-right py-2">Acciones</th>
                                         </tr>
@@ -833,6 +874,7 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                                     <tbody>
                                         {keys.map((k) => {
                                             const rateLimitText = getRateLimitText(k.rate_limited_until);
+                                            const health = keyHealthState[k.key_id];
                                             return (
                                                 <tr key={k.key_id} className="border-b border-white/5 hover:bg-white/[0.02]">
                                                     <td className="py-3 pr-4 text-white font-bold">{k.label || '—'}</td>
@@ -849,6 +891,23 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                                                                 {k.active_models.length > 2 && ` (+${k.active_models.length - 2})`}
                                                             </>
                                                         ) : 'Auto'}
+                                                    </td>
+                                                    <td className="py-3 pr-4">
+                                                        {health?.status === 'testing' ? (
+                                                            <span className="flex items-center gap-1.5 text-[9px] text-aegis-cyan animate-pulse font-bold">
+                                                                <Loader2 className="w-3 h-3 animate-spin" /> Verificando...
+                                                            </span>
+                                                        ) : health?.status === 'valid' ? (
+                                                            <span className="flex items-center gap-1 text-[9px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded" title={`${health.count} modelos activos`}>
+                                                                <CheckCircle className="w-3 h-3" /> Funciona ({health.count})
+                                                            </span>
+                                                        ) : health?.status === 'invalid' ? (
+                                                            <span className="flex items-center gap-1 text-[9px] text-red-400 font-bold bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded truncate max-w-[140px]" title={health.error}>
+                                                                <AlertCircle className="w-3 h-3 shrink-0" /> Error
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-[9px] text-white/30 uppercase">Sin probar</span>
+                                                        )}
                                                     </td>
                                                     <td className="py-3 pr-4">
                                                         {rateLimitText ? (
@@ -870,6 +929,14 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                                                     </td>
                                                     <td className="py-3 text-right">
                                                         <div className="flex items-center justify-end gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleTestKeyHealth(k)}
+                                                                className="p-1.5 border border-aegis-cyan/30 rounded bg-aegis-cyan/10 hover:bg-aegis-cyan/20 transition-colors group"
+                                                                title="Probar si la clave funciona"
+                                                            >
+                                                                <Zap className="w-3.5 h-3.5 text-aegis-cyan group-hover:scale-110 transition-transform" />
+                                                            </button>
                                                             <button
                                                                 type="button"
                                                                 onClick={() => { setEditingKey(k); setShowModal(true); }}

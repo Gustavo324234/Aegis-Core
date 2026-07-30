@@ -891,7 +891,7 @@ fn main() -> Result<()> {
         // launched us it succeeds (and blocks until service stop); from a
         // real console it fails instantly with
         // ERROR_FAILED_SERVICE_CONTROLLER_CONNECT and we fall through.
-        if windows_service_impl::try_dispatch_legacy() {
+        if std::env::var("AEGIS_DATA_DIR").is_err() && windows_service_impl::try_dispatch_legacy() {
             return Ok(());
         }
     }
