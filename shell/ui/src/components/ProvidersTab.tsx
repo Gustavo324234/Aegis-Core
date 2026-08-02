@@ -16,10 +16,12 @@ interface ProviderEntry {
 
 const ProviderCard: React.FC<{
     provider: ProviderEntry;
+    tenantId: string;
+    sessionKey: string;
     onDelete: (keyId: string) => void;
     onEdit: (provider: ProviderEntry) => void;
     onToggle: (keyId: string, active: boolean) => Promise<void>;
-}> = ({ provider, onDelete, onEdit, onToggle }) => {
+}> = ({ provider, tenantId, sessionKey, onDelete, onEdit, onToggle }) => {
     const { t } = useTranslation();
     const [isToggling, setIsToggling] = useState(false);
     const isRateLimited = provider.rate_limited_until && new Date(provider.rate_limited_until) > new Date();
@@ -43,8 +45,12 @@ const ProviderCard: React.FC<{
         try {
             const res = await fetch('/api/router/keys/probe-models', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: provider.provider })
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey
+                },
+                body: JSON.stringify({ provider: provider.provider, key_id: provider.key_id })
             });
             if (res.ok) {
                 const data = await res.json();
@@ -52,8 +58,15 @@ const ProviderCard: React.FC<{
                 setHealthStatus('ok');
                 setHealthInfo(`${count} modelos detectados`);
             } else {
+                let errDetail = '';
+                try {
+                    const errJson = await res.json();
+                    errDetail = errJson.error || errJson.detail || '';
+                } catch (e) {
+                    void e;
+                }
                 setHealthStatus('error');
-                setHealthInfo('Rechazada o inalcanzable');
+                setHealthInfo(errDetail ? `Error: ${errDetail}` : 'Rechazada o inalcanzable');
             }
         } catch {
             setHealthStatus('error');
@@ -685,6 +698,8 @@ const ProvidersTab: React.FC<{ tenantId: string | null; sessionKey: string | nul
                         <ProviderCard
                             key={provider.key_id}
                             provider={provider}
+                            tenantId={tenantId!}
+                            sessionKey={sessionKey!}
                             onDelete={handleDelete}
                             onToggle={handleToggle}
                             onEdit={(p) => {
@@ -761,7 +776,7 @@ const AdminPlaygroundDrawer: React.FC<{
 
         const startTime = Date.now();
         try {
-            const res = await fetch('/api/providers/models', {
+            const res = await fetch('/api/router/keys/probe-models', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -770,8 +785,7 @@ const AdminPlaygroundDrawer: React.FC<{
                 },
                 body: JSON.stringify({
                     provider: selectedProvider,
-                    model: selectedModel || availableModels[0] || undefined,
-                    prompt: userMsg
+                    key_id: activeProviderObj?.key_id
                 })
             });
 
@@ -779,7 +793,18 @@ const AdminPlaygroundDrawer: React.FC<{
 
             if (res.ok) {
                 const data = await res.json();
-                const replyText = data.reply || data.message || `Conexión exitosa con el proveedor ${selectedProvider}. API Key válida y respondiendo correctamente.`;
+                const count = Array.isArray(data.models) ? data.models.length : 0;
+                const modelListStr = Array.isArray(data.models)
+                    ? data.models
+                          .map((m: Record<string, unknown> | string) =>
+                              typeof m === 'object' && m !== null && 'model_id' in m
+                                  ? String(m.model_id)
+                                  : String(m)
+                          )
+                          .slice(0, 3)
+                          .join(', ')
+                    : '';
+                const replyText = `🟢 Conexión exitosa con el proveedor ${selectedProvider}. API Key activa y funcional (${count} modelos disponibles: ${modelListStr}${count > 3 ? '...' : ''}).`;
                 setMessages(prev => [...prev, { role: 'assistant', content: replyText, latencyMs }]);
             } else {
                 const errData = await res.json().catch(() => ({}));

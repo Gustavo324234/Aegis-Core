@@ -85,3 +85,10 @@ auditorias/
 plugin_signer.key
 plugin_signer.pub
 
+# Local test & dev data directories
+.dev_data/
+.native_user_data/
+target_dev/
+test_dev_data/
+token_output.log
+

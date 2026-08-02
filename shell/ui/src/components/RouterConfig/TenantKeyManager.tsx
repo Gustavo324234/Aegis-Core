@@ -428,6 +428,7 @@ const TenantKeyManager: React.FC<{ tenantId: string; sessionKey: string }> = ({ 
                 },
                 body: JSON.stringify({
                     provider: key.provider,
+                    key_id: key.key_id,
                     api_key: key.api_key || undefined,
                     api_url: key.api_url || presetUrl
                 })
