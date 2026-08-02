@@ -62,7 +62,9 @@ const ProviderCard: React.FC<{
                 try {
                     const errJson = await res.json();
                     errDetail = errJson.error || errJson.detail || '';
-                } catch {}
+                } catch (e) {
+                    void e;
+                }
                 setHealthStatus('error');
                 setHealthInfo(errDetail ? `Error: ${errDetail}` : 'Rechazada o inalcanzable');
             }
@@ -792,7 +794,16 @@ const AdminPlaygroundDrawer: React.FC<{
             if (res.ok) {
                 const data = await res.json();
                 const count = Array.isArray(data.models) ? data.models.length : 0;
-                const modelListStr = Array.isArray(data.models) ? data.models.map((m: any) => m.model_id || m).slice(0, 3).join(', ') : '';
+                const modelListStr = Array.isArray(data.models)
+                    ? data.models
+                          .map((m: Record<string, unknown> | string) =>
+                              typeof m === 'object' && m !== null && 'model_id' in m
+                                  ? String(m.model_id)
+                                  : String(m)
+                          )
+                          .slice(0, 3)
+                          .join(', ')
+                    : '';
                 const replyText = `🟢 Conexión exitosa con el proveedor ${selectedProvider}. API Key activa y funcional (${count} modelos disponibles: ${modelListStr}${count > 3 ? '...' : ''}).`;
                 setMessages(prev => [...prev, { role: 'assistant', content: replyText, latencyMs }]);
             } else {

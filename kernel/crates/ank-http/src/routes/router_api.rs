@@ -792,10 +792,9 @@ async fn probe_models(
     let router = state.router.read().await;
 
     let (api_key, api_url) = if let Some(key_id) = &req.key_id {
-        if let Some(entry) = router
-            .get_raw_key_by_id(key_id, None)
-            .await
-            .or(router.get_raw_key_by_id(key_id, Some(&auth.tenant_id)).await)
+        if let Some(entry) = router.get_raw_key_by_id(key_id, None).await.or(router
+            .get_raw_key_by_id(key_id, Some(&auth.tenant_id))
+            .await)
         {
             let key = req
                 .api_key
