@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.29.4](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.29.3...shell-ui-v1.29.4) (2026-08-02)
+
+
+### Bug Fixes
+
+* **http:** support stored key_id lookup in probe-models and send citadel auth headers ([#371](https://github.com/Gustavo324234/Aegis-Core/issues/371)) ([98356fd](https://github.com/Gustavo324234/Aegis-Core/commit/98356fd2e198a6df5e328e6d84246835e4e3709d))
+
 ## [1.29.3](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.29.2...shell-ui-v1.29.3) (2026-08-02)
 
 
