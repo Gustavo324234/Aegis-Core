@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.29.3](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.29.2...shell-ui-v1.29.3) (2026-08-02)
+
+
+### Bug Fixes
+
+* **router:** update Gemini catalog with official 3.5/3.6 Flash production IDs ([#369](https://github.com/Gustavo324234/Aegis-Core/issues/369)) ([686c495](https://github.com/Gustavo324234/Aegis-Core/commit/686c495d854ff3c2b598d348b3cca8c38f035313))
+
 ## [1.29.2](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.29.1...shell-ui-v1.29.2) (2026-07-11)
 
 
