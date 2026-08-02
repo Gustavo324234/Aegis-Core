@@ -750,7 +750,10 @@ fn is_keyless_provider(provider: &str) -> bool {
 #[derive(Deserialize, ToSchema)]
 pub struct ProbeModelsRequest {
     pub provider: String,
-    /// Required for paid providers (gemini, openai, anthropic, groq, etc.).
+    /// Optional stored key_id to look up the saved API key.
+    #[serde(default)]
+    pub key_id: Option<String>,
+    /// Required for paid providers (gemini, openai, anthropic, groq, etc.) if key_id is not given.
     /// Ollama local can omit it.
     #[serde(default)]
     #[schema(format = "password")]
@@ -782,24 +785,49 @@ pub struct ProbeModelsResponse {
     )
 )]
 async fn probe_models(
-    State(_state): State<AppState>,
-    _auth: CitadelAuthenticated,
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
     Json(req): Json<ProbeModelsRequest>,
 ) -> Result<Json<ProbeModelsResponse>, AegisHttpError> {
-    let api_key = if is_keyless_provider(&req.provider) {
-        req.api_key.unwrap_or_default()
+    let router = state.router.read().await;
+
+    let (api_key, api_url) = if let Some(key_id) = &req.key_id {
+        if let Some(entry) = router
+            .get_raw_key_by_id(key_id, None)
+            .await
+            .or(router.get_raw_key_by_id(key_id, Some(&auth.tenant_id)).await)
+        {
+            let key = req
+                .api_key
+                .filter(|k| !k.trim().is_empty())
+                .unwrap_or(entry.api_key);
+            let url = req.api_url.or(entry.api_url);
+            (key, url)
+        } else {
+            let key = req.api_key.filter(|k| !k.trim().is_empty());
+            if is_keyless_provider(&req.provider) {
+                (key.unwrap_or_default(), req.api_url.clone())
+            } else {
+                let k = key.ok_or_else(|| {
+                    AegisHttpError::BadRequest("api_key is required to probe this provider".into())
+                })?;
+                (k, req.api_url.clone())
+            }
+        }
+    } else if let Some(key) = req.api_key.filter(|k| !k.trim().is_empty()) {
+        (key, req.api_url.clone())
+    } else if is_keyless_provider(&req.provider) {
+        (String::new(), req.api_url.clone())
     } else {
-        req.api_key
-            .filter(|k| !k.trim().is_empty())
-            .ok_or_else(|| {
-                AegisHttpError::BadRequest("api_key is required to probe this provider".into())
-            })?
+        return Err(AegisHttpError::BadRequest(
+            "api_key or key_id is required to probe this provider".into(),
+        ));
     };
 
     // Normalise so the response echoes the canonical id the catalog uses,
     // not whatever spelling the UI happened to send.
     let canonical_provider = ank_core::router::normalize_provider_id(&req.provider);
-    match fetch_provider_models(&canonical_provider, req.api_url.as_deref(), &api_key).await {
+    match fetch_provider_models(&canonical_provider, api_url.as_deref(), &api_key).await {
         Ok(models) => Ok(Json(ProbeModelsResponse {
             provider: canonical_provider,
             models,
