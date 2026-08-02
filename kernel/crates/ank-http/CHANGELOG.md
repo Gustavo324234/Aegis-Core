@@ -36,6 +36,13 @@
 
 
 
+## [0.1.93](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.92...ank-http-v0.1.93) (2026-08-02)
+
+
+### Bug Fixes
+
+* **router:** update Gemini catalog with official 3.5/3.6 Flash production IDs ([#369](https://github.com/Gustavo324234/Aegis-Core/issues/369)) ([686c495](https://github.com/Gustavo324234/Aegis-Core/commit/686c495d854ff3c2b598d348b3cca8c38f035313))
+
 ## [0.1.88](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.87...ank-http-v0.1.88) (2026-06-21)
 
 
