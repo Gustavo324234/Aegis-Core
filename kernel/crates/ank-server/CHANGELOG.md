@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.100
+
+- feat(admin): add API health probe and interactive playground drawer
+- fix(router): update Gemini catalog with official 3.5/3.6 Flash production IDs
+- fix(ui): clear local state on tenant deletion
+
+
 
 
 
