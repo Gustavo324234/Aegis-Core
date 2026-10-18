@@ -24,12 +24,14 @@ pub fn router() -> Router<AppState> {
 // ── POST /api/train/start ─────────────────────────────────────────────────────
 async fn start_train(
     State(state): State<AppState>,
-    _auth: CitadelAuthenticated,
-    Json(config): Json<TrainingConfig>,
+    auth: CitadelAuthenticated,
+    Json(mut config): Json<TrainingConfig>,
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
+    config.tenant_id = Some(auth.tenant_id.clone());
     info!(
-        "Iniciando petición de entrenamiento para: {}",
-        config.model_id
+        tenant_id = %auth.tenant_id,
+        model_id = %config.model_id,
+        "Iniciando petición de entrenamiento aislada por tenant"
     );
 
     state

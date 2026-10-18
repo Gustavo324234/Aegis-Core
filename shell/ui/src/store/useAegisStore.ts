@@ -476,7 +476,11 @@ export const useAegisStore = create<AegisState>()(
                             'x-citadel-key': sessionKey,
                         }
                     });
-                    if (res.ok) { get().fetchTenants(); return true; }
+                    if (res.ok) {
+                        set({ messages: [] });
+                        get().fetchTenants();
+                        return true;
+                    }
                     return false;
                 } catch (e) { console.error('Delete tenant error:', e); return false; }
             },
@@ -937,10 +941,10 @@ export const useAegisStore = create<AegisState>()(
                     if (response.ok) {
                         const data = await response.json() as { status: string; role?: string };
                         if (data.status === 'password_must_change') {
-                            set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: false, needsPasswordReset: true });
+                            set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: false, needsPasswordReset: true, messages: [] });
                             return 'password_must_change';
                         }
-                        set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: data.role === 'admin', needsPasswordReset: false });
+                        set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: data.role === 'admin', needsPasswordReset: false, messages: [] });
                         return 'authenticated';
                     }
                     return 'failed';

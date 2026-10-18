@@ -1,12 +1,24 @@
 use crate::chal::EmbeddingDriver;
 use crate::pcb::PCB;
 use crate::vcm::swap::LanceSwapManager;
+use std::collections::HashMap;
 use std::path::{Component, Path};
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::process::Command;
+use tokio::sync::RwLock;
 use tracing::warn;
 
 pub mod swap;
+
+const VCM_STATE_CACHE_TTL: Duration = Duration::from_secs(10);
+const MAX_GIT_STATUS_LINES: usize = 25;
+
+static GIT_STATE_CACHE: LazyLock<RwLock<HashMap<String, (Instant, String)>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+static GOV_STATE_CACHE: LazyLock<RwLock<Option<(Instant, String)>>> =
+    LazyLock::new(|| RwLock::new(None));
 
 /// --- VCM ERROR SYSTEM ---
 #[derive(Error, Debug, Clone)]
@@ -47,39 +59,105 @@ impl VirtualContextManager {
         Self
     }
 
-    /// Obtiene el estado actual de Git (rama, cambios, último commit).
-    async fn fetch_git_state(&self) -> String {
-        let branch = Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .output()
-            .await
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
+    /// Obtiene el estado actual de Git (rama, cambios, último commit) usando `git2` nativo y caché TTL (CORE-352).
+    async fn fetch_git_state(&self, tenant_id: &str) -> String {
+        let cache_key = tenant_id.to_string();
+        {
+            let cache = GIT_STATE_CACHE.read().await;
+            if let Some((ts, cached)) = cache.get(&cache_key) {
+                if ts.elapsed() < VCM_STATE_CACHE_TTL {
+                    return cached.clone();
+                }
+            }
+        }
 
-        let status = Command::new("git")
-            .args(["status", "--short"])
-            .output()
-            .await
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| "error fetching status".to_string());
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let tenant_workspace = format!("{}/users/{}/workspace", base_dir, tenant_id);
 
-        let last_commit = Command::new("git")
-            .args(["log", "-1", "--pretty=%B"])
-            .output()
-            .await
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| "no commits found".to_string());
+        let computed = tokio::task::spawn_blocking(move || {
+            let repo = git2::Repository::discover(&tenant_workspace)
+                .or_else(|_| git2::Repository::discover("."));
 
-        format!(
-            "[Git Branch]: {}\n[Git Status]:\n{}\n[Last Commit]: {}",
-            branch, status, last_commit
-        )
+            let Ok(repo) = repo else {
+                return "[Git Branch]: unknown\n[Git Status]:\nnot a git repository\n[Last Commit]: no commits found".to_string();
+            };
+
+            let branch = repo
+                .head()
+                .ok()
+                .and_then(|h| h.shorthand().ok().map(str::to_string))
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let last_commit = repo
+                .head()
+                .ok()
+                .and_then(|h| h.peel_to_commit().ok())
+                .and_then(|c| c.message().ok().map(|m| m.trim().to_string()))
+                .unwrap_or_else(|| "no commits found".to_string());
+
+            let mut status_opts = git2::StatusOptions::new();
+            status_opts
+                .include_untracked(true)
+                .recurse_untracked_dirs(false);
+
+            let status_str = match repo.statuses(Some(&mut status_opts)) {
+                Ok(statuses) => {
+                    let mut lines = Vec::new();
+                    for entry in statuses.iter().take(MAX_GIT_STATUS_LINES) {
+                        let st = entry.status();
+                        let code = if st.is_wt_new() || st.is_index_new() {
+                            "??"
+                        } else if st.is_wt_deleted() || st.is_index_deleted() {
+                            " D"
+                        } else {
+                            " M"
+                        };
+                        if let Ok(p) = entry.path() {
+                            lines.push(format!("{} {}", code, p));
+                        }
+                    }
+                    if statuses.len() > MAX_GIT_STATUS_LINES {
+                        lines.push(format!(
+                            "... (+{} more files)",
+                            statuses.len() - MAX_GIT_STATUS_LINES
+                        ));
+                    }
+                    lines.join("\n")
+                }
+                Err(_) => "error fetching status".to_string(),
+            };
+
+            format!(
+                "[Git Branch]: {}\n[Git Status]:\n{}\n[Last Commit]: {}",
+                branch, status_str, last_commit
+            )
+        })
+        .await
+        .unwrap_or_else(|_| {
+            "[Git Branch]: unknown\n[Git Status]:\nerror\n[Last Commit]: unknown".to_string()
+        });
+
+        {
+            let mut cache = GIT_STATE_CACHE.write().await;
+            cache.insert(cache_key, (Instant::now(), computed.clone()));
+        }
+
+        computed
     }
 
-    /// Obtiene el estado de los tickets desde TICKETS_MASTER.md.
+    /// Obtiene el estado de los tickets desde TICKETS_MASTER.md con caché TTL (CORE-352).
     async fn fetch_governance_state(&self) -> String {
+        {
+            let cache = GOV_STATE_CACHE.read().await;
+            if let Some((ts, ref cached)) = *cache {
+                if ts.elapsed() < VCM_STATE_CACHE_TTL {
+                    return cached.clone();
+                }
+            }
+        }
+
         let master_path = "governance/TICKETS_MASTER.md";
-        match tokio::fs::read_to_string(master_path).await {
+        let computed = match tokio::fs::read_to_string(master_path).await {
             Ok(content) => {
                 let in_progress: Vec<&str> = content
                     .lines()
@@ -96,7 +174,14 @@ impl VirtualContextManager {
                 "[Governance]: Error reading TICKETS_MASTER.md (file not found or unreadable)"
                     .to_string()
             }
+        };
+
+        {
+            let mut cache = GOV_STATE_CACHE.write().await;
+            *cache = Some((Instant::now(), computed.clone()));
         }
+
+        computed
     }
 
     /// Ensambla el contexto final a partir de un PCB y acceso a la memoria L3.
@@ -138,10 +223,12 @@ impl VirtualContextManager {
         }
         let mut current_tokens = mandatory_tokens;
 
-        // --- PROJECT CONTEXT INJECTION (CORE-151) ---
+        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+
+        // --- PROJECT CONTEXT INJECTION (CORE-151 / CORE-352) ---
         // Project state is best-effort: omitted silently when budget is tight.
         let mut project_state_str = String::new();
-        let git_state = self.fetch_git_state().await;
+        let git_state = self.fetch_git_state(tenant_id).await;
         let gov_state = self.fetch_governance_state().await;
         let mut candidate = String::new();
         candidate.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
@@ -158,7 +245,6 @@ impl VirtualContextManager {
         // L3 SEMANTIC MEMORY - Medium Priority
         let mut l3_added = false;
         let mut l3_str = String::new();
-        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
         if !pcb.memory_pointers.swap_refs.is_empty() {
             for _swap_query in &pcb.memory_pointers.swap_refs {

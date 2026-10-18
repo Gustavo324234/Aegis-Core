@@ -75,6 +75,6 @@ cargo check --workspace
 ---
 
 ## 5. References & Tooling
-* Benchmark Synchronizer Script: [tools/update_models.py](file:///e:/Aegis/Aegis-Core/tools/update_models.py)
+* Benchmark Synchronizer Script: [tools/update_models.py](../tools/update_models.py)
 * Model Catalog Configuration: `kernel/crates/ank-core/src/router/models.yaml`
 * Router Test Suite: `kernel/crates/ank-core/src/router/tests.rs`

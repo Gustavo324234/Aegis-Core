@@ -212,6 +212,15 @@
 | CORE-343 | feat | Kernel Syscall & Tool: Telemetría de Hardware Nativa (`SYS_HW_TELEMETRY`) | ✅ Done | Alta | Kernel Engineer |
 | CORE-344 | feat | Kernel Syscall & Tool: Control de Audio PipeWire (`SYS_AUDIO_CONTROL`) | ✅ Done | Alta | Kernel Engineer |
 | CORE-345 | docs | Guía de Compilación de Imagen ISO de NixOS y Despliegue Bare-Metal | ✅ Done | Alta | DevOps Engineer |
+| CORE-346 | fix | Purge Physical Tenant Directory & L3 Swap on Delete | ✅ Done | Crítica | Kernel Engineer |
+| CORE-347 | fix | Clear Local Messages State on Tenant Delete and User Authentication | ✅ Done | Alta | Shell Engineer |
+| CORE-348 | fix | Update Gemini Catalog with Official 3.5/3.6 Flash Production IDs | ✅ Done | Alta | Kernel Engineer |
+| CORE-349 | fix | Encrypt L3 Swap Fragments in SQLCipher and Fix Vector Dimension Initialization | ✅ Done | Crítica | Kernel Engineer |
+| CORE-350 | fix | Enforce Tenant Isolation, Secret Redaction, and Tool Use v2 in Fine-Tuning Dataset | ✅ Done | Crítica | Kernel Engineer |
+| CORE-351 | fix | Create Missing `profile-server.nix` for Headless NixOS Flake | ✅ Done | Alta | DevOps Engineer |
+| CORE-352 | perf | Optimize VCM Git & Governance Context Assembly with Native `git2` and TTL Cache | ✅ Done | Alta | Kernel Engineer |
+| CORE-353 | perf | gRPC Channel Pool for Microkernel Domain Modules | ✅ Done | Alta | Kernel Engineer |
+| CORE-354 | feat | Real Ollama Modelfile Export and Model Registration in TrainingManager | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

@@ -186,35 +186,11 @@ impl SyscallExecutor {
         args_json: &str,
         tenant_id: &str,
     ) -> Result<String, SyscallError> {
-        let channel_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-            endpoint.to_string()
-        } else {
-            format!("http://{}", endpoint)
-        };
-
-        let endpoint_parsed = tonic::transport::Endpoint::from_shared(channel_url)
-            .map_err(|e| SyscallError::PluginError(format!("Invalid endpoint format: {}", e)))?
-            .timeout(std::time::Duration::from_secs(5))
-            .connect_timeout(std::time::Duration::from_secs(5));
-
-        let channel = endpoint_parsed.connect().await.map_err(|e| {
-            SyscallError::PluginError(format!("Failed to connect to microkernel module: {}", e))
-        })?;
-
-        let mut client =
-            ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
-
-        let request = tonic::Request::new(ank_proto::v1::ExecuteToolRequest {
-            tool_name: tool_name.to_string(),
-            arguments_json: args_json.to_string(),
-            tenant_id: tenant_id.to_string(),
-        });
-
-        let response = client
-            .execute_tool(request)
-            .await
-            .map_err(|e| SyscallError::PluginError(format!("Module tool execution failed: {}", e)))?
-            .into_inner();
+        let response = crate::router::modules::call_module_tool_pooled(
+            endpoint, tool_name, args_json, tenant_id,
+        )
+        .await
+        .map_err(SyscallError::PluginError)?;
 
         if response.success {
             Ok(response.result_json)

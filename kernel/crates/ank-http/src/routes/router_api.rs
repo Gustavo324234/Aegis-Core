@@ -1022,45 +1022,25 @@ async fn execute_module_tool(
 
     let endpoint = manifest.ipc_transport.endpoint.clone();
 
-    // Call the external module tool via gRPC (using tonic)
-    let channel_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
-        endpoint
-    } else {
-        format!("http://{}", endpoint)
-    };
-
-    let endpoint_parsed = tonic::transport::Endpoint::from_shared(channel_url)
-        .map_err(|e| AegisHttpError::BadRequest(format!("Invalid endpoint format: {}", e)))?
-        .timeout(std::time::Duration::from_secs(5))
-        .connect_timeout(std::time::Duration::from_secs(5));
-
-    let channel = endpoint_parsed.connect().await.map_err(|e| {
-        AegisHttpError::Internal(anyhow::anyhow!(
-            "Failed to connect to microkernel module: {}",
-            e
-        ))
-    })?;
-
-    let mut client =
-        ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
-
     // Convert arguments to string JSON
     let args_str = serde_json::to_string(&body.arguments)
         .map_err(|e| AegisHttpError::BadRequest(format!("Invalid arguments format: {}", e)))?;
 
-    let request = tonic::Request::new(ank_proto::v1::ExecuteToolRequest {
-        tool_name: body.tool_name,
-        arguments_json: args_str,
-        tenant_id: auth.tenant_id.clone(),
-    });
-
-    let response = client
-        .execute_tool(request)
-        .await
-        .map_err(|e| {
-            AegisHttpError::Internal(anyhow::anyhow!("Module tool execution failed: {}", e))
-        })?
-        .into_inner();
+    // Call the external module tool via pooled HTTP/2 gRPC channel (CORE-353)
+    let response = ank_core::router::modules::call_module_tool_pooled(
+        &endpoint,
+        &body.tool_name,
+        &args_str,
+        &auth.tenant_id,
+    )
+    .await
+    .map_err(|e| {
+        if e.starts_with("Invalid endpoint format:") {
+            AegisHttpError::BadRequest(e)
+        } else {
+            AegisHttpError::Internal(anyhow::anyhow!(e))
+        }
+    })?;
 
     if response.success {
         // Formulate result as a parsed JSON value

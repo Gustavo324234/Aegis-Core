@@ -387,6 +387,26 @@ impl MasterEnclave {
             }
         }
 
+        let swap_dir = std::path::Path::new(&base_dir)
+            .join(".aegis_swap")
+            .join(tenant_id);
+        if swap_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&swap_dir) {
+                tracing::error!(
+                    tenant_id = %tenant_id,
+                    "Failed to delete tenant L3 swap directory at {}: {}",
+                    swap_dir.display(),
+                    e
+                );
+            } else {
+                info!(
+                    tenant_id = %tenant_id,
+                    "Purged tenant L3 swap directory at {}",
+                    swap_dir.display()
+                );
+            }
+        }
+
         info!("Tenant {} successfully deleted from master.", tenant_id);
         Ok(())
     }

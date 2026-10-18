@@ -86,8 +86,8 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Añadir tokens de control específicos de Aegis OS
-    special_tokens = ["<aegis_sys_call>", "</aegis_sys_call>", "<siren_audio>"]
+    # Añadir tokens de control específicos de Aegis OS (Tool Use v2 + Siren)
+    special_tokens = ["__TOOL_CALL__", "<siren_audio>"]
     tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
 
     # 2. Configurar la cuantización a 4 bits para QLoRA

@@ -26,10 +26,10 @@ Aegis OS provides a fully declarative Linux distribution built on NixOS. It supp
 
 ## 2. Declarative Flake Structure (`distro/nixos/`)
 
-* **[flake.nix](file:///e:/Aegis/Aegis-Core/distro/nixos/flake.nix)** — Main entry point exposing `#aegis-server`, `#aegis-kiosk`, and `#aegis-iso`.
-* **[configuration.nix](file:///e:/Aegis/Aegis-Core/distro/nixos/configuration.nix)** — Core system security, Citadel policies, LUKS2 disk encryption, and `ank-server` systemd daemon.
-* **[profile-server.nix](file:///e:/Aegis/Aegis-Core/distro/nixos/profile-server.nix)** — Headless power-saving mode (selectively suspends display server when laptop lid is closed).
-* **[profile-kiosk.nix](file:///e:/Aegis/Aegis-Core/distro/nixos/profile-kiosk.nix)** — Wayland `cage` compositor launching Chromium in fullscreen Kiosk mode targeting `http://localhost:8000`.
+* **[flake.nix](nixos/flake.nix)** — Main entry point exposing `#aegis-server`, `#aegis-kiosk`, and `#aegis-iso`.
+* **[configuration.nix](nixos/configuration.nix)** — Core system security, Citadel policies, LUKS2 disk encryption, and `ank-server` systemd daemon.
+* **[profile-server.nix](nixos/profile-server.nix)** — Headless power-saving mode (selectively suspends display server when laptop lid is closed).
+* **[profile-kiosk.nix](nixos/profile-kiosk.nix)** — Wayland `cage` compositor launching Chromium in fullscreen Kiosk mode targeting `http://localhost:8000`.
 
 ---
 
