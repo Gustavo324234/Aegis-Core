@@ -221,6 +221,8 @@
 | CORE-352 | perf | Optimize VCM Git & Governance Context Assembly with Native `git2` and TTL Cache | ✅ Done | Alta | Kernel Engineer |
 | CORE-353 | perf | gRPC Channel Pool for Microkernel Domain Modules | ✅ Done | Alta | Kernel Engineer |
 | CORE-354 | feat | Real Ollama Modelfile Export and Model Registration in TrainingManager | ✅ Done | Alta | Kernel Engineer |
+| CORE-355 | refactor | Modularize `syscalls/mod.rs` into `parser.rs` and `oauth_integrations.rs` | ✅ Done | Media | Kernel Engineer |
+| CORE-356 | refactor | Modularize and Deduplicate `router_api.rs` into Submodules | ✅ Done | Media | Kernel Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

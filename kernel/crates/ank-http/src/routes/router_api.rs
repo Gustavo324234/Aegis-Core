@@ -3,7 +3,6 @@ use crate::{
     error::AegisHttpError,
     state::AppState,
 };
-use ank_core::router::discovery::{fetch_provider_models, DiscoveredModel};
 use ank_core::router::key_pool::ApiKeyEntry;
 use ank_core::router::syncer;
 use axum::{
@@ -15,6 +14,17 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use utoipa::ToSchema;
+
+pub mod discovery_handlers;
+pub mod modules_handlers;
+
+pub use discovery_handlers::{probe_models, ProbeModelsRequest, ProbeModelsResponse};
+pub use modules_handlers::{
+    enable_module, execute_module_tool, list_modules, EnableModuleBody, ExecuteToolBody,
+    ModuleUiResponse, ModulesListResponse,
+};
+
+use discovery_handlers::{auto_discover_models, is_keyless_provider};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -142,6 +152,32 @@ async fn require_master_auth(
     Ok(tenant_id)
 }
 
+/// Sincroniza inmediatamente los modelos asociados a una clave recién agregada o editada (CORE-356).
+async fn sync_key_models_into_catalog(
+    router: &ank_core::router::CognitiveRouter,
+    entry: &ApiKeyEntry,
+) {
+    let catalog = router.catalog_ref();
+    if entry.provider == "openrouter" {
+        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
+            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
+            Ok(_) => {}
+            Err(e) => warn!(
+                "CatalogSyncer: failed to sync OpenRouter free models: {}",
+                e
+            ),
+        }
+    } else if let Some(models) = &entry.active_models {
+        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
+        if n > 0 {
+            info!(
+                "CatalogSyncer: registered {} {} models into catalog",
+                n, entry.provider
+            );
+        }
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/router/keys/global",
@@ -179,12 +215,6 @@ async fn add_global_key(
             })?
     };
 
-    // CORE-FIX: when the caller didn't pre-specify which models the key
-    // should expose, probe the provider's /models endpoint. This is how the
-    // catalog stays in sync with what the provider actually offers today
-    // (instead of hardcoded ids that go stale the moment a new Gemini
-    // ships). Falls back to None/empty if discovery fails — the user can
-    // always edit the list afterwards.
     let active_models = match req.models {
         Some(ms) if !ms.is_empty() => Some(ms),
         _ => {
@@ -198,10 +228,6 @@ async fn add_global_key(
         }
     };
 
-    // CORE-FIX: normalise provider id BEFORE persisting. The key, the catalog
-    // entries it produces, and the router lookups all key off the same string;
-    // if the UI submits "google" and we save "google" but catalog stores
-    // "gemini", routing silently fails to find the key on chat.
     let entry = ApiKeyEntry {
         key_id: uuid::Uuid::new_v4().to_string(),
         provider: ank_core::router::normalize_provider_id(provider_raw),
@@ -220,26 +246,7 @@ async fn add_global_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    // Sync models into catalog immediately after key registration
-    let catalog = router.catalog_ref();
-    if entry.provider == "openrouter" {
-        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
-            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
-            Ok(_) => {}
-            Err(e) => warn!(
-                "CatalogSyncer: failed to sync OpenRouter free models: {}",
-                e
-            ),
-        }
-    } else if let Some(models) = &entry.active_models {
-        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
-        if n > 0 {
-            info!(
-                "CatalogSyncer: registered {} {} models into catalog",
-                n, entry.provider
-            );
-        }
-    }
+    sync_key_models_into_catalog(&router, &entry).await;
 
     Ok(Json(SyncResponse {
         success: true,
@@ -333,7 +340,6 @@ async fn add_tenant_key(
     auth: CitadelAuthenticated,
     Json(req): Json<KeyAddRequest>,
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
-    // Al crear (POST), la api_key es obligatoria — salvo para providers locales.
     let provider_raw = req.provider.as_ref().ok_or_else(|| {
         AegisHttpError::BadRequest("provider is required when adding a new key".into())
     })?;
@@ -348,8 +354,6 @@ async fn add_tenant_key(
             })?
     };
 
-    // CORE-FIX: same auto-discovery as add_global_key — keep catalog fresh
-    // instead of relying on the user remembering the exact model id strings.
     let active_models = match req.models {
         Some(ms) if !ms.is_empty() => Some(ms),
         _ => {
@@ -381,26 +385,7 @@ async fn add_tenant_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    // Sync models into catalog immediately after key registration
-    let catalog = router.catalog_ref();
-    if entry.provider == "openrouter" {
-        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
-            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models (tenant)", n),
-            Ok(_) => {}
-            Err(e) => warn!(
-                "CatalogSyncer: failed to sync OpenRouter free models: {}",
-                e
-            ),
-        }
-    } else if let Some(models) = &entry.active_models {
-        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
-        if n > 0 {
-            info!(
-                "CatalogSyncer: registered {} {} models into catalog (tenant)",
-                n, entry.provider
-            );
-        }
-    }
+    sync_key_models_into_catalog(&router, &entry).await;
 
     Ok(Json(SyncResponse {
         success: true,
@@ -567,7 +552,6 @@ async fn update_global_key(
 
     let router = state.router.read().await;
 
-    // Si api_key viene vacía, preservar la key almacenada para no sobrescribirla
     let existing_key = router.get_raw_key_by_id(&id, None).await;
     let existing = existing_key
         .as_ref()
@@ -600,26 +584,7 @@ async fn update_global_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    // Sync models into catalog after key update
-    let catalog = router.catalog_ref();
-    if entry.provider == "openrouter" {
-        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
-            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models", n),
-            Ok(_) => {}
-            Err(e) => warn!(
-                "CatalogSyncer: failed to sync OpenRouter free models: {}",
-                e
-            ),
-        }
-    } else if let Some(models) = &entry.active_models {
-        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
-        if n > 0 {
-            info!(
-                "CatalogSyncer: registered {} {} models into catalog",
-                n, entry.provider
-            );
-        }
-    }
+    sync_key_models_into_catalog(&router, &entry).await;
 
     Ok(Json(SyncResponse {
         success: true,
@@ -650,7 +615,6 @@ async fn update_tenant_key(
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
     let router = state.router.read().await;
 
-    // Si api_key viene vacía, preservar la key almacenada para no sobrescribirla
     let existing_key = router.get_raw_key_by_id(&id, Some(&auth.tenant_id)).await;
     let existing = existing_key
         .as_ref()
@@ -683,26 +647,7 @@ async fn update_tenant_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
-    // Sync models into catalog after key update
-    let catalog = router.catalog_ref();
-    if entry.provider == "openrouter" {
-        match syncer::sync_openrouter_free_models(&entry.api_key, &catalog).await {
-            Ok(n) if n > 0 => info!("CatalogSyncer: added {} free OpenRouter models (tenant)", n),
-            Ok(_) => {}
-            Err(e) => warn!(
-                "CatalogSyncer: failed to sync OpenRouter free models: {}",
-                e
-            ),
-        }
-    } else if let Some(models) = &entry.active_models {
-        let n = syncer::register_provider_models(&entry.provider, models, &catalog).await;
-        if n > 0 {
-            info!(
-                "CatalogSyncer: registered {} {} models into catalog (tenant)",
-                n, entry.provider
-            );
-        }
-    }
+    sync_key_models_into_catalog(&router, &entry).await;
 
     Ok(Json(SyncResponse {
         success: true,
@@ -737,327 +682,6 @@ async fn router_stats(
     Ok(Json(router.stats().await))
 }
 
-/// Providers that don't require an API key (local / unauthenticated endpoints).
-/// Ollama runs on localhost with no auth by default; "custom" may or may not
-/// need one but we don't enforce it — if the endpoint needs a key the caller
-/// can still supply it.
-fn is_keyless_provider(provider: &str) -> bool {
-    matches!(provider.to_lowercase().as_str(), "ollama" | "custom")
-}
-
-// ── Model discovery ────────────────────────────────────────────────────────
-
-#[derive(Deserialize, ToSchema)]
-pub struct ProbeModelsRequest {
-    pub provider: String,
-    /// Optional stored key_id to look up the saved API key.
-    #[serde(default)]
-    pub key_id: Option<String>,
-    /// Required for paid providers (gemini, openai, anthropic, groq, etc.) if key_id is not given.
-    /// Ollama local can omit it.
-    #[serde(default)]
-    #[schema(format = "password")]
-    pub api_key: Option<String>,
-    /// Optional override for custom endpoints (Ollama remote, OpenAI-compat gateways).
-    #[serde(default)]
-    pub api_url: Option<String>,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct ProbeModelsResponse {
-    pub provider: String,
-    pub models: Vec<DiscoveredModel>,
-}
-
-/// Probe a provider's `/models` endpoint without persisting the key.
-/// Lets the UI present the actual list of models the key has access to
-/// (instead of a hardcoded option set that drifts as providers ship updates).
-#[utoipa::path(
-    post,
-    path = "/api/router/keys/probe-models",
-    tag = "router",
-    request_body = ProbeModelsRequest,
-    responses(
-        (status = 200, description = "Discovered models", body = ProbeModelsResponse),
-        (status = 400, description = "Bad request"),
-        (status = 401, description = "Unauthorized"),
-        (status = 502, description = "Provider rejected the key or unreachable")
-    )
-)]
-async fn probe_models(
-    State(state): State<AppState>,
-    auth: CitadelAuthenticated,
-    Json(req): Json<ProbeModelsRequest>,
-) -> Result<Json<ProbeModelsResponse>, AegisHttpError> {
-    let router = state.router.read().await;
-
-    let (api_key, api_url) = if let Some(key_id) = &req.key_id {
-        if let Some(entry) = router.get_raw_key_by_id(key_id, None).await.or(router
-            .get_raw_key_by_id(key_id, Some(&auth.tenant_id))
-            .await)
-        {
-            let key = req
-                .api_key
-                .filter(|k| !k.trim().is_empty())
-                .unwrap_or(entry.api_key);
-            let url = req.api_url.or(entry.api_url);
-            (key, url)
-        } else {
-            let key = req.api_key.filter(|k| !k.trim().is_empty());
-            if is_keyless_provider(&req.provider) {
-                (key.unwrap_or_default(), req.api_url.clone())
-            } else {
-                let k = key.ok_or_else(|| {
-                    AegisHttpError::BadRequest("api_key is required to probe this provider".into())
-                })?;
-                (k, req.api_url.clone())
-            }
-        }
-    } else if let Some(key) = req.api_key.filter(|k| !k.trim().is_empty()) {
-        (key, req.api_url.clone())
-    } else if is_keyless_provider(&req.provider) {
-        (String::new(), req.api_url.clone())
-    } else {
-        return Err(AegisHttpError::BadRequest(
-            "api_key or key_id is required to probe this provider".into(),
-        ));
-    };
-
-    // Normalise so the response echoes the canonical id the catalog uses,
-    // not whatever spelling the UI happened to send.
-    let canonical_provider = ank_core::router::normalize_provider_id(&req.provider);
-    match fetch_provider_models(&canonical_provider, api_url.as_deref(), &api_key).await {
-        Ok(models) => Ok(Json(ProbeModelsResponse {
-            provider: canonical_provider,
-            models,
-        })),
-        Err(e) => {
-            warn!(
-                provider = %req.provider,
-                error = %e,
-                "probe_models: provider rejected the key or is unreachable"
-            );
-            Err(AegisHttpError::BadGateway(format!(
-                "Provider '{}' did not return a model list: {}. Verify the key, \
-                 the api_url, and that the provider is reachable from this host.",
-                req.provider, e
-            )))
-        }
-    }
-}
-
-/// Auto-discover models when the caller didn't pass an explicit list.
-/// Returns the discovered ids so the caller can set them on the key entry.
-/// Empty result means "no discovery available for this provider" OR "discovery
-/// failed" — either way the caller should keep going and just register the key
-/// with whatever models the user already provided.
-async fn auto_discover_models(provider: &str, api_url: Option<&str>, api_key: &str) -> Vec<String> {
-    match fetch_provider_models(provider, api_url, api_key).await {
-        Ok(models) => {
-            let ids: Vec<String> = models.into_iter().map(|m| m.model_id).collect();
-            if !ids.is_empty() {
-                info!(
-                    provider = provider,
-                    count = ids.len(),
-                    "router_api: auto-discovered models for new key"
-                );
-            }
-            ids
-        }
-        Err(e) => {
-            warn!(
-                provider = provider,
-                error = %e,
-                "router_api: discovery failed; falling back to user-supplied models"
-            );
-            Vec::new()
-        }
-    }
-}
-
-// ── MODULES UI INTEGRATION ENDPOINTS (PHASE 4) ───────────────────────────────
-
-#[derive(Serialize)]
-pub struct ModuleUiResponse {
-    pub module_id: String,
-    pub display_name: String,
-    pub version: String,
-    pub active: bool,
-    pub exposed_tools: Vec<ank_core::router::modules::ExposedTool>,
-    pub ui_views: Vec<serde_json::Value>,
-}
-
-#[derive(Serialize)]
-pub struct ModulesListResponse {
-    pub modules: Vec<ModuleUiResponse>,
-}
-
-#[derive(Deserialize)]
-pub struct EnableModuleBody {
-    pub enabled: bool,
-}
-
-#[derive(Deserialize)]
-pub struct ExecuteToolBody {
-    pub tool_name: String,
-    pub arguments: serde_json::Value,
-}
-
-async fn list_modules(
-    State(state): State<AppState>,
-    auth: CitadelAuthenticated,
-) -> Result<Json<ModulesListResponse>, AegisHttpError> {
-    let router = state.router.read().await;
-    let modules_registry = router.modules.read().await;
-
-    // Open TenantDB to query module status
-    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let mut response_modules = Vec::new();
-
-    for manifest in modules_registry.values() {
-        let active = db
-            .get_kv(&format!("module_active:{}", manifest.module_id))
-            .unwrap_or(None)
-            .map(|v| v == "true")
-            .unwrap_or(false);
-
-        response_modules.push(ModuleUiResponse {
-            module_id: manifest.module_id.clone(),
-            display_name: manifest.display_name.clone(),
-            version: manifest.version.clone(),
-            active,
-            exposed_tools: manifest.exposed_tools.clone(),
-            ui_views: manifest.ui_views.clone(),
-        });
-    }
-
-    Ok(Json(ModulesListResponse {
-        modules: response_modules,
-    }))
-}
-
-async fn enable_module(
-    State(state): State<AppState>,
-    auth: CitadelAuthenticated,
-    Path(module_id): Path<String>,
-    Json(body): Json<EnableModuleBody>,
-) -> Result<Json<serde_json::Value>, AegisHttpError> {
-    // Open TenantDB to toggle status
-    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let router = state.router.read().await;
-    let modules_registry = router.modules.read().await;
-
-    if !modules_registry.contains_key(&module_id) {
-        return Err(AegisHttpError::BadRequest(format!(
-            "Module '{}' not found in system",
-            module_id
-        )));
-    }
-
-    db.set_kv(
-        &format!("module_active:{}", module_id),
-        if body.enabled { "true" } else { "false" },
-    )
-    .map_err(|e| {
-        AegisHttpError::Internal(anyhow::anyhow!("Failed to set active status in DB: {}", e))
-    })?;
-
-    info!(
-        "HTTP API: Module '{}' active status set to {} for tenant '{}'",
-        module_id, body.enabled, auth.tenant_id
-    );
-
-    Ok(Json(serde_json::json!({
-        "success": true,
-        "module_id": module_id,
-        "active": body.enabled
-    })))
-}
-
-async fn execute_module_tool(
-    State(state): State<AppState>,
-    auth: CitadelAuthenticated,
-    Path(module_id): Path<String>,
-    Json(body): Json<ExecuteToolBody>,
-) -> Result<Json<serde_json::Value>, AegisHttpError> {
-    // Verify that the module is active for this tenant
-    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let is_active = db
-        .get_kv(&format!("module_active:{}", module_id))
-        .unwrap_or(None)
-        .map(|v| v == "true")
-        .unwrap_or(false);
-
-    if !is_active {
-        return Err(AegisHttpError::BadRequest(format!(
-            "Module '{}' is not enabled for this tenant",
-            module_id
-        )));
-    }
-
-    let router = state.router.read().await;
-    let modules_registry = router.modules.read().await;
-
-    let manifest = modules_registry.get(&module_id).ok_or_else(|| {
-        AegisHttpError::BadRequest(format!("Module '{}' not found in system", module_id))
-    })?;
-
-    // Verify the tool is exposed by this module
-    if !manifest
-        .exposed_tools
-        .iter()
-        .any(|t| t.name == body.tool_name)
-    {
-        return Err(AegisHttpError::BadRequest(format!(
-            "Tool '{}' is not exposed by module '{}'",
-            body.tool_name, module_id
-        )));
-    }
-
-    let endpoint = manifest.ipc_transport.endpoint.clone();
-
-    // Convert arguments to string JSON
-    let args_str = serde_json::to_string(&body.arguments)
-        .map_err(|e| AegisHttpError::BadRequest(format!("Invalid arguments format: {}", e)))?;
-
-    // Call the external module tool via pooled HTTP/2 gRPC channel (CORE-353)
-    let response = ank_core::router::modules::call_module_tool_pooled(
-        &endpoint,
-        &body.tool_name,
-        &args_str,
-        &auth.tenant_id,
-    )
-    .await
-    .map_err(|e| {
-        if e.starts_with("Invalid endpoint format:") {
-            AegisHttpError::BadRequest(e)
-        } else {
-            AegisHttpError::Internal(anyhow::anyhow!(e))
-        }
-    })?;
-
-    if response.success {
-        // Formulate result as a parsed JSON value
-        let parsed_result: serde_json::Value = serde_json::from_str(&response.result_json)
-            .unwrap_or(serde_json::Value::String(response.result_json));
-        Ok(Json(serde_json::json!({
-            "success": true,
-            "result": parsed_result
-        })))
-    } else {
-        Ok(Json(serde_json::json!({
-            "success": false,
-            "error": response.result_json
-        })))
-    }
-}
-
 #[derive(Deserialize, ToSchema)]
 pub struct KeyExportRequest {
     pub password: String,
@@ -1075,6 +699,41 @@ pub struct KeyImportRequest {
 pub struct ImportResponse {
     pub success: bool,
     pub count: usize,
+}
+
+/// Resuelve si las credenciales en headers corresponden al Master Admin (`Ok(None)`)
+/// o a un tenant autenticado (`Ok(Some(tenant_id))`) para operaciones de backup (CORE-356).
+async fn resolve_backup_tenant_scope(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<String>, AegisHttpError> {
+    let tenant_id = headers
+        .get("x-citadel-tenant")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+    let key = headers
+        .get("x-citadel-key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+    let hash = hash_passphrase(key);
+
+    let citadel = state.citadel.lock().await;
+    if citadel
+        .enclave
+        .authenticate_master(tenant_id, &hash)
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+
+    citadel
+        .enclave
+        .authenticate_tenant(tenant_id, &hash)
+        .await
+        .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+
+    Ok(Some(tenant_id.to_string()))
 }
 
 #[utoipa::path(
@@ -1096,52 +755,12 @@ async fn export_keys(
     headers: HeaderMap,
     Json(req): Json<KeyExportRequest>,
 ) -> Result<Json<ank_core::router::key_pool::EncryptedKeysBackup>, AegisHttpError> {
-    let is_master = {
-        if let (Some(tenant_id), Some(key)) = (
-            headers
-                .get("x-citadel-tenant")
-                .and_then(|v| v.to_str().ok()),
-            headers.get("x-citadel-key").and_then(|v| v.to_str().ok()),
-        ) {
-            let hash = hash_passphrase(key);
-            let citadel = state.citadel.lock().await;
-            citadel
-                .enclave
-                .authenticate_master(tenant_id, &hash)
-                .await
-                .unwrap_or(false)
-        } else {
-            false
-        }
-    };
-
-    let tenant_id = if is_master {
-        None
-    } else {
-        let tenant_id = headers
-            .get("x-citadel-tenant")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-        let key = headers
-            .get("x-citadel-key")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-        let hash = hash_passphrase(key);
-        {
-            let citadel = state.citadel.lock().await;
-            citadel
-                .enclave
-                .authenticate_tenant(tenant_id, &hash)
-                .await
-                .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-        }
-        Some(tenant_id)
-    };
+    let tenant_scope = resolve_backup_tenant_scope(&state, &headers).await?;
 
     let router = state.router.read().await;
     let backup = router
         .key_pool_ref()
-        .export_keys_encrypted(tenant_id, &req.password)
+        .export_keys_encrypted(tenant_scope.as_deref(), &req.password)
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Export failed: {}", e)))?;
 
@@ -1167,47 +786,7 @@ async fn import_keys(
     headers: HeaderMap,
     Json(req): Json<KeyImportRequest>,
 ) -> Result<Json<ImportResponse>, AegisHttpError> {
-    let is_master = {
-        if let (Some(tenant_id), Some(key)) = (
-            headers
-                .get("x-citadel-tenant")
-                .and_then(|v| v.to_str().ok()),
-            headers.get("x-citadel-key").and_then(|v| v.to_str().ok()),
-        ) {
-            let hash = hash_passphrase(key);
-            let citadel = state.citadel.lock().await;
-            citadel
-                .enclave
-                .authenticate_master(tenant_id, &hash)
-                .await
-                .unwrap_or(false)
-        } else {
-            false
-        }
-    };
-
-    let tenant_id = if is_master {
-        None
-    } else {
-        let tenant_id = headers
-            .get("x-citadel-tenant")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-        let key = headers
-            .get("x-citadel-key")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-        let hash = hash_passphrase(key);
-        {
-            let citadel = state.citadel.lock().await;
-            citadel
-                .enclave
-                .authenticate_tenant(tenant_id, &hash)
-                .await
-                .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-        }
-        Some(tenant_id)
-    };
+    let tenant_scope = resolve_backup_tenant_scope(&state, &headers).await?;
 
     let backup = ank_core::router::key_pool::EncryptedKeysBackup {
         salt: req.salt,
@@ -1218,7 +797,7 @@ async fn import_keys(
     let router = state.router.read().await;
     let count = router
         .key_pool_ref()
-        .import_keys_encrypted(tenant_id, &req.password, backup)
+        .import_keys_encrypted(tenant_scope.as_deref(), &req.password, backup)
         .await
         .map_err(|e| AegisHttpError::BadRequest(format!("Import failed: {}", e)))?;
 
