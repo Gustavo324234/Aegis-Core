@@ -225,6 +225,8 @@ pub async fn delete_tenant_path(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
+    crate::ws::chat::invalidate_onboarding_cache(&target_id);
+
     Ok(Json(TenantDeleteResponse {
         success: true,
         message: format!("Tenant {} deleted.", target_id),
@@ -263,6 +265,8 @@ pub async fn delete_tenant_body(
         .delete_tenant(&body.target_tenant_id)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    crate::ws::chat::invalidate_onboarding_cache(&body.target_tenant_id);
 
     Ok(Json(TenantDeleteResponse {
         success: true,

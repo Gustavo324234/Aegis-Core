@@ -348,7 +348,7 @@ pub(crate) async fn run_server() -> Result<()> {
                         broker
                             .entry(pid.clone())
                             .or_insert_with(|| {
-                                let (tx, _) = tokio::sync::broadcast::channel(512);
+                                let (tx, _) = tokio::sync::broadcast::channel(2048);
                                 tx
                             })
                             .clone()
@@ -607,6 +607,10 @@ pub(crate) async fn run_server() -> Result<()> {
                             });
                         }
                     }
+
+                    // CORE-357: Evict completed PID channel from event_broker so non-WS tasks
+                    // (Siren, Cron, Supervisors) never leak broadcast channels in RAM.
+                    event_broker_runner.write().await.remove(&pid);
                 });
             }
 

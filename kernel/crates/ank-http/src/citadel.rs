@@ -45,6 +45,7 @@ impl<S: Send + Sync> FromRequestParts<S> for CitadelCredentials {
 pub struct CitadelAuthenticated {
     pub tenant_id: String,
     pub session_key_hash: String,
+    pub is_master: bool,
 }
 
 #[axum::async_trait]
@@ -56,24 +57,38 @@ impl FromRequestParts<crate::state::AppState> for CitadelAuthenticated {
         state: &crate::state::AppState,
     ) -> Result<Self, Self::Rejection> {
         let creds = CitadelCredentials::from_request_parts(parts, state).await?;
-        {
+        let is_master = {
             let citadel = state.citadel.lock().await;
-            citadel
+            let master_ok = citadel
                 .enclave
-                .authenticate_tenant(&creds.tenant_id, &creds.session_key_hash)
+                .authenticate_master(&creds.tenant_id, &creds.session_key_hash)
                 .await
-                .map_err(|e| {
-                    let msg = e.to_string();
-                    if msg.contains("PASSWORD_MUST_CHANGE") {
-                        CitadelError::PasswordMustChange
-                    } else {
-                        CitadelError::Unauthorized
-                    }
-                })?;
-        }
+                .unwrap_or(false);
+            if master_ok {
+                true
+            } else {
+                let tenant_ok = citadel
+                    .enclave
+                    .authenticate_tenant(&creds.tenant_id, &creds.session_key_hash)
+                    .await
+                    .map_err(|e| {
+                        let msg = e.to_string();
+                        if msg.contains("PASSWORD_MUST_CHANGE") {
+                            CitadelError::PasswordMustChange
+                        } else {
+                            CitadelError::Unauthorized
+                        }
+                    })?;
+                if !tenant_ok {
+                    return Err(CitadelError::Unauthorized);
+                }
+                false
+            }
+        };
         Ok(CitadelAuthenticated {
             tenant_id: creds.tenant_id,
             session_key_hash: creds.session_key_hash,
+            is_master,
         })
     }
 }

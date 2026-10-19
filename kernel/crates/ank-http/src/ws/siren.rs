@@ -71,14 +71,23 @@ async fn handle_siren(
 
     let hash = hash_passphrase(&session_key);
 
-    // 1. Authenticate
+    // 1. Authenticate (Master or Tenant)
     {
         let citadel = state.citadel.lock().await;
-        let is_auth = citadel
+        let is_master = citadel
             .enclave
-            .authenticate_tenant(&tenant_id, &hash)
+            .authenticate_master(&tenant_id, &hash)
             .await
             .unwrap_or(false);
+        let is_auth = if is_master {
+            true
+        } else {
+            citadel
+                .enclave
+                .authenticate_tenant(&tenant_id, &hash)
+                .await
+                .unwrap_or(false)
+        };
 
         if !is_auth {
             let _ = socket

@@ -57,7 +57,7 @@ fn resolve_safe_path(project_root: &Path, requested: &str) -> anyhow::Result<Pat
     if requested.starts_with('/') || requested.contains(':') {
         anyhow::bail!("Absolute paths not allowed");
     }
-    if requested.contains("../") {
+    if requested.contains("../") || requested.contains("..\\") {
         anyhow::bail!("Path traversal detected");
     }
     let joined = project_root.join(requested);
@@ -71,6 +71,45 @@ fn resolve_safe_path(project_root: &Path, requested: &str) -> anyhow::Result<Pat
         anyhow::bail!("Path traversal detected");
     }
     Ok(resolved)
+}
+
+/// CORE-359: Resolves and validates a tenant's `project_root`.
+/// - Defaults to `<data_dir>/users/<tenant_id>/workspace` when unset or empty.
+/// - Non-master tenants are strictly confined within `<data_dir>/users/<tenant_id>/workspace`.
+pub(crate) fn resolve_tenant_project_root(
+    data_dir: &Path,
+    tenant_id: &str,
+    is_master: bool,
+    configured_root: Option<&str>,
+) -> anyhow::Result<PathBuf> {
+    let tenant_workspace = data_dir.join("users").join(tenant_id).join("workspace");
+    std::fs::create_dir_all(&tenant_workspace)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize tenant workspace dir: {}", e))?;
+    let workspace_canon = tenant_workspace
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("Cannot canonicalize tenant workspace: {}", e))?;
+
+    let Some(raw) = configured_root.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(workspace_canon);
+    };
+
+    let candidate = PathBuf::from(raw);
+    let resolved_candidate = if candidate.is_relative() {
+        tenant_workspace.join(&candidate)
+    } else {
+        candidate
+    };
+    let canon = resolved_candidate
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("Cannot canonicalize project_root '{}': {}", raw, e))?;
+
+    if !is_master && !canon.starts_with(&workspace_canon) {
+        anyhow::bail!(
+            "Security policy: non-admin tenants cannot access project_root outside their isolated workspace"
+        );
+    }
+
+    Ok(canon)
 }
 
 fn is_blocked_file(path: &Path) -> bool {
@@ -205,23 +244,23 @@ fn build_tree(dir: &Path, root: &Path, depth: u8) -> Vec<FsEntry> {
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 async fn fs_tree(
-    _state: State<AppState>,
+    State(state): State<AppState>,
     auth: CitadelAuthenticated,
     Query(params): Query<PathQuery>,
 ) -> Result<Json<FileTreeDto>, AegisHttpError> {
     let requested = params.path.unwrap_or_else(|| ".".to_string());
+    let data_dir = state.config.data_dir.clone();
 
     let dto = tokio::task::spawn_blocking(move || -> anyhow::Result<FileTreeDto> {
         let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)?;
         let settings = WorkspaceConfig::load_all(&db)?;
-        let project_root = settings
-            .project_root
-            .ok_or_else(|| anyhow::anyhow!("project_root not configured"))?;
-        let root = PathBuf::from(&project_root);
-        let target = resolve_safe_path(&root, &requested)?;
-        let root_canon = root
-            .canonicalize()
-            .map_err(|e| anyhow::anyhow!("Cannot canonicalize root: {}", e))?;
+        let root_canon = resolve_tenant_project_root(
+            &data_dir,
+            &auth.tenant_id,
+            auth.is_master,
+            settings.project_root.as_deref(),
+        )?;
+        let target = resolve_safe_path(&root_canon, &requested)?;
         let entries = build_tree(&target, &root_canon, 3);
         Ok(FileTreeDto {
             path: requested,
@@ -235,7 +274,7 @@ async fn fs_tree(
 }
 
 async fn fs_file(
-    _state: State<AppState>,
+    State(state): State<AppState>,
     auth: CitadelAuthenticated,
     Query(params): Query<PathQuery>,
 ) -> Result<Json<FileContentDto>, (StatusCode, Json<serde_json::Value>)> {
@@ -246,17 +285,22 @@ async fn fs_file(
             Json(serde_json::json!({ "error": "path query param required" })),
         ));
     }
+    let data_dir = state.config.data_dir.clone();
 
     let result = tokio::task::spawn_blocking(move || -> Result<FileContentDto, FsFileError> {
         let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
             .map_err(|e| FsFileError::Internal(e.to_string()))?;
         let settings =
             WorkspaceConfig::load_all(&db).map_err(|e| FsFileError::Internal(e.to_string()))?;
-        let project_root = settings
-            .project_root
-            .ok_or_else(|| FsFileError::Internal("project_root not configured".to_string()))?;
-        let root = PathBuf::from(&project_root);
-        let resolved = resolve_safe_path(&root, &requested).map_err(|_| FsFileError::Traversal)?;
+        let root_canon = resolve_tenant_project_root(
+            &data_dir,
+            &auth.tenant_id,
+            auth.is_master,
+            settings.project_root.as_deref(),
+        )
+        .map_err(|_| FsFileError::Forbidden)?;
+        let resolved =
+            resolve_safe_path(&root_canon, &requested).map_err(|_| FsFileError::Traversal)?;
 
         if is_blocked_file(&resolved) {
             return Err(FsFileError::Forbidden);
@@ -317,4 +361,40 @@ enum FsFileError {
     Traversal,
     TooLarge,
     Internal(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_tenant_project_root_defaults_and_sandboxes_non_master() {
+        let temp_dir = std::env::temp_dir().join(format!("aegis_fs_test_{}", uuid::Uuid::new_v4()));
+        let outside_dir =
+            std::env::temp_dir().join(format!("aegis_outside_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&outside_dir).unwrap_or_default();
+
+        // 1. Default when None -> creates and returns <data_dir>/users/alice/workspace
+        let default_root = resolve_tenant_project_root(&temp_dir, "alice", false, None)
+            .unwrap_or_else(|e| panic!("Expected default root: {}", e));
+        assert!(default_root.ends_with(Path::new("users").join("alice").join("workspace")));
+
+        // 2. Non-master trying to point outside workspace -> rejected
+        let outside_str = outside_dir.to_string_lossy().to_string();
+        let err = resolve_tenant_project_root(&temp_dir, "alice", false, Some(&outside_str));
+        assert!(
+            err.is_err(),
+            "Non-master must not escape isolated workspace"
+        );
+
+        // 3. Master pointing to valid outside directory -> allowed
+        let master_ok = resolve_tenant_project_root(&temp_dir, "root", true, Some(&outside_str));
+        assert!(
+            master_ok.is_ok(),
+            "Master admin can configure host project_root"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir_all(&outside_dir);
+    }
 }

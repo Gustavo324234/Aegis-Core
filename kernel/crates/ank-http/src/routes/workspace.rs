@@ -64,7 +64,17 @@ async fn set_config(
         )));
     }
 
-    if body.key == "orion_id_token" {
+    if body.key == "project_root" && !body.value.trim().is_empty() {
+        crate::routes::fs::resolve_tenant_project_root(
+            &state.config.data_dir,
+            &auth.tenant_id,
+            auth.is_master,
+            Some(&body.value),
+        )
+        .map_err(|e| AegisHttpError::BadRequest(e.to_string()))?;
+    }
+
+    if body.key == "orion_id_token" && (auth.is_master || auth.tenant_id == "root") {
         let token = body.value.clone();
         let tenant = auth.tenant_id.clone();
         let data_dir = state.config.data_dir.clone();

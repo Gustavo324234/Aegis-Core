@@ -30,9 +30,12 @@ pub async fn ws_agents_handler(
 async fn handle_agents_stream(mut socket: WebSocket, tenant_id: String, state: AppState) {
     info!(tenant = %tenant_id, "[AgentWS] Client connected.");
 
-    // Enviar snapshot inicial del árbol
+    // CORE-358: Enviar snapshot inicial del árbol filtrado por tenant
     let snapshot = {
-        let nodes = state.agent_orchestrator.tree_snapshot().await;
+        let nodes = state
+            .agent_orchestrator
+            .tree_snapshot_for_tenant(&tenant_id)
+            .await;
         AgentEvent::TreeSnapshot { nodes }
     };
 

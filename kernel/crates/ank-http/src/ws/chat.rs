@@ -21,7 +21,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::LazyLock;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
@@ -41,10 +41,15 @@ static MUSIC_CTRL_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// step persisted). Lets reconnecting WebSocket sessions skip the SQLCipher
 /// enclave open during the onboarding check — the enclave init costs ~600ms
 /// and was being re-triggered every ~2 minutes by idle client reconnects.
-/// Bounded by the number of distinct tenants, never invalidated (the
-/// "has persona/step" fact is monotonic).
 static ONBOARDING_SETTLED_TENANTS: LazyLock<std::sync::RwLock<std::collections::HashSet<String>>> =
     LazyLock::new(|| std::sync::RwLock::new(std::collections::HashSet::new()));
+
+/// CORE-359: Invalidate cached onboarding status when a tenant or its persona is deleted.
+pub fn invalidate_onboarding_cache(tenant_id: &str) {
+    if let Ok(mut set) = ONBOARDING_SETTLED_TENANTS.write() {
+        set.remove(tenant_id);
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/:tenant_id", get(ws_chat_handler))
@@ -132,14 +137,23 @@ async fn handle_chat(
 
     let hash = hash_passphrase(&session_key);
 
-    // 1. Authenticate
+    // 1. Authenticate (Master or Tenant)
     {
         let citadel = state.citadel.lock().await;
-        let is_auth = citadel
+        let is_master = citadel
             .enclave
-            .authenticate_tenant(&tenant_id, &hash)
+            .authenticate_master(&tenant_id, &hash)
             .await
             .unwrap_or(false);
+        let is_auth = if is_master {
+            true
+        } else {
+            citadel
+                .enclave
+                .authenticate_tenant(&tenant_id, &hash)
+                .await
+                .unwrap_or(false)
+        };
 
         if !is_auth {
             let _ = socket
@@ -574,28 +588,29 @@ async fn handle_chat(
             let receiver = {
                 let mut broker = state.event_broker.write().await;
                 let sender = broker.entry(pid.clone()).or_insert_with(|| {
-                    let (tx, _) = tokio::sync::broadcast::channel(512);
+                    let (tx, _) = tokio::sync::broadcast::channel(2048);
                     tx
                 });
                 sender.subscribe()
             };
 
-            let (tx, rx) = oneshot::channel();
-
-            // CORE-FIX (A4 + C5): timeout on scheduler send so a stuck scheduler
-            // doesn't hang the WS handler indefinitely. 5s is generous —
-            // scheduler is in-process via mpsc, normal latency is sub-millisecond.
+            // CORE-FIX (A4 + C5 + CORE-357): timeout on scheduler send so a stuck scheduler
+            // doesn't hang the WS handler indefinitely. Use ScheduleTask (not
+            // ScheduleTaskConfirmed, which holds oneshot in output_pending until
+            // ProcessCompleted for Siren TTS) so stream_with_receiver streams tokens
+            // in real time immediately after dispatch.
             let send_result = tokio::time::timeout(
                 std::time::Duration::from_secs(5),
                 state
                     .scheduler_tx
-                    .send(SchedulerEvent::ScheduleTaskConfirmed(Box::new(pcb), tx)),
+                    .send(SchedulerEvent::ScheduleTask(Box::new(pcb))),
             )
             .await;
 
             match send_result {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
+                    state.event_broker.write().await.remove(&pid);
                     let _ = socket
                         .send(Message::Text(error_event(
                             "scheduler_unavailable",
@@ -606,6 +621,7 @@ async fn handle_chat(
                     continue;
                 }
                 Err(_) => {
+                    state.event_broker.write().await.remove(&pid);
                     let _ = socket
                         .send(Message::Text(error_event(
                             "scheduler_timeout",
@@ -617,15 +633,12 @@ async fn handle_chat(
                 }
             }
 
-            // Esperar confirmación del PID (best-effort)
-            let confirmed_pid = rx.await.unwrap_or(pid);
-
             let _ = socket
                 .send(Message::Text(
                     json!({
                         "event": "status",
-                        "data": format!("Task accepted. PID: {}", confirmed_pid),
-                        "pid": confirmed_pid
+                        "data": format!("Task accepted. PID: {}", pid),
+                        "pid": pid
                     })
                     .to_string(),
                 ))
@@ -643,6 +656,9 @@ async fn handle_chat(
                 &state.agent_orchestrator,
             )
             .await;
+
+            // CORE-357: Evict completed task channel from event_broker to prevent memory leak.
+            state.event_broker.write().await.remove(&pid);
 
             // CORE-FIX (C): el turno pudo terminar de forma anómala (429 / output vacío)
             // justo después de que un supervisor preguntara algo. Re-entregamos las
@@ -709,7 +725,7 @@ async fn stream_task_events(
     let receiver = {
         let mut broker = state.event_broker.write().await;
         let sender = broker.entry(pid.to_string()).or_insert_with(|| {
-            let (tx, _) = tokio::sync::broadcast::channel(512);
+            let (tx, _) = tokio::sync::broadcast::channel(2048);
             tx
         });
         sender.subscribe()
@@ -722,6 +738,7 @@ async fn stream_task_events(
         &state.agent_orchestrator,
     )
     .await;
+    state.event_broker.write().await.remove(pid);
 }
 
 async fn stream_with_receiver(

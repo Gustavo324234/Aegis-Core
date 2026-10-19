@@ -223,6 +223,9 @@
 | CORE-354 | feat | Real Ollama Modelfile Export and Model Registration in TrainingManager | ✅ Done | Alta | Kernel Engineer |
 | CORE-355 | refactor | Modularize `syscalls/mod.rs` into `parser.rs` and `oauth_integrations.rs` | ✅ Done | Media | Kernel Engineer |
 | CORE-356 | refactor | Modularize and Deduplicate `router_api.rs` into Submodules | ✅ Done | Media | Kernel Engineer |
+| CORE-357 | fix | Fix WebSocket Real-Time Token Streaming and Evict Completed PIDs from `event_broker` | ✅ Done | Crítica | Kernel Engineer |
+| CORE-358 | fix | Enforce `CitadelAuthenticated` Verification and Multi-Tenant Agent/Persona Isolation | ✅ Done | Crítica | Kernel Engineer |
+| CORE-359 | fix | Sandbox Tenant `project_root`, Add Default Workspace Fallback, and Prune RateLimiter/Onboarding State | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

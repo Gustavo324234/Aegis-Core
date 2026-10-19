@@ -1,7 +1,4 @@
-use crate::{
-    citadel::{CitadelAuthenticated, CitadelCredentials},
-    state::AppState,
-};
+use crate::{citadel::CitadelAuthenticated, state::AppState};
 use ank_core::agents::{node::AgentRole, persistence::AgentPersistence};
 use axum::{
     extract::{Path, State},
@@ -79,12 +76,15 @@ pub struct SpawnAgentResponse {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-/// GET /api/agents/projects — retorna los proyectos activos derivados del árbol de agentes.
+/// GET /api/agents/projects — retorna los proyectos activos derivados del árbol de agentes del tenant.
 async fn list_projects(
     State(state): State<AppState>,
-    _creds: CitadelCredentials,
+    auth: CitadelAuthenticated,
 ) -> Json<ProjectListDto> {
-    let snapshot = state.agent_orchestrator.tree_snapshot().await;
+    let snapshot = state
+        .agent_orchestrator
+        .tree_snapshot_for_tenant(&auth.tenant_id)
+        .await;
 
     let mut projects_map: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
@@ -119,12 +119,15 @@ async fn list_projects(
     Json(ProjectListDto { projects })
 }
 
-/// GET /api/agents/tree — retorna el árbol completo de agentes activos.
+/// GET /api/agents/tree — retorna el árbol de agentes activos del tenant.
 async fn get_agent_tree(
     State(state): State<AppState>,
-    _creds: CitadelCredentials,
+    auth: CitadelAuthenticated,
 ) -> Json<AgentTreeDto> {
-    let snapshot = state.agent_orchestrator.tree_snapshot().await;
+    let snapshot = state
+        .agent_orchestrator
+        .tree_snapshot_for_tenant(&auth.tenant_id)
+        .await;
     let total = snapshot.len();
     let nodes = snapshot.into_iter().map(summary_to_dto).collect();
     Json(AgentTreeDto {
@@ -133,17 +136,20 @@ async fn get_agent_tree(
     })
 }
 
-/// GET /api/agents/{agent_id} — retorna el estado de un agente específico.
+/// GET /api/agents/{agent_id} — retorna el estado de un agente específico del tenant.
 async fn get_agent(
     State(state): State<AppState>,
     Path(agent_id_str): Path<String>,
-    _creds: CitadelCredentials,
+    auth: CitadelAuthenticated,
 ) -> Result<Json<AgentNodeDto>, axum::http::StatusCode> {
     let id = agent_id_str
         .parse::<uuid::Uuid>()
         .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 
-    let snapshot = state.agent_orchestrator.tree_snapshot().await;
+    let snapshot = state
+        .agent_orchestrator
+        .tree_snapshot_for_tenant(&auth.tenant_id)
+        .await;
     let summary = snapshot
         .into_iter()
         .find(|n| n.agent_id == id)
@@ -226,6 +232,22 @@ async fn reply_to_agent(
                 .into_response()
         }
     };
+
+    // CORE-358: Verify that the target agent belongs to the authenticated tenant.
+    let belongs_to_tenant = {
+        let tree = state.agent_orchestrator.tree.read().await;
+        match tree.get(&agent_id) {
+            Some(node) => auth.is_master || node.tenant_id == auth.tenant_id,
+            None => false,
+        }
+    };
+    if !belongs_to_tenant {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no_supervisor_waiting" })),
+        )
+            .into_response();
+    }
 
     if state
         .agent_orchestrator
