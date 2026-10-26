@@ -229,6 +229,9 @@
 | CORE-360 | fix | Multi-Tenant Key Scoping in KeyPool, Agent Tenant Propagation, and Sticky Cache Key Health Validation | ✅ Done | Crítica | Kernel Engineer |
 | CORE-361 | feat | Native Provider Endpoints, Universal OpenRouter Hub Fallback, and Base URL Normalization in CognitiveRouter | ✅ Done | Alta | Kernel Engineer |
 | CORE-362 | fix | Accurate Per-Model Cooldowns, Key-Specific Fallback Rate-Limiting, and Complete CatalogSyncer Registration | ✅ Done | Alta | Kernel Engineer |
+| CORE-363 | fix | Harden WASM & JS Maker Sandboxes: StoreLimits, SSRF Redirect/IPv6 Guard, Tainted Enforcement, and Path Traversal Fixes | ✅ Done | Crítica | Kernel Engineer |
+| CORE-364 | fix | Harden ank-mcp Client Protocol Handshake, Long-Lived SSE Timeouts, Safe Env Isolation, and Server Bootstrap | ✅ Done | Alta | Kernel Engineer |
+| CORE-365 | fix | Complete aegis-supervisor Windows Service Lifecycle, Bounded Health Checks, Secret Safety, and Process Reaping | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

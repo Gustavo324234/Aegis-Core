@@ -1,12 +1,11 @@
 mod health;
 mod supervisor;
-#[cfg(windows)]
 mod windows_service;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use supervisor::{AegisSupervisor, SupervisorConfig};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -33,8 +32,12 @@ enum Commands {
     Restart,
     /// Show status
     Status,
-    /// Tail logs
-    Logs,
+    /// Print recent kernel logs
+    Logs {
+        /// Number of trailing lines to print
+        #[arg(short = 'n', long, default_value_t = 80)]
+        lines: usize,
+    },
     /// Start in development mode
     Dev,
     /// Install as a background service
@@ -53,17 +56,15 @@ async fn main() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)
         .context("setting default subscriber failed")?;
 
+    let cli = Cli::parse();
+
+    // Only probe Windows SCM when invoked with `--service` or without an explicit CLI subcommand
+    // (legacy service registrations without `--service`), avoiding SCM delays on `status`/`logs`.
     #[cfg(windows)]
-    {
-        // Try to run as a Windows Service if invoked by SCM
-        if windows_service::run_as_service().is_err() {
-            // Not a service context, continue as CLI
-        } else {
-            return Ok(());
-        }
+    if (cli.service || cli.command.is_none()) && windows_service::run_as_service().is_ok() {
+        return Ok(());
     }
 
-    let cli = Cli::parse();
     let mut config = load_config()?;
 
     if cli.service {
@@ -86,20 +87,28 @@ async fn main() -> Result<()> {
             supervisor.watch().await;
         }
         Commands::Stop => {
-            println!("Stop command received. Terminating Aegis processes...");
-            // Simplified: we could send signals if we had a daemon,
-            // but for now we follow the legacy's path or just a simple message.
+            let supervisor = AegisSupervisor::new(config);
+            if supervisor.stop_external_instance().await? {
+                println!("ANK Kernel stopped.");
+            } else {
+                println!("No active managed ANK PID file found.");
+            }
         }
         Commands::Restart => {
             info!("Restarting Aegis service...");
+            config.dev_mode = false;
+            let mut supervisor = AegisSupervisor::new(config);
+            let _ = supervisor.stop_external_instance().await;
+            supervisor.start().await?;
+            supervisor.watch().await;
         }
         Commands::Status => {
             let supervisor = AegisSupervisor::new(config);
             supervisor.status().await?;
         }
-        Commands::Logs => {
-            info!("Tailing logs...");
-            println!("Feature in development: Log file tailing");
+        Commands::Logs { lines } => {
+            let supervisor = AegisSupervisor::new(config);
+            supervisor.tail_logs(lines)?;
         }
         Commands::Dev => {
             info!("Starting Aegis in DEV mode...");
@@ -112,10 +121,14 @@ async fn main() -> Result<()> {
             info!("Attempting to register Aegis as a system service...");
             #[cfg(windows)]
             windows_service::install_service()?;
+            #[cfg(not(windows))]
+            windows_service::install_service()?;
         }
         Commands::UninstallService => {
             info!("Removing Aegis service registration...");
             #[cfg(windows)]
+            windows_service::uninstall_service()?;
+            #[cfg(not(windows))]
             windows_service::uninstall_service()?;
         }
     }
@@ -123,22 +136,30 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn load_config() -> Result<SupervisorConfig> {
-    let root_key = env::var("AEGIS_ROOT_KEY").unwrap_or_else(|_| "development_key".to_string());
+pub(crate) fn load_config() -> Result<SupervisorConfig> {
     let config_path = get_config_path();
+    let env_root_key = env::var("AEGIS_ROOT_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    load_config_from_path(&config_path, env_root_key)
+}
 
+fn load_config_from_path(
+    config_path: &Path,
+    env_root_key: Option<String>,
+) -> Result<SupervisorConfig> {
     let mut config = SupervisorConfig {
         ank_bin: PathBuf::from("ank-server"),
         data_dir: dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("aegis"),
-        root_key,
+        root_key: env_root_key,
         port: 8000,
         dev_mode: false,
     };
 
     if config_path.exists() {
-        let content = std::fs::read_to_string(&config_path)?;
+        let content = std::fs::read_to_string(config_path)?;
         let toml_val: toml::Value = toml::from_str(&content)?;
 
         if let Some(runtime) = toml_val.get("runtime") {
@@ -149,7 +170,18 @@ fn load_config() -> Result<SupervisorConfig> {
                 config.data_dir = PathBuf::from(dir);
             }
             if let Some(port) = runtime.get("port").and_then(|v| v.as_integer()) {
-                config.port = port as u16;
+                if let Ok(valid_port) = u16::try_from(port) {
+                    config.port = valid_port;
+                }
+            }
+            if config.root_key.is_none() {
+                if let Some(rk) = runtime
+                    .get("root_key")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    config.root_key = Some(rk.to_string());
+                }
             }
         }
     }
@@ -162,4 +194,18 @@ fn get_config_path() -> PathBuf {
     p.push("aegis");
     p.push("config.toml");
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_config_does_not_inject_hardcoded_development_key() -> Result<()> {
+        let missing = PathBuf::from("non_existent_supervisor_config_test.toml");
+        let cfg = load_config_from_path(&missing, None)?;
+        assert!(cfg.root_key.is_none());
+        assert!(!cfg.dev_mode);
+        Ok(())
+    }
 }

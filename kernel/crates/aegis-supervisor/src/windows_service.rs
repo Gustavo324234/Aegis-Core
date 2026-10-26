@@ -41,7 +41,7 @@ pub fn install_service() -> Result<()> {
         start_type: ServiceStartType::AutoStart,
         error_control: ServiceErrorControl::Normal,
         executable_path,
-        launch_arguments: Vec::new(),
+        launch_arguments: vec![OsString::from("--service")],
         dependencies: Vec::new(),
         account_name: None,
         account_password: None,
@@ -93,22 +93,24 @@ pub fn run_as_service() -> Result<()> {
 
 #[cfg(windows)]
 fn service_main(_arguments: Vec<OsString>) {
-    if let Err(_e) = service_run() {
-        // Log error if needed
+    if let Err(e) = service_run() {
+        tracing::error!("AegisSupervisor Windows service failed: {}", e);
     }
 }
 
 #[cfg(windows)]
 fn service_run() -> Result<()> {
-    use std::sync::mpsc;
+    use crate::supervisor::AegisSupervisor;
+    use std::time::Duration;
     use tokio::runtime::Runtime;
+    use tokio::sync::watch;
 
-    let (shutdown_tx, shutdown_rx) = mpsc::channel();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
-            ServiceControl::Stop => {
-                let _ = shutdown_tx.send(());
+            ServiceControl::Stop | ServiceControl::Shutdown => {
+                let _ = shutdown_tx.send(true);
                 ServiceControlHandlerResult::NoError
             }
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
@@ -120,32 +122,52 @@ fn service_run() -> Result<()> {
 
     status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
-        current_state: ServiceState::Running,
-        controls_accepted: ServiceControlAccept::STOP,
+        current_state: ServiceState::StartPending,
+        controls_accepted: ServiceControlAccept::empty(),
         exit_code: ServiceExitCode::Win32(0),
         checkpoint: 0,
-        wait_hint: std::time::Duration::default(),
+        wait_hint: Duration::from_secs(15),
         process_id: None,
     })?;
 
     let rt = Runtime::new()?;
-    rt.block_on(async {
-        // In a real service, we'd start the supervisor here
-        // For now, we just wait for the signal as in legacy
-        let _ = shutdown_rx.recv();
+    let run_result: Result<()> = rt.block_on(async {
+        let mut config = crate::load_config()?;
+        config.dev_mode = false;
+        let mut supervisor = AegisSupervisor::new(config);
+        supervisor.start().await?;
+
+        status_handle.set_service_status(ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: ServiceState::Running,
+            controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
+            exit_code: ServiceExitCode::Win32(0),
+            checkpoint: 0,
+            wait_hint: Duration::from_secs(0),
+            process_id: None,
+        })?;
+
+        supervisor.watch_until_shutdown(shutdown_rx).await;
+        Ok(())
     });
+
+    let exit_code = if run_result.is_ok() {
+        ServiceExitCode::Win32(0)
+    } else {
+        ServiceExitCode::ServiceSpecific(1)
+    };
 
     status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::Stopped,
         controls_accepted: ServiceControlAccept::empty(),
-        exit_code: ServiceExitCode::Win32(0),
+        exit_code,
         checkpoint: 0,
-        wait_hint: std::time::Duration::default(),
+        wait_hint: Duration::default(),
         process_id: None,
     })?;
 
-    Ok(())
+    run_result
 }
 
 #[cfg(not(windows))]

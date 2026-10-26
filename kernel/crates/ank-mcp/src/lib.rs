@@ -7,7 +7,7 @@ pub mod transport;
 
 pub use client::McpClientSession;
 pub use error::McpError;
-pub use registry::{McpTool, McpToolRegistry};
+pub use registry::{McpTool, McpToolDispatcher, McpToolRegistry};
 pub use sse::SseTransport;
 pub use stdio::StdioTransport;
 pub use transport::{JsonRpcMessage, McpTransport};
