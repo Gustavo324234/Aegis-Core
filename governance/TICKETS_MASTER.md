@@ -226,6 +226,9 @@
 | CORE-357 | fix | Fix WebSocket Real-Time Token Streaming and Evict Completed PIDs from `event_broker` | ✅ Done | Crítica | Kernel Engineer |
 | CORE-358 | fix | Enforce `CitadelAuthenticated` Verification and Multi-Tenant Agent/Persona Isolation | ✅ Done | Crítica | Kernel Engineer |
 | CORE-359 | fix | Sandbox Tenant `project_root`, Add Default Workspace Fallback, and Prune RateLimiter/Onboarding State | ✅ Done | Alta | Kernel Engineer |
+| CORE-360 | fix | Multi-Tenant Key Scoping in KeyPool, Agent Tenant Propagation, and Sticky Cache Key Health Validation | ✅ Done | Crítica | Kernel Engineer |
+| CORE-361 | feat | Native Provider Endpoints, Universal OpenRouter Hub Fallback, and Base URL Normalization in CognitiveRouter | ✅ Done | Alta | Kernel Engineer |
+| CORE-362 | fix | Accurate Per-Model Cooldowns, Key-Specific Fallback Rate-Limiting, and Complete CatalogSyncer Registration | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

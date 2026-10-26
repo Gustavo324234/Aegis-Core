@@ -69,12 +69,13 @@ impl CatalogSyncer {
     }
 
     async fn sync_once(&self) -> anyhow::Result<()> {
-        // Sync non-OpenRouter provider models (ollama, custom, etc.) from global key pool.
-        // This ensures their models survive restarts and appear in the catalog immediately.
+        // Sync non-OpenRouter provider models (ollama, custom, etc.) from BOTH global
+        // and tenant key pools (CORE-362) so discovered models survive restarts.
         // Unredacted because the Ollama prune path below probes the live API with
         // real credentials.
-        let global_keys = self.key_pool.list_global_keys_unredacted().await;
-        for key in &global_keys {
+        let mut all_keys = self.key_pool.list_global_keys_unredacted().await;
+        all_keys.extend(self.key_pool.list_all_tenant_keys_unredacted().await);
+        for key in &all_keys {
             if key.provider == "openrouter" {
                 continue;
             }

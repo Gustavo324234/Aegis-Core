@@ -246,6 +246,7 @@ async fn add_global_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
+    router.invalidate_all_sticky().await;
     sync_key_models_into_catalog(&router, &entry).await;
 
     Ok(Json(SyncResponse {
@@ -314,6 +315,7 @@ async fn delete_global_key(
         .delete_key(&id, None)
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+    router.invalidate_all_sticky().await;
 
     Ok(Json(SyncResponse {
         success: true,
@@ -385,6 +387,7 @@ async fn add_tenant_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
+    router.invalidate_sticky(&auth.tenant_id).await;
     sync_key_models_into_catalog(&router, &entry).await;
 
     Ok(Json(SyncResponse {
@@ -451,6 +454,7 @@ async fn delete_tenant_key(
         .delete_key(&id, Some(&auth.tenant_id))
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+    router.invalidate_sticky(&auth.tenant_id).await;
 
     Ok(Json(SyncResponse {
         success: true,
@@ -521,9 +525,15 @@ async fn sync_router_catalog(
     headers: HeaderMap,
 ) -> Result<Json<SyncResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
+    if let Some(syncer) = &state.catalog_syncer {
+        syncer
+            .sync_now()
+            .await
+            .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Catalog sync failed: {}", e)))?;
+    }
     Ok(Json(SyncResponse {
         success: true,
-        message: "Catalog synchronization triggered".to_string(),
+        message: "Catalog synchronization completed".to_string(),
     }))
 }
 
@@ -584,6 +594,7 @@ async fn update_global_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
+    router.invalidate_all_sticky().await;
     sync_key_models_into_catalog(&router, &entry).await;
 
     Ok(Json(SyncResponse {
@@ -647,6 +658,7 @@ async fn update_tenant_key(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
+    router.invalidate_sticky(&auth.tenant_id).await;
     sync_key_models_into_catalog(&router, &entry).await;
 
     Ok(Json(SyncResponse {
@@ -727,11 +739,14 @@ async fn resolve_backup_tenant_scope(
         return Ok(None);
     }
 
-    citadel
+    let is_tenant = citadel
         .enclave
         .authenticate_tenant(tenant_id, &hash)
         .await
         .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+    if !is_tenant {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+    }
 
     Ok(Some(tenant_id.to_string()))
 }
@@ -800,6 +815,11 @@ async fn import_keys(
         .import_keys_encrypted(tenant_scope.as_deref(), &req.password, backup)
         .await
         .map_err(|e| AegisHttpError::BadRequest(format!("Import failed: {}", e)))?;
+
+    match tenant_scope.as_deref() {
+        Some(tid) => router.invalidate_sticky(tid).await,
+        None => router.invalidate_all_sticky().await,
+    }
 
     if let Some(syncer) = &state.catalog_syncer {
         if let Err(e) = syncer.sync_now().await {

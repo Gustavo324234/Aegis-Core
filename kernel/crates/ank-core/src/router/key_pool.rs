@@ -100,6 +100,18 @@ fn model_id_matches(catalog_id: &str, stored_id: &str) -> bool {
     false
 }
 
+/// CORE-361: Whether a cloud catalog model (`org/model`) can fall back to an
+/// `"openrouter"` key when no native key exists for `provider`.
+pub(crate) fn can_route_via_openrouter(provider: &str, model_id: &str) -> bool {
+    if provider == "openrouter" {
+        return true;
+    }
+    if matches!(provider, "ollama" | "ollama_cloud" | "groq" | "gemini") {
+        return false;
+    }
+    model_id.contains('/')
+}
+
 impl KeyPool {
     pub fn new(persistence: Arc<dyn StatePersistor>) -> Self {
         Self {
@@ -224,6 +236,44 @@ impl KeyPool {
                 return Some(bucket[idx % bucket.len()].clone());
             }
         }
+
+        // CORE-361: Universal OpenRouter hub fallback when no native key exists
+        // for an OpenRouter-compatible `org/model` catalog entry.
+        if provider != "openrouter" && can_route_via_openrouter(provider, model_id) {
+            let or_matches = |k: &&ApiKeyEntry| -> bool {
+                k.provider == "openrouter"
+                    && k.is_available()
+                    && k.active_models
+                        .as_ref()
+                        .map(|m| m.iter().any(|s| s == model_id))
+                        .unwrap_or(true)
+            };
+            let or_buckets: [Vec<&ApiKeyEntry>; 4] = [
+                tenant
+                    .iter()
+                    .filter(|k| k.is_free_tier && or_matches(k))
+                    .collect(),
+                global_keys
+                    .iter()
+                    .filter(|k| k.is_free_tier && or_matches(k))
+                    .collect(),
+                tenant
+                    .iter()
+                    .filter(|k| !k.is_free_tier && or_matches(k))
+                    .collect(),
+                global_keys
+                    .iter()
+                    .filter(|k| !k.is_free_tier && or_matches(k))
+                    .collect(),
+            ];
+            for bucket in &or_buckets {
+                if !bucket.is_empty() {
+                    let idx = self.next_rr_index("openrouter").await;
+                    return Some(bucket[idx % bucket.len()].clone());
+                }
+            }
+        }
+
         None
     }
 
@@ -413,6 +463,61 @@ impl KeyPool {
         tenants.values().any(|keys| keys.iter().any(&model_ok))
     }
 
+    /// CORE-360: Tenant-scoped check for at least one non-free-tier (paid) key
+    /// usable by `tenant_id` (own keys + global pool, plus OpenRouter hub fallback).
+    pub async fn has_paid_key_for_tenant(
+        &self,
+        provider: &str,
+        model_id: &str,
+        tenant_id: &str,
+    ) -> bool {
+        let model_ok = |k: &ApiKeyEntry| -> bool {
+            k.provider == provider
+                && !k.is_free_tier
+                && k.is_available()
+                && k.active_models
+                    .as_ref()
+                    .map(|m| m.iter().any(|s| model_id_matches(model_id, s)))
+                    .unwrap_or(true)
+        };
+
+        let global = self.global_keys.read().await;
+        if global.iter().any(&model_ok) {
+            return true;
+        }
+        let tenants = self.tenant_keys.read().await;
+        if tenants
+            .get(tenant_id)
+            .map(|keys| keys.iter().any(&model_ok))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        if provider != "openrouter" && can_route_via_openrouter(provider, model_id) {
+            let or_ok = |k: &ApiKeyEntry| -> bool {
+                k.provider == "openrouter"
+                    && !k.is_free_tier
+                    && k.is_available()
+                    && k.active_models
+                        .as_ref()
+                        .map(|m| m.iter().any(|s| s == model_id))
+                        .unwrap_or(true)
+            };
+            if global.iter().any(&or_ok) {
+                return true;
+            }
+            if tenants
+                .get(tenant_id)
+                .map(|keys| keys.iter().any(&or_ok))
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// CORE-320: number of distinct free-tier keys currently usable for this
     /// (provider, model) by this tenant — its own keys plus the global pool.
     /// Each key carries its own provider-side quota and `get_available_key`
@@ -443,10 +548,33 @@ impl KeyPool {
             .map(|keys| keys.iter().filter(|k| model_matches(k)).count())
             .unwrap_or(0);
         let global_count = global_keys.iter().filter(|k| model_matches(k)).count();
-        tenant_count + global_count
+        let native_total = tenant_count + global_count;
+        if native_total > 0 {
+            return native_total;
+        }
+
+        if provider != "openrouter" && can_route_via_openrouter(provider, model_id) {
+            let or_matches = |k: &ApiKeyEntry| -> bool {
+                k.provider == "openrouter"
+                    && k.is_free_tier
+                    && k.is_available()
+                    && k.active_models
+                        .as_ref()
+                        .map(|m| m.iter().any(|s| s == model_id))
+                        .unwrap_or(true)
+            };
+            let or_tenant = tenant_keys
+                .get(tenant_id)
+                .map(|keys| keys.iter().filter(|k| or_matches(k)).count())
+                .unwrap_or(0);
+            let or_global = global_keys.iter().filter(|k| or_matches(k)).count();
+            return or_tenant + or_global;
+        }
+        0
     }
 
-    /// Check if at least one key is available for a given provider and model
+    /// Check if at least one key is available globally or across any tenant
+    /// (retained for diagnostics/tests; routing uses `has_key_for_model_for_tenant`).
     pub async fn has_key_for_model(&self, provider: &str, model_id: &str) -> bool {
         let global = self.global_keys.read().await;
         if global.iter().any(|k| {
@@ -471,6 +599,79 @@ impl KeyPool {
                         .unwrap_or(true)
             })
         })
+    }
+
+    /// CORE-360 / CORE-361: Tenant-scoped key availability check (own keys + global pool,
+    /// plus universal OpenRouter hub fallback for prefixed cloud models).
+    pub async fn has_key_for_model_for_tenant(
+        &self,
+        provider: &str,
+        model_id: &str,
+        tenant_id: &str,
+    ) -> bool {
+        let model_ok = |k: &ApiKeyEntry| -> bool {
+            k.provider == provider
+                && k.is_available()
+                && k.active_models
+                    .as_ref()
+                    .map(|m| m.iter().any(|s| model_id_matches(model_id, s)))
+                    .unwrap_or(true)
+        };
+
+        let global = self.global_keys.read().await;
+        if global.iter().any(&model_ok) {
+            return true;
+        }
+        let tenants = self.tenant_keys.read().await;
+        if tenants
+            .get(tenant_id)
+            .map(|keys| keys.iter().any(&model_ok))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        if provider != "openrouter" && can_route_via_openrouter(provider, model_id) {
+            let or_ok = |k: &ApiKeyEntry| -> bool {
+                k.provider == "openrouter"
+                    && k.is_available()
+                    && k.active_models
+                        .as_ref()
+                        .map(|m| m.iter().any(|s| s == model_id))
+                        .unwrap_or(true)
+            };
+            if global.iter().any(&or_ok) {
+                return true;
+            }
+            if tenants
+                .get(tenant_id)
+                .map(|keys| keys.iter().any(&or_ok))
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// CORE-360: Verify whether a previously resolved `key_id` is still active,
+    /// unthrottled, and accessible to `tenant_id`. Used to validate sticky-cache hits.
+    pub async fn is_key_available_for_tenant(&self, key_id: &str, tenant_id: &str) -> bool {
+        if key_id == "local" {
+            return true;
+        }
+        {
+            let tenants = self.tenant_keys.read().await;
+            if let Some(keys) = tenants.get(tenant_id) {
+                if keys.iter().any(|k| k.key_id == key_id && k.is_available()) {
+                    return true;
+                }
+            }
+        }
+        let global = self.global_keys.read().await;
+        global
+            .iter()
+            .any(|k| k.key_id == key_id && k.is_available())
     }
 
     /// Returns the full (unredacted) entry for a given key_id.
@@ -514,6 +715,13 @@ impl KeyPool {
     pub(crate) async fn list_tenant_keys_unredacted(&self, tenant_id: &str) -> Vec<ApiKeyEntry> {
         let tenants = self.tenant_keys.read().await;
         tenants.get(tenant_id).cloned().unwrap_or_default()
+    }
+
+    /// CORE-362: Returns all tenant keys across all tenants (unredacted) so
+    /// `CatalogSyncer::sync_once` can re-register tenant `active_models` on boot.
+    pub(crate) async fn list_all_tenant_keys_unredacted(&self) -> Vec<ApiKeyEntry> {
+        let tenants = self.tenant_keys.read().await;
+        tenants.values().flat_map(|v| v.iter().cloned()).collect()
     }
 
     pub async fn export_keys_encrypted(
@@ -923,6 +1131,98 @@ mod tests {
             "Rate limited until should be stripped in export"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tenant_key_does_not_leak_to_other_tenant() -> anyhow::Result<()> {
+        let pool = KeyPool::new(Arc::new(NoopPersistor));
+
+        pool.add_tenant_key(
+            "alice",
+            ApiKeyEntry {
+                key_id: "alice-openai".to_string(),
+                provider: "openai".to_string(),
+                api_key: "sk-alice".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: false,
+            },
+        )
+        .await?;
+
+        assert!(
+            pool.has_key_for_model_for_tenant("openai", "openai/gpt-4o", "alice")
+                .await
+        );
+        assert!(
+            pool.has_paid_key_for_tenant("openai", "openai/gpt-4o", "alice")
+                .await
+        );
+        assert!(
+            !pool
+                .has_key_for_model_for_tenant("openai", "openai/gpt-4o", "bob")
+                .await,
+            "Alice's private key must not appear available to Bob"
+        );
+        assert!(
+            !pool
+                .has_paid_key_for_tenant("openai", "openai/gpt-4o", "bob")
+                .await,
+            "Alice's paid key must not promote paid-only models for Bob"
+        );
+        assert!(
+            pool.is_key_available_for_tenant("alice-openai", "alice")
+                .await
+        );
+        assert!(
+            !pool
+                .is_key_available_for_tenant("alice-openai", "bob")
+                .await
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_fallback_for_prefixed_cloud_models() -> anyhow::Result<()> {
+        let pool = KeyPool::new(Arc::new(NoopPersistor));
+
+        pool.add_tenant_key(
+            "alice",
+            ApiKeyEntry {
+                key_id: "alice-or".to_string(),
+                provider: "openrouter".to_string(),
+                api_key: "sk-or-v1-test".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: false,
+            },
+        )
+        .await?;
+
+        assert!(
+            pool.has_key_for_model_for_tenant("anthropic", "anthropic/claude-sonnet-4-6", "alice")
+                .await
+        );
+        let resolved = pool
+            .get_available_key("anthropic", "anthropic/claude-sonnet-4-6", "alice")
+            .await
+            .expect("OpenRouter hub key must resolve for anthropic/claude-sonnet-4-6");
+        assert_eq!(resolved.provider, "openrouter");
+        assert_eq!(resolved.key_id, "alice-or");
+
+        // Bare Gemini models without org/ prefix must NOT falsely route via OpenRouter
+        assert!(
+            !pool
+                .has_key_for_model_for_tenant("gemini", "gemini-3.6-flash", "alice")
+                .await
+        );
         Ok(())
     }
 }

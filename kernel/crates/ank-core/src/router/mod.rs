@@ -43,6 +43,7 @@ pub struct FallbackDecision {
     pub provider: String,
     pub api_url: String,
     pub api_key: String,
+    pub key_id: Option<String>,
 }
 
 /// Key for the sticky-routing cache. Identifies the conversation intent —
@@ -201,13 +202,22 @@ impl CognitiveRouter {
             };
             if let Some((stamped_at, decision)) = cached {
                 if stamped_at.elapsed() < STICKY_DECISION_TTL {
-                    // Re-validate health before reusing — provider circuit AND
-                    // per-model circuit (CORE-319: a model returning 401s or
-                    // empty streams must not stay pinned for the whole TTL).
-                    if !self
-                        .tracker
-                        .is_provider_circuit_open(&decision.provider)
-                        .await
+                    // CORE-360: Re-validate key availability AND circuit breakers
+                    // before reusing — if the key was disabled, deleted, or
+                    // rate-limited since the previous turn, evict immediately.
+                    let key_healthy = match decision.key_id.as_deref() {
+                        Some(kid) => {
+                            self.key_pool
+                                .is_key_available_for_tenant(kid, tenant_id)
+                                .await
+                        }
+                        None => true,
+                    };
+                    if key_healthy
+                        && !self
+                            .tracker
+                            .is_provider_circuit_open(&decision.provider)
+                            .await
                         && !self.tracker.is_model_circuit_open(&decision.model_id).await
                     {
                         info!(
@@ -232,12 +242,19 @@ impl CognitiveRouter {
                         model_id
                     ))
                 })?;
+                let effective_provider = if entry.is_local {
+                    entry.provider.clone()
+                } else {
+                    key.provider.clone()
+                };
                 return Ok(RoutingDecision {
-                    model_id: bare_model_id(&entry.model_id, &entry.provider),
-                    provider: entry.provider.clone(),
+                    model_id: bare_model_id(&entry.model_id, &effective_provider),
+                    provider: effective_provider.clone(),
                     api_url: normalize_chat_api_url(
-                        &entry.provider,
-                        key.api_url.clone().unwrap_or_else(|| entry_api_url(&entry)),
+                        &effective_provider,
+                        key.api_url
+                            .clone()
+                            .unwrap_or_else(|| provider_default_chat_url(&effective_provider)),
                     ),
                     api_key: key.api_key.clone(),
                     key_id: Some(key.key_id.clone()),
@@ -318,26 +335,23 @@ impl CognitiveRouter {
         // "retry in Ns" countdown if everything ends up gated.
         let mut providers_in_cooldown: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        let mut models_in_cooldown: Vec<(String, String)> = Vec::new();
         for entry in filtered {
+            // CORE-360: Strictly scope key lookup to the requesting tenant + global pool.
             let has_key = self
                 .key_pool
-                .has_key_for_model(&entry.provider, &entry.model_id)
+                .has_key_for_model_for_tenant(&entry.provider, &entry.model_id, tenant_id)
                 .await
                 || entry.is_local;
             if !has_key {
                 continue;
             }
-            // CORE-FIX (F): proactively exclude paid-only models when the
-            // tenant has ONLY a free-tier key for the provider. Without this
-            // the router happily ranks gemini-2.5-pro #1, calls it, and eats a
-            // 429 `limit: 0` every single request (the model isn't on the free
-            // plan). has_paid_key tells us whether a paid key exists; if not
-            // and the model isn't free-tier-eligible, skip it up front so a
-            // free-tier-eligible sibling (gemini-2.5-flash) wins instead.
+            // CORE-FIX (F) / CORE-360: proactively exclude paid-only models when
+            // THIS tenant has ONLY a free-tier key for the provider.
             if !entry.free_tier_eligible && !entry.is_local {
                 let has_paid = self
                     .key_pool
-                    .has_paid_key(&entry.provider, &entry.model_id)
+                    .has_paid_key_for_tenant(&entry.provider, &entry.model_id, tenant_id)
                     .await;
                 if !has_paid {
                     skipped_by_breaker.push(entry.model_id.clone());
@@ -363,15 +377,13 @@ impl CognitiveRouter {
                     "CMR: half-open probe — letting one candidate through an open circuit"
                 );
             }
-            // CORE-FIX (D): per-model circuit. The provider may be perfectly
-            // healthy overall (e.g. ollama_cloud responds for gpt-oss:120b)
-            // but a specific model on it keeps returning HTTP 200 with zero
-            // content (cogito-2.1:671b from the smoke test). Skip just that
-            // model so the router promotes a sibling instead of falling
-            // through to a different provider. CORE-319: queried under BOTH
-            // id spaces — the chal layer records under the bare API id.
+            // CORE-FIX (D): per-model circuit.
             if self.model_circuit_open_merged(&entry).await {
                 skipped_by_breaker.push(entry.model_id.clone());
+                models_in_cooldown.push((
+                    entry.model_id.clone(),
+                    bare_model_id(&entry.model_id, &entry.provider),
+                ));
                 continue;
             }
             available.push(entry);
@@ -380,15 +392,13 @@ impl CognitiveRouter {
         if !skipped_by_breaker.is_empty() {
             warn!(
                 skipped = ?skipped_by_breaker,
-                "CMR: skipped models whose provider has open circuit (3+ recent failures)"
+                "CMR: skipped models whose provider or model circuit is open"
             );
         }
 
         if available.is_empty() {
-            // CORE-FIX (inspired by OpenClaw's per-profile cooldown tracking):
-            // if everything got gated, surface the soonest cooldown expiry so
-            // the WS layer can render a "retry in Ns" countdown instead of a
-            // generic error.
+            // CORE-FIX / CORE-362: surface the soonest cooldown expiry across
+            // both provider-level and per-model circuits.
             let mut soonest: Option<u64> = None;
             for provider in &providers_in_cooldown {
                 if let Some(secs) = self
@@ -399,10 +409,20 @@ impl CognitiveRouter {
                     soonest = Some(soonest.map_or(secs, |cur| cur.min(secs)));
                 }
             }
+            for (cat_id, api_id) in &models_in_cooldown {
+                if let Some(secs) = self.tracker.model_cooldown_remaining_secs(cat_id).await {
+                    soonest = Some(soonest.map_or(secs, |cur| cur.min(secs)));
+                }
+                if api_id != cat_id {
+                    if let Some(secs) = self.tracker.model_cooldown_remaining_secs(api_id).await {
+                        soonest = Some(soonest.map_or(secs, |cur| cur.min(secs)));
+                    }
+                }
+            }
 
             let msg = match soonest {
                 Some(secs) => format!(
-                    "No available keys for any candidate model. Provider cooldown active — retry in {}s.",
+                    "No available keys for any candidate model. Cooldown active — retry in {}s.",
                     secs
                 ),
                 None => "No available keys for any candidate model.".to_string(),
@@ -445,7 +465,7 @@ impl CognitiveRouter {
         for entry in available {
             let has_paid = self
                 .key_pool
-                .has_paid_key(&entry.provider, &entry.model_id)
+                .has_paid_key_for_tenant(&entry.provider, &entry.model_id, tenant_id)
                 .await
                 || entry.is_local;
 
@@ -541,6 +561,11 @@ impl CognitiveRouter {
         // partition puts different-provider candidates first while preserving
         // score order within each group; we then take the first 2 with a key.
         let primary_provider = primary.provider.clone();
+        let primary_effective_provider = if primary.is_local {
+            primary.provider.clone()
+        } else {
+            primary_key.provider.clone()
+        };
         let mut fallback_candidates: Vec<&ModelEntry> =
             scored.iter().skip(1).map(|(_, e)| e).collect();
         fallback_candidates.sort_by_key(|e| e.provider == primary_provider);
@@ -561,22 +586,28 @@ impl CognitiveRouter {
                     continue;
                 }
             };
+            let fb_effective_provider = if entry.is_local {
+                entry.provider.clone()
+            } else {
+                fb_key.provider.clone()
+            };
             let api_url = normalize_chat_api_url(
-                &entry.provider,
+                &fb_effective_provider,
                 fb_key
                     .api_url
                     .clone()
-                    .unwrap_or_else(|| entry_api_url(entry)),
+                    .unwrap_or_else(|| provider_default_chat_url(&fb_effective_provider)),
             );
             fallback_chain.push(FallbackDecision {
-                model_id: bare_model_id(&entry.model_id, &entry.provider),
-                provider: entry.provider.clone(),
+                model_id: bare_model_id(&entry.model_id, &fb_effective_provider),
+                provider: fb_effective_provider,
                 api_url,
                 api_key: fb_key.api_key.clone(),
+                key_id: Some(fb_key.key_id.clone()),
             });
         }
 
-        let api_model_id = bare_model_id(&primary.model_id, &primary.provider);
+        let api_model_id = bare_model_id(&primary.model_id, &primary_effective_provider);
 
         // CORE-FIX (D1): Structured log with the top-3 scoring breakdown so we
         // can answer "why did the router pick X over Y?" after the fact. Without
@@ -591,7 +622,7 @@ impl CognitiveRouter {
         info!(
             catalog_id = %primary.model_id,
             api_model_id = %api_model_id,
-            provider = %primary.provider,
+            provider = %primary_effective_provider,
             task_type = ?task_type,
             model_pref = ?effective_pref,
             tenant = %tenant_id,
@@ -603,13 +634,13 @@ impl CognitiveRouter {
 
         let decision = RoutingDecision {
             model_id: api_model_id,
-            provider: primary.provider.clone(),
+            provider: primary_effective_provider.clone(),
             api_url: normalize_chat_api_url(
-                &primary.provider,
+                &primary_effective_provider,
                 primary_key
                     .api_url
                     .clone()
-                    .unwrap_or_else(|| entry_api_url(primary)),
+                    .unwrap_or_else(|| provider_default_chat_url(&primary_effective_provider)),
             ),
             api_key: primary_key.api_key.clone(),
             key_id: Some(primary_key.key_id.clone()),
@@ -645,6 +676,12 @@ impl CognitiveRouter {
     pub async fn invalidate_sticky(&self, tenant_id: &str) {
         let mut sticky = self.sticky.write().await;
         sticky.retain(|k, _| k.tenant_id != tenant_id);
+    }
+
+    /// CORE-360: Drop all sticky-routing entries (e.g. when a global API key is
+    /// added, updated, disabled, or deleted).
+    pub async fn invalidate_all_sticky(&self) {
+        self.sticky.write().await.clear();
     }
 
     /// CORE-319 (test-only): whether a sticky entry exists for this intent.
@@ -1239,7 +1276,7 @@ fn detect_content_type(prompt: &str, task_type: TaskType) -> f64 {
 /// Returns the model ID as expected by the provider's native API.
 /// Strips the leading "provider/" prefix for APIs that don't use it.
 /// OpenRouter is the exception — it expects the full "org/model" format.
-fn bare_model_id(model_id: &str, provider: &str) -> String {
+pub(crate) fn bare_model_id(model_id: &str, provider: &str) -> String {
     match provider {
         // OpenRouter expects the full "org/model" format natively
         "openrouter" => model_id.to_string(),
@@ -1260,50 +1297,75 @@ fn bare_model_id(model_id: &str, provider: &str) -> String {
     }
 }
 
-fn entry_api_url(entry: &ModelEntry) -> String {
-    // Default API URLs per provider
-    match entry.provider.as_str() {
-        // Compatible OpenAI — requiere key propia
+/// CORE-361: Default OpenAI-compatible chat-completions URL for each canonical provider.
+fn provider_default_chat_url(provider: &str) -> String {
+    match normalize_provider_id(provider).as_str() {
         "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
         "groq" => "https://api.groq.com/openai/v1/chat/completions".to_string(),
-        // CORE-FIX: both Ollama local and cloud use the OpenAI-compat shim at
-        // /v1/chat/completions because the cloud driver speaks OpenAI's SSE
-        // format. The native /api/chat endpoint returns NDJSON without the
-        // `data: ` prefix and our parser silently produces 0 tokens.
         "ollama" => "http://localhost:11434/v1/chat/completions".to_string(),
         "ollama_cloud" => "https://ollama.com/v1/chat/completions".to_string(),
-        // Compatible OpenAI via OpenRouter — requiere key de OpenRouter
-        "anthropic" | "deepseek" | "mistral" | "qwen" => {
-            "https://openrouter.ai/api/v1/chat/completions".to_string()
+        "anthropic" => "https://api.anthropic.com/v1/chat/completions".to_string(),
+        "deepseek" => "https://api.deepseek.com/v1/chat/completions".to_string(),
+        "mistral" => "https://api.mistral.ai/v1/chat/completions".to_string(),
+        "xai" => "https://api.x.ai/v1/chat/completions".to_string(),
+        "qwen" => {
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions".to_string()
         }
-        // Google Gemini: compatible OpenAI via endpoint beta
-        "google" | "gemini" => {
+        "gemini" => {
             "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".to_string()
         }
-        // OpenRouter: hub universal
         "openrouter" => "https://openrouter.ai/api/v1/chat/completions".to_string(),
-        // Fallback seguro
         _ => "https://openrouter.ai/api/v1/chat/completions".to_string(),
     }
 }
 
-/// CORE-FIX (F): normalise a stored/user-supplied chat URL so it points at the
-/// OpenAI-compatible endpoint the CloudProxyDriver actually speaks.
-///
-/// Tenants who linked Ollama (cloud or local) BEFORE the protocol fix have a
-/// stored `api_url` ending in `/api/chat` — Ollama's *native* NDJSON endpoint.
-/// The driver sends OpenAI-format requests and parses `data: ` SSE, so hitting
-/// `/api/chat` yields 401/400/empty. We rewrite `…/api/chat` →
-/// `…/v1/chat/completions` for ollama providers at decision-build time, which
-/// is non-destructive (the stored key is left untouched; only the request URL
-/// is corrected). No-op for every other provider/URL.
+#[allow(dead_code)]
+fn entry_api_url(entry: &ModelEntry) -> String {
+    provider_default_chat_url(&entry.provider)
+}
+
+/// CORE-FIX (F) / CORE-361: normalise a stored/user-supplied chat URL so it points
+/// at the OpenAI-compatible `/chat/completions` endpoint that `CloudProxyDriver` speaks.
 fn normalize_chat_api_url(provider: &str, url: String) -> String {
     let p = normalize_provider_id(provider);
+    let trimmed = url.trim_end_matches('/');
     if p == "ollama" || p == "ollama_cloud" {
-        if let Some(base) = url.strip_suffix("/api/chat") {
+        if let Some(base) = trimmed.strip_suffix("/api/chat") {
+            return format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+        }
+        if trimmed.ends_with("/v1") {
+            return format!("{}/chat/completions", trimmed);
+        }
+        if !trimmed.ends_with("/chat/completions") {
+            return format!("{}/v1/chat/completions", trimmed);
+        }
+        return trimmed.to_string();
+    }
+
+    if p == "anthropic" {
+        if let Some(base) = trimmed.strip_suffix("/v1/messages") {
             return format!("{}/v1/chat/completions", base.trim_end_matches('/'));
         }
     }
+
+    if matches!(
+        p.as_str(),
+        "openai"
+            | "openrouter"
+            | "groq"
+            | "deepseek"
+            | "mistral"
+            | "xai"
+            | "anthropic"
+            | "gemini"
+            | "qwen"
+    ) && (trimmed.ends_with("/v1")
+        || trimmed.ends_with("/v1beta/openai")
+        || trimmed.ends_with("/compatible-mode/v1"))
+    {
+        return format!("{}/chat/completions", trimmed);
+    }
+
     url
 }
 
@@ -1324,6 +1386,22 @@ mod normalize_url_tests {
         assert_eq!(
             normalize_chat_api_url("ollama", "http://localhost:11434/api/chat".into()),
             "http://localhost:11434/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn completes_bare_ollama_root_and_v1_base_urls() {
+        assert_eq!(
+            normalize_chat_api_url("ollama", "http://192.168.1.50:11434".into()),
+            "http://192.168.1.50:11434/v1/chat/completions"
+        );
+        assert_eq!(
+            normalize_chat_api_url("openrouter", "https://openrouter.ai/api/v1".into()),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
+        assert_eq!(
+            normalize_chat_api_url("openai", "https://api.openai.com/v1/".into()),
+            "https://api.openai.com/v1/chat/completions"
         );
     }
 
@@ -1979,6 +2057,206 @@ mod tests {
         assert!(
             (chat_healthy - chat_degraded).abs() < f64::EPSILON,
             "Chat scoring must be unaffected by tool degradation"
+        );
+        Ok(())
+    }
+
+    /// CORE-360: Tenant A's private keys must never cause Tenant B's decide()
+    /// to pick Tenant A's provider and fail at resolve_key.
+    #[tokio::test]
+    async fn test_multi_tenant_isolation_in_decide() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_tenant_key(
+                "alice",
+                ApiKeyEntry {
+                    key_id: "alice-openai".to_string(),
+                    provider: "openai".to_string(),
+                    api_key: "sk-alice".to_string(),
+                    api_url: None,
+                    label: None,
+                    is_active: true,
+                    rate_limited_until: None,
+                    active_models: None,
+                    is_free_tier: false,
+                },
+            )
+            .await?;
+        key_pool
+            .add_tenant_key(
+                "bob",
+                ApiKeyEntry {
+                    key_id: "bob-gemini".to_string(),
+                    provider: "gemini".to_string(),
+                    api_key: "AIza-bob".to_string(),
+                    api_url: None,
+                    label: None,
+                    is_active: true,
+                    rate_limited_until: None,
+                    active_models: None,
+                    is_free_tier: true,
+                },
+            )
+            .await?;
+
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let mut pcb_bob = PCB::new(
+            "bob-task".to_string(),
+            5,
+            "Implement a thread-safe B-tree in Rust with comprehensive unit tests".to_string(),
+        );
+        pcb_bob.tenant_id = Some("bob".to_string());
+        pcb_bob.task_type = TaskType::Code;
+        pcb_bob.model_pref = ModelPreference::CloudOnly;
+
+        let bob_decision = router.decide(&pcb_bob).await?;
+        assert_eq!(bob_decision.provider, "gemini");
+        assert_eq!(bob_decision.key_id.as_deref(), Some("bob-gemini"));
+        // Bob only has a free-tier Gemini key, so paid-only gemini-2.5-pro / gemini-3.1-pro-preview must be skipped
+        assert_ne!(bob_decision.model_id, "gemini-2.5-pro");
+        assert_ne!(bob_decision.model_id, "gemini-3.1-pro-preview");
+
+        let mut pcb_alice = pcb_bob.clone();
+        pcb_alice.tenant_id = Some("alice".to_string());
+        let alice_decision = router.decide(&pcb_alice).await?;
+        assert_eq!(alice_decision.provider, "openai");
+        assert_eq!(alice_decision.key_id.as_deref(), Some("alice-openai"));
+        Ok(())
+    }
+
+    /// CORE-360: Sticky cache must immediately evict a decision if its underlying
+    /// key becomes rate-limited or disabled within the sticky TTL.
+    #[tokio::test]
+    async fn test_sticky_cache_evicted_when_key_rate_limited() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_global_key(ApiKeyEntry {
+                key_id: "key-primary".to_string(),
+                provider: "openai".to_string(),
+                api_key: "sk-1".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: true, // prioritized first
+            })
+            .await?;
+        key_pool
+            .add_global_key(ApiKeyEntry {
+                key_id: "key-backup".to_string(),
+                provider: "openai".to_string(),
+                api_key: "sk-2".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: false,
+            })
+            .await?;
+
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let mut pcb = PCB::new(
+            "sticky-key-test".to_string(),
+            5,
+            "Design an architecture for distributed consensus in Rust".to_string(),
+        );
+        pcb.task_type = TaskType::Planning;
+        pcb.model_pref = ModelPreference::CloudOnly;
+
+        let first = router.decide(&pcb).await?;
+        assert_eq!(first.key_id.as_deref(), Some("key-primary"));
+
+        // Rate-limit key-primary within sticky TTL
+        router
+            .mark_key_rate_limited(
+                "key-primary",
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            )
+            .await;
+
+        let second = router.decide(&pcb).await?;
+        assert_eq!(
+            second.key_id.as_deref(),
+            Some("key-backup"),
+            "sticky cache must evict rate-limited key and resolve healthy backup key"
+        );
+        Ok(())
+    }
+
+    /// CORE-361: Native Anthropic key hits api.anthropic.com with stripped bare ID,
+    /// whereas an OpenRouter key routes anthropic/claude-sonnet-4-6 via openrouter.ai
+    /// preserving the full org/model identifier.
+    #[tokio::test]
+    async fn test_native_provider_vs_openrouter_hub_urls() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_tenant_key(
+                "native-user",
+                ApiKeyEntry {
+                    key_id: "ant-native".to_string(),
+                    provider: "anthropic".to_string(),
+                    api_key: "sk-ant-native".to_string(),
+                    api_url: None,
+                    label: None,
+                    is_active: true,
+                    rate_limited_until: None,
+                    active_models: None,
+                    is_free_tier: false,
+                },
+            )
+            .await?;
+        key_pool
+            .add_tenant_key(
+                "hub-user",
+                ApiKeyEntry {
+                    key_id: "or-hub".to_string(),
+                    provider: "openrouter".to_string(),
+                    api_key: "sk-or-v1-hub".to_string(),
+                    api_url: None,
+                    label: None,
+                    is_active: true,
+                    rate_limited_until: None,
+                    active_models: None,
+                    is_free_tier: false,
+                },
+            )
+            .await?;
+
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let mut pcb_native = PCB::new("t1".to_string(), 5, "code".to_string());
+        pcb_native.tenant_id = Some("native-user".to_string());
+        pcb_native.model_override = Some("anthropic/claude-sonnet-4-6".to_string());
+        let d_native = router.decide(&pcb_native).await?;
+        assert_eq!(d_native.provider, "anthropic");
+        assert_eq!(d_native.model_id, "claude-sonnet-4-6");
+        assert_eq!(
+            d_native.api_url,
+            "https://api.anthropic.com/v1/chat/completions"
+        );
+
+        let mut pcb_hub = PCB::new("t2".to_string(), 5, "code".to_string());
+        pcb_hub.tenant_id = Some("hub-user".to_string());
+        pcb_hub.model_override = Some("anthropic/claude-sonnet-4-6".to_string());
+        let d_hub = router.decide(&pcb_hub).await?;
+        assert_eq!(d_hub.provider, "openrouter");
+        assert_eq!(d_hub.model_id, "anthropic/claude-sonnet-4-6");
+        assert_eq!(
+            d_hub.api_url,
+            "https://openrouter.ai/api/v1/chat/completions"
         );
         Ok(())
     }

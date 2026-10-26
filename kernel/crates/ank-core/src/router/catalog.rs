@@ -188,7 +188,13 @@ impl ModelCatalog {
 
     pub async fn find(&self, model_id: &str) -> Option<ModelEntry> {
         let entries = self.entries.read().await;
-        entries.iter().find(|e| e.model_id == model_id).cloned()
+        if let Some(exact) = entries.iter().find(|e| e.model_id == model_id).cloned() {
+            return Some(exact);
+        }
+        entries
+            .iter()
+            .find(|e| crate::router::bare_model_id(&e.model_id, &e.provider) == model_id)
+            .cloned()
     }
 
     pub async fn replace_all(&self, new_entries: Vec<ModelEntry>) {
@@ -206,20 +212,27 @@ impl ModelCatalog {
         self.entries.read().await.clone()
     }
 
-    /// Appends a single entry to the catalog if it doesn't already exist.
+    /// Appends a single entry to the catalog if it doesn't already exist (CORE-362).
     pub async fn add_entry(&self, entry: ModelEntry) {
         let mut entries = self.entries.write().await;
-        entries.push(entry);
+        if !entries.iter().any(|e| e.model_id == entry.model_id) {
+            entries.push(entry);
+        }
     }
 
-    /// CORE-319: updates a single entry's `tool_use_support` in place under the
-    /// write lock. Replaces the read-modify-write pattern (`all_entries` +
-    /// `replace_all`) that could drop entries added concurrently by the
-    /// CatalogSyncer and falsified `last_synced` as if a sync had happened.
+    /// CORE-319 / CORE-362: updates a single entry's `tool_use_support` in place
+    /// under the write lock, matching either the full catalog ID or the bare API ID.
     /// Returns false when the model is not in the catalog.
     pub async fn update_tool_support(&self, model_id: &str, support: ToolUseSupport) -> bool {
         let mut entries = self.entries.write().await;
-        match entries.iter_mut().find(|e| e.model_id == model_id) {
+        if let Some(entry) = entries.iter_mut().find(|e| e.model_id == model_id) {
+            entry.tool_use_support = support;
+            return true;
+        }
+        match entries
+            .iter_mut()
+            .find(|e| crate::router::bare_model_id(&e.model_id, &e.provider) == model_id)
+        {
             Some(entry) => {
                 entry.tool_use_support = support;
                 true

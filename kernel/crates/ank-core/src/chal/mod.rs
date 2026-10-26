@@ -678,22 +678,19 @@ impl CognitiveHAL {
             "CognitiveRouter: routing to model (ReAct loop)"
         );
 
-        let on_rate_limited = {
-            let router_opt = self.router_ref.read().await.clone();
-            let key_id = decision.key_id.clone();
-            match (router_opt, key_id) {
-                (Some(router), Some(kid)) => {
-                    Some(Arc::new(move |until: chrono::DateTime<chrono::Utc>| {
-                        let router = Arc::clone(&router);
-                        let kid = kid.clone();
-                        tokio::spawn(async move {
-                            router.read().await.mark_key_rate_limited(&kid, until).await;
-                        });
-                    })
-                        as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
-                }
-                _ => None,
+        let router_opt = self.router_ref.read().await.clone();
+        let make_rate_limited_cb = |key_id: Option<String>| match (router_opt.clone(), key_id) {
+            (Some(router), Some(kid)) => {
+                Some(Arc::new(move |until: chrono::DateTime<chrono::Utc>| {
+                    let router = Arc::clone(&router);
+                    let kid = kid.clone();
+                    tokio::spawn(async move {
+                        router.read().await.mark_key_rate_limited(&kid, until).await;
+                    });
+                })
+                    as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
             }
+            _ => None,
         };
 
         // Mutable so that B1 (fallback chain) can swap to a backup model on
@@ -706,7 +703,7 @@ impl CognitiveHAL {
             decision.api_key.clone(),
             decision.model_id.clone(),
             decision.key_id.clone(),
-            on_rate_limited.clone(),
+            make_rate_limited_cb(decision.key_id.clone()),
         );
 
         let provider = ProviderKind::from_string(&decision.provider);
@@ -806,16 +803,20 @@ impl CognitiveHAL {
                                     tried.insert(kid.clone());
                                 }
                                 for attempt in 0..3u32 {
+                                    // CORE-362: Use get_available_key_excluding so we never
+                                    // re-pick a key already in `tried` even if the spawned
+                                    // mark_key_rate_limited task has not acquired the lock yet.
                                     let alt = match kp
-                                        .get_available_key(
+                                        .get_available_key_excluding(
                                             &active_provider,
                                             &active_model_id,
                                             tenant_id,
+                                            &tried,
                                         )
                                         .await
                                     {
-                                        Some(k) if !tried.contains(&k.key_id) => k,
-                                        _ => break,
+                                        Some(k) => k,
+                                        None => break,
                                     };
                                     tried.insert(alt.key_id.clone());
                                     let alt_url = alt
@@ -828,7 +829,7 @@ impl CognitiveHAL {
                                         alt.api_key.clone(),
                                         active_model_id.clone(),
                                         Some(alt.key_id.clone()),
-                                        on_rate_limited.clone(),
+                                        make_rate_limited_cb(Some(alt.key_id.clone())),
                                     );
                                     match alt_driver
                                         .generate_stream(
@@ -912,8 +913,8 @@ impl CognitiveHAL {
                                     fb.api_url.clone(),
                                     fb.api_key.clone(),
                                     fb.model_id.clone(),
-                                    None,
-                                    on_rate_limited.clone(),
+                                    fb.key_id.clone(),
+                                    make_rate_limited_cb(fb.key_id.clone()),
                                 );
                                 match fb_driver
                                     .generate_stream(local_messages.clone(), None, tools.clone())
@@ -1134,7 +1135,7 @@ impl CognitiveHAL {
                                 alt.api_key.clone(),
                                 active_model_id.clone(),
                                 Some(alt.key_id.clone()),
-                                on_rate_limited.clone(),
+                                make_rate_limited_cb(Some(alt.key_id.clone())),
                             );
                             match alt_driver
                                 .generate_stream(local_messages.clone(), None, tools.clone())
@@ -1244,8 +1245,8 @@ impl CognitiveHAL {
                                 fb.api_url.clone(),
                                 fb.api_key.clone(),
                                 fb.model_id.clone(),
-                                None,
-                                on_rate_limited.clone(),
+                                fb.key_id.clone(),
+                                make_rate_limited_cb(fb.key_id.clone()),
                             );
                             match fb_driver
                                 .generate_stream(local_messages.clone(), None, tools.clone())
@@ -1562,31 +1563,30 @@ impl CognitiveHAL {
     ) -> Result<(), SystemError> {
         use crate::chal::drivers::CloudProxyDriver;
 
-        let on_rate_limited = {
-            let router_opt = self.router_ref.read().await.clone();
-            let key_id = decision.key_id.clone();
-            match (router_opt, key_id) {
-                (Some(router), Some(kid)) => {
-                    Some(Arc::new(move |until: chrono::DateTime<chrono::Utc>| {
-                        let router = Arc::clone(&router);
-                        let kid = kid.clone();
-                        tokio::spawn(async move {
-                            router.read().await.mark_key_rate_limited(&kid, until).await;
-                        });
-                    })
-                        as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
-                }
-                _ => None,
+        let router_opt = self.router_ref.read().await.clone();
+        let make_rate_limited_cb = |key_id: Option<String>| match (router_opt.clone(), key_id) {
+            (Some(router), Some(kid)) => {
+                Some(Arc::new(move |until: chrono::DateTime<chrono::Utc>| {
+                    let router = Arc::clone(&router);
+                    let kid = kid.clone();
+                    tokio::spawn(async move {
+                        router.read().await.mark_key_rate_limited(&kid, until).await;
+                    });
+                })
+                    as Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>)
             }
+            _ => None,
         };
 
-        let driver = CloudProxyDriver::new_with_callback(
+        let mut active_model_id = decision.model_id.clone();
+        let mut active_provider = decision.provider.clone();
+        let mut driver = CloudProxyDriver::new_with_callback(
             Arc::clone(&self.http_client),
             decision.api_url.clone(),
             decision.api_key.clone(),
             decision.model_id.clone(),
             decision.key_id.clone(),
-            on_rate_limited,
+            make_rate_limited_cb(decision.key_id.clone()),
         );
 
         // CORE-FIX: resolve the agent's real tenant_id ONCE so the tool
@@ -1613,7 +1613,21 @@ impl CognitiveHAL {
         let mut messages = messages;
         const MAX_ITERATIONS: usize = 10;
 
-        for _iteration in 0..MAX_ITERATIONS {
+        let agent_task_type = {
+            let orch = self.agent_orchestrator.read().await.clone();
+            match orch {
+                Some(o) => o
+                    .tree
+                    .read()
+                    .await
+                    .get(&agent_id)
+                    .map(|n| n.task_type)
+                    .unwrap_or(crate::pcb::TaskType::Code),
+                None => crate::pcb::TaskType::Code,
+            }
+        };
+
+        for iteration in 0..MAX_ITERATIONS {
             let mut autocorrect_retries = 0;
             let mut local_messages = messages.clone();
 
@@ -1621,9 +1635,67 @@ impl CognitiveHAL {
             let mut tool_calls: Vec<ToolCallRecord> = Vec::new();
 
             loop {
-                let raw_stream = driver
+                let raw_stream = match driver
                     .generate_stream(local_messages.clone(), None, tools.clone())
-                    .await?;
+                    .await
+                {
+                    Ok(s) => s,
+                    Err(primary_err) if iteration == 0 && autocorrect_retries == 0 => {
+                        self.note_model_failure(
+                            &active_model_id,
+                            &active_provider,
+                            agent_task_type,
+                            Some(&primary_err),
+                        )
+                        .await;
+                        let mut recovered = None;
+                        for fb in &decision.fallback_chain {
+                            let fb_driver = CloudProxyDriver::new_with_callback(
+                                Arc::clone(&self.http_client),
+                                fb.api_url.clone(),
+                                fb.api_key.clone(),
+                                fb.model_id.clone(),
+                                fb.key_id.clone(),
+                                make_rate_limited_cb(fb.key_id.clone()),
+                            );
+                            match fb_driver
+                                .generate_stream(local_messages.clone(), None, tools.clone())
+                                .await
+                            {
+                                Ok(s) => {
+                                    active_model_id = fb.model_id.clone();
+                                    active_provider = fb.provider.clone();
+                                    driver = fb_driver;
+                                    recovered = Some(s);
+                                    break;
+                                }
+                                Err(e) => {
+                                    self.note_model_failure(
+                                        &fb.model_id,
+                                        &fb.provider,
+                                        agent_task_type,
+                                        Some(&e),
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                        match recovered {
+                            Some(s) => s,
+                            None => return Err(primary_err),
+                        }
+                    }
+                    Err(e) => {
+                        self.note_model_failure(
+                            &active_model_id,
+                            &active_provider,
+                            agent_task_type,
+                            Some(&e),
+                        )
+                        .await;
+                        return Err(e);
+                    }
+                };
                 tokio::pin!(raw_stream);
 
                 assistant_text = String::new();
@@ -1797,6 +1869,14 @@ impl CognitiveHAL {
                     ..Default::default()
                 });
             }
+        }
+
+        if let Some(r) = self.router_ref.read().await.clone() {
+            r.read()
+                .await
+                .tracker_ref()
+                .record_success_for_task(&active_model_id, agent_task_type)
+                .await;
         }
 
         Ok(())

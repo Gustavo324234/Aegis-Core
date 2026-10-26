@@ -1339,16 +1339,17 @@ impl AgentOrchestrator {
         hal: Arc<crate::chal::CognitiveHAL>,
         cancel_token: tokio_util::sync::CancellationToken,
     ) {
-        let (role_label, task_type, model_preference) = {
+        let (role_label, task_type, model_preference, node_tenant_id) = {
             let t = tree.read().await;
             if let Some(n) = t.get(&agent_id) {
                 let label = n.role.display_name().to_string();
-                (label, n.task_type, n.model_preference)
+                (label, n.task_type, n.model_preference, n.tenant_id.clone())
             } else {
                 (
                     "UNKNOWN".to_string(),
                     TaskType::Chat,
                     ModelPreference::HybridSmart,
+                    String::new(),
                 )
             }
         };
@@ -1475,6 +1476,9 @@ impl AgentOrchestrator {
                         mock_pcb.task_type = task_type;
                         mock_pcb.model_pref = model_preference;
                         mock_pcb.agent_id = Some(agent_id);
+                        if !node_tenant_id.is_empty() {
+                            mock_pcb.tenant_id = Some(node_tenant_id.clone());
+                        }
                         r.decide(&mock_pcb).await
                     };
 
@@ -1747,11 +1751,8 @@ impl AgentOrchestrator {
                     reply_to,
                     query_id,
                 } => {
-                    info!(
-                        "[{}] Query received: {}",
-                        role_label,
-                        &question[..question.len().min(60)]
-                    );
+                    let q_preview: String = question.chars().take(60).collect();
+                    info!("[{}] Query received: {}", role_label, q_preview);
 
                     // Si tiene hijos, delegar al hijo más adecuado según context_hint
                     let children = {
