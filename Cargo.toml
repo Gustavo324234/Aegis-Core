@@ -37,7 +37,7 @@ prost-build        = "0.13.3"
 axum               = { version = "0.7", features = ["ws", "multipart"] }
 tower              = "0.4"
 tower-http         = { version = "0.5", features = ["cors", "fs", "trace"] }
-tokio-tungstenite  = "0.21"
+tokio-tungstenite  = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 http-body-util     = "0.1"
 
 # Serialization

@@ -35,8 +35,11 @@ dependencies = [
  "axum 0.7.9",
  "futures",
  "futures-util",
+ "hex",
+ "hmac",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -203,7 +206,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite 0.21.0",
+ "tokio-tungstenite 0.24.0",
  "tokio-util",
  "tonic",
  "tracing",
@@ -5683,8 +5686,12 @@ checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
 dependencies = [
  "futures-util",
  "log",
+ "rustls 0.23.38",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite 0.24.0",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -6018,6 +6025,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.8.6",
+ "rustls 0.23.38",
+ "rustls-pki-types",
  "sha1",
  "thiserror 1.0.69",
  "utf-8",

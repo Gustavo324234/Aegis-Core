@@ -56,6 +56,10 @@ impl SirenEngine for VoxtralDriver {
         "voxtral"
     }
 
+    fn sample_rate(&self) -> u32 {
+        16000
+    }
+
     async fn synthesize(&self, text: String) -> Result<Vec<u8>> {
         // 1. Check VRAM and trigger fallback if necessary (SRE Requirement)
         self.check_vram_buffer()?;

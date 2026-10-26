@@ -232,6 +232,8 @@
 | CORE-363 | fix | Harden WASM & JS Maker Sandboxes: StoreLimits, SSRF Redirect/IPv6 Guard, Tainted Enforcement, and Path Traversal Fixes | ✅ Done | Crítica | Kernel Engineer |
 | CORE-364 | fix | Harden ank-mcp Client Protocol Handshake, Long-Lived SSE Timeouts, Safe Env Isolation, and Server Bootstrap | ✅ Done | Alta | Kernel Engineer |
 | CORE-365 | fix | Complete aegis-supervisor Windows Service Lifecycle, Bounded Health Checks, Secret Safety, and Process Reaping | ✅ Done | Alta | Kernel Engineer |
+| CORE-366 | fix | Harden aegis-connect-relay & TunnelClient: Token Binding, Reconnect Race Fix, Bounded Queues, Query Preservation, and WSS TLS | ✅ Done | Crítica | Kernel Engineer |
+| CORE-367 | fix | Harden Siren WebRTC/WS & Voice API: Citadel Auth & IDOR Protection, Secret Masking, PeerConnection Cleanup, and Opus Sample-Rate Fidelity | ✅ Done | Crítica | Kernel Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

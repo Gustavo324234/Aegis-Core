@@ -141,20 +141,53 @@ async fn handle_siren(
                         .await;
 
                     let pcm_data = std::mem::take(&mut audio_buffer);
-                    let transcript =
-                        match state.siren_router.process_audio(&tenant_id, pcm_data).await {
-                            Ok(t) => t,
-                            Err(e) => {
-                                error!("Siren: STT Processing failed: {}", e);
-                                let _ = socket.send(Message::Text(
+                    if pcm_data.is_empty() {
+                        let _ = socket
+                            .send(Message::Text(
                                 json!({
                                     "event": "siren_event",
-                                    "data": { "event_type": "STT_ERROR", "message": e.to_string() }
-                                }).to_string()
-                            )).await;
-                                continue;
-                            }
-                        };
+                                    "data": { "event_type": "STT_EMPTY" }
+                                })
+                                .to_string(),
+                            ))
+                            .await;
+                        continue;
+                    }
+
+                    let transcript = match state
+                        .siren_router
+                        .process_audio(&tenant_id, pcm_data)
+                        .await
+                    {
+                        Ok(t) => t,
+                        Err(e) => {
+                            error!("Siren: STT Processing failed: {}", e);
+                            let _ = socket
+                                    .send(Message::Text(
+                                        json!({
+                                            "event": "siren_event",
+                                            "data": { "event_type": "STT_ERROR", "message": e.to_string() }
+                                        })
+                                        .to_string(),
+                                    ))
+                                    .await;
+                            continue;
+                        }
+                    };
+
+                    if transcript.trim().is_empty() {
+                        info!("Siren WS: Empty STT transcript; skipping LLM task.");
+                        let _ = socket
+                            .send(Message::Text(
+                                json!({
+                                    "event": "siren_event",
+                                    "data": { "event_type": "STT_EMPTY" }
+                                })
+                                .to_string(),
+                            ))
+                            .await;
+                        continue;
+                    }
 
                     let mut pcb =
                         ank_core::PCB::new("Voice Task".to_string(), 5, transcript.clone());
@@ -212,10 +245,10 @@ async fn handle_siren(
                         }
                     };
 
+                    let sample_rate = engine.sample_rate();
                     match engine.synthesize(llm_output).await {
                         Ok(pcm_bytes) => {
                             const CHUNK_SIZE: usize = 8 * 1024;
-                            let sample_rate = 22050u32;
 
                             for chunk in pcm_bytes.chunks(CHUNK_SIZE) {
                                 let b64 = base64::engine::general_purpose::STANDARD.encode(chunk);

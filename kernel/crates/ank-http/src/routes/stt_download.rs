@@ -11,6 +11,8 @@ use std::sync::{Arc, OnceLock};
 use tokio::{io::AsyncWriteExt, sync::Mutex};
 use tracing::{error, info};
 
+const MAX_MODEL_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
+
 // ---------------------------------------------------------------------------
 // Static download state (one global download at a time)
 // ---------------------------------------------------------------------------
@@ -120,13 +122,19 @@ struct DownloadRequest {
 
 async fn start_download(
     State(state): State<AppState>,
-    _auth: CitadelAuthenticated,
+    auth: CitadelAuthenticated,
     Json(req): Json<DownloadRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
+    if !auth.is_master && auth.tenant_id != "root" {
+        return Err(AegisHttpError::Forbidden(
+            "Only master or root admin can download global STT models".to_string(),
+        ));
+    }
+
     let model_info = WHISPER_MODELS
         .iter()
         .find(|m| m.id == req.model)
-        .ok_or_else(|| AegisHttpError::Internal(anyhow::anyhow!("Unknown model: {}", req.model)))?;
+        .ok_or_else(|| AegisHttpError::BadRequest(format!("Unknown model: {}", req.model)))?;
 
     {
         let stt_arc = stt_state();
@@ -187,41 +195,59 @@ async fn download_model(
     let tmp_path = models_dir.join(format!("ggml-{}.bin.downloading", model_id));
     let final_path = models_dir.join(format!("ggml-{}.bin", model_id));
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3600))
-        .build()?;
+    let download_res: anyhow::Result<()> = async {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(3600))
+            .build()?;
 
-    let response = client.get(&url).send().await?;
-    if !response.status().is_success() {
-        anyhow::bail!("HTTP {} al descargar modelo", response.status());
+        let response = client.get(&url).send().await?;
+        if !response.status().is_success() {
+            anyhow::bail!("HTTP {} al descargar modelo", response.status());
+        }
+
+        let total = response.content_length().unwrap_or(0);
+        if total > MAX_MODEL_DOWNLOAD_BYTES {
+            anyhow::bail!(
+                "El tamaño del modelo ({} bytes) excede el límite permitido",
+                total
+            );
+        }
+
+        let mut downloaded: u64 = 0;
+        let mut file = tokio::fs::File::create(&tmp_path).await?;
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            downloaded = downloaded.saturating_add(chunk.len() as u64);
+            if downloaded > MAX_MODEL_DOWNLOAD_BYTES {
+                anyhow::bail!("Descarga abortada: límite de 4 GiB excedido");
+            }
+            file.write_all(&chunk).await?;
+
+            let progress = if total > 0 {
+                (downloaded as f32 / total as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+
+            let mut st = state.lock().await;
+            st.progress = progress;
+        }
+
+        file.flush().await?;
+        drop(file);
+
+        tokio::fs::rename(&tmp_path, &final_path).await?;
+        Ok(())
     }
+    .await;
 
-    let total = response.content_length().unwrap_or(0);
-    let mut downloaded: u64 = 0;
-
-    let mut file = tokio::fs::File::create(&tmp_path).await?;
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        file.write_all(&chunk).await?;
-        downloaded += chunk.len() as u64;
-
-        let progress = if total > 0 {
-            downloaded as f32 / total as f32
-        } else {
-            0.0
-        };
-
-        let mut st = state.lock().await;
-        st.progress = progress;
-        drop(st);
+    if let Err(e) = download_res {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(e);
     }
-
-    file.flush().await?;
-    drop(file);
-
-    tokio::fs::rename(&tmp_path, &final_path).await?;
 
     // Persist which model is active
     let active_path = models_dir.join("active_model.txt");
@@ -235,4 +261,18 @@ async fn download_model(
     st.error = None;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ank_core::chal::drivers::siren::whisper_local::is_safe_whisper_model_id;
+
+    #[test]
+    fn test_whisper_catalogue_ids_and_urls_are_safe() {
+        for model in WHISPER_MODELS {
+            assert!(is_safe_whisper_model_id(model.id));
+            assert!(model.url.starts_with("https://huggingface.co/"));
+        }
+    }
 }
