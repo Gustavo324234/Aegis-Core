@@ -119,6 +119,83 @@ impl IntoResponse for CitadelError {
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
+/// CORE-368: Extracts `session-key.<key>` from `Sec-WebSocket-Protocol` (returning both the
+/// plaintext session key and the exact subprotocol token to echo in `101 Switching Protocols`),
+/// falling back to `x-citadel-key` for non-browser WebSocket clients.
+pub fn extract_ws_session_key_and_protocol(
+    headers: &axum::http::HeaderMap,
+) -> (Option<String>, Option<String>) {
+    if let Some(val) = headers
+        .get("sec-websocket-protocol")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(proto) = val
+            .split(',')
+            .map(str::trim)
+            .find(|p| p.starts_with("session-key."))
+        {
+            let key = proto
+                .strip_prefix("session-key.")
+                .unwrap_or_default()
+                .to_string();
+            if !key.is_empty() {
+                return (Some(key), Some(proto.to_string()));
+            }
+        }
+    }
+
+    let fallback_key = headers
+        .get("x-citadel-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string);
+
+    (fallback_key, None)
+}
+
+/// CORE-368: Validates a plaintext session key for `tenant_id` against the Citadel Enclave
+/// before upgrading a WebSocket connection. Returns `Ok(is_master)` when valid.
+pub async fn verify_ws_tenant(
+    state: &crate::state::AppState,
+    tenant_id: &str,
+    raw_session_key: &str,
+) -> Result<bool, CitadelError> {
+    if tenant_id.trim().is_empty() {
+        return Err(CitadelError::MissingTenant);
+    }
+    if raw_session_key.trim().is_empty() {
+        return Err(CitadelError::MissingKey);
+    }
+
+    let key_hash = hash_passphrase(raw_session_key);
+    let citadel = state.citadel.lock().await;
+    if citadel
+        .enclave
+        .authenticate_master(tenant_id, &key_hash)
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(true);
+    }
+
+    match citadel
+        .enclave
+        .authenticate_tenant(tenant_id, &key_hash)
+        .await
+    {
+        Ok(true) => Ok(false),
+        Ok(false) => Err(CitadelError::Unauthorized),
+        Err(e) => {
+            if e.to_string().contains("PASSWORD_MUST_CHANGE") {
+                Err(CitadelError::PasswordMustChange)
+            } else {
+                Err(CitadelError::Unauthorized)
+            }
+        }
+    }
+}
+
 fn header_str(parts: &Parts, name: &str) -> Result<String, CitadelError> {
     parts
         .headers
@@ -154,5 +231,26 @@ mod tests {
             hash_passphrase(""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn extract_ws_subprotocol_and_header_fallback() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "sec-websocket-protocol",
+            axum::http::HeaderValue::from_static("chat, session-key.my_secret_123"),
+        );
+        let (key, proto) = extract_ws_session_key_and_protocol(&headers);
+        assert_eq!(key.as_deref(), Some("my_secret_123"));
+        assert_eq!(proto.as_deref(), Some("session-key.my_secret_123"));
+
+        let mut header_only = axum::http::HeaderMap::new();
+        header_only.insert(
+            "x-citadel-key",
+            axum::http::HeaderValue::from_static("cli_key_456"),
+        );
+        let (key2, proto2) = extract_ws_session_key_and_protocol(&header_only);
+        assert_eq!(key2.as_deref(), Some("cli_key_456"));
+        assert!(proto2.is_none());
     }
 }

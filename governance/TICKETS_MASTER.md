@@ -234,6 +234,8 @@
 | CORE-365 | fix | Complete aegis-supervisor Windows Service Lifecycle, Bounded Health Checks, Secret Safety, and Process Reaping | ✅ Done | Alta | Kernel Engineer |
 | CORE-366 | fix | Harden aegis-connect-relay & TunnelClient: Token Binding, Reconnect Race Fix, Bounded Queues, Query Preservation, and WSS TLS | ✅ Done | Crítica | Kernel Engineer |
 | CORE-367 | fix | Harden Siren WebRTC/WS & Voice API: Citadel Auth & IDOR Protection, Secret Masking, PeerConnection Cleanup, and Opus Sample-Rate Fidelity | ✅ Done | Crítica | Kernel Engineer |
+| CORE-368 | fix | Harden ank-cli & WS/System Endpoints: Citadel gRPC Headers, Authenticated Agent/Train WS Handshakes, and Connection Info Guard | ✅ Done | Crítica | Kernel Engineer |
+| CORE-369 | fix | Harden Shell UI: Chat Auto-Reconnect, Logout State Purge, Agent/Train WS Protocol Alignment, Siren STT Recovery, and Audio Safety | ✅ Done | Crítica | Shell Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

@@ -43,6 +43,7 @@ pub struct TrainingConfig {
 pub struct TrainingManager {
     status: Arc<RwLock<TrainingProgress>>,
     active_process: Arc<Mutex<Option<tokio::process::Child>>>,
+    active_tenant: Arc<RwLock<Option<String>>>,
     progress_tx: broadcast::Sender<TrainingProgress>,
     data_dir: PathBuf,
 }
@@ -62,6 +63,7 @@ impl TrainingManager {
         Self {
             status,
             active_process: Arc::new(Mutex::new(None)),
+            active_tenant: Arc::new(RwLock::new(None)),
             progress_tx,
             data_dir,
         }
@@ -73,6 +75,38 @@ impl TrainingManager {
 
     pub async fn get_progress(&self) -> TrainingProgress {
         self.status.read().await.clone()
+    }
+
+    /// CORE-368: Checks whether `tenant_id` (or a master admin) owns the current/last training run.
+    pub async fn owner_matches(&self, tenant_id: &str, is_master: bool) -> bool {
+        if is_master {
+            return true;
+        }
+        match self.active_tenant.read().await.as_deref() {
+            Some(owner) => owner == tenant_id,
+            None => true,
+        }
+    }
+
+    /// CORE-368: Returns `TrainingProgress` scoped to `tenant_id` so other tenants never read
+    /// cross-tenant `log_snippet` or metrics.
+    pub async fn get_progress_for_tenant(
+        &self,
+        tenant_id: &str,
+        is_master: bool,
+    ) -> TrainingProgress {
+        if self.owner_matches(tenant_id, is_master).await {
+            self.get_progress().await
+        } else {
+            TrainingProgress {
+                status: TrainingStatus::Idle,
+                epoch: 0.0,
+                step: 0,
+                loss: 0.0,
+                eta_seconds: 0,
+                log_snippet: String::new(),
+            }
+        }
     }
 
     async fn update_status(&self, status: TrainingStatus) {
@@ -146,10 +180,13 @@ impl TrainingManager {
             }
         }
 
+        *self.active_tenant.write().await = config.tenant_id.clone();
+
         let active_process = self.active_process.clone();
         let manager_clone = Arc::new(Self {
             status: self.status.clone(),
             active_process: self.active_process.clone(),
+            active_tenant: self.active_tenant.clone(),
             progress_tx: self.progress_tx.clone(),
             data_dir: self.data_dir.clone(),
         });
@@ -512,5 +549,26 @@ mod tests {
             .err()
             .unwrap_or_default()
             .contains("requiere una API Key"));
+    }
+
+    #[tokio::test]
+    async fn test_training_progress_isolated_by_tenant() {
+        let dir = std::env::temp_dir();
+        let manager = TrainingManager::new(dir);
+        *manager.active_tenant.write().await = Some("tenant_alpha".to_string());
+        manager.update_status(TrainingStatus::Training).await;
+        manager.append_log("secret loss trace for alpha").await;
+
+        assert!(manager.owner_matches("tenant_alpha", false).await);
+        assert!(!manager.owner_matches("tenant_beta", false).await);
+        assert!(manager.owner_matches("master", true).await);
+
+        let alpha_prog = manager.get_progress_for_tenant("tenant_alpha", false).await;
+        assert_eq!(alpha_prog.status, TrainingStatus::Training);
+        assert!(alpha_prog.log_snippet.contains("alpha"));
+
+        let beta_prog = manager.get_progress_for_tenant("tenant_beta", false).await;
+        assert_eq!(beta_prog.status, TrainingStatus::Idle);
+        assert!(beta_prog.log_snippet.is_empty());
     }
 }

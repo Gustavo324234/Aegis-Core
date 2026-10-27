@@ -110,8 +110,21 @@ const SttModelManager: React.FC<{ activeModel: string | null; onModelActivated: 
             });
             if (res.ok) {
                 setStatus({ downloading: true, progress: 0, current_model: modelId, error: null });
+            } else {
+                const errData = (await res.json().catch(() => ({}))) as { error?: string; detail?: string };
+                setStatus((prev) => ({
+                    ...prev,
+                    downloading: false,
+                    error: errData.error || errData.detail || `HTTP ${res.status}: Failed to start model download`,
+                }));
             }
-        } catch { /* network errors are non-fatal here */ }
+        } catch (err) {
+            setStatus((prev) => ({
+                ...prev,
+                downloading: false,
+                error: err instanceof Error ? err.message : 'Network error starting model download',
+            }));
+        }
     };
 
     if (models.length === 0) return null;

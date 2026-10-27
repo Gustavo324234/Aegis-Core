@@ -228,6 +228,169 @@ const buildWsUrl = (path: string) => {
 };
 
 let telemetryInterval: number | null = null;
+let chatReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let chatReconnectAttempts = 0;
+let chatAuthRejected = false;
+let chatManualDisconnect = false;
+
+function normalizeAgentState(rawState: unknown): AgentNodeState {
+    if (
+        rawState === 'Idle' ||
+        rawState === 'Running' ||
+        rawState === 'WaitingReport' ||
+        rawState === 'WaitingQuery' ||
+        rawState === 'Complete'
+    ) {
+        return rawState;
+    }
+    if (rawState === 'WaitingUser') {
+        return 'WaitingQuery';
+    }
+    if (typeof rawState === 'string' && rawState.startsWith('Failed')) {
+        return { Failed: { reason: rawState } };
+    }
+    if (typeof rawState === 'object' && rawState !== null && 'Failed' in rawState) {
+        const failed = (rawState as { Failed?: { reason?: unknown } }).Failed;
+        return { Failed: { reason: typeof failed?.reason === 'string' ? failed.reason : 'Agent failed' } };
+    }
+    return 'Idle';
+}
+
+function normalizeAgentRole(rawRole: unknown, roleLabel?: string, projectId?: string): AgentRole {
+    if (rawRole === 'ChatAgent') {
+        return { type: 'ChatAgent' };
+    }
+    if (typeof rawRole === 'object' && rawRole !== null) {
+        const obj = rawRole as Record<string, unknown>;
+        if (typeof obj.type === 'string') {
+            return rawRole as AgentRole;
+        }
+        if (typeof obj.ProjectSupervisor === 'object' && obj.ProjectSupervisor !== null) {
+            const ps = obj.ProjectSupervisor as Record<string, unknown>;
+            const pid = projectId || (typeof ps.name === 'string' ? ps.name : 'project');
+            return { type: 'ProjectSupervisor', project_id: pid };
+        }
+        if (typeof obj.Supervisor === 'object' && obj.Supervisor !== null) {
+            const sup = obj.Supervisor as Record<string, unknown>;
+            return {
+                type: 'Supervisor',
+                name: typeof sup.name === 'string' ? sup.name : 'Supervisor',
+                depth: 2,
+            };
+        }
+        if (typeof obj.Specialist === 'object' && obj.Specialist !== null) {
+            const spec = obj.Specialist as Record<string, unknown>;
+            return {
+                type: 'Specialist',
+                scope: typeof spec.scope === 'string' ? spec.scope : 'Specialist',
+            };
+        }
+    }
+
+    const cleanLabel = (roleLabel ?? '').replace(/\s*\[degraded\]\s*$/i, '').trim();
+    if (cleanLabel.startsWith('Project Supervisor')) {
+        const namePart = cleanLabel.split('—')[1]?.trim();
+        return { type: 'ProjectSupervisor', project_id: projectId || namePart || 'project' };
+    }
+    if (cleanLabel.startsWith('Supervisor')) {
+        const namePart = cleanLabel.split('—')[1]?.trim() || 'Supervisor';
+        return { type: 'Supervisor', name: namePart, depth: 2 };
+    }
+    if (cleanLabel.startsWith('Specialist')) {
+        const scopePart = cleanLabel.split('—')[1]?.trim() || 'Specialist';
+        return { type: 'Specialist', scope: scopePart };
+    }
+    return { type: 'ChatAgent' };
+}
+
+function normalizeSnapshotNodes(rawNodes: unknown): AgentNodeSummary[] {
+    if (!Array.isArray(rawNodes)) return [];
+    const items = rawNodes.filter((n): n is Record<string, unknown> => typeof n === 'object' && n !== null);
+    return items.map((n) => {
+        const id = typeof n.id === 'string' ? n.id : String(n.agent_id ?? '');
+        const parentId = typeof n.parent_id === 'string' ? n.parent_id : null;
+        const explicitChildren = Array.isArray(n.children)
+            ? n.children.filter((c): c is string => typeof c === 'string')
+            : items
+                  .filter((child) => child.parent_id === id && id.length > 0)
+                  .map((child) => (typeof child.id === 'string' ? child.id : String(child.agent_id ?? '')))
+                  .filter((cid) => cid.length > 0);
+        const roleLabel = typeof n.role_label === 'string' ? n.role_label : undefined;
+        const projectId = typeof n.project_id === 'string' ? n.project_id : undefined;
+
+        return {
+            id,
+            role: normalizeAgentRole(n.role, roleLabel, projectId),
+            state: normalizeAgentState(n.state),
+            parent_id: parentId,
+            children: explicitChildren,
+            model: typeof n.model === 'string' ? n.model : null,
+            activity: typeof n.activity === 'string' ? n.activity : null,
+            last_report: typeof n.last_report === 'string' ? n.last_report : null,
+        };
+    });
+}
+
+function normalizeAgentEvent(raw: Record<string, unknown>): AgentEventPayload | null {
+    const rawType = typeof raw.type === 'string' ? raw.type : '';
+    switch (rawType) {
+        case 'tree_snapshot':
+        case 'TreeSnapshot':
+            return {
+                type: 'TreeSnapshot',
+                tree: normalizeSnapshotNodes(raw.nodes ?? raw.tree),
+            };
+        case 'spawned':
+        case 'Spawned':
+            return {
+                type: 'Spawned',
+                agent_id: String(raw.agent_id ?? ''),
+                role: normalizeAgentRole(
+                    raw.role,
+                    undefined,
+                    typeof raw.project_id === 'string' ? raw.project_id : undefined,
+                ),
+                parent_id: typeof raw.parent_id === 'string' ? raw.parent_id : null,
+                model: typeof raw.model === 'string' ? raw.model : 'hybrid',
+            };
+        case 'state_changed':
+        case 'StateChanged':
+            return {
+                type: 'StateChanged',
+                agent_id: String(raw.agent_id ?? ''),
+                state: normalizeAgentState(raw.state),
+            };
+        case 'activity':
+        case 'Activity':
+            return {
+                type: 'Activity',
+                agent_id: String(raw.agent_id ?? ''),
+                description: typeof raw.description === 'string' ? raw.description : '',
+            };
+        case 'reported':
+        case 'Reported':
+            return {
+                type: 'Reported',
+                agent_id: String(raw.agent_id ?? ''),
+                summary: typeof raw.summary === 'string' ? raw.summary : '',
+            };
+        case 'pruned':
+        case 'Pruned':
+            return {
+                type: 'Pruned',
+                agent_id: String(raw.agent_id ?? ''),
+            };
+        case 'restored':
+        case 'Restored':
+            return {
+                type: 'Restored',
+                project_id: String(raw.project_id ?? ''),
+                node_count: typeof raw.node_count === 'number' ? raw.node_count : 0,
+            };
+        default:
+            return null;
+    }
+}
 
 function detectLanguage(text: string): string {
     const spanishChars = /[áéíóúñÁÉÍÓÚÑ]/;
@@ -244,8 +407,8 @@ function formatAgentRole(role: AgentRole): string {
     return 'Agente';
 }
 
-// CORE-124: bump version para migrar stores viejos que tenían sessionKey persistida
-const STORE_VERSION = 4;
+// CORE-369: bump version to clear legacy plaintext messages from localStorage
+const STORE_VERSION = 5;
 
 export const useAegisStore = create<AegisState>()(
     persist(
@@ -520,6 +683,8 @@ export const useAegisStore = create<AegisState>()(
                         })
                     });
                     if (res.ok) {
+                        chatAuthRejected = false;
+                        chatReconnectAttempts = 0;
                         set({ sessionKey: newPass, needsPasswordReset: false });
                         return true;
                     }
@@ -528,17 +693,31 @@ export const useAegisStore = create<AegisState>()(
             },
 
             connect: async (tenantId, sessionKey) => {
+                if (chatReconnectTimer) {
+                    clearTimeout(chatReconnectTimer);
+                    chatReconnectTimer = null;
+                }
+                chatManualDisconnect = false;
+
                 const wsUrl = buildWsUrl(`/ws/chat/${encodeURIComponent(tenantId)}`);
                 const currentSocket = get().socket;
-                if (currentSocket) currentSocket.close();
-                set({ status: 'connecting' });
+                if (currentSocket) {
+                    currentSocket.onclose = null;
+                    currentSocket.onerror = null;
+                    currentSocket.close();
+                }
+                set({ socket: null, status: 'connecting' });
 
                 // Cargar historial persistido ANTES de abrir el WebSocket (CORE-247)
-                await get().loadChatHistory(tenantId, sessionKey);
+                if (chatReconnectAttempts === 0 || get().messages.length === 0) {
+                    await get().loadChatHistory(tenantId, sessionKey);
+                }
 
                 const socket = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
                 socket.onopen = () => {
-                    set({ socket, status: 'idle' });
+                    chatReconnectAttempts = 0;
+                    chatAuthRejected = false;
+                    set({ socket, status: 'idle', lastError: null });
                     get().startTelemetryPolling(tenantId);
                     get().connectAgentStream();
                     void get().fetchActiveProjects();
@@ -673,10 +852,16 @@ export const useAegisStore = create<AegisState>()(
                                 legacy === 'PASSWORD_MUST_CHANGE';
 
                             if (isPasswordReset) {
+                                chatAuthRejected = true;
                                 set({ needsPasswordReset: true });
                             } else if (isAuthFailure) {
+                                chatAuthRejected = true;
                                 const sock = get().socket;
-                                if (sock) sock.close();
+                                if (sock) {
+                                    sock.onclose = null;
+                                    sock.onerror = null;
+                                    sock.close();
+                                }
                                 set({ socket: null, status: 'error' });
                             } else {
                                 // Surface the actual message when we have one — falling back
@@ -846,13 +1031,67 @@ export const useAegisStore = create<AegisState>()(
                     }
                 };
                 socket.onclose = () => {
-                    set(state => ({ socket: null, status: state.status === 'error' ? 'error' : 'disconnected' }));
+                    const shouldReconnect =
+                        !chatManualDisconnect &&
+                        !chatAuthRejected &&
+                        get().isAuthenticated &&
+                        !get().isAdmin &&
+                        !get().needsPasswordReset &&
+                        get().isEngineConfigured &&
+                        Boolean(get().tenantId && get().sessionKey);
+
+                    set((state) => ({
+                        socket: state.socket === socket ? null : state.socket,
+                        status: chatAuthRejected
+                            ? 'error'
+                            : shouldReconnect
+                            ? 'connecting'
+                            : 'disconnected',
+                    }));
+
+                    if (shouldReconnect) {
+                        const delayMs = Math.min(30_000, 1000 * Math.pow(2, chatReconnectAttempts));
+                        chatReconnectAttempts = Math.min(chatReconnectAttempts + 1, 6);
+                        if (chatReconnectTimer) clearTimeout(chatReconnectTimer);
+                        chatReconnectTimer = setTimeout(() => {
+                            chatReconnectTimer = null;
+                            const cur = get();
+                            if (
+                                !chatManualDisconnect &&
+                                !chatAuthRejected &&
+                                cur.isAuthenticated &&
+                                !cur.isAdmin &&
+                                !cur.needsPasswordReset &&
+                                cur.tenantId &&
+                                cur.sessionKey &&
+                                !cur.socket
+                            ) {
+                                void cur.connect(cur.tenantId, cur.sessionKey);
+                            }
+                        }, delayMs);
+                    }
                 };
-                socket.onerror = () => set({ status: 'error' });
+                socket.onerror = () => {
+                    // Transient network errors trigger onclose right after onerror; let onclose manage backoff
+                    if (chatAuthRejected) {
+                        set({ status: 'error' });
+                    }
+                };
             },
 
             disconnect: () => {
-                get().socket?.close();
+                chatManualDisconnect = true;
+                if (chatReconnectTimer) {
+                    clearTimeout(chatReconnectTimer);
+                    chatReconnectTimer = null;
+                }
+                const sock = get().socket;
+                if (sock) {
+                    sock.onclose = null;
+                    sock.onerror = null;
+                    sock.close();
+                }
+                set({ socket: null, status: 'disconnected' });
                 get().disconnectAgentStream();
                 get().disconnectTrainingStream();
             },
@@ -939,6 +1178,8 @@ export const useAegisStore = create<AegisState>()(
                         body: JSON.stringify({ tenant_id: tenantId, session_key: passphrase })
                     });
                     if (response.ok) {
+                        chatAuthRejected = false;
+                        chatReconnectAttempts = 0;
                         const data = await response.json() as { status: string; role?: string };
                         if (data.status === 'password_must_change') {
                             set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: false, needsPasswordReset: true, messages: [] });
@@ -951,11 +1192,25 @@ export const useAegisStore = create<AegisState>()(
                 } catch (error) { console.error('🛡️ Citadel Auth Error:', error); return 'failed'; }
             },
 
-            // CORE-124: logout NO borra el historial de mensajes.
+            // CORE-369: Purge sensitive in-memory state on logout; server-side SQLCipher
+            // history is reloaded automatically via loadChatHistory upon re-authentication.
             logout: () => {
+                chatManualDisconnect = true;
+                chatAuthRejected = false;
+                chatReconnectAttempts = 0;
+                if (chatReconnectTimer) {
+                    clearTimeout(chatReconnectTimer);
+                    chatReconnectTimer = null;
+                }
                 const { socket, sirenSocket } = get();
-                if (socket) socket.close();
+                if (socket) {
+                    socket.onclose = null;
+                    socket.onerror = null;
+                    socket.close();
+                }
                 if (sirenSocket) sirenSocket.close();
+                get().stopWakewordListener();
+                get().stopSirenStream();
                 get().disconnectAgentStream();
                 get().disconnectTrainingStream();
                 set({
@@ -965,6 +1220,15 @@ export const useAegisStore = create<AegisState>()(
                     sessionKey: null,
                     socket: null,
                     sirenSocket: null,
+                    messages: [],
+                    activePid: null,
+                    lastRoutingInfo: null,
+                    lastError: null,
+                    sttApiKey: '',
+                    agentTree: [],
+                    activeProjects: [],
+                    activeAgentId: null,
+                    currentView: 'chat',
                     needsPasswordReset: false,
                     adminActiveTab: 'users',
                     status: 'disconnected',
@@ -997,8 +1261,15 @@ export const useAegisStore = create<AegisState>()(
                     set({ isRecording: true, status: 'listening' });
                     recognition.onresult = (event: SpeechRecognitionEvent) => {
                         const transcript = event.results[0][0].transcript.trim();
-                        set({ isRecording: false, status: 'thinking' });
-                        if (transcript) get().sendMessage(transcript);
+                        if (transcript) {
+                            set({ isRecording: false, status: 'thinking' });
+                            get().sendMessage(transcript);
+                        } else {
+                            set({ isRecording: false, status: 'idle' });
+                            if (get().inputMode === 'conversation') {
+                                get().restartMicForConversation().catch(console.error);
+                            }
+                        }
                     };
                     recognition.onerror = () => set({ isRecording: false, status: 'idle' });
                     recognition.onend = () => set({ isRecording: false });
@@ -1114,13 +1385,50 @@ export const useAegisStore = create<AegisState>()(
                                         delete audioRefs._aegis_audio_gain;
                                     }
                                 } catch (e) { console.error('Failed to parse STT_DONE payload', e); set({ status: 'idle' }); }
+                            } else if (sirenEvent.event_type === 'STT_EMPTY') {
+                                set({ status: 'idle' });
+                                if (get().inputMode === 'audio') {
+                                    get().stopSirenStream();
+                                } else if (get().inputMode === 'conversation') {
+                                    set({ isRecording: false });
+                                    if (audioRefs._aegis_audio_stream) {
+                                        audioRefs._aegis_audio_stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
+                                        delete audioRefs._aegis_audio_stream;
+                                    }
+                                    if (audioRefs._aegis_audio_ctx) {
+                                        audioRefs._aegis_audio_ctx.close();
+                                        delete audioRefs._aegis_audio_ctx;
+                                    }
+                                    delete audioRefs._aegis_audio_gain;
+                                    get().restartMicForConversation().catch(console.error);
+                                } else if (get().inputMode === 'wakeword') {
+                                    get().stopSirenStream();
+                                    get().startWakewordListener();
+                                }
                             } else if (sirenEvent.event_type === 'TTS_DONE') {
                                 const gainRef = audioRefs._aegis_audio_gain;
                                 if (gainRef) gainRef.gain.setTargetAtTime(1, gainRef.context.currentTime, 0.01);
                                 if (get().inputMode === 'conversation') {
                                     get().restartMicForConversation().catch(console.error);
                                 }
-                            } else if (sirenEvent.event_type === 'STT_ERROR') set({ status: 'error' });
+                            } else if (sirenEvent.event_type === 'STT_ERROR') {
+                                const errMsg = sirenEvent.message || 'STT transcription failed';
+                                set({ status: 'error', lastError: errMsg });
+                                if (get().inputMode === 'audio') {
+                                    get().stopSirenStream();
+                                } else if (get().inputMode === 'conversation') {
+                                    set({ isRecording: false });
+                                    if (audioRefs._aegis_audio_stream) {
+                                        audioRefs._aegis_audio_stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
+                                        delete audioRefs._aegis_audio_stream;
+                                    }
+                                    if (audioRefs._aegis_audio_ctx) {
+                                        audioRefs._aegis_audio_ctx.close();
+                                        delete audioRefs._aegis_audio_ctx;
+                                    }
+                                    delete audioRefs._aegis_audio_gain;
+                                }
+                            }
                         }
                     };
 
@@ -1348,8 +1656,15 @@ export const useAegisStore = create<AegisState>()(
                     set({ isRecording: true, status: 'listening' });
                     recognition.onresult = (event: SpeechRecognitionEvent) => {
                         const transcript = event.results[0][0].transcript.trim();
-                        set({ isRecording: false, status: 'thinking' });
-                        if (transcript) get().sendMessage(transcript);
+                        if (transcript) {
+                            set({ isRecording: false, status: 'thinking' });
+                            get().sendMessage(transcript);
+                        } else {
+                            set({ isRecording: false, status: 'idle' });
+                            if (get().inputMode === 'conversation') {
+                                get().restartMicForConversation().catch(console.error);
+                            }
+                        }
                     };
                     recognition.onerror = () => set({ isRecording: false, status: 'idle' });
                     recognition.onend = () => set({ isRecording: false });
@@ -1458,7 +1773,9 @@ export const useAegisStore = create<AegisState>()(
 
                 ws.onmessage = (event) => {
                     try {
-                        const payload = JSON.parse(event.data as string) as AgentEventPayload;
+                        const raw = JSON.parse(event.data as string) as Record<string, unknown>;
+                        const payload = normalizeAgentEvent(raw);
+                        if (!payload) return;
                         set((state) => {
                             switch (payload.type) {
                                 case 'TreeSnapshot':
@@ -1602,6 +1919,8 @@ export const useAegisStore = create<AegisState>()(
             disconnectAgentStream: () => {
                 const { agentSocket } = get();
                 if (agentSocket) {
+                    agentSocket.onclose = null;
+                    agentSocket.onerror = null;
                     agentSocket.close();
                     set({ agentSocket: null, isAgentStreamConnected: false, agentTree: [] });
                 }
@@ -1713,12 +2032,14 @@ export const useAegisStore = create<AegisState>()(
             connectTrainingStream: () => {
                 const { trainingSocket, tenantId, sessionKey } = get();
                 if (trainingSocket) {
+                    trainingSocket.onclose = null;
+                    trainingSocket.onerror = null;
                     trainingSocket.close();
                 }
                 if (!tenantId || !sessionKey) return;
 
-                const wsUrl = buildWsUrl('/api/train/progress');
-                const socket = new WebSocket(wsUrl);
+                const wsUrl = buildWsUrl(`/api/train/progress/${encodeURIComponent(tenantId)}`);
+                const socket = new WebSocket(wsUrl, [`session-key.${sessionKey}`]);
 
                 socket.onopen = () => {
                     console.log('[TrainWS] Connected to progress stream');
@@ -1756,6 +2077,8 @@ export const useAegisStore = create<AegisState>()(
             disconnectTrainingStream: () => {
                 const { trainingSocket } = get();
                 if (trainingSocket) {
+                    trainingSocket.onclose = null;
+                    trainingSocket.onerror = null;
                     trainingSocket.close();
                 }
                 set({ trainingSocket: null });
@@ -1789,11 +2112,9 @@ export const useAegisStore = create<AegisState>()(
                 isAuthenticated: state.isAuthenticated,
                 isAdmin: state.isAdmin,
                 tenantId: state.tenantId,
-                // sessionKey NO se persiste — seguridad (CORE-073)
+                // sessionKey y messages NO se persisten en localStorage — seguridad (CORE-073 / CORE-369)
                 isEngineConfigured: state.isEngineConfigured,
                 taskType: state.taskType,
-                messages: state.messages,  // CORE-124: mensajes persisten entre sesiones
-                lastError: state.lastError,
                 needsPasswordReset: state.needsPasswordReset,
                 lastTenantsUpdate: state.lastTenantsUpdate,
                 // No persistir vistas de agente — el store es en memoria y se perdería al recargar

@@ -5,14 +5,32 @@ use crate::{
 };
 use ank_core::SchedulerEvent;
 use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    extract::{ConnectInfo, FromRequestParts, State},
+    http::{request::Parts, HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
+use std::convert::Infallible;
+use std::net::SocketAddr;
 use utoipa::ToSchema;
 
 static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static CLOUDFLARED_INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+pub struct OptionalPeerAddr(pub Option<SocketAddr>);
+
+#[axum::async_trait]
+impl<S: Send + Sync> FromRequestParts<S> for OptionalPeerAddr {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let addr = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0);
+        Ok(OptionalPeerAddr(addr))
+    }
+}
 
 #[derive(serde::Serialize, ToSchema)]
 pub struct SystemStatusResponse {
@@ -347,37 +365,83 @@ pub async fn health_check() -> Json<HealthResponse> {
     })
 }
 
-#[utoipa::path(
-    get,
-    path = "/api/system/connection-info",
-    tag = "status",
-    responses(
-        (status = 200, description = "Connection information", body = ConnectionInfoResponse)
-    )
-)]
-pub async fn get_connection_info(State(state): State<AppState>) -> Json<ConnectionInfoResponse> {
-    let tunnel_url = state.tunnel_url.read().await.clone();
-
-    // Determine tunnel status
-    let tunnel_status = if tunnel_url.is_some() {
-        "active".to_string()
-    } else {
-        // Best effort check if cloudflared is available
+fn is_cloudflared_installed() -> bool {
+    *CLOUDFLARED_INSTALLED.get_or_init(|| {
         let bin = if cfg!(windows) {
             "cloudflared.exe"
         } else {
             "cloudflared"
         };
-        let exists = std::process::Command::new(bin)
+        std::process::Command::new(bin)
             .arg("--version")
             .output()
-            .is_ok();
+            .is_ok()
+    })
+}
 
-        if exists {
-            "connecting".to_string()
-        } else {
-            "disabled".to_string()
-        }
+fn is_direct_local_cli_probe(peer_addr: Option<SocketAddr>, headers: &HeaderMap) -> bool {
+    let Some(addr) = peer_addr else {
+        return false;
+    };
+    if !addr.ip().is_loopback() {
+        return false;
+    }
+
+    // Reject requests forwarded through cloudflared, reverse proxies, or aegis-connect-relay
+    const PROXY_HEADERS: [&str; 5] = [
+        "cf-connecting-ip",
+        "cf-ray",
+        "x-forwarded-for",
+        "x-real-ip",
+        "forwarded",
+    ];
+    if PROXY_HEADERS.iter().any(|h| headers.contains_key(*h)) {
+        return false;
+    }
+
+    let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let host_only = host
+        .trim()
+        .strip_prefix('[')
+        .and_then(|s| s.split(']').next())
+        .unwrap_or_else(|| host.trim().split(':').next().unwrap_or(""));
+
+    matches!(host_only, "localhost" | "127.0.0.1" | "::1")
+}
+
+pub async fn get_connection_info(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    OptionalPeerAddr(peer_addr): OptionalPeerAddr,
+) -> Result<Json<ConnectionInfoResponse>, AegisHttpError> {
+    // CORE-368: Allow authenticated Citadel sessions from any origin, or direct non-proxied
+    // loopback probes used by `aegis status` on the local host.
+    let citadel_tenant = headers
+        .get("x-citadel-tenant")
+        .and_then(|v| v.to_str().ok());
+    let citadel_key = headers.get("x-citadel-key").and_then(|v| v.to_str().ok());
+
+    let authorized = if let (Some(t), Some(k)) = (citadel_tenant, citadel_key) {
+        crate::citadel::verify_ws_tenant(&state, t, k).await.is_ok()
+    } else {
+        is_direct_local_cli_probe(peer_addr, &headers)
+    };
+
+    if !authorized {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+    }
+
+    let tunnel_url = state.tunnel_url.read().await.clone();
+
+    // Determine tunnel status without spawning a subprocess per HTTP request (CORE-368)
+    let tunnel_status = if tunnel_url.is_some() {
+        "active".to_string()
+    } else if is_cloudflared_installed() {
+        "connecting".to_string()
+    } else {
+        "disabled".to_string()
     };
 
     // Get local IP
@@ -391,7 +455,7 @@ pub async fn get_connection_info(State(state): State<AppState>) -> Json<Connecti
     } else {
         "http"
     };
-    let local_url = format!("{}://{}:8000", protocol, local_ip);
+    let local_url = format!("{}://{}:{}", protocol, local_ip, state.config.port);
 
     // CORE-146: If tunnel is active, it's the preferred URL for the app
     let qr_url = tunnel_url.clone().unwrap_or_else(|| local_url.clone());
@@ -403,12 +467,12 @@ pub async fn get_connection_info(State(state): State<AppState>) -> Json<Connecti
         "System connection info requested"
     );
 
-    Json(ConnectionInfoResponse {
+    Ok(Json(ConnectionInfoResponse {
         local_url,
         tunnel_url,
         tunnel_status,
         qr_url,
-    })
+    }))
 }
 
 fn get_local_ip() -> Option<String> {
@@ -487,4 +551,44 @@ pub async fn get_service_logs(
     let logs_content = selected_lines.join("\n");
 
     Ok(Json(LogsResponse { logs: logs_content }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn direct_local_cli_probe_accepts_loopback_localhost() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("localhost:8000"));
+        let peer = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 51234));
+        assert!(is_direct_local_cli_probe(peer, &headers));
+    }
+
+    #[test]
+    fn direct_local_cli_probe_rejects_proxied_or_public_host() {
+        let peer = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 51234));
+
+        // Forwarded via cloudflared / reverse proxy
+        let mut cf_headers = HeaderMap::new();
+        cf_headers.insert("host", HeaderValue::from_static("localhost:8000"));
+        cf_headers.insert("cf-connecting-ip", HeaderValue::from_static("203.0.113.42"));
+        assert!(!is_direct_local_cli_probe(peer, &cf_headers));
+
+        // Forwarded via aegis-connect-relay with public Host header
+        let mut relay_headers = HeaderMap::new();
+        relay_headers.insert("host", HeaderValue::from_static("node1.relay.aegis-os.com"));
+        assert!(!is_direct_local_cli_probe(peer, &relay_headers));
+
+        // Non-loopback LAN client without Citadel headers
+        let lan_peer = Some(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)),
+            51234,
+        ));
+        let mut lan_headers = HeaderMap::new();
+        lan_headers.insert("host", HeaderValue::from_static("192.168.1.10:8000"));
+        assert!(!is_direct_local_cli_probe(lan_peer, &lan_headers));
+    }
 }

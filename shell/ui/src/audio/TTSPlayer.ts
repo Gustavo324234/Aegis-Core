@@ -18,8 +18,9 @@ export class TTSPlayer {
             const win = window as WindowWithWebkit;
             const AudioCtx = win.AudioContext ?? win.webkitAudioContext;
             if (!AudioCtx) throw new Error('Web Audio API not supported');
-            // Use a local variable so TypeScript can track non-null after construction
-            const ctx = new AudioCtx({ sampleRate: 22050 });
+            // CORE-369: Use native hardware sampleRate so createBuffer(..., sampleRate)
+            // resamples cleanly for both 16 kHz (Voxtral) and 22.05 kHz (ElevenLabs/Espeak).
+            const ctx = new AudioCtx();
             this.audioContext = ctx;
 
             if (ctx.state === 'suspended') {
@@ -45,19 +46,24 @@ export class TTSPlayer {
             console.warn("TTSPlayer: AudioContext not initialized. Call initialize() first.");
             return;
         }
+        if (!base64PCM) return;
 
         // 1. Decode Base64 to binary string
         const binaryString = window.atob(base64PCM);
         const len = binaryString.length;
+        // CORE-369: Guard odd-byte PCM payloads so Int16Array never throws RangeError
+        const sampleCount = Math.floor(len / 2);
+        if (sampleCount === 0) return;
 
         // 2. Base64 represents bytes. We need Uint8Array to hold them.
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
+        const byteLen = sampleCount * 2;
+        const bytes = new Uint8Array(byteLen);
+        for (let i = 0; i < byteLen; i++) {
             bytes[i] = binaryString.charCodeAt(i);
         }
 
         // 3. Convert Uint8Array to Int16Array (assuming Little Endian)
-        const int16Array = new Int16Array(bytes.buffer);
+        const int16Array = new Int16Array(bytes.buffer, 0, sampleCount);
 
         // 4. Convert Int16Array to Float32Array (Web Audio API native format)
         const float32Array = new Float32Array(int16Array.length);
@@ -67,7 +73,8 @@ export class TTSPlayer {
         }
 
         // 5. Create AudioBuffer (1 channel, Mono)
-        const audioBuffer = this.audioContext.createBuffer(1, float32Array.length, sampleRate);
+        const safeRate = sampleRate >= 8000 && sampleRate <= 96000 ? sampleRate : 22050;
+        const audioBuffer = this.audioContext.createBuffer(1, float32Array.length, safeRate);
         audioBuffer.copyToChannel(float32Array, 0);
 
         // 6. Jitter Protection Resync
