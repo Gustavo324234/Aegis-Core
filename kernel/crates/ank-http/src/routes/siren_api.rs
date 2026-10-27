@@ -719,9 +719,10 @@ async fn webrtc_offer_handler(
 
                         // Remuestrear TTS PCM a 48kHz según el sample_rate real del motor
                         let src_rate = engine.sample_rate();
-                        let mut samples_src = Vec::with_capacity(tts_bytes.len() / 2);
-                        for chunk in tts_bytes.chunks_exact(2) {
-                            samples_src.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+                        let count = tts_bytes.len() / 2;
+                        let mut samples_src = Vec::with_capacity(count);
+                        for i in 0..count {
+                            samples_src.push(i16::from_le_bytes([tts_bytes[2 * i], tts_bytes[2 * i + 1]]));
                         }
 
                         let samples_48000 = resample_linear(&samples_src, src_rate, 48000);
