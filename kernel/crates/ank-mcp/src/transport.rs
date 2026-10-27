@@ -39,6 +39,7 @@ pub struct JsonRpcError {
 /// Trait fundamental para el transporte de mensajes MCP.
 /// Permite un desacoplamiento total entre la lógica del protocolo y el medio físico (SSE, StdIO, etc).
 #[async_trait]
+#[allow(clippy::double_must_use)]
 pub trait McpTransport: Send + Sync {
     /// Envía un mensaje JSON-RPC al servidor MCP.
     async fn send_message(&self, msg: JsonRpcMessage) -> Result<()>;

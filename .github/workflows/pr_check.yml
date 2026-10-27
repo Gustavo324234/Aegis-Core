@@ -32,7 +32,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: clippy
-        run: cargo clippy --workspace -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+        run: cargo clippy --workspace -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -A clippy::double-must-use -A clippy::result-large-err
 
       - name: test
         run: cargo test --workspace

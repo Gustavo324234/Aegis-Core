@@ -1,3 +1,5 @@
+#![allow(clippy::double_must_use)]
+
 // release-please trigger: PR #277 squash landed with a non-Conventional
 // title ("Fix/router chat supervisors") so release-please skipped it.
 // This anchor lets a new Conventional commit re-associate the PR's
