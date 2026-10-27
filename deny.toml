@@ -1,4 +1,8 @@
 [advisories]
+vulnerability = "warn"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
 ignore = [
     "RUSTSEC-2025-0057",
     # paste is unmaintained (pulled by boa_engine). No safe upgrade available.
