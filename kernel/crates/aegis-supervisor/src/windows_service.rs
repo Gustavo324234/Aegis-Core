@@ -185,6 +185,7 @@ pub fn uninstall_service() -> Result<()> {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 pub fn run_as_service() -> Result<()> {
     Err(anyhow!("Service execution is only supported on Windows."))
 }
