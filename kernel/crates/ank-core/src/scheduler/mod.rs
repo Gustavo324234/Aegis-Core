@@ -486,7 +486,7 @@ impl CognitiveScheduler {
             // CORE-092: HAL Runner watchdog — limpia estado huerfano si el canal cierra
             SchedulerEvent::HalRunnerDied { reason } => {
                 warn!("CORE-092: HAL Runner terminated: {}", reason);
-                let pids_to_clean: Vec<String> = self.current_running.drain(..).collect();
+                let pids_to_clean: Vec<String> = std::mem::take(&mut self.current_running);
                 for pid in pids_to_clean {
                     error!(
                         pid = %pid,

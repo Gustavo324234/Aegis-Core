@@ -42,10 +42,11 @@ pub fn extract_fingerprint(pcm_bytes: &[u8]) -> Option<Vec<f32>> {
         return None;
     }
 
-    let samples: Vec<f32> = pcm_bytes
-        .chunks_exact(2)
-        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
-        .collect();
+    let count = pcm_bytes.len() / 2;
+    let mut samples = Vec::with_capacity(count);
+    for i in 0..count {
+        samples.push(i16::from_le_bytes([pcm_bytes[2 * i], pcm_bytes[2 * i + 1]]) as f32 / 32768.0);
+    }
 
     let mut sums = [0.0f64; FEATURE_DIM];
     let mut frame_count = 0usize;
