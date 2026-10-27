@@ -236,6 +236,8 @@
 | CORE-367 | fix | Harden Siren WebRTC/WS & Voice API: Citadel Auth & IDOR Protection, Secret Masking, PeerConnection Cleanup, and Opus Sample-Rate Fidelity | ✅ Done | Crítica | Kernel Engineer |
 | CORE-368 | fix | Harden ank-cli & WS/System Endpoints: Citadel gRPC Headers, Authenticated Agent/Train WS Handshakes, and Connection Info Guard | ✅ Done | Crítica | Kernel Engineer |
 | CORE-369 | fix | Harden Shell UI: Chat Auto-Reconnect, Logout State Purge, Agent/Train WS Protocol Alignment, Siren STT Recovery, and Audio Safety | ✅ Done | Crítica | Shell Engineer |
+| CORE-370 | fix | Harden ank-server gRPC: Mandatory Setup Token & Hashing, Process Auth/IDOR Guard, Loopback Default Bind, Live Telemetry, and Full Tenant Purge | ✅ Done | Crítica | Kernel Engineer |
+| CORE-371 | fix | Harden Bootstrap Setup & Cognitive Engine Auth, Purge Tenant Keys on Delete, and Clean Tracked Test Databases | ✅ Done | Crítica | Kernel Engineer + Shell Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

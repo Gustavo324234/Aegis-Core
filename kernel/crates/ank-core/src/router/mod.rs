@@ -142,6 +142,11 @@ impl CognitiveRouter {
         self.key_pool.delete_key(key_id, tenant_id).await
     }
 
+    /// CORE-371: Purge all tenant-owned API keys from `KeyPool` when deleting a tenant.
+    pub async fn purge_tenant_keys(&self, tenant_id: &str) -> anyhow::Result<usize> {
+        self.key_pool.purge_tenant_keys(tenant_id).await
+    }
+
     /// Returns the full (unredacted) entry for a key_id. Used by update handlers
     /// to preserve the existing api_key when the request omits it.
     pub async fn get_raw_key_by_id(

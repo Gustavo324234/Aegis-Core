@@ -327,6 +327,34 @@ impl MasterEnclave {
         Ok(())
     }
 
+    /// CORE-371: Rotate the Ring-0 Master Admin password hash in `master_admin`.
+    pub async fn reset_master_password(
+        &self,
+        username: &str,
+        new_passphrase_sha256: &str,
+    ) -> Result<()> {
+        use anyhow::Context;
+        let new_hash = Self::hash_password(new_passphrase_sha256)
+            .context("Failed to hash new master passphrase")?;
+        let conn = self.connection.lock().await;
+        let rows = conn
+            .execute(
+                "UPDATE master_admin SET password_hash = ?1 WHERE username = ?2",
+                rusqlite::params![new_hash, username],
+            )
+            .context("Failed to update master admin password")?;
+
+        if rows == 0 {
+            anyhow::bail!("Master admin {} not found.", username);
+        }
+        drop(conn);
+        self.checkpoint()
+            .await
+            .context("Failed to checkpoint WAL after reset_master_password")?;
+        info!("Password rotation completed for master admin {}", username);
+        Ok(())
+    }
+
     pub async fn list_tenants(&self) -> Result<Vec<ank_proto::v1::TenantInfo>> {
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare(

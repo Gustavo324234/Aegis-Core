@@ -91,4 +91,10 @@ plugin_signer.pub
 target_dev/
 test_dev_data/
 token_output.log
+users/
+kernel/crates/*/users/
+*.db
+*.db-shm
+*.db-wal
+
 

@@ -700,10 +700,22 @@ pub(crate) async fn run_server() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(50051);
-    let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()?;
+    let grpc_bind_host = std::env::var("AEGIS_GRPC_BIND")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let grpc_addr: std::net::SocketAddr = format!("{}:{}", grpc_bind_host, grpc_port).parse()?;
     let mut tonic_builder = Server::builder();
 
-    warn!("gRPC running in INSECURE mode (h2c) on port {}", grpc_port);
+    if grpc_addr.ip().is_loopback() {
+        info!("gRPC listening on loopback {} (h2c)", grpc_addr);
+    } else {
+        warn!(
+            "gRPC running in INSECURE mode (h2c) on {} — restrict via firewall or set AEGIS_GRPC_BIND=127.0.0.1",
+            grpc_addr
+        );
+    }
 
     tokio::spawn(async move {
         if let Err(e) = tonic_builder.add_service(tonic_svc).serve(grpc_addr).await {

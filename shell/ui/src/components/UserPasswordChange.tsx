@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { useTranslation } from '../i18n';
 
 const UserPasswordChange: React.FC<{ onComplete?: () => void }> = ({ onComplete }) => {
-    const { tenantId, sessionKey } = useAegisStore();
+    const { sessionKey, changeOwnPassword } = useAegisStore();
     const [newPassphrase, setNewPassphrase] = useState('');
     const [confirmPassphrase, setConfirmPassphrase] = useState('');
     const [isUpdating, setIsUpdating] = useState(false);
@@ -16,6 +16,10 @@ const UserPasswordChange: React.FC<{ onComplete?: () => void }> = ({ onComplete 
     const handlePasswordChange = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newPassphrase) return;
+        if (newPassphrase === sessionKey) {
+            setError(t('error_same_password'));
+            return;
+        }
         if (newPassphrase !== confirmPassphrase) {
             setError(t('passwords_not_match'));
             return;
@@ -26,33 +30,18 @@ const UserPasswordChange: React.FC<{ onComplete?: () => void }> = ({ onComplete 
         setSuccess(false);
 
         try {
-            const response = await fetch('/api/admin/reset_password', {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-citadel-tenant': tenantId!,
-                    'x-citadel-key': sessionKey!
-                },
-                body: JSON.stringify({
-                    tenant_id: tenantId,
-                    new_passphrase: newPassphrase
-                })
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.success) {
-                    setSuccess(true);
-                    setNewPassphrase('');
-                    setConfirmPassphrase('');
-                    if (onComplete) {
-                        setTimeout(onComplete, 2000);
-                    }
-                } else {
-                    setError(data.message || t('error_updating_password'));
+            // CORE-371: Rotate own password via /api/auth/change_password so both
+            // tenants and Master Admin succeed and `sessionKey` updates in store.
+            const ok = await changeOwnPassword(newPassphrase);
+            if (ok) {
+                setSuccess(true);
+                setNewPassphrase('');
+                setConfirmPassphrase('');
+                if (onComplete) {
+                    setTimeout(onComplete, 2000);
                 }
             } else {
-                setError(t('ring0_connection_failed'));
+                setError(t('error_updating_password'));
             }
         } catch (err) {
             setError(err instanceof Error ? err.message : t('unknown_error'));

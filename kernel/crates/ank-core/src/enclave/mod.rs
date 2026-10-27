@@ -742,16 +742,23 @@ mod tests {
         let correct_key = "test_key_456";
 
         let too_long = "x".repeat(4001);
-        let db = TenantDB::open(&tenant_id, correct_key)?;
-        let result = db.set_persona(&too_long);
-        assert!(result.is_err(), "Persona of 4001 chars should fail");
+        {
+            let db = TenantDB::open(&tenant_id, correct_key)?;
+            let result = db.set_persona(&too_long);
+            assert!(result.is_err(), "Persona of 4001 chars should fail");
 
-        let valid = "x".repeat(4000);
-        db.set_persona(&valid)?;
-        let loaded = db.get_persona()?;
-        assert_eq!(loaded.unwrap_or_default().len(), 4000);
+            let valid = "x".repeat(4000);
+            db.set_persona(&valid)?;
+            let loaded = db.get_persona()?;
+            assert_eq!(loaded.unwrap_or_default().len(), 4000);
+        }
 
-        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let _ = std::fs::remove_dir_all(
+            std::path::Path::new(&base_dir)
+                .join("users")
+                .join(&tenant_id),
+        );
         Ok(())
     }
 
@@ -824,22 +831,6 @@ mod tests {
         );
         let correct_key = "test_key_sync_999";
 
-        let db = TenantDB::open(&tenant_id, correct_key)?;
-
-        // 1. KV write
-        db.set_kv("agent_persona", "Hello test persona")?;
-
-        // 2. Gasto write
-        db.add_expense(450.0, "Almuerzo de negocios", Some("comida"))?;
-
-        // 3. Recordatorio write
-        db.add_reminder("2026-06-01 12:00:00", "Reunión de alineación")?;
-
-        // Verificar entradas en sync_log
-        let mut stmt = db.connection.prepare(
-            "SELECT table_name, row_key, operation, data_json, seq_num FROM sync_log ORDER BY seq_num ASC"
-        )?;
-
         struct SyncEntry {
             table_name: String,
             row_key: String,
@@ -848,17 +839,35 @@ mod tests {
             seq_num: i64,
         }
 
-        let rows = stmt.query_map([], |row| {
-            Ok(SyncEntry {
-                table_name: row.get(0)?,
-                row_key: row.get(1)?,
-                operation: row.get(2)?,
-                data_json: row.get(3)?,
-                seq_num: row.get(4)?,
-            })
-        })?;
+        let results: Vec<SyncEntry> = {
+            let db = TenantDB::open(&tenant_id, correct_key)?;
 
-        let results: Vec<SyncEntry> = rows.filter_map(|r| r.ok()).collect();
+            // 1. KV write
+            db.set_kv("agent_persona", "Hello test persona")?;
+
+            // 2. Gasto write
+            db.add_expense(450.0, "Almuerzo de negocios", Some("comida"))?;
+
+            // 3. Recordatorio write
+            db.add_reminder("2026-06-01 12:00:00", "Reunión de alineación")?;
+
+            // Verificar entradas en sync_log
+            let mut stmt = db.connection.prepare(
+                "SELECT table_name, row_key, operation, data_json, seq_num FROM sync_log ORDER BY seq_num ASC"
+            )?;
+
+            let rows = stmt.query_map([], |row| {
+                Ok(SyncEntry {
+                    table_name: row.get(0)?,
+                    row_key: row.get(1)?,
+                    operation: row.get(2)?,
+                    data_json: row.get(3)?,
+                    seq_num: row.get(4)?,
+                })
+            })?;
+
+            rows.filter_map(|r| r.ok()).collect()
+        };
 
         // Debería haber exactamente 3 entradas
         assert_eq!(results.len(), 3);
@@ -870,8 +879,8 @@ mod tests {
         assert!(results[0]
             .data_json
             .as_ref()
-            .unwrap()
-            .contains("Hello test persona"));
+            .map(|s| s.contains("Hello test persona"))
+            .unwrap_or(false));
         assert_eq!(results[0].seq_num, 1);
 
         // Turno 2: expenses
@@ -884,7 +893,12 @@ mod tests {
         assert_eq!(results[2].operation, "INSERT");
         assert_eq!(results[2].seq_num, 3);
 
-        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let _ = std::fs::remove_dir_all(
+            std::path::Path::new(&base_dir)
+                .join("users")
+                .join(&tenant_id),
+        );
         Ok(())
     }
 

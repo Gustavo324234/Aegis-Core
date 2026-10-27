@@ -441,6 +441,23 @@ impl KeyPool {
         Ok(())
     }
 
+    /// CORE-371: Remove all API keys belonging to `tenant_id` from both memory
+    /// and persistent storage (`router_keys.db`), leaving global keys and other
+    /// tenants untouched.
+    pub async fn purge_tenant_keys(&self, tenant_id: &str) -> anyhow::Result<usize> {
+        let removed_entries = {
+            let mut tenants = self.tenant_keys.write().await;
+            tenants.remove(tenant_id).unwrap_or_default()
+        };
+        let count = removed_entries.len();
+        for entry in removed_entries {
+            self.persistence
+                .delete_pcb(&format!("keypool:tenant:{}:{}", tenant_id, entry.key_id))
+                .await?;
+        }
+        Ok(count)
+    }
+
     /// Returns true if at least one non-free-tier (paid) key is available for this provider+model.
     /// When a paid key exists, free-tier rate limits can be safely ignored.
     pub async fn has_paid_key(&self, provider: &str, model_id: &str) -> bool {
@@ -1223,6 +1240,63 @@ mod tests {
                 .has_key_for_model_for_tenant("gemini", "gemini-3.6-flash", "alice")
                 .await
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_purge_tenant_keys_isolates_other_tenants_and_global() -> anyhow::Result<()> {
+        let pool = KeyPool::new(Arc::new(NoopPersistor));
+
+        pool.add_global_key(ApiKeyEntry {
+            key_id: "global-1".to_string(),
+            provider: "openai".to_string(),
+            api_key: "sk-global".to_string(),
+            api_url: None,
+            label: None,
+            is_active: true,
+            rate_limited_until: None,
+            active_models: None,
+            is_free_tier: false,
+        })
+        .await?;
+
+        pool.add_tenant_key(
+            "alice",
+            ApiKeyEntry {
+                key_id: "alice-1".to_string(),
+                provider: "anthropic".to_string(),
+                api_key: "sk-ant-alice".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: false,
+            },
+        )
+        .await?;
+
+        pool.add_tenant_key(
+            "bob",
+            ApiKeyEntry {
+                key_id: "bob-1".to_string(),
+                provider: "groq".to_string(),
+                api_key: "gsk-bob".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: true,
+            },
+        )
+        .await?;
+
+        let removed = pool.purge_tenant_keys("alice").await?;
+        assert_eq!(removed, 1);
+        assert!(pool.list_tenant_keys("alice").await.is_empty());
+        assert_eq!(pool.list_tenant_keys("bob").await.len(), 1);
+        assert_eq!(pool.list_global_keys().await.len(), 1);
         Ok(())
     }
 }
