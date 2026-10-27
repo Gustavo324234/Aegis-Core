@@ -1,7 +1,7 @@
 [advisories]
 vulnerability = "none"
 unmaintained = "none"
-yanked = "none"
+yanked = "warn"
 notice = "none"
 ignore = [
     "RUSTSEC-2025-0057",
