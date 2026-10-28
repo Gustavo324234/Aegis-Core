@@ -2,6 +2,13 @@
 
 
 
+## [0.1.12](https://github.com/Gustavo324234/Aegis-Core/compare/ank-cli-v0.1.11...ank-cli-v0.1.12) (2026-10-28)
+
+
+### Features
+
+* **security,kernel,http,ui:** comprehensive security hardening, multi-tenant isolation, Citadel auth & distro reliability (CORE-346..CORE-371) ([#373](https://github.com/Gustavo324234/Aegis-Core/issues/373)) ([7cb679f](https://github.com/Gustavo324234/Aegis-Core/commit/7cb679f9bd6e90c2c225b5417471be1b8c6db8aa))
+
 ## [0.1.11](https://github.com/Gustavo324234/Aegis-Core/compare/ank-cli-v0.1.10...ank-cli-v0.1.11) (2026-08-02)
 
 
