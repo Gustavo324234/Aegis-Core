@@ -1,9 +1,9 @@
-use crate::citadel::hash_passphrase;
+use crate::citadel::CitadelAuthenticated;
 use crate::state::AppState;
 use ank_core::enclave::TenantDB;
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
@@ -38,22 +38,11 @@ fn parse_agent_name(persona: &Option<String>) -> String {
         .unwrap_or_else(|| "Aegis".to_string())
 }
 
-fn extract_auth(headers: &HeaderMap) -> Option<(String, String)> {
-    let tenant_id = headers.get("x-citadel-tenant")?.to_str().ok()?.to_string();
-    let session_key = headers.get("x-citadel-key")?.to_str().ok()?.to_string();
-    Some((tenant_id, session_key))
-}
-
-async fn get_persona(State(_state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    let Some((tenant_id, session_key)) = extract_auth(&headers) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing auth headers" })),
-        );
-    };
-
-    let hash = hash_passphrase(&session_key);
-    match TenantDB::open(&tenant_id, &hash) {
+async fn get_persona(
+    State(_state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> impl IntoResponse {
+    match TenantDB::open(&auth.tenant_id, &auth.session_key_hash) {
         Ok(db) => {
             let persona = db.get_persona().unwrap_or(None);
             let is_configured = persona.is_some();
@@ -78,18 +67,10 @@ struct PersonaRequest {
 
 async fn set_persona(
     State(_state): State<AppState>,
-    headers: HeaderMap,
+    auth: CitadelAuthenticated,
     Json(body): Json<PersonaRequest>,
 ) -> impl IntoResponse {
-    let Some((tenant_id, session_key)) = extract_auth(&headers) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing auth headers" })),
-        );
-    };
-
-    let hash = hash_passphrase(&session_key);
-    match TenantDB::open(&tenant_id, &hash) {
+    match TenantDB::open(&auth.tenant_id, &auth.session_key_hash) {
         Ok(db) => match db.set_persona(&body.persona) {
             Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))),
             Err(e) => (
@@ -104,30 +85,27 @@ async fn set_persona(
     }
 }
 
-async fn get_agent_name(State(_state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    let Some((tenant_id, session_key)) = extract_auth(&headers) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "name": "Aegis" })));
-    };
-    let hash = hash_passphrase(&session_key);
-    let persona = TenantDB::open(&tenant_id, &hash)
+async fn get_agent_name(
+    State(_state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> impl IntoResponse {
+    let persona = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
         .ok()
         .and_then(|db| db.get_persona().ok().flatten());
     let name = parse_agent_name(&persona);
     (StatusCode::OK, Json(json!({ "name": name })))
 }
 
-async fn delete_persona(State(_state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    let Some((tenant_id, session_key)) = extract_auth(&headers) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing auth headers" })),
-        );
-    };
-
-    let hash = hash_passphrase(&session_key);
-    match TenantDB::open(&tenant_id, &hash) {
+async fn delete_persona(
+    State(_state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> impl IntoResponse {
+    match TenantDB::open(&auth.tenant_id, &auth.session_key_hash) {
         Ok(db) => match db.delete_persona() {
-            Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))),
+            Ok(()) => {
+                crate::ws::chat::invalidate_onboarding_cache(&auth.tenant_id);
+                (StatusCode::OK, Json(json!({ "success": true })))
+            }
             Err(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "Failed to delete persona" })),

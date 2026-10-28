@@ -58,12 +58,12 @@ El prototipado se realizará sobre una laptop antigua. Esta elección proporcion
 
 ## 4. Estructura Declarativa en NixOS
 
-La configuración en [distro/nixos/](file:///e:/Aegis/Aegis-Core/distro/nixos) se modularizará para admitir este doble modo de forma limpia:
+La configuración en [distro/nixos/](../distro/nixos) se modularizará para admitir este doble modo de forma limpia:
 
-* **[configuration.nix](file:///e:/Aegis/Aegis-Core/distro/nixos/configuration.nix):** Contiene las políticas de seguridad de Citadel, particiones LUKS2, swap cifrado y el servicio del demonio Aegis en Rust.
-* **`profile-server.nix`:** Habilita el firewall, SSH con llaves criptográficas y optimizaciones de ahorro de energía para cuando la tapa de la laptop esté cerrada.
-* **`profile-kiosk.nix`:** Habilita los controladores de GPU (Mesa/Intel/AMD), el servidor de audio PipeWire y el compositor Wayland `cage` para la interfaz visual.
-* **[flake.nix](file:///e:/Aegis/Aegis-Core/distro/nixos/flake.nix):** Define las configuraciones de salida del sistema para compilar la imagen correspondiente (ej: `#aegis-laptop-server` o `#aegis-laptop-kiosk`).
+* **[configuration.nix](../distro/nixos/configuration.nix):** Contiene las políticas de seguridad de Citadel, particiones LUKS2, swap cifrado y el servicio del demonio Aegis en Rust.
+* **[profile-server.nix](../distro/nixos/profile-server.nix):** Habilita el firewall, SSH con llaves criptográficas y optimizaciones de ahorro de energía para cuando la tapa de la laptop esté cerrada.
+* **[profile-kiosk.nix](../distro/nixos/profile-kiosk.nix):** Habilita los controladores de GPU (Mesa/Intel/AMD), el servidor de audio PipeWire y el compositor Wayland `cage` para la interfaz visual.
+* **[flake.nix](../distro/nixos/flake.nix):** Define las configuraciones de salida del sistema para compilar la imagen correspondiente (ej: `#aegis-server` o `#aegis-kiosk`).
 
 ---
 
@@ -76,8 +76,8 @@ La configuración en [distro/nixos/](file:///e:/Aegis/Aegis-Core/distro/nixos) s
 ### Fase 2: Virtualización y Generación de la Distro (Completada)
 * **Objetivo:** Crear la infraestructura de compilación de NixOS.
 * **Estado:** **COMPLETO**. 
-  * Se modularizó la distro NixOS agregando el perfil gráfico de quiosco ([profile-kiosk.nix](file:///e:/Aegis/Aegis-Core/distro/nixos/profile-kiosk.nix)) con soporte para Cage Wayland, auto-inicio de Chromium a pantalla completa y configuración de audio local con PipeWire.
-  * Se diseñó el entorno declarativo de Machine Learning ([shell.nix](file:///e:/Aegis/Aegis-Core/tools/fine-tuning/shell.nix) y [requirements.txt](file:///e:/Aegis/Aegis-Core/tools/fine-tuning/requirements.txt)) para encapsular de forma limpia dependencias dinámicas como PyTorch, PEFT y drivers OpenGL/NVIDIA.
+  * Se modularizó la distro NixOS agregando el perfil gráfico de quiosco ([profile-kiosk.nix](../distro/nixos/profile-kiosk.nix)) con soporte para Cage Wayland, auto-inicio de Chromium a pantalla completa y configuración de audio local con PipeWire.
+  * Se diseñó el entorno declarativo de Machine Learning ([shell.nix](../tools/fine-tuning/shell.nix) y [requirements.txt](../tools/fine-tuning/requirements.txt)) para encapsular de forma limpia dependencias dinámicas como PyTorch, PEFT y drivers OpenGL/NVIDIA.
 
 ### Fase 3: Despliegue en Hardware Real - Laptop Vieja (En Desarrollo / Foco Actual)
 * **Objetivo:** Instalación física de la distro en la laptop de pruebas.

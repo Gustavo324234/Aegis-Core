@@ -11,6 +11,11 @@ pub trait SirenEngine: Send + Sync {
     /// Identificador único del motor (e.g., "voxtral", "mock").
     fn id(&self) -> &str;
 
+    /// Frecuencia de muestreo PCM 16-bit mono producida por `synthesize` (por defecto 22050 Hz).
+    fn sample_rate(&self) -> u32 {
+        22050
+    }
+
     /// Sintetiza texto a audio PCM (bytes).
     async fn synthesize(&self, text: String) -> Result<Vec<u8>>;
 

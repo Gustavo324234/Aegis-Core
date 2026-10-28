@@ -1,11 +1,18 @@
-use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
+use crate::{
+    citadel::{
+        extract_ws_session_key_and_protocol, verify_ws_tenant, CitadelAuthenticated, CitadelError,
+    },
+    error::AegisHttpError,
+    state::AppState,
+};
 use ank_core::trainer::{TrainingConfig, TrainingProgress};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
+        Path, State,
     },
-    response::IntoResponse,
+    http::HeaderMap,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -18,18 +25,21 @@ pub fn router() -> Router<AppState> {
         .route("/start", post(start_train))
         .route("/cancel", post(cancel_train))
         .route("/status", get(get_train_status))
-        .route("/progress", get(ws_progress_handler))
+        .route("/progress", get(ws_progress_legacy_handler))
+        .route("/progress/:tenant_id", get(ws_progress_handler))
 }
 
 // ── POST /api/train/start ─────────────────────────────────────────────────────
 async fn start_train(
     State(state): State<AppState>,
-    _auth: CitadelAuthenticated,
-    Json(config): Json<TrainingConfig>,
+    auth: CitadelAuthenticated,
+    Json(mut config): Json<TrainingConfig>,
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
+    config.tenant_id = Some(auth.tenant_id.clone());
     info!(
-        "Iniciando petición de entrenamiento para: {}",
-        config.model_id
+        tenant_id = %auth.tenant_id,
+        model_id = %config.model_id,
+        "Iniciando petición de entrenamiento aislada por tenant"
     );
 
     state
@@ -47,9 +57,22 @@ async fn start_train(
 // ── POST /api/train/cancel ────────────────────────────────────────────────────
 async fn cancel_train(
     State(state): State<AppState>,
-    _auth: CitadelAuthenticated,
+    auth: CitadelAuthenticated,
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
-    info!("Petición para cancelar el entrenamiento activo...");
+    if !state
+        .training_manager
+        .owner_matches(&auth.tenant_id, auth.is_master)
+        .await
+    {
+        return Err(AegisHttpError::Forbidden(
+            "No tienes permisos para cancelar el entrenamiento de otro tenant".to_string(),
+        ));
+    }
+
+    info!(
+        tenant_id = %auth.tenant_id,
+        "Petición para cancelar el entrenamiento activo..."
+    );
 
     state
         .training_manager
@@ -66,25 +89,78 @@ async fn cancel_train(
 // ── GET /api/train/status ─────────────────────────────────────────────────────
 async fn get_train_status(
     State(state): State<AppState>,
-    _auth: CitadelAuthenticated,
+    auth: CitadelAuthenticated,
 ) -> Result<Json<TrainingProgress>, AegisHttpError> {
-    let progress = state.training_manager.get_progress().await;
+    let progress = state
+        .training_manager
+        .get_progress_for_tenant(&auth.tenant_id, auth.is_master)
+        .await;
     Ok(Json(progress))
 }
 
-// ── GET /api/train/progress (WebSocket) ──────────────────────────────────────────
-async fn ws_progress_handler(
+// ── GET /api/train/progress (legacy header-authenticated WS) ──────────────────
+async fn ws_progress_legacy_handler(
     ws: WebSocketUpgrade,
+    auth: CitadelAuthenticated,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_progress_stream(socket, state))
+) -> Response {
+    ws.on_upgrade(move |socket| {
+        handle_progress_stream(socket, state, auth.tenant_id, auth.is_master)
+    })
 }
 
-async fn handle_progress_stream(mut socket: WebSocket, state: AppState) {
-    info!("[TrainWS] Cliente conectado al stream de progreso...");
+// ── GET /api/train/progress/:tenant_id (subprotocol-authenticated WS) ─────────
+async fn ws_progress_handler(
+    ws: WebSocketUpgrade,
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (Some(session_key), protocol_header) = extract_ws_session_key_and_protocol(&headers) else {
+        warn!(
+            tenant = %tenant_id,
+            "[TrainWS] Rejected unauthenticated WebSocket upgrade"
+        );
+        return CitadelError::MissingKey.into_response();
+    };
 
-    // Enviar estado inicial del progreso
-    let initial = state.training_manager.get_progress().await;
+    let is_master = match verify_ws_tenant(&state, &tenant_id, &session_key).await {
+        Ok(master) => master,
+        Err(err) => {
+            warn!(
+                tenant = %tenant_id,
+                error = %err,
+                "[TrainWS] Rejected unauthorized WebSocket upgrade"
+            );
+            return err.into_response();
+        }
+    };
+
+    let ws = if let Some(proto) = protocol_header {
+        ws.protocols([proto])
+    } else {
+        ws
+    };
+
+    ws.on_upgrade(move |socket| handle_progress_stream(socket, state, tenant_id, is_master))
+}
+
+async fn handle_progress_stream(
+    mut socket: WebSocket,
+    state: AppState,
+    tenant_id: String,
+    is_master: bool,
+) {
+    info!(
+        tenant = %tenant_id,
+        "[TrainWS] Cliente conectado al stream de progreso..."
+    );
+
+    // Enviar estado inicial del progreso filtrado por tenant (CORE-368)
+    let initial = state
+        .training_manager
+        .get_progress_for_tenant(&tenant_id, is_master)
+        .await;
     if let Ok(json) = serde_json::to_string(&initial) {
         if socket.send(Message::Text(json)).await.is_err() {
             return;
@@ -96,10 +172,13 @@ async fn handle_progress_stream(mut socket: WebSocket, state: AppState) {
 
     loop {
         tokio::select! {
-            // Recibir métricas del canal de broadcast del manager y enviarlas a la UI
+            // Recibir métricas del canal de broadcast del manager y enviarlas a la UI si pertenecen al tenant
             progress_event = rx.recv() => {
                 match progress_event {
                     Ok(progress) => {
+                        if !state.training_manager.owner_matches(&tenant_id, is_master).await {
+                            continue;
+                        }
                         match serde_json::to_string(&progress) {
                             Ok(json) => {
                                 if socket.send(Message::Text(json)).await.is_err() {
@@ -128,5 +207,8 @@ async fn handle_progress_stream(mut socket: WebSocket, state: AppState) {
         }
     }
 
-    info!("[TrainWS] Cliente desconectado del stream de progreso.");
+    info!(
+        tenant = %tenant_id,
+        "[TrainWS] Cliente desconectado del stream de progreso."
+    );
 }

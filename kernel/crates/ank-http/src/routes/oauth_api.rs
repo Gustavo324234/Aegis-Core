@@ -122,5 +122,5 @@ pub fn router() -> axum::Router<crate::AppState> {
     axum::Router::new()
         .route("/tokens", axum::routing::post(receive_tokens))
         .route("/status", axum::routing::get(get_status))
-        .route("/{provider}", axum::routing::delete(disconnect_provider))
+        .route("/:provider", axum::routing::delete(disconnect_provider))
 }

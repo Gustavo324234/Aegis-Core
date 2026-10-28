@@ -50,14 +50,14 @@ El motor de entrenamiento se compone de cuatro capas integradas dentro del monor
 ## 3. Especificación del Flujo de Datos
 
 ### Paso 1: Generación y Curación del Dataset
-* El módulo `trainer` en `ank-core` ejecuta internamente el script [generate_dataset.py](file:///e:/Aegis/Aegis-Core/tools/fine-tuning/generate_dataset.py).
+* El módulo `trainer` en `ank-core` ejecuta internamente el script [generate_dataset.py](../tools/fine-tuning/generate_dataset.py).
 * Lee el log local `chat_history.log` del tenant activo en `data_dir/users/<tenant_id>/workspace/chat_history.log`.
 * Segmenta los datos en sesiones de chat, inyecta el `system_prompt` base del **Aegis Assistant** y los escribe en un archivo temporal en formato JSON Lines.
 
 ### Paso 2: Ejecución del Entrenamiento
 
 #### A. Modo Local (Procesamiento por Subproceso)
-* El kernel de Aegis inicia un subproceso de Python llamando a [fine_tune.py](file:///e:/Aegis/Aegis-Core/tools/fine-tuning/fine_tune.py) con los parámetros configurados.
+* El kernel de Aegis inicia un subproceso de Python llamando a [fine_tune.py](../tools/fine-tuning/fine_tune.py) con los parámetros configurados.
 * Captura el flujo de salida estándar (`stdout`) del proceso.
 * Un parser busca patrones de pérdida (`Loss = X.XXXX`) en el output del script y los envía en tiempo real al WebSocket de la UI para graficar el avance.
 
@@ -125,7 +125,7 @@ El motor de entrenamiento nativo ha sido completamente implementado y estabiliza
    - Consola negra interactiva con scroll automático para logs en vivo del subproceso.
    - Gráfico dinámico SVG para seguir en tiempo real la curva de pérdida de pasos de entrenamiento.
    - Telemetría en tiempo real de uso de memoria de video (VRAM Widget) con alertas automáticas de color en caso de consumo crítico (>85%) para mitigar desbordamientos.
-4. **Entorno Aislado para NixOS:** Inclusión de [shell.nix](file:///e:/Aegis/Aegis-Core/tools/fine-tuning/shell.nix) para enlazar los drivers OpenGL del anfitrión, CUDA, C++ Standard Libraries y construir el entorno virtual `.venv` de forma reproducible.
+4. **Entorno Aislado para NixOS:** Inclusión de [shell.nix](../tools/fine-tuning/shell.nix) para enlazar los drivers OpenGL del anfitrión, CUDA, C++ Standard Libraries y construir el entorno virtual `.venv` de forma reproducible.
 
 ---
 

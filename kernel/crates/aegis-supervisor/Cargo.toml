@@ -20,4 +20,4 @@ toml.workspace               = true
 reqwest.workspace            = true
 
 [target.'cfg(windows)'.dependencies]
-windows-service = "0.6"
+windows-service.workspace    = true

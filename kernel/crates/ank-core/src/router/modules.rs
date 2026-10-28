@@ -295,12 +295,129 @@ pub fn generate_system_prompt_for_modules(
     system_prompt
 }
 
+// ── Pool de Canales gRPC para Módulos del Microkernel (CORE-353) ─────────────
+
+static MODULE_CHANNEL_POOL: std::sync::LazyLock<
+    tokio::sync::RwLock<HashMap<String, tonic::transport::Channel>>,
+> = std::sync::LazyLock::new(|| tokio::sync::RwLock::new(HashMap::new()));
+
+/// Normaliza un endpoint de módulo garantizando esquema `http://` o `https://`.
+pub fn normalize_module_endpoint(endpoint: &str) -> String {
+    let trimmed = endpoint.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{}", trimmed)
+    }
+}
+
+async fn get_or_connect_module_channel(
+    channel_url: &str,
+) -> Result<tonic::transport::Channel, String> {
+    {
+        let pool = MODULE_CHANNEL_POOL.read().await;
+        if let Some(ch) = pool.get(channel_url) {
+            return Ok(ch.clone());
+        }
+    }
+
+    let endpoint_parsed = tonic::transport::Endpoint::from_shared(channel_url.to_string())
+        .map_err(|e| format!("Invalid endpoint format: {}", e))?
+        .timeout(std::time::Duration::from_secs(5))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .http2_keep_alive_interval(std::time::Duration::from_secs(30))
+        .keep_alive_while_idle(true);
+
+    let channel = endpoint_parsed
+        .connect()
+        .await
+        .map_err(|e| format!("Failed to connect to microkernel module: {}", e))?;
+
+    let mut pool = MODULE_CHANNEL_POOL.write().await;
+    pool.insert(channel_url.to_string(), channel.clone());
+    Ok(channel)
+}
+
+async fn evict_module_channel(channel_url: &str) {
+    let mut pool = MODULE_CHANNEL_POOL.write().await;
+    pool.remove(channel_url);
+}
+
+/// Invoca una herramienta de un módulo externo vía gRPC reutilizando el pool de canales HTTP/2 (CORE-353).
+/// Si el canal cacheado falla por error de transporte (`Unavailable` / `Unknown`), se evicta y reintenta una vez.
+pub async fn call_module_tool_pooled(
+    endpoint: &str,
+    tool_name: &str,
+    args_json: &str,
+    tenant_id: &str,
+) -> Result<ank_proto::v1::ExecuteToolResponse, String> {
+    let channel_url = normalize_module_endpoint(endpoint);
+    let channel = get_or_connect_module_channel(&channel_url).await?;
+
+    let mut client =
+        ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(channel);
+    let request = tonic::Request::new(ank_proto::v1::ExecuteToolRequest {
+        tool_name: tool_name.to_string(),
+        arguments_json: args_json.to_string(),
+        tenant_id: tenant_id.to_string(),
+    });
+
+    match client.execute_tool(request).await {
+        Ok(resp) => Ok(resp.into_inner()),
+        Err(status)
+            if matches!(
+                status.code(),
+                tonic::Code::Unavailable | tonic::Code::Unknown | tonic::Code::Internal
+            ) =>
+        {
+            warn!(
+                endpoint = %channel_url,
+                code = ?status.code(),
+                "Pooled gRPC channel failed; evicting and retrying once"
+            );
+            evict_module_channel(&channel_url).await;
+            let fresh_channel = get_or_connect_module_channel(&channel_url).await?;
+            let mut retry_client =
+                ank_proto::v1::domain_module_service_client::DomainModuleServiceClient::new(
+                    fresh_channel,
+                );
+            let retry_req = tonic::Request::new(ank_proto::v1::ExecuteToolRequest {
+                tool_name: tool_name.to_string(),
+                arguments_json: args_json.to_string(),
+                tenant_id: tenant_id.to_string(),
+            });
+            retry_client
+                .execute_tool(retry_req)
+                .await
+                .map(|r| r.into_inner())
+                .map_err(|e| format!("Module tool execution failed: {}", e))
+        }
+        Err(e) => Err(format!("Module tool execution failed: {}", e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_normalize_module_endpoint() {
+        assert_eq!(
+            normalize_module_endpoint("localhost:50071"),
+            "http://localhost:50071"
+        );
+        assert_eq!(
+            normalize_module_endpoint("http://127.0.0.1:50071"),
+            "http://127.0.0.1:50071"
+        );
+        assert_eq!(
+            normalize_module_endpoint("https://biz.aegis.local:50071"),
+            "https://biz.aegis.local:50071"
+        );
+    }
 
     #[test]
     fn test_manifest_deserialization() {
@@ -403,5 +520,18 @@ mod tests {
         assert!(loaded.contains_key("aegis.domain.business"));
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_call_module_tool_pooled_invalid_endpoint() {
+        let res =
+            call_module_tool_pooled("http://invalid uri with spaces", "ping", "{}", "default")
+                .await;
+        assert!(res.is_err());
+        let err = res.err().unwrap_or_default();
+        assert!(
+            err.starts_with("Invalid endpoint format:"),
+            "Unexpected error message: {err}"
+        );
     }
 }

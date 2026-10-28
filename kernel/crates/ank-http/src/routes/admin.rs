@@ -216,14 +216,35 @@ pub async fn delete_tenant_path(
     headers: HeaderMap,
     Path(target_id): Path<String>,
 ) -> Result<Json<TenantDeleteResponse>, AegisHttpError> {
-    require_master_auth(&state, &headers).await?;
+    let admin_id = require_master_auth(&state, &headers).await?;
+    if target_id == admin_id {
+        return Err(AegisHttpError::BadRequest(
+            "Cannot delete active master admin account".into(),
+        ));
+    }
 
-    let citadel = state.citadel.lock().await;
-    citadel
-        .enclave
-        .delete_tenant(&target_id)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    {
+        let citadel = state.citadel.lock().await;
+        citadel
+            .enclave
+            .delete_tenant(&target_id)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    }
+
+    {
+        let router = state.router.read().await;
+        if let Err(e) = router.purge_tenant_keys(&target_id).await {
+            tracing::warn!(
+                tenant_id = %target_id,
+                error = %e,
+                "Failed to purge tenant keys from KeyPool"
+            );
+        }
+        router.invalidate_sticky(&target_id).await;
+    }
+
+    crate::ws::chat::invalidate_onboarding_cache(&target_id);
 
     Ok(Json(TenantDeleteResponse {
         success: true,
@@ -245,24 +266,46 @@ pub async fn delete_tenant_body(
     State(state): State<AppState>,
     Json(body): Json<TenantDeleteAction>,
 ) -> Result<Json<TenantDeleteResponse>, AegisHttpError> {
-    let admin_hash = hash_passphrase(&body.admin_session_key);
-    let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(&body.admin_tenant_id, &admin_hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+    if body.target_tenant_id == body.admin_tenant_id {
+        return Err(AegisHttpError::BadRequest(
+            "Cannot delete active master admin account".into(),
+        ));
     }
 
-    citadel
-        .enclave
-        .delete_tenant(&body.target_tenant_id)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    let admin_hash = hash_passphrase(&body.admin_session_key);
+    {
+        let citadel = state.citadel.lock().await;
+
+        let is_auth = citadel
+            .enclave
+            .authenticate_master(&body.admin_tenant_id, &admin_hash)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+        if !is_auth {
+            return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+        }
+
+        citadel
+            .enclave
+            .delete_tenant(&body.target_tenant_id)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    }
+
+    {
+        let router = state.router.read().await;
+        if let Err(e) = router.purge_tenant_keys(&body.target_tenant_id).await {
+            tracing::warn!(
+                tenant_id = %body.target_tenant_id,
+                error = %e,
+                "Failed to purge tenant keys from KeyPool"
+            );
+        }
+        router.invalidate_sticky(&body.target_tenant_id).await;
+    }
+
+    crate::ws::chat::invalidate_onboarding_cache(&body.target_tenant_id);
 
     Ok(Json(TenantDeleteResponse {
         success: true,

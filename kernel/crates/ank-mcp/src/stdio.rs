@@ -1,9 +1,7 @@
 use crate::transport::{JsonRpcMessage, McpTransport};
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures_util::Stream;
-use serde_json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -13,6 +11,85 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 use tracing::{debug, error, warn};
+
+/// Tamaño máximo por línea JSON-RPC leída desde STDOUT del proceso hijo (4 MiB).
+const MAX_STDIO_LINE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Variables de entorno mínimas no sensibles del sistema operativo requeridas para que
+/// subprocesos (Node/NPX, Python, Winsock en Windows, certificados TLS) arranquen sin heredar
+/// secretos `AEGIS_*` del Ring 0.
+const SAFE_HOST_ENV_KEYS: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "HOME",
+    "USERPROFILE",
+    "LANG",
+    "LC_ALL",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+];
+
+/// Lee una línea terminada en `\n` acotando el uso de memoria a `max_bytes`.
+/// Si una línea excede `max_bytes`, descarta el resto hasta `\n` y retorna `Ok(Some(None))`.
+async fn read_bounded_line<R: AsyncBufReadExt + Unpin>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<Option<String>>> {
+    let mut buf = Vec::new();
+    let mut overflowed = false;
+
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            if buf.is_empty() && !overflowed {
+                return Ok(None);
+            }
+            if overflowed {
+                return Ok(Some(None));
+            }
+            let text = String::from_utf8_lossy(&buf).into_owned();
+            return Ok(Some(Some(text)));
+        }
+
+        if let Some(newline_idx) = available.iter().position(|&b| b == b'\n') {
+            if !overflowed {
+                let slice = &available[..newline_idx];
+                if buf.len().saturating_add(slice.len()) <= max_bytes {
+                    buf.extend_from_slice(slice);
+                } else {
+                    overflowed = true;
+                    buf.clear();
+                }
+            }
+            reader.consume(newline_idx + 1);
+            if overflowed {
+                return Ok(Some(None));
+            }
+            if buf.last() == Some(&b'\r') {
+                buf.pop();
+            }
+            let text = String::from_utf8_lossy(&buf).into_owned();
+            return Ok(Some(Some(text)));
+        } else {
+            let chunk_len = available.len();
+            if !overflowed {
+                if buf.len().saturating_add(chunk_len) <= max_bytes {
+                    buf.extend_from_slice(available);
+                } else {
+                    overflowed = true;
+                    buf.clear();
+                }
+            }
+            reader.consume(chunk_len);
+        }
+    }
+}
 
 /// Implementación de transporte MCP vía StdIO.
 /// Diseñado bajo principios SRE: Zero-Trust Isolation y Gestión de Ciclo de Vida forzada.
@@ -26,8 +103,10 @@ impl StdioTransport {
     /// Crea un nuevo transporte MCP iniciando un proceso hijo.
     ///
     /// # Jailing & Security
-    /// - `env_clear()`: Elimina todas las variables de entorno heredadas del Ring 0.
-    /// - `current_dir()`: Confinamiento físico en el workspace del tenant.
+    /// - `env_clear()` + whitelist de runtime OS: Bloquea fugas de `AEGIS_ROOT_KEY` / API keys
+    ///   sin romper Winsock/Node/Python en Windows y Linux.
+    /// - `current_dir()`: Confinamiento físico en el directorio indicado.
+    /// - `kill_on_drop(true)`: Garantía adicional contra procesos zombi.
     pub fn new(
         command: &str,
         args: Vec<String>,
@@ -45,12 +124,19 @@ impl StdioTransport {
 
         // Protocolo Citadel: Zero-Trust Isolation (Regla 1)
         cmd.args(args)
-            .env_clear() // El subproceso nace ciego. No hereda la AEGIS_ROOT_KEY.
-            .envs(envs) // Inyección explícita de secretos necesarios.
-            .current_dir(cwd) // Jailing a nivel de directorio de trabajo.
+            .env_clear()
+            .kill_on_drop(true)
+            .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()); // Permitimos ver errores del servidor en el log del kernel.
+            .stderr(Stdio::inherit());
+
+        for key in SAFE_HOST_ENV_KEYS {
+            if let Some(val) = std::env::var_os(key) {
+                cmd.env(key, val);
+            }
+        }
+        cmd.envs(envs);
 
         let mut child = cmd
             .spawn()
@@ -94,7 +180,7 @@ impl McpTransport for StdioTransport {
         Ok(())
     }
 
-    /// Captura el STDOUT y lo convierte en un Stream asíncrono de mensajes. (Regla 2)
+    /// Captura el STDOUT y lo convierte en un Stream asíncrono de mensajes con límite de memoria. (Regla 2)
     fn receive_messages(&self) -> Pin<Box<dyn Stream<Item = Result<JsonRpcMessage>> + Send>> {
         let stdout_mutex = self.stdout.clone();
 
@@ -102,9 +188,20 @@ impl McpTransport for StdioTransport {
             let stdout = stdout_mutex.lock().await.take()
                 .context("Error de estado: El flujo de STDOUT ya ha sido reclamado")?;
 
-            let mut reader = BufReader::new(stdout).lines();
+            let mut reader = BufReader::new(stdout);
 
-            while let Some(line) = reader.next_line().await.context("Error de lectura en STDOUT")? {
+            while let Some(maybe_line) = read_bounded_line(&mut reader, MAX_STDIO_LINE_BYTES)
+                .await
+                .context("Error de lectura en STDOUT")?
+            {
+                let Some(line) = maybe_line else {
+                    warn!(
+                        "ANK-MCP: Línea STDOUT descartada por exceder el límite de {} bytes",
+                        MAX_STDIO_LINE_BYTES
+                    );
+                    continue;
+                };
+
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -113,7 +210,6 @@ impl McpTransport for StdioTransport {
                     Ok(msg) => yield msg,
                     Err(e) => {
                         error!("Mensaje MCP malformado recibido del servidor: {}", e);
-                        // No cortamos el stream por un error de parsing, pero lo reportamos
                     }
                 }
             }
@@ -126,18 +222,14 @@ impl McpTransport for StdioTransport {
 /// Zombie Killer: Asegura que el proceso hijo muera si el transporte es dropeado. (Regla 3)
 impl Drop for StdioTransport {
     fn drop(&mut self) {
-        // Como estamos en Drop, no podemos usar await. start_kill() envía el SIGKILL/Terminate de forma inmediata.
         if let Ok(mut child) = self.child.try_lock() {
             match child.start_kill() {
                 Ok(_) => debug!("Proceso servidor MCP terminado exitosamente (Drop)"),
                 Err(e) => {
-                    // Si ya murió (es lo normal si cerró el stream), start_kill puede fallar con "NotConnected" o similar.
-                    // Solo logueamos si es relevante.
                     debug!("Nota: Intento de terminación de proceso hijo: {}", e);
                 }
             }
         } else {
-            // Este caso es raro pero posible si hay un lock eterno bloqueando el guard de Child.
             warn!("Fuga potencial de proceso hijo: No se pudo adquirir lock del Child en Drop");
         }
     }
@@ -151,8 +243,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_stdio_transport_e2e() -> Result<()> {
-        // Usamos una utilidad de sistema que haga echo de la entrada.
-        // En Windows usamos python o powershell, en Unix/Docker 'cat'.
         let (cmd, args) = if cfg!(windows) {
             (
                 "python",
@@ -176,13 +266,9 @@ mod tests {
             params: None,
         };
 
-        // Escuchamos en una tarea separada
         let mut stream = transport.receive_messages();
+        transport.send_message(req).await?;
 
-        // Enviamos
-        transport.send_message(req.clone()).await?;
-
-        // Validamos recepción
         if let Some(res) = stream.next().await {
             let msg = res?;
             if let JsonRpcMessage::Request { id, method, .. } = msg {
@@ -195,6 +281,23 @@ mod tests {
             anyhow::bail!("Stream cerrado prematuramente");
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bounded_line_discards_oversized_and_recovers() -> Result<()> {
+        let payload = b"0123456789ABCDEF\nok\n";
+        let mut reader = BufReader::new(&payload[..]);
+
+        // Max 8 bytes: first line (16 bytes) overflows -> Some(None), second line ("ok") succeeds!
+        let first = read_bounded_line(&mut reader, 8).await?;
+        assert_eq!(first, Some(None));
+
+        let second = read_bounded_line(&mut reader, 8).await?;
+        assert_eq!(second, Some(Some("ok".to_string())));
+
+        let eof = read_bounded_line(&mut reader, 8).await?;
+        assert_eq!(eof, None);
         Ok(())
     }
 }

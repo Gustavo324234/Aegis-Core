@@ -113,7 +113,12 @@ function App() {
         if (!_hydrated || !isAuthenticated || isAdmin || needsPasswordReset || isEngineConfigured) return;
         const checkGlobalEngine = async () => {
             try {
-                const res = await fetch('/api/engine/status');
+                const headers: Record<string, string> = {};
+                if (tenantId && sessionKey) {
+                    headers['x-citadel-tenant'] = tenantId;
+                    headers['x-citadel-key'] = sessionKey;
+                }
+                const res = await fetch('/api/engine/status', { headers });
                 if (res.ok) {
                     const data = await res.json() as { configured: boolean };
                     if (data.configured) setEngineConfigured(true);
@@ -123,7 +128,7 @@ function App() {
             }
         };
         checkGlobalEngine();
-    }, [_hydrated, isAuthenticated, isAdmin, needsPasswordReset, isEngineConfigured, setEngineConfigured]);
+    }, [_hydrated, isAuthenticated, isAdmin, needsPasswordReset, isEngineConfigured, tenantId, sessionKey, setEngineConfigured]);
 
     useEffect(() => {
         if (_hydrated && isAuthenticated && !isAdmin && !needsPasswordReset && isEngineConfigured && tenantId && sessionKey && status === 'disconnected') {

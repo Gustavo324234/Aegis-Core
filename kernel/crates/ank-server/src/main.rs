@@ -233,13 +233,20 @@ pub(crate) async fn run_server() -> Result<()> {
         }
     });
 
-    // 8. Plugin Manager
-    let plugin_manager = Arc::new(RwLock::new(PluginManager::new()?));
+    // 8. Plugin Manager (initial load + hot-reload watcher)
+    let plugins_dir = data_dir.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).ok();
+    let mut initial_pm = PluginManager::new()?;
+    if let Some(s) = plugins_dir.to_str() {
+        if let Err(e) = initial_pm.load_all_from_dir(s).await {
+            warn!("Plugins initial directory scan warning: {}", e);
+        }
+    }
+    let plugin_manager = Arc::new(RwLock::new(initial_pm));
     let pm_clone = Arc::clone(&plugin_manager);
+    let plugins_dir_clone = plugins_dir.clone();
     tokio::spawn(async move {
-        let p_dir = resolve_data_dir().join("plugins");
-        std::fs::create_dir_all(&p_dir).ok();
-        if let Some(s) = p_dir.to_str() {
+        if let Some(s) = plugins_dir_clone.to_str() {
             let _ = watch_plugins_dir(s.to_string(), pm_clone).await;
         }
     });
@@ -249,8 +256,21 @@ pub(crate) async fn run_server() -> Result<()> {
         data_dir.to_str().unwrap_or("."),
     ));
 
-    // 10. HAL
+    // 10. HAL & MCP Bootstrap
     let hal = Arc::new(CognitiveHAL::new(Arc::clone(&plugin_manager))?);
+    {
+        let mcp_registry_boot = hal.mcp_registry.clone();
+        let mcp_cfg_path = data_dir.join("mcp_servers.json");
+        tokio::spawn(async move {
+            let count = mcp_registry_boot.load_from_config_file(&mcp_cfg_path).await;
+            if count > 0 {
+                info!(
+                    "MCP Bootstrap: {} external MCP tools registered from {:?}",
+                    count, mcp_cfg_path
+                );
+            }
+        });
+    }
 
     // 10. Router & Catalog — filtrado por AEGIS_MODEL_PROFILE
     let model_profile = ModelProfile::from_env();
@@ -348,7 +368,7 @@ pub(crate) async fn run_server() -> Result<()> {
                         broker
                             .entry(pid.clone())
                             .or_insert_with(|| {
-                                let (tx, _) = tokio::sync::broadcast::channel(512);
+                                let (tx, _) = tokio::sync::broadcast::channel(2048);
                                 tx
                             })
                             .clone()
@@ -607,6 +627,10 @@ pub(crate) async fn run_server() -> Result<()> {
                             });
                         }
                     }
+
+                    // CORE-357: Evict completed PID channel from event_broker so non-WS tasks
+                    // (Siren, Cron, Supervisors) never leak broadcast channels in RAM.
+                    event_broker_runner.write().await.remove(&pid);
                 });
             }
 
@@ -676,10 +700,22 @@ pub(crate) async fn run_server() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(50051);
-    let grpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", grpc_port).parse()?;
+    let grpc_bind_host = std::env::var("AEGIS_GRPC_BIND")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let grpc_addr: std::net::SocketAddr = format!("{}:{}", grpc_bind_host, grpc_port).parse()?;
     let mut tonic_builder = Server::builder();
 
-    warn!("gRPC running in INSECURE mode (h2c) on port {}", grpc_port);
+    if grpc_addr.ip().is_loopback() {
+        info!("gRPC listening on loopback {} (h2c)", grpc_addr);
+    } else {
+        warn!(
+            "gRPC running in INSECURE mode (h2c) on {} — restrict via firewall or set AEGIS_GRPC_BIND=127.0.0.1",
+            grpc_addr
+        );
+    }
 
     tokio::spawn(async move {
         if let Err(e) = tonic_builder.add_service(tonic_svc).serve(grpc_addr).await {

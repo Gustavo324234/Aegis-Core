@@ -14,6 +14,8 @@ pub enum AegisHttpError {
     Kernel(String),
     #[error("Bad request: {0}")]
     BadRequest(String),
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
     #[error("Rate limit exceeded. Retry after {0} seconds")]
     RateLimitExceeded(u64),
     /// 502 — an upstream provider (Anthropic, Gemini, OpenAI, …) rejected
@@ -31,6 +33,9 @@ impl IntoResponse for AegisHttpError {
             AegisHttpError::Citadel(e) => e.into_response(),
             AegisHttpError::BadRequest(m) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": m }))).into_response()
+            }
+            AegisHttpError::Forbidden(m) => {
+                (StatusCode::FORBIDDEN, Json(json!({ "error": m }))).into_response()
             }
             AegisHttpError::Kernel(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

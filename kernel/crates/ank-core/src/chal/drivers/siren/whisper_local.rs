@@ -1,9 +1,22 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::router::siren::SirenEngine;
+
+const WHISPER_CLI_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Valida que un identificador de modelo Whisper sea un slug seguro sin path traversal.
+pub fn is_safe_whisper_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && !id.contains("..")
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
 
 /// WhisperLocalEngine: Transcripción STT local usando whisper.cpp CLI.
 /// TTS no soportado — este engine es solo STT.
@@ -34,6 +47,14 @@ impl WhisperLocalEngine {
                     None
                 }
             })?;
+
+        if !is_safe_whisper_model_id(&model_id) {
+            warn!(
+                model = %model_id,
+                "WhisperLocalEngine: invalid or unsafe model_id in active_model.txt; ignoring."
+            );
+            return None;
+        }
 
         let model_path = models_dir.join(format!("ggml-{}.bin", model_id));
         if !model_path.exists() {
@@ -114,11 +135,11 @@ fn pcm_to_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
     let bits_per_sample: u16 = 16;
     let byte_rate = sample_rate * u32::from(num_channels) * u32::from(bits_per_sample) / 8;
     let block_align = num_channels * bits_per_sample / 8;
-    let data_len = pcm.len() as u32;
+    let data_len = u32::try_from(pcm.len()).unwrap_or(u32::MAX - 36);
 
     let mut wav = Vec::with_capacity(44 + pcm.len());
     wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&(36u32 + data_len).to_le_bytes());
+    wav.extend_from_slice(&36u32.saturating_add(data_len).to_le_bytes());
     wav.extend_from_slice(b"WAVE");
     wav.extend_from_slice(b"fmt ");
     wav.extend_from_slice(&16u32.to_le_bytes());
@@ -134,46 +155,86 @@ fn pcm_to_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
-/// Ejecuta whisper-cli como subprocess. Prueba "whisper-cli" y luego "whisper" como fallback.
+/// Ejecuta whisper-cli como subprocess con timeout estricto y kill_on_drop.
+/// Prueba "whisper-cli" y luego "whisper" como fallback.
 async fn run_whisper_cli(
     model_path: &std::path::Path,
     wav_path: &std::path::Path,
 ) -> Result<String> {
+    let model_str = model_path
+        .to_str()
+        .ok_or_else(|| anyhow!("Ruta de modelo Whisper inválida (no UTF-8)"))?;
+    let wav_str = wav_path
+        .to_str()
+        .ok_or_else(|| anyhow!("Ruta de archivo WAV temporal inválida (no UTF-8)"))?;
+
     let args = [
-        "-m",
-        model_path.to_str().unwrap_or(""),
-        "-f",
-        wav_path.to_str().unwrap_or(""),
-        "-nt", // sin timestamps
-        "-l",
-        "auto", // auto-detectar idioma
+        "-m", model_str, "-f", wav_str, "-nt", // sin timestamps
+        "-l", "auto", // auto-detectar idioma
         "-np",  // sin barra de progreso
     ];
 
     // Intentar whisper-cli primero (versiones modernas de whisper.cpp)
-    for cmd in &["whisper-cli", "whisper"] {
-        let result = tokio::process::Command::new(cmd).args(args).output().await;
+    for bin in &["whisper-cli", "whisper"] {
+        let mut command = tokio::process::Command::new(bin);
+        command.args(args).kill_on_drop(true);
 
-        match result {
-            Ok(out) if out.status.success() => {
+        let timed = tokio::time::timeout(WHISPER_CLI_TIMEOUT, command.output()).await;
+        match timed {
+            Err(_) => {
+                return Err(anyhow!(
+                    "{} excedió el timeout de {}s",
+                    bin,
+                    WHISPER_CLI_TIMEOUT.as_secs()
+                ));
+            }
+            Ok(Ok(out)) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout).to_string();
                 return Ok(text);
             }
-            Ok(out) => {
+            Ok(Ok(out)) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 return Err(anyhow!(
-                    "whisper-cli falló (exit {}): {}",
+                    "{} falló (exit {}): {}",
+                    bin,
                     out.status,
                     stderr.trim()
                 ));
             }
             // Binario no encontrado — probar el siguiente
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(anyhow!("Error al ejecutar whisper-cli: {}", e)),
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Ok(Err(e)) => return Err(anyhow!("Error al ejecutar {}: {}", bin, e)),
         }
     }
 
     Err(anyhow!(
         "whisper-cli no encontrado. Instalá whisper.cpp: https://github.com/ggerganov/whisper.cpp"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_safe_whisper_model_id() {
+        assert!(is_safe_whisper_model_id("base"));
+        assert!(is_safe_whisper_model_id("large-v3"));
+        assert!(is_safe_whisper_model_id("small.en_q5"));
+        assert!(!is_safe_whisper_model_id(""));
+        assert!(!is_safe_whisper_model_id("../etc/passwd"));
+        assert!(!is_safe_whisper_model_id("..\\windows\\win"));
+        assert!(!is_safe_whisper_model_id("C:\\model"));
+        assert!(!is_safe_whisper_model_id("sub/model"));
+    }
+
+    #[test]
+    fn test_pcm_to_wav_header_integrity() {
+        let pcm = vec![0u8; 320];
+        let wav = pcm_to_wav(&pcm, 16000);
+        assert_eq!(wav.len(), 44 + 320);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[36..40], b"data");
+    }
 }

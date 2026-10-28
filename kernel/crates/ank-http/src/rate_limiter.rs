@@ -77,6 +77,12 @@ impl AuthRateLimiter {
         let now = Instant::now();
         let window = Duration::from_secs(self.config.window_secs);
 
+        // CORE-359: Evict expired entries when map grows beyond threshold to bound memory under brute-force floods.
+        if self.store.len() >= 1024 {
+            self.store
+                .retain(|_, v| now.duration_since(v.window_start) < window);
+        }
+
         let mut entry = self.store.entry(key).or_insert_with(|| Entry {
             attempts: 0,
             window_start: now,

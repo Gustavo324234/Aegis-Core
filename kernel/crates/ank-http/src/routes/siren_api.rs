@@ -1,4 +1,5 @@
 use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
+use ank_core::chal::drivers::siren::whisper_local::is_safe_whisper_model_id;
 use ank_core::scheduler::persistence::VoiceProfile;
 use axum::{
     extract::{Path, State},
@@ -6,16 +7,81 @@ use axum::{
     Json, Router,
 };
 use base64::Engine as _;
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, OnceLock, Weak,
+};
+use std::time::Duration;
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::APIBuilder;
 use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
 use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 use webrtc::track::track_local::TrackLocal;
+
+const SECRET_MASK_PREFIX: &str = "••••••••";
+const MAX_ENROLL_B64_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SDP_OFFER_BYTES: usize = 64 * 1024;
+const MAX_WEBRTC_PCM_SAMPLES: usize = 16_000 * 120; // ~2 min @ 16kHz mono
+const MAX_ACTIVE_WEBRTC_PER_TENANT: usize = 4;
+
+type ActivePeerRegistry = DashMap<String, Vec<(u64, Arc<RTCPeerConnection>)>>;
+
+static NEXT_WEBRTC_CONN_ID: AtomicU64 = AtomicU64::new(1);
+static ACTIVE_WEBRTC_PEERS: OnceLock<ActivePeerRegistry> = OnceLock::new();
+
+fn active_webrtc_peers() -> &'static ActivePeerRegistry {
+    ACTIVE_WEBRTC_PEERS.get_or_init(DashMap::new)
+}
+
+fn unregister_webrtc_peer(tenant_id: &str, conn_id: u64) -> Option<Arc<RTCPeerConnection>> {
+    let registry = active_webrtc_peers();
+    let mut removed = None;
+    let mut remove_entry = false;
+    if let Some(mut list) = registry.get_mut(tenant_id) {
+        if let Some(pos) = list.iter().position(|(id, _)| *id == conn_id) {
+            removed = Some(list.remove(pos).1);
+        }
+        remove_entry = list.is_empty();
+    }
+    if remove_entry {
+        registry.remove_if(tenant_id, |_, list| list.is_empty());
+    }
+    removed
+}
+
+fn mask_secret(secret: &str) -> String {
+    if secret.is_empty() {
+        return String::new();
+    }
+    let char_count = secret.chars().count();
+    if char_count <= 4 {
+        return SECRET_MASK_PREFIX.to_string();
+    }
+    let tail: String = secret
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{}{}", SECRET_MASK_PREFIX, tail)
+}
+
+fn resolve_secret_input(incoming: &str, existing: &str) -> String {
+    if incoming.starts_with("••••") {
+        existing.to_string()
+    } else {
+        incoming.to_string()
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -48,8 +114,16 @@ async fn get_siren_config(
     let (stt_available, active_model) =
         if let Ok(name) = std::fs::read_to_string(&active_model_path) {
             let name = name.trim().to_string();
-            let model_file = models_dir.join(format!("ggml-{}.bin", name));
-            (model_file.exists(), Some(name))
+            if is_safe_whisper_model_id(&name) {
+                let model_file = models_dir.join(format!("ggml-{}.bin", name));
+                (model_file.exists(), Some(name))
+            } else {
+                tracing::warn!(
+                    model = %name,
+                    "Siren API: unsafe model id in active_model.txt; ignoring."
+                );
+                (false, None)
+            }
         } else {
             // backwards-compat: accept ggml-base.bin without active_model.txt
             let legacy = models_dir.join("ggml-base.bin");
@@ -69,24 +143,24 @@ async fn get_siren_config(
     match profile {
         Some(p) => {
             let settings = serde_json::from_str::<serde_json::Value>(&p.settings_json).ok();
-            let api_key = settings
+            let raw_api_key = settings
                 .as_ref()
-                .and_then(|v| v["api_key"].as_str().map(|s| s.to_string()))
+                .and_then(|v| v["api_key"].as_str())
                 .unwrap_or_default();
             let stt_provider = settings
                 .as_ref()
                 .and_then(|v| v["stt_provider"].as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| "browser".to_string());
-            let stt_api_key = settings
+            let raw_stt_api_key = settings
                 .as_ref()
-                .and_then(|v| v["stt_api_key"].as_str().map(|s| s.to_string()))
+                .and_then(|v| v["stt_api_key"].as_str())
                 .unwrap_or_default();
             Ok(Json(json!({
                 "provider": p.engine_id,
                 "voice_id": p.voice_id,
-                "api_key": api_key,
+                "api_key": mask_secret(raw_api_key),
                 "stt_provider": stt_provider,
-                "stt_api_key": stt_api_key,
+                "stt_api_key": mask_secret(raw_stt_api_key),
                 "configured": true,
                 "stt_available": stt_available,
                 "active_model": active_model
@@ -116,6 +190,21 @@ async fn set_siren_config(
         .await
         .unwrap_or(None);
 
+    let existing_settings = existing
+        .as_ref()
+        .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.settings_json).ok());
+    let existing_api_key = existing_settings
+        .as_ref()
+        .and_then(|v| v["api_key"].as_str())
+        .unwrap_or_default();
+    let existing_stt_api_key = existing_settings
+        .as_ref()
+        .and_then(|v| v["stt_api_key"].as_str())
+        .unwrap_or_default();
+
+    let resolved_api_key = resolve_secret_input(&req.api_key, existing_api_key);
+    let resolved_stt_api_key = resolve_secret_input(&req.stt_api_key, existing_stt_api_key);
+
     let profile = VoiceProfile {
         tenant_id: auth.tenant_id.clone(),
         engine_id: req.provider,
@@ -124,9 +213,9 @@ async fn set_siren_config(
             .map(|p| p.model_pref)
             .unwrap_or_else(|| "HybridSmart".to_string()),
         settings_json: json!({
-            "api_key": req.api_key,
+            "api_key": resolved_api_key,
             "stt_provider": req.stt_provider,
-            "stt_api_key": req.stt_api_key
+            "stt_api_key": resolved_stt_api_key
         })
         .to_string(),
     };
@@ -155,19 +244,30 @@ async fn enroll_speaker(
     auth: CitadelAuthenticated,
     Json(req): Json<EnrollBody>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let pcm_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&req.pcm_b64)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Invalid base64 PCM: {}", e)))?;
-
-    let fingerprint = ank_core::speaker_id::extract_fingerprint(&pcm_bytes).ok_or_else(|| {
-        AegisHttpError::Internal(anyhow::anyhow!(
-            "Audio demasiado corto para enrollment (mínimo 25ms)"
-        ))
-    })?;
+    if req.pcm_b64.len() > MAX_ENROLL_B64_BYTES {
+        return Err(AegisHttpError::BadRequest(
+            "Enrollment audio payload exceeds 8 MiB limit".to_string(),
+        ));
+    }
 
     let threshold = req
         .threshold
         .unwrap_or(ank_core::speaker_id::DEFAULT_THRESHOLD);
+    if !threshold.is_finite() || !(0.1..=0.99).contains(&threshold) {
+        return Err(AegisHttpError::BadRequest(
+            "Invalid verification threshold (expected 0.10..=0.99)".to_string(),
+        ));
+    }
+
+    let pcm_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&req.pcm_b64)
+        .map_err(|e| AegisHttpError::BadRequest(format!("Invalid base64 PCM: {}", e)))?;
+
+    let fingerprint = ank_core::speaker_id::extract_fingerprint(&pcm_bytes).ok_or_else(|| {
+        AegisHttpError::BadRequest(
+            "Audio demasiado corto para enrollment (mínimo 25ms)".to_string(),
+        )
+    })?;
 
     state
         .persistence
@@ -212,7 +312,7 @@ async fn enrollment_status(
     Ok(Json(json!({ "enrolled": enrolled })))
 }
 
-async fn list_siren_voices() -> Json<Value> {
+async fn list_siren_voices(_auth: CitadelAuthenticated) -> Json<Value> {
     Json(json!({
         "voices": [
             { "id": "aura-asteria-en", "name": "Asteria (EN)", "provider": "voxtral" },
@@ -242,6 +342,9 @@ pub struct WebRtcAnswer {
 
 // ── Audio Resampling Helper ──────────────────────────────────────────────────
 fn resample_linear(input: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
+    if from_rate == 0 || to_rate == 0 || input.is_empty() {
+        return Vec::new();
+    }
     if from_rate == to_rate {
         return input.to_vec();
     }
@@ -265,11 +368,23 @@ fn resample_linear(input: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
 // ── WebRTC Offer Handler ─────────────────────────────────────────────────────
 async fn webrtc_offer_handler(
     State(state): State<AppState>,
-    _auth: CitadelAuthenticated,
+    auth: CitadelAuthenticated,
     Path(tenant_id): Path<String>,
     headers: axum::http::HeaderMap,
     Json(req): Json<WebRtcOffer>,
 ) -> Result<Json<WebRtcAnswer>, AegisHttpError> {
+    if !auth.is_master && auth.tenant_id != tenant_id {
+        return Err(AegisHttpError::Forbidden(
+            "Cross-tenant WebRTC signaling denied".to_string(),
+        ));
+    }
+
+    if req.sdp.is_empty() || req.sdp.len() > MAX_SDP_OFFER_BYTES {
+        return Err(AegisHttpError::BadRequest(
+            "Invalid or oversized SDP offer".to_string(),
+        ));
+    }
+
     let session_key = headers
         .get("x-citadel-key")
         .and_then(|h| h.to_str().ok())
@@ -301,6 +416,25 @@ async fn webrtc_offer_handler(
         AegisHttpError::Internal(anyhow::anyhow!("Failed to create PeerConnection: {}", e))
     })?);
 
+    // 1b. Acotar sesiones WebRTC activas por tenant y cerrar conexiones obsoletas si exceden el límite
+    let conn_id = NEXT_WEBRTC_CONN_ID.fetch_add(1, Ordering::Relaxed);
+    let mut evicted_peers: Vec<Arc<RTCPeerConnection>> = Vec::new();
+    {
+        let mut entry = active_webrtc_peers().entry(tenant_id.clone()).or_default();
+        while entry.len() >= MAX_ACTIVE_WEBRTC_PER_TENANT {
+            let (_, old_pc) = entry.remove(0);
+            evicted_peers.push(old_pc);
+        }
+        entry.push((conn_id, Arc::clone(&peer_connection)));
+    }
+    for old_pc in evicted_peers {
+        tracing::info!(
+            tenant = %tenant_id,
+            "Siren WebRTC: Closing oldest PeerConnection (per-tenant cap reached)."
+        );
+        let _ = old_pc.close().await;
+    }
+
     // 2. Configurar Track de Salida (TTS Opus)
     let local_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
@@ -311,15 +445,57 @@ async fn webrtc_offer_handler(
         "webrtc-rs".to_owned(),
     ));
 
-    peer_connection
+    if let Err(e) = peer_connection
         .add_track(Arc::clone(&local_track) as Arc<dyn TrackLocal + Send + Sync>)
         .await
-        .map_err(|e| {
-            AegisHttpError::Internal(anyhow::anyhow!("Failed to add WebRTC audio track: {}", e))
-        })?;
+    {
+        let _ = unregister_webrtc_peer(&tenant_id, conn_id);
+        let _ = peer_connection.close().await;
+        return Err(AegisHttpError::Internal(anyhow::anyhow!(
+            "Failed to add WebRTC audio track: {}",
+            e
+        )));
+    }
 
-    // 3. Crear buffer de audio compartido
+    // 3. Crear buffer de audio compartido (acotado a MAX_WEBRTC_PCM_SAMPLES)
     let shared_audio = Arc::new(tokio::sync::Mutex::new(Vec::<i16>::new()));
+
+    // 3b. Cerrar PeerConnection y liberar memoria ante desconexión/fallo ICE (sin ciclo Arc)
+    let pc_weak: Weak<RTCPeerConnection> = Arc::downgrade(&peer_connection);
+    let shared_audio_cleanup = Arc::clone(&shared_audio);
+    let tenant_cleanup = tenant_id.clone();
+    peer_connection.on_peer_connection_state_change(Box::new(
+        move |conn_state: RTCPeerConnectionState| {
+            let pc_weak = pc_weak.clone();
+            let audio_ref = Arc::clone(&shared_audio_cleanup);
+            let tenant_ref = tenant_cleanup.clone();
+            Box::pin(async move {
+                if matches!(
+                    conn_state,
+                    RTCPeerConnectionState::Failed
+                        | RTCPeerConnectionState::Disconnected
+                        | RTCPeerConnectionState::Closed
+                ) {
+                    tracing::info!(
+                        tenant = %tenant_ref,
+                        state = ?conn_state,
+                        "Siren WebRTC: PeerConnection state terminal; releasing resources."
+                    );
+                    {
+                        let mut buf = audio_ref.lock().await;
+                        buf.clear();
+                        buf.shrink_to_fit();
+                    }
+                    let removed = unregister_webrtc_peer(&tenant_ref, conn_id);
+                    if conn_state != RTCPeerConnectionState::Closed {
+                        if let Some(pc) = removed.or_else(|| pc_weak.upgrade()) {
+                            let _ = pc.close().await;
+                        }
+                    }
+                }
+            })
+        },
+    ));
 
     // 4. Configurar handler para el Track de entrada remoto (Microfono Opus RTP)
     let shared_audio_clone = Arc::clone(&shared_audio);
@@ -342,6 +518,11 @@ async fn webrtc_offer_handler(
                     match decoder.decode(&payload, &mut pcm_buf, false) {
                         Ok(len) => {
                             let mut buf = shared_audio_track.lock().await;
+                            if buf.len().saturating_add(len) > MAX_WEBRTC_PCM_SAMPLES {
+                                let excess = (buf.len() + len) - MAX_WEBRTC_PCM_SAMPLES;
+                                let drain_cnt = excess.min(buf.len());
+                                buf.drain(..drain_cnt);
+                            }
                             buf.extend_from_slice(&pcm_buf[..len]);
                         }
                         Err(e) => {
@@ -413,6 +594,19 @@ async fn webrtc_offer_handler(
                             std::mem::take(&mut *buf)
                         };
 
+                        if pcm_samples.is_empty() {
+                            let _ = d_inner
+                                .send_text(
+                                    json!({
+                                        "event": "siren_event",
+                                        "data": { "event_type": "STT_EMPTY" }
+                                    })
+                                    .to_string(),
+                                )
+                                .await;
+                            return;
+                        }
+
                         // Convertir a bytes Little-Endian
                         let mut pcm_bytes = Vec::with_capacity(pcm_samples.len() * 2);
                         for sample in pcm_samples {
@@ -428,13 +622,34 @@ async fn webrtc_offer_handler(
                             Ok(t) => t,
                             Err(e) => {
                                 tracing::error!("Siren WebRTC: STT Processing failed: {}", e);
-                                let _ = d_inner.send_text(json!({
-                                    "event": "siren_event",
-                                    "data": { "event_type": "STT_ERROR", "message": e.to_string() }
-                                }).to_string()).await;
+                                let _ = d_inner
+                                    .send_text(
+                                        json!({
+                                            "event": "siren_event",
+                                            "data": { "event_type": "STT_ERROR", "message": e.to_string() }
+                                        })
+                                        .to_string(),
+                                    )
+                                    .await;
                                 return;
                             }
                         };
+
+                        if transcript.trim().is_empty() {
+                            tracing::info!(
+                                "Siren WebRTC: Empty STT transcript; skipping LLM task."
+                            );
+                            let _ = d_inner
+                                .send_text(
+                                    json!({
+                                        "event": "siren_event",
+                                        "data": { "event_type": "STT_EMPTY" }
+                                    })
+                                    .to_string(),
+                                )
+                                .await;
+                            return;
+                        }
 
                         // Agendar tarea en el Scheduler
                         let mut pcb =
@@ -474,20 +689,16 @@ async fn webrtc_offer_handler(
                             .await;
 
                         // Esperar respuesta LLM
-                        let llm_output = match tokio::time::timeout(
-                            std::time::Duration::from_secs(60),
-                            output_rx,
-                        )
-                        .await
-                        {
-                            Ok(Ok(output)) => output,
-                            _ => {
-                                tracing::warn!(
-                                    "Siren WebRTC: LLM response channel error or timeout."
-                                );
-                                return;
-                            }
-                        };
+                        let llm_output =
+                            match tokio::time::timeout(Duration::from_secs(60), output_rx).await {
+                                Ok(Ok(output)) => output,
+                                _ => {
+                                    tracing::warn!(
+                                        "Siren WebRTC: LLM response channel error or timeout."
+                                    );
+                                    return;
+                                }
+                            };
 
                         // Sintetizar TTS
                         let engine = match state_dc.siren_router.resolve(&tenant_id_dc).await {
@@ -506,15 +717,17 @@ async fn webrtc_offer_handler(
                             }
                         };
 
-                        // Remuestrear TTS PCM (22.05kHz) a 48kHz para Opus
-                        let mut samples_22050 = Vec::with_capacity(tts_bytes.len() / 2);
-                        for chunk in tts_bytes.chunks_exact(2) {
-                            samples_22050.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+                        // Remuestrear TTS PCM a 48kHz según el sample_rate real del motor
+                        let src_rate = engine.sample_rate();
+                        let count = tts_bytes.len() / 2;
+                        let mut samples_src = Vec::with_capacity(count);
+                        for i in 0..count {
+                            samples_src.push(i16::from_le_bytes([tts_bytes[2 * i], tts_bytes[2 * i + 1]]));
                         }
 
-                        let samples_48000 = resample_linear(&samples_22050, 22050, 48000);
+                        let samples_48000 = resample_linear(&samples_src, src_rate, 48000);
 
-                        // Codificar Opus a 48kHz mono
+                        // Codificar Opus a 48kHz mono con cadencia RTP real de 20ms por frame
                         let mut encoder = match opus::Encoder::new(
                             48000,
                             opus::Channels::Mono,
@@ -532,8 +745,11 @@ async fn webrtc_offer_handler(
 
                         const OPUS_FRAME_SIZE: usize = 960;
                         let mut opus_buf = vec![0u8; 2048];
+                        let mut frame_ticker = tokio::time::interval(Duration::from_millis(20));
+                        frame_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
                         for chunk in samples_48000.chunks(OPUS_FRAME_SIZE) {
+                            frame_ticker.tick().await;
                             let mut padded_chunk = vec![0i16; OPUS_FRAME_SIZE];
                             padded_chunk[..chunk.len()].copy_from_slice(chunk);
 
@@ -541,7 +757,7 @@ async fn webrtc_offer_handler(
                                 Ok(len) => {
                                     let sample = webrtc::media::Sample {
                                         data: bytes::Bytes::copy_from_slice(&opus_buf[..len]),
-                                        duration: std::time::Duration::from_millis(20),
+                                        duration: Duration::from_millis(20),
                                         ..Default::default()
                                     };
                                     if let Err(e) = local_track_dc.write_sample(&sample).await {
@@ -575,41 +791,112 @@ async fn webrtc_offer_handler(
     }));
 
     // 6. Aplicar la oferta y generar la respuesta SDP
-    let offer = RTCSessionDescription::offer(req.sdp).map_err(|e| {
-        AegisHttpError::Internal(anyhow::anyhow!("Failed to parse SDP offer: {}", e))
-    })?;
+    let offer = match RTCSessionDescription::offer(req.sdp) {
+        Ok(o) => o,
+        Err(e) => {
+            unregister_webrtc_peer(&tenant_id, conn_id);
+            let _ = peer_connection.close().await;
+            return Err(AegisHttpError::BadRequest(format!(
+                "Failed to parse SDP offer: {}",
+                e
+            )));
+        }
+    };
 
-    peer_connection
-        .set_remote_description(offer)
-        .await
-        .map_err(|e| {
-            AegisHttpError::Internal(anyhow::anyhow!("Failed to set remote description: {}", e))
-        })?;
+    if let Err(e) = peer_connection.set_remote_description(offer).await {
+        unregister_webrtc_peer(&tenant_id, conn_id);
+        let _ = peer_connection.close().await;
+        return Err(AegisHttpError::BadRequest(format!(
+            "Failed to set remote description: {}",
+            e
+        )));
+    }
 
-    let answer = peer_connection
-        .create_answer(None)
-        .await
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to create answer: {}", e)))?;
+    let answer = match peer_connection.create_answer(None).await {
+        Ok(a) => a,
+        Err(e) => {
+            unregister_webrtc_peer(&tenant_id, conn_id);
+            let _ = peer_connection.close().await;
+            return Err(AegisHttpError::Internal(anyhow::anyhow!(
+                "Failed to create answer: {}",
+                e
+            )));
+        }
+    };
 
     let mut gather_complete = peer_connection.gathering_complete_promise().await;
 
-    peer_connection
-        .set_local_description(answer)
+    if let Err(e) = peer_connection.set_local_description(answer).await {
+        unregister_webrtc_peer(&tenant_id, conn_id);
+        let _ = peer_connection.close().await;
+        return Err(AegisHttpError::Internal(anyhow::anyhow!(
+            "Failed to set local description: {}",
+            e
+        )));
+    }
+
+    // Esperar recoleccion de ICE locales con timeout acotado (evita colgar ante STUN caído)
+    if tokio::time::timeout(Duration::from_secs(10), gather_complete.recv())
         .await
-        .map_err(|e| {
-            AegisHttpError::Internal(anyhow::anyhow!("Failed to set local description: {}", e))
-        })?;
+        .is_err()
+    {
+        tracing::warn!(
+            tenant = %tenant_id,
+            "Siren WebRTC: ICE gathering timed out after 10s; returning partial local SDP."
+        );
+    }
 
-    // Esperar recoleccion completa de ICE locales
-    let _ = gather_complete.recv().await;
-
-    let local_desc = peer_connection.local_description().await.ok_or_else(|| {
-        AegisHttpError::Internal(anyhow::anyhow!("Failed to extract local SDP answer"))
-    })?;
+    let local_desc = match peer_connection.local_description().await {
+        Some(desc) => desc,
+        None => {
+            unregister_webrtc_peer(&tenant_id, conn_id);
+            let _ = peer_connection.close().await;
+            return Err(AegisHttpError::Internal(anyhow::anyhow!(
+                "Failed to extract local SDP answer"
+            )));
+        }
+    };
 
     tracing::info!("Siren WebRTC: SDP Answer generada y enviada.");
 
     Ok(Json(WebRtcAnswer {
         sdp: local_desc.sdp,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mask_and_resolve_secret_roundtrip() {
+        assert_eq!(mask_secret(""), "");
+        assert_eq!(mask_secret("abc"), "••••••••");
+        assert_eq!(mask_secret("sk_live_1234567890abcd"), "••••••••abcd");
+
+        let masked = mask_secret("sk_live_1234567890abcd");
+        assert_eq!(
+            resolve_secret_input(&masked, "sk_live_1234567890abcd"),
+            "sk_live_1234567890abcd"
+        );
+        assert_eq!(
+            resolve_secret_input("sk_new_secret_9999", "sk_live_1234567890abcd"),
+            "sk_new_secret_9999"
+        );
+        assert_eq!(resolve_secret_input("", "sk_live_1234567890abcd"), "");
+    }
+
+    #[test]
+    fn test_resample_linear_16k_and_22k_to_48k() {
+        let input_16k = vec![1000i16; 160]; // 10ms @ 16kHz
+        let out_48k = resample_linear(&input_16k, 16000, 48000);
+        assert_eq!(out_48k.len(), 480); // 10ms @ 48kHz
+        assert!(out_48k.iter().all(|&s| (s - 1000).abs() <= 1));
+
+        let input_22k = vec![-500i16; 2205]; // 100ms @ 22.05kHz
+        let out_22_to_48 = resample_linear(&input_22k, 22050, 48000);
+        assert_eq!(out_22_to_48.len(), 4800);
+        assert_eq!(resample_linear(&[], 16000, 48000).len(), 0);
+        assert_eq!(resample_linear(&input_16k, 0, 48000).len(), 0);
+    }
 }

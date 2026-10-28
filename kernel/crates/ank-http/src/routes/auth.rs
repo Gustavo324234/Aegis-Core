@@ -1,15 +1,21 @@
 use crate::{
-    citadel::hash_passphrase, error::AegisHttpError, rate_limiter::RateLimitOutcome,
+    citadel::{hash_passphrase, CitadelError},
+    error::AegisHttpError,
+    rate_limiter::{AuthRateLimiter, RateLimitOutcome},
     state::AppState,
 };
+use ank_core::enclave::MasterEnclave;
 use axum::{
     extract::{ConnectInfo, State},
     routing::post,
     Json, Router,
 };
 use serde::Deserialize;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use utoipa::ToSchema;
+
+const MIN_PASSPHRASE_CHARS: usize = 6;
+const BOOTSTRAP_RATE_BUCKET: &str = "__bootstrap_setup__";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -33,6 +39,10 @@ pub struct AdminSetupRequest {
     pub username: String,
     #[schema(format = "password")]
     pub passphrase: String,
+    /// CORE-371: Setup token is mandatory across all bootstrap endpoints.
+    #[serde(default)]
+    #[schema(example = "SETUP-XXXX-XXXX")]
+    pub setup_token: String,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -81,6 +91,85 @@ pub struct ChangePasswordResponse {
     pub message: String,
 }
 
+fn client_ip(maybe_addr: Option<ConnectInfo<SocketAddr>>) -> IpAddr {
+    maybe_addr
+        .map(|ConnectInfo(addr)| addr.ip())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
+fn validate_new_passphrase(raw: &str) -> Result<(), AegisHttpError> {
+    if raw.trim().is_empty() || raw.chars().count() < MIN_PASSPHRASE_CHARS {
+        return Err(AegisHttpError::BadRequest(format!(
+            "Passphrase must be at least {} characters long",
+            MIN_PASSPHRASE_CHARS
+        )));
+    }
+    Ok(())
+}
+
+/// CORE-371: Atomic, rate-limited Master Admin bootstrap enforcing a valid `setup_token`.
+async fn bootstrap_master_with_token(
+    enclave: &MasterEnclave,
+    rate_limiter: &AuthRateLimiter,
+    ip: IpAddr,
+    username: &str,
+    raw_password: &str,
+    setup_token: &str,
+) -> Result<(), AegisHttpError> {
+    match rate_limiter.check_and_record_failed(ip, BOOTSTRAP_RATE_BUCKET) {
+        RateLimitOutcome::Blocked { retry_after_secs } => {
+            return Err(AegisHttpError::RateLimitExceeded(retry_after_secs));
+        }
+        RateLimitOutcome::Allowed { .. } => {}
+    }
+
+    let trimmed_user = username.trim();
+    if trimmed_user.is_empty() {
+        return Err(AegisHttpError::BadRequest(
+            "Username cannot be empty".to_string(),
+        ));
+    }
+    validate_new_passphrase(raw_password)?;
+
+    let trimmed_token = setup_token.trim();
+    if trimmed_token.is_empty() {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+    }
+
+    if enclave
+        .admin_exists()
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?
+    {
+        return Err(AegisHttpError::Forbidden(
+            "Master Admin is already initialized".to_string(),
+        ));
+    }
+
+    let valid = enclave
+        .validate_setup_token_only(trimmed_token)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    if !valid {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+    }
+
+    let hash = hash_passphrase(raw_password);
+    enclave
+        .initialize_master(trimmed_user, &hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    enclave
+        .consume_setup_token(trimmed_token)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    rate_limiter.reset(ip, BOOTSTRAP_RATE_BUCKET);
+    Ok(())
+}
+
 #[utoipa::path(
     post,
     path = "/api/auth/login",
@@ -94,10 +183,10 @@ pub struct ChangePasswordResponse {
 )]
 pub async fn login(
     State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    maybe_addr: Option<ConnectInfo<SocketAddr>>,
     Json(body): Json<AuthRequest>,
 ) -> Result<Json<LoginResponse>, AegisHttpError> {
-    let ip = addr.ip();
+    let ip = client_ip(maybe_addr);
 
     match state
         .auth_rate_limiter
@@ -150,9 +239,7 @@ pub async fn login(
                 role: "tenant".to_string(),
             }))
         }
-        Ok(false) => Err(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::Unauthorized,
-        )),
+        Ok(false) => Err(AegisHttpError::Citadel(CitadelError::Unauthorized)),
         Err(e) if e.to_string().contains("PASSWORD_MUST_CHANGE") => {
             state.auth_rate_limiter.reset(ip, &body.tenant_id);
             Ok(Json(LoginResponse {
@@ -161,9 +248,7 @@ pub async fn login(
                 role: "tenant".to_string(),
             }))
         }
-        Err(_) => Err(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::Unauthorized,
-        )),
+        Err(_) => Err(AegisHttpError::Citadel(CitadelError::Unauthorized)),
     }
 }
 
@@ -174,20 +259,27 @@ pub async fn login(
     request_body = AdminSetupRequest,
     responses(
         (status = 200, description = "Master admin initialized", body = SetupResponse),
-        (status = 500, description = "Kernel error")
+        (status = 401, description = "Missing, invalid, or expired setup token"),
+        (status = 403, description = "Already initialized"),
+        (status = 429, description = "Rate limit exceeded")
     )
 )]
 pub async fn setup(
     State(state): State<AppState>,
+    maybe_addr: Option<ConnectInfo<SocketAddr>>,
     Json(body): Json<AdminSetupRequest>,
 ) -> Result<Json<SetupResponse>, AegisHttpError> {
-    let hash = hash_passphrase(&body.passphrase);
+    let ip = client_ip(maybe_addr);
     let citadel = state.citadel.lock().await;
-    citadel
-        .enclave
-        .initialize_master(&body.username, &hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    bootstrap_master_with_token(
+        &citadel.enclave,
+        &state.auth_rate_limiter,
+        ip,
+        &body.username,
+        &body.passphrase,
+        &body.setup_token,
+    )
+    .await?;
 
     Ok(Json(SetupResponse {
         status: "success".to_string(),
@@ -203,48 +295,27 @@ pub async fn setup(
     request_body = SetupTokenRequest,
     responses(
         (status = 200, description = "Setup completed", body = SetupTokenResponse),
-        (status = 400, description = "Invalid or expired setup token"),
-        (status = 500, description = "Kernel error")
+        (status = 401, description = "Invalid or expired setup token"),
+        (status = 403, description = "Already initialized"),
+        (status = 429, description = "Rate limit exceeded")
     )
 )]
 pub async fn setup_token(
     State(state): State<AppState>,
+    maybe_addr: Option<ConnectInfo<SocketAddr>>,
     Json(body): Json<SetupTokenRequest>,
 ) -> Result<Json<SetupTokenResponse>, AegisHttpError> {
-    let hash = hash_passphrase(&body.password);
-
-    {
-        let citadel = state.citadel.lock().await;
-        let valid = citadel
-            .enclave
-            .validate_setup_token_only(&body.setup_token)
-            .await
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-        if !valid {
-            return Err(AegisHttpError::Kernel(
-                "Invalid or expired setup token".to_string(),
-            ));
-        }
-    }
-
-    {
-        let citadel = state.citadel.lock().await;
-        citadel
-            .enclave
-            .initialize_master(&body.username, &hash)
-            .await
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    }
-
-    {
-        let citadel = state.citadel.lock().await;
-        citadel
-            .enclave
-            .consume_setup_token(&body.setup_token)
-            .await
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    }
+    let ip = client_ip(maybe_addr);
+    let citadel = state.citadel.lock().await;
+    bootstrap_master_with_token(
+        &citadel.enclave,
+        &state.auth_rate_limiter,
+        ip,
+        &body.username,
+        &body.password,
+        &body.setup_token,
+    )
+    .await?;
 
     Ok(Json(SetupTokenResponse {
         success: true,
@@ -259,21 +330,61 @@ pub async fn setup_token(
     request_body = ChangePasswordRequest,
     responses(
         (status = 200, description = "Password changed", body = ChangePasswordResponse),
+        (status = 400, description = "Weak new password"),
         (status = 401, description = "Invalid current password"),
-        (status = 500, description = "Kernel error")
+        (status = 429, description = "Rate limit exceeded")
     )
 )]
 pub async fn change_password(
     State(state): State<AppState>,
+    maybe_addr: Option<ConnectInfo<SocketAddr>>,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<ChangePasswordResponse>, AegisHttpError> {
+    let ip = client_ip(maybe_addr);
+
+    match state
+        .auth_rate_limiter
+        .check_and_record_failed(ip, &body.tenant_id)
+    {
+        RateLimitOutcome::Blocked { retry_after_secs } => {
+            return Err(AegisHttpError::RateLimitExceeded(retry_after_secs));
+        }
+        RateLimitOutcome::Allowed { .. } => {}
+    }
+
+    validate_new_passphrase(&body.new_password)?;
+    if body.new_password == body.current_password {
+        return Err(AegisHttpError::BadRequest(
+            "New password must differ from current password".to_string(),
+        ));
+    }
+
     let current_hash = hash_passphrase(&body.current_password);
     let new_hash = hash_passphrase(&body.new_password);
 
     let citadel = state.citadel.lock().await;
 
-    // Verificar la contraseña actual usando authenticate_tenant (ya implementado en enclave)
-    // Ignoramos PASSWORD_MUST_CHANGE — el usuario está intentando cambiarlo ahora mismo
+    let is_master = citadel
+        .enclave
+        .authenticate_master(&body.tenant_id, &current_hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    if is_master {
+        citadel
+            .enclave
+            .reset_master_password(&body.tenant_id, &new_hash)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+        state.auth_rate_limiter.reset(ip, &body.tenant_id);
+        return Ok(Json(ChangePasswordResponse {
+            success: true,
+            message: "Password updated successfully".to_string(),
+        }));
+    }
+
+    // Verificar la contraseña actual usando authenticate_tenant
+    // Ignoramos PASSWORD_MUST_CHANGE — el usuario está intentando cambiarla ahora mismo
     let current_valid = match citadel
         .enclave
         .authenticate_tenant(&body.tenant_id, &current_hash)
@@ -285,9 +396,7 @@ pub async fn change_password(
     };
 
     if !current_valid {
-        return Err(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::Unauthorized,
-        ));
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
     }
 
     citadel
@@ -296,8 +405,113 @@ pub async fn change_password(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
+    state.auth_rate_limiter.reset(ip, &body.tenant_id);
+
     Ok(Json(ChangePasswordResponse {
         success: true,
         message: "Password updated successfully".to_string(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_bootstrap_rejects_missing_or_invalid_setup_token() -> anyhow::Result<()> {
+        let enclave = MasterEnclave::new_in_memory().await?;
+        enclave.store_setup_token("SETUP-VALID-TOKEN", 15).await?;
+        let limiter = AuthRateLimiter::new(crate::rate_limiter::RateLimitConfig::default());
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+
+        // Empty setup_token (legacy /api/auth/setup bypass attempt) must fail with 401
+        let empty_err =
+            bootstrap_master_with_token(&enclave, &limiter, ip, "admin", "strongpass123", "").await;
+        assert!(matches!(
+            empty_err,
+            Err(AegisHttpError::Citadel(CitadelError::Unauthorized))
+        ));
+        assert!(!enclave.admin_exists().await?);
+
+        // Wrong setup_token must fail with 401
+        let wrong_err = bootstrap_master_with_token(
+            &enclave,
+            &limiter,
+            ip,
+            "admin",
+            "strongpass123",
+            "SETUP-WRONG",
+        )
+        .await;
+        assert!(matches!(
+            wrong_err,
+            Err(AegisHttpError::Citadel(CitadelError::Unauthorized))
+        ));
+        assert!(!enclave.admin_exists().await?);
+
+        // Valid setup_token initializes Master Admin and consumes the token
+        bootstrap_master_with_token(
+            &enclave,
+            &limiter,
+            ip,
+            "admin",
+            "strongpass123",
+            "SETUP-VALID-TOKEN",
+        )
+        .await?;
+        assert!(enclave.admin_exists().await?);
+        assert!(
+            enclave
+                .authenticate_master("admin", &hash_passphrase("strongpass123"))
+                .await?
+        );
+
+        // Second bootstrap attempt must fail with 403 Forbidden
+        let replay_err = bootstrap_master_with_token(
+            &enclave,
+            &limiter,
+            ip,
+            "attacker",
+            "strongpass123",
+            "SETUP-VALID-TOKEN",
+        )
+        .await;
+        assert!(matches!(replay_err, Err(AegisHttpError::Forbidden(_))));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_bootstrap_rate_limits_token_bruteforce() -> anyhow::Result<()> {
+        let enclave = MasterEnclave::new_in_memory().await?;
+        enclave.store_setup_token("SETUP-REAL-SECRET", 15).await?;
+        let limiter = AuthRateLimiter::new(crate::rate_limiter::RateLimitConfig::default());
+        let ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42));
+
+        for _ in 0..5 {
+            let _ = bootstrap_master_with_token(
+                &enclave,
+                &limiter,
+                ip,
+                "admin",
+                "strongpass123",
+                "SETUP-GUESS",
+            )
+            .await;
+        }
+
+        // 6th attempt must be blocked with 429 even if token were valid
+        let blocked = bootstrap_master_with_token(
+            &enclave,
+            &limiter,
+            ip,
+            "admin",
+            "strongpass123",
+            "SETUP-REAL-SECRET",
+        )
+        .await;
+        assert!(matches!(blocked, Err(AegisHttpError::RateLimitExceeded(_))));
+        assert!(!enclave.admin_exists().await?);
+        Ok(())
+    }
 }

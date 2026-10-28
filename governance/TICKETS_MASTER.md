@@ -212,6 +212,32 @@
 | CORE-343 | feat | Kernel Syscall & Tool: Telemetría de Hardware Nativa (`SYS_HW_TELEMETRY`) | ✅ Done | Alta | Kernel Engineer |
 | CORE-344 | feat | Kernel Syscall & Tool: Control de Audio PipeWire (`SYS_AUDIO_CONTROL`) | ✅ Done | Alta | Kernel Engineer |
 | CORE-345 | docs | Guía de Compilación de Imagen ISO de NixOS y Despliegue Bare-Metal | ✅ Done | Alta | DevOps Engineer |
+| CORE-346 | fix | Purge Physical Tenant Directory & L3 Swap on Delete | ✅ Done | Crítica | Kernel Engineer |
+| CORE-347 | fix | Clear Local Messages State on Tenant Delete and User Authentication | ✅ Done | Alta | Shell Engineer |
+| CORE-348 | fix | Update Gemini Catalog with Official 3.5/3.6 Flash Production IDs | ✅ Done | Alta | Kernel Engineer |
+| CORE-349 | fix | Encrypt L3 Swap Fragments in SQLCipher and Fix Vector Dimension Initialization | ✅ Done | Crítica | Kernel Engineer |
+| CORE-350 | fix | Enforce Tenant Isolation, Secret Redaction, and Tool Use v2 in Fine-Tuning Dataset | ✅ Done | Crítica | Kernel Engineer |
+| CORE-351 | fix | Create Missing `profile-server.nix` for Headless NixOS Flake | ✅ Done | Alta | DevOps Engineer |
+| CORE-352 | perf | Optimize VCM Git & Governance Context Assembly with Native `git2` and TTL Cache | ✅ Done | Alta | Kernel Engineer |
+| CORE-353 | perf | gRPC Channel Pool for Microkernel Domain Modules | ✅ Done | Alta | Kernel Engineer |
+| CORE-354 | feat | Real Ollama Modelfile Export and Model Registration in TrainingManager | ✅ Done | Alta | Kernel Engineer |
+| CORE-355 | refactor | Modularize `syscalls/mod.rs` into `parser.rs` and `oauth_integrations.rs` | ✅ Done | Media | Kernel Engineer |
+| CORE-356 | refactor | Modularize and Deduplicate `router_api.rs` into Submodules | ✅ Done | Media | Kernel Engineer |
+| CORE-357 | fix | Fix WebSocket Real-Time Token Streaming and Evict Completed PIDs from `event_broker` | ✅ Done | Crítica | Kernel Engineer |
+| CORE-358 | fix | Enforce `CitadelAuthenticated` Verification and Multi-Tenant Agent/Persona Isolation | ✅ Done | Crítica | Kernel Engineer |
+| CORE-359 | fix | Sandbox Tenant `project_root`, Add Default Workspace Fallback, and Prune RateLimiter/Onboarding State | ✅ Done | Alta | Kernel Engineer |
+| CORE-360 | fix | Multi-Tenant Key Scoping in KeyPool, Agent Tenant Propagation, and Sticky Cache Key Health Validation | ✅ Done | Crítica | Kernel Engineer |
+| CORE-361 | feat | Native Provider Endpoints, Universal OpenRouter Hub Fallback, and Base URL Normalization in CognitiveRouter | ✅ Done | Alta | Kernel Engineer |
+| CORE-362 | fix | Accurate Per-Model Cooldowns, Key-Specific Fallback Rate-Limiting, and Complete CatalogSyncer Registration | ✅ Done | Alta | Kernel Engineer |
+| CORE-363 | fix | Harden WASM & JS Maker Sandboxes: StoreLimits, SSRF Redirect/IPv6 Guard, Tainted Enforcement, and Path Traversal Fixes | ✅ Done | Crítica | Kernel Engineer |
+| CORE-364 | fix | Harden ank-mcp Client Protocol Handshake, Long-Lived SSE Timeouts, Safe Env Isolation, and Server Bootstrap | ✅ Done | Alta | Kernel Engineer |
+| CORE-365 | fix | Complete aegis-supervisor Windows Service Lifecycle, Bounded Health Checks, Secret Safety, and Process Reaping | ✅ Done | Alta | Kernel Engineer |
+| CORE-366 | fix | Harden aegis-connect-relay & TunnelClient: Token Binding, Reconnect Race Fix, Bounded Queues, Query Preservation, and WSS TLS | ✅ Done | Crítica | Kernel Engineer |
+| CORE-367 | fix | Harden Siren WebRTC/WS & Voice API: Citadel Auth & IDOR Protection, Secret Masking, PeerConnection Cleanup, and Opus Sample-Rate Fidelity | ✅ Done | Crítica | Kernel Engineer |
+| CORE-368 | fix | Harden ank-cli & WS/System Endpoints: Citadel gRPC Headers, Authenticated Agent/Train WS Handshakes, and Connection Info Guard | ✅ Done | Crítica | Kernel Engineer |
+| CORE-369 | fix | Harden Shell UI: Chat Auto-Reconnect, Logout State Purge, Agent/Train WS Protocol Alignment, Siren STT Recovery, and Audio Safety | ✅ Done | Crítica | Shell Engineer |
+| CORE-370 | fix | Harden ank-server gRPC: Mandatory Setup Token & Hashing, Process Auth/IDOR Guard, Loopback Default Bind, Live Telemetry, and Full Tenant Purge | ✅ Done | Crítica | Kernel Engineer |
+| CORE-371 | fix | Harden Bootstrap Setup & Cognitive Engine Auth, Purge Tenant Keys on Delete, and Clean Tracked Test Databases | ✅ Done | Crítica | Kernel Engineer + Shell Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 

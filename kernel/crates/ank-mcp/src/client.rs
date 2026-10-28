@@ -3,11 +3,15 @@ use crate::transport::{JsonRpcMessage, McpTransport};
 use futures_util::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+/// Versión del protocolo MCP soportada en el handshake `initialize`.
+pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Alias para el mapa de peticiones pendientes ruteadas por ID.
 type PendingRequests =
@@ -18,12 +22,13 @@ type PendingRequests =
 pub struct McpClientSession {
     transport: Arc<dyn McpTransport>,
     pending_requests: PendingRequests,
+    closed: AtomicBool,
 }
 
 impl std::fmt::Debug for McpClientSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("McpClientSession")
-            .field("pending_requests_count", &"...") // Simplificado para evitar bloqueos
+            .field("closed", &self.is_closed())
             .finish()
     }
 }
@@ -35,6 +40,7 @@ impl McpClientSession {
         let session = Arc::new(Self {
             transport: Arc::new(transport),
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
+            closed: AtomicBool::new(false),
         });
 
         let session_clone = session.clone();
@@ -43,6 +49,11 @@ impl McpClientSession {
         });
 
         session
+    }
+
+    /// Indica si el transporte subyacente ya se ha cerrado.
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
     }
 
     /// Bucle de background que procesa mensajes entrantes del transporte.
@@ -90,7 +101,10 @@ impl McpClientSession {
                     debug!("ANK-MCP: Payload: {:?}", params);
                 }
                 Ok(JsonRpcMessage::Request { method, .. }) => {
-                    warn!("ANK-MCP: Servidor intentó invocar el método '{}'. Bidireccionalidad no implementada en cliente.", method);
+                    warn!(
+                        "ANK-MCP: Servidor intentó invocar el método '{}'. Bidireccionalidad no implementada en cliente.",
+                        method
+                    );
                 }
                 Err(e) => {
                     error!("ANK-MCP: Error en el stream de transporte: {}", e);
@@ -99,28 +113,85 @@ impl McpClientSession {
             }
         }
 
+        self.closed.store(true, Ordering::Release);
+
         // Escalación SRE: Si el transporte muere, abortar todas las promesas pendientes.
+        let mut pending = self.pending_requests.lock().await;
         warn!(
             "ANK-MCP: Transporte cerrado. Limpiando {} peticiones pendientes.",
-            self.pending_requests.lock().await.len()
+            pending.len()
         );
-
-        let mut pending = self.pending_requests.lock().await;
         for (id, tx) in pending.drain() {
             debug!("ANK-MCP: Notificando ConnectionClosed a ID: {}", id);
             let _ = tx.send(Err(McpError::ConnectionClosed));
         }
     }
 
+    /// Envía una notificación JSON-RPC 2.0 unidireccional (sin respuesta esperada).
+    pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<(), McpError> {
+        if self.is_closed() {
+            return Err(McpError::ConnectionClosed);
+        }
+
+        let notification = JsonRpcMessage::Notification {
+            jsonrpc: "2.0".to_string(),
+            method: method.to_string(),
+            params,
+        };
+
+        self.transport
+            .send_message(notification)
+            .await
+            .map_err(|e| McpError::Transport(e.to_string()))
+    }
+
+    /// Ejecuta el handshake oficial MCP (`initialize` + `notifications/initialized`).
+    pub async fn initialize(
+        &self,
+        client_name: &str,
+        client_version: &str,
+    ) -> Result<Value, McpError> {
+        let init_params = serde_json::json!({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {
+                "name": client_name,
+                "version": client_version,
+            }
+        });
+
+        let server_info = self.call("initialize", init_params).await?;
+        self.notify("notifications/initialized", None).await?;
+        Ok(server_info)
+    }
+
     /// API Pública: "Fire and Await".
     /// Envía una petición y espera la respuesta asíncrona con un timeout de 30s.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, McpError> {
+        self.call_with_timeout(method, params, Duration::from_secs(30))
+            .await
+    }
+
+    /// Variante de `call` con timeout configurable por operación.
+    pub async fn call_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        call_timeout: Duration,
+    ) -> Result<Value, McpError> {
+        if self.is_closed() {
+            return Err(McpError::ConnectionClosed);
+        }
+
         let id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
 
         // 1. Registro de la promesa
         {
             let mut pending = self.pending_requests.lock().await;
+            if self.is_closed() {
+                return Err(McpError::ConnectionClosed);
+            }
             pending.insert(id.clone(), tx);
         }
 
@@ -141,8 +212,8 @@ impl McpClientSession {
 
         debug!("ANK-MCP: Petición '{}' enviada con ID: {}", method, id);
 
-        // 3. Await con Resiliencia (Timeout de 30 segundos según especificación)
-        match timeout(Duration::from_secs(30), rx).await {
+        // 3. Await con Resiliencia
+        match timeout(call_timeout, rx).await {
             Ok(Ok(Ok(JsonRpcMessage::Response {
                 result,
                 error: rpc_err,
@@ -161,12 +232,8 @@ impl McpClientSession {
                     Ok(result.unwrap_or(Value::Null))
                 }
             }
-            Ok(Ok(Err(e))) => {
-                // Error propagado desde el loop (ej ConnectionClosed)
-                Err(e)
-            }
+            Ok(Ok(Err(e))) => Err(e),
             Ok(Err(_)) => {
-                // RecvError: El sender fue droppeado sin enviar nada
                 error!(
                     "ANK-MCP: El canal de respuesta se cerró prematuramente para ID: {}",
                     id
@@ -174,17 +241,19 @@ impl McpClientSession {
                 Err(McpError::ConnectionClosed)
             }
             Err(_) => {
-                // Timeout
                 warn!(
-                    "ANK-MCP: Timeout excedido (30s) esperando respuesta para ID: {}",
-                    id
+                    "ANK-MCP: Timeout excedido ({:?}) esperando respuesta para ID: {}",
+                    call_timeout, id
                 );
                 let mut pending = self.pending_requests.lock().await;
                 pending.remove(&id);
                 Err(McpError::Timeout)
             }
             Ok(Ok(_)) => {
-                error!("ANK-MCP: Flujo de control inválido. Se recibió un mensaje no-Response para ID: {}", id);
+                error!(
+                    "ANK-MCP: Flujo de control inválido. Se recibió un mensaje no-Response para ID: {}",
+                    id
+                );
                 Err(McpError::Internal(
                     "Protocol violation: Non-response message in channel".into(),
                 ))
@@ -200,6 +269,7 @@ mod tests {
     use async_trait::async_trait;
     use futures_util::Stream;
     use std::pin::Pin;
+    use tokio::sync::mpsc;
     use tokio::time::sleep;
 
     struct MockTransport {
@@ -218,7 +288,6 @@ mod tests {
             let delay = self.delay;
             let stream = async_stream::try_stream! {
                 sleep(delay).await;
-                // Yielding nothing is fine, but we need to satisfy the type inference
                 if false {
                     yield JsonRpcMessage::Notification {
                         jsonrpc: "2.0".to_string(),
@@ -231,19 +300,100 @@ mod tests {
         }
     }
 
+    struct HandshakeMockTransport {
+        tx: mpsc::UnboundedSender<JsonRpcMessage>,
+        rx: Mutex<Option<mpsc::UnboundedReceiver<JsonRpcMessage>>>,
+        sent_methods: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl McpTransport for HandshakeMockTransport {
+        async fn send_message(&self, msg: JsonRpcMessage) -> anyhow::Result<()> {
+            match &msg {
+                JsonRpcMessage::Request { id, method, .. } => {
+                    self.sent_methods.lock().await.push(method.clone());
+                    if method == "initialize" {
+                        let _ = self.tx.send(JsonRpcMessage::Response {
+                            jsonrpc: "2.0".to_string(),
+                            id: id.clone(),
+                            result: Some(serde_json::json!({
+                                "protocolVersion": MCP_PROTOCOL_VERSION,
+                                "capabilities": { "tools": {} },
+                                "serverInfo": { "name": "mock-mcp", "version": "1.0.0" }
+                            })),
+                            error: None,
+                        });
+                    }
+                }
+                JsonRpcMessage::Notification { method, .. } => {
+                    self.sent_methods.lock().await.push(method.clone());
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+
+        fn receive_messages(
+            &self,
+        ) -> Pin<Box<dyn Stream<Item = anyhow::Result<JsonRpcMessage>> + Send>> {
+            let mut rx_guard = self.rx.try_lock().ok().and_then(|mut g| g.take());
+            let stream = async_stream::try_stream! {
+                if let Some(ref mut rx) = rx_guard {
+                    while let Some(msg) = rx.recv().await {
+                        yield msg;
+                    }
+                }
+            };
+            Box::pin(stream)
+        }
+    }
+
     #[tokio::test]
     async fn test_client_session_timeout() -> anyhow::Result<()> {
         let transport = MockTransport {
-            delay: Duration::from_secs(40),
-        }; // Mayor que el timeout de 30s
+            delay: Duration::from_secs(5),
+        };
         let session = McpClientSession::new(transport);
 
-        let result = session.call("test/method", Value::Null).await;
+        let result = session
+            .call_with_timeout("test/method", Value::Null, Duration::from_millis(120))
+            .await;
 
         match result {
             Err(McpError::Timeout) => info!("Test pasado: Timeout detectado correctamente"),
             other => anyhow::bail!("Se esperaba McpError::Timeout, se obtuvo: {:?}", other),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mcp_initialize_handshake_and_closed_flag() -> anyhow::Result<()> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let sent_methods = Arc::new(Mutex::new(Vec::new()));
+        let transport = HandshakeMockTransport {
+            tx: tx.clone(),
+            rx: Mutex::new(Some(rx)),
+            sent_methods: sent_methods.clone(),
+        };
+
+        let session = McpClientSession::new(transport);
+        let info = session.initialize("aegis-core", "0.1.0").await?;
+        assert_eq!(info["serverInfo"]["name"], "mock-mcp");
+
+        let methods = sent_methods.lock().await.clone();
+        assert_eq!(
+            methods,
+            vec![
+                "initialize".to_string(),
+                "notifications/initialized".to_string()
+            ]
+        );
+
+        drop(tx);
+        // Allow background_loop to observe stream EOF
+        sleep(Duration::from_millis(20)).await;
+        // Wait: HandshakeMockTransport holds a clone of tx inside itself, so session remains open while alive
+        assert!(!session.is_closed());
         Ok(())
     }
 }

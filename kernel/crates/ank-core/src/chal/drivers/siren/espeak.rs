@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use std::time::Duration;
 use tracing::info;
 
 use crate::router::siren::SirenEngine;
@@ -40,7 +41,12 @@ impl EspeakEngine {
 
     /// Retorna true si espeak-ng está instalado en el sistema.
     pub fn is_available() -> bool {
-        std::process::Command::new("which")
+        #[cfg(windows)]
+        let probe_cmd = "where";
+        #[cfg(not(windows))]
+        let probe_cmd = "which";
+
+        std::process::Command::new(probe_cmd)
             .arg("espeak-ng")
             .output()
             .map(|o| o.status.success())
@@ -54,6 +60,10 @@ impl SirenEngine for EspeakEngine {
         "espeak"
     }
 
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
     /// Sintetiza texto a PCM 16-bit little-endian mono a 22050 Hz usando espeak-ng CLI.
     async fn synthesize(&self, text: String) -> Result<Vec<u8>> {
         if text.trim().is_empty() {
@@ -65,19 +75,22 @@ impl SirenEngine for EspeakEngine {
         // --stdout: output PCM raw a stdout
         // -b 1: encoding 16-bit little-endian
         // espeak-ng nativo opera a 22050 Hz; no hay flag de sample-rate en CLI.
-        let output = tokio::process::Command::new("espeak-ng")
-            .args([
-                "-v",
-                &self.voice,
-                "-s",
-                &self.speed.to_string(),
-                "--stdout",
-                "-b",
-                "1",
-                &clean_text,
-            ])
-            .output()
+        let mut cmd = tokio::process::Command::new("espeak-ng");
+        cmd.args([
+            "-v",
+            &self.voice,
+            "-s",
+            &self.speed.to_string(),
+            "--stdout",
+            "-b",
+            "1",
+            &clean_text,
+        ])
+        .kill_on_drop(true);
+
+        let output = tokio::time::timeout(Duration::from_secs(30), cmd.output())
             .await
+            .map_err(|_| anyhow!("espeak-ng excedió el timeout de 30s"))?
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     anyhow!("espeak-ng no encontrado. Instalá con: apt install espeak-ng")

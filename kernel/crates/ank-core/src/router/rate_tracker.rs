@@ -583,30 +583,75 @@ impl ModelUsageTracker {
         self.empty_responses_recent(model_id).await >= 2
     }
 
-    /// Seconds remaining until this model's circuit closes (oldest empty
-    /// response slides out of the 5min window). `None` when the circuit
-    /// is currently closed.
+    /// Seconds remaining until this model's circuit closes (when both the
+    /// `model_unavailable` and `empty_responses` 5-minute windows have aged
+    /// past their open thresholds). `None` when the circuit is currently closed.
     pub async fn model_cooldown_remaining_secs(&self, model_id: &str) -> Option<u64> {
-        let map = self.empty_responses.read().await;
-        let queue = map.get(model_id)?;
-        if queue.len() < 2 {
-            return None;
-        }
-        let oldest = *queue.front()?;
         let now = Instant::now();
         let window = Duration::from_secs(300);
-        let age = now.duration_since(oldest);
-        if age >= window {
-            None
-        } else {
-            Some((window - age).as_secs().max(1))
+        let cutoff = now.checked_sub(window).unwrap_or(now);
+        let mut max_remaining: Option<u64> = None;
+
+        // 1. Check empty_responses (circuit stays open while >= 2 events in window;
+        //    closes once the second-newest event slides past 300s).
+        {
+            let map = self.empty_responses.read().await;
+            if let Some(queue) = map.get(model_id) {
+                let active: Vec<Instant> = queue.iter().copied().filter(|&t| t >= cutoff).collect();
+                if active.len() >= 2 {
+                    let closing_event = active[active.len() - 2];
+                    let age = now.duration_since(closing_event);
+                    if age < window {
+                        let rem = (window - age).as_secs().max(1);
+                        max_remaining = Some(max_remaining.map_or(rem, |cur| cur.max(rem)));
+                    }
+                }
+            }
         }
+
+        // 2. Check model_unavailable (CORE-362: circuit stays open while >= 1 event
+        //    in window; closes once the newest event slides past 300s).
+        {
+            let map = self.model_unavailable.read().await;
+            if let Some(queue) = map.get(model_id) {
+                if let Some(&newest) = queue.iter().rfind(|&&t| t >= cutoff) {
+                    let age = now.duration_since(newest);
+                    if age < window {
+                        let rem = (window - age).as_secs().max(1);
+                        max_remaining = Some(max_remaining.map_or(rem, |cur| cur.max(rem)));
+                    }
+                }
+            }
+        }
+
+        max_remaining
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn model_unavailable_reports_non_zero_cooldown() {
+        let t = ModelUsageTracker::new();
+        assert!(t
+            .model_cooldown_remaining_secs("claude-sonnet-4-6")
+            .await
+            .is_none());
+        t.record_model_unavailable("claude-sonnet-4-6").await;
+        assert!(t.is_model_circuit_open("claude-sonnet-4-6").await);
+        let secs = t
+            .model_cooldown_remaining_secs("claude-sonnet-4-6")
+            .await
+            .expect("hard-unavailable model circuit must report remaining cooldown");
+        assert!(secs >= 1 && secs <= 300);
+        let open = t.open_model_circuits().await;
+        assert!(
+            open.get("claude-sonnet-4-6").copied().unwrap_or(0) >= 1,
+            "open_model_circuits must expose non-zero cooldown for unavailable model"
+        );
+    }
 
     #[tokio::test]
     async fn record_failure_feeds_error_window_for_scoring() {

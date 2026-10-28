@@ -1,8 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
+use std::sync::RwLock as StdRwLock;
+use std::time::Duration;
 use thiserror::Error;
 use tracing::{error, info, warn};
-use wasmtime::{Config, Engine, Linker, Module, Store};
+use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::preview1::WasiP1Ctx;
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxView, WasiView};
@@ -12,6 +15,15 @@ pub mod watcher;
 
 use self::signer::PluginSigner;
 use crate::enclave::TenantDB;
+
+/// Límite máximo de memoria lineal por instancia WASM (64 MiB).
+const MAX_WASM_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+/// Tiempo máximo de reloj para ejecutar un plugin WASM (15s).
+const MAX_WASM_EXECUTION_TIMEOUT: Duration = Duration::from_secs(15);
+/// Límite máximo de cuerpo descargado en `fetch_url_safe` (2 MiB).
+const MAX_FETCH_BODY_BYTES: usize = 2 * 1024 * 1024;
+/// Máximo de redirecciones HTTP validadas contra SSRF.
+const MAX_SAFE_REDIRECTS: usize = 3;
 
 /// --- PLUGIN ERROR SYSTEM (ANK-2411 Hardening) ---
 #[derive(Error, Debug)]
@@ -52,14 +64,75 @@ pub struct Plugin {
 }
 
 /// --- PLUGIN STATE ---
-/// Estado interno para el sandbox Wasm (WASI P1 bridge).
+/// Estado interno para el sandbox Wasm (WASI P1 bridge + ResourceLimiter).
 struct PluginState {
     ctx: WasiP1Ctx,
+    limits: StoreLimits,
 }
 
 impl WasiView for PluginState {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         self.ctx.ctx()
+    }
+}
+
+fn validate_tenant_segment(tenant_id: &str) -> Result<(), PluginError> {
+    if tenant_id.is_empty()
+        || tenant_id == "."
+        || tenant_id == ".."
+        || tenant_id.contains("..")
+        || tenant_id.contains('/')
+        || tenant_id.contains('\\')
+        || tenant_id.contains(':')
+        || tenant_id.contains('\0')
+    {
+        return Err(PluginError::SecurityViolation(format!(
+            "Invalid tenant_id for WASI sandbox jail: '{}'",
+            tenant_id
+        )));
+    }
+    Ok(())
+}
+
+fn is_forbidden_ipv4(v4: Ipv4Addr) -> bool {
+    let octets = v4.octets();
+    let is_cgnat = octets[0] == 100 && (octets[1] & 0xc0) == 64; // 100.64.0.0/10
+    let is_benchmark = octets[0] == 198 && (octets[1] & 0xfe) == 18; // 198.18.0.0/15
+    let is_reserved = octets[0] >= 240; // 240.0.0.0/4
+
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_documentation()
+        || v4.is_unspecified()
+        || v4.is_multicast()
+        || is_cgnat
+        || is_benchmark
+        || is_reserved
+}
+
+fn is_forbidden_ipv6(v6: Ipv6Addr) -> bool {
+    if let Some(mapped_v4) = v6.to_ipv4_mapped() {
+        return is_forbidden_ipv4(mapped_v4);
+    }
+    let segs = v6.segments();
+    let is_unique_local = (segs[0] & 0xfe00) == 0xfc00; // fc00::/7
+    let is_link_local = (segs[0] & 0xffc0) == 0xfe80; // fe80::/10
+    let is_doc = segs[0] == 0x2001 && segs[1] == 0x0db8; // 2001:db8::/32
+
+    v6.is_loopback()
+        || v6.is_unspecified()
+        || v6.is_multicast()
+        || is_unique_local
+        || is_link_local
+        || is_doc
+}
+
+pub(crate) fn is_forbidden_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_forbidden_ipv4(v4),
+        IpAddr::V6(v6) => is_forbidden_ipv6(v6),
     }
 }
 
@@ -71,6 +144,7 @@ pub struct PluginManager {
     plugins: HashMap<String, Plugin>,
     signer: PluginSigner,
     domain_plugins: HashMap<String, PluginMetadata>,
+    tainted_plugins: StdRwLock<HashSet<String>>,
 }
 
 impl PluginManager {
@@ -95,9 +169,9 @@ impl PluginManager {
         // sandbox bypass.
         let permissive_default = cfg!(debug_assertions);
 
-        let public_key: [u8; 32] = match std::env::var("AEGIS_PLUGIN_ROOT_KEY") {
+        let signer = match std::env::var("AEGIS_PLUGIN_ROOT_KEY") {
             Ok(hex_str) => {
-                let bytes = hex::decode(&hex_str).map_err(|e| {
+                let bytes = hex::decode(hex_str.trim()).map_err(|e| {
                     PluginError::IOError(format!("AEGIS_PLUGIN_ROOT_KEY is not valid hex: {}", e))
                 })?;
                 if bytes.len() < 32 {
@@ -108,15 +182,21 @@ impl PluginManager {
                 }
                 let mut key = [0u8; 32];
                 key.copy_from_slice(&bytes[..32]);
-                key
+                if allow_insecure {
+                    PluginSigner::new_permissive(&key)
+                } else {
+                    PluginSigner::new(&key)
+                }
+                .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?
             }
             Err(_) if allow_insecure || permissive_default => {
                 tracing::warn!(
-                    "AEGIS_PLUGIN_ROOT_KEY not set — using zeroed public key. \
-                     Plugin signatures are NOT verified. This is acceptable for \
-                     development/tests but MUST NOT be used in a release build."
+                    "AEGIS_PLUGIN_ROOT_KEY not set — using permissive dev/test signer. \
+                     Plugin signatures are NOT verified unless .wasm.sig is present. \
+                     MUST NOT be used in a release build."
                 );
-                [0u8; 32]
+                PluginSigner::new_permissive(&[0u8; 32])
+                    .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?
             }
             Err(_) => {
                 return Err(PluginError::IOError(
@@ -129,8 +209,6 @@ impl PluginManager {
             }
         };
 
-        let signer = PluginSigner::new(&public_key)
-            .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?;
         Self::new_with_signer(signer)
     }
 
@@ -142,7 +220,7 @@ impl PluginManager {
         config.async_support(true);
         config.consume_fuel(true);
         config.cranelift_opt_level(wasmtime::OptLevel::Speed);
-        config.memory_reservation(512 * 1024 * 1024); // Máximo 512MB RAM
+        config.memory_reservation(512 * 1024 * 1024); // Reserva virtual máx 512MB RAM
 
         let engine =
             Engine::new(&config).map_err(|e| PluginError::CompilationFailed(e.to_string()))?;
@@ -179,6 +257,7 @@ impl PluginManager {
             plugins: HashMap::new(),
             signer,
             domain_plugins,
+            tainted_plugins: StdRwLock::new(HashSet::new()),
         })
     }
 
@@ -186,12 +265,60 @@ impl PluginManager {
         &self.engine
     }
 
+    pub fn signer(&self) -> &PluginSigner {
+        &self.signer
+    }
+
+    fn clear_tainted_for_plugin(&self, plugin_name: &str) {
+        if let Ok(mut tainted) = self.tainted_plugins.write() {
+            let suffix = format!(":{}", plugin_name);
+            tainted.retain(|entry| !entry.ends_with(&suffix));
+        }
+    }
+
+    fn is_plugin_tainted(
+        &self,
+        tenant_id: &str,
+        plugin_name: &str,
+        session_key: Option<&str>,
+    ) -> bool {
+        let key = format!("{}:{}", tenant_id, plugin_name);
+        if let Ok(tainted) = self.tainted_plugins.read() {
+            if tainted.contains(&key) {
+                return true;
+            }
+        }
+        if let Some(skey) = session_key {
+            if let Ok(db) = TenantDB::open(tenant_id, skey) {
+                if let Ok(Some(status)) = db.get_kv(&format!("plugin_status:{}", plugin_name)) {
+                    if status == "TAINTED" {
+                        if let Ok(mut tainted) = self.tainted_plugins.write() {
+                            tainted.insert(key);
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn mark_plugin_tainted(&self, tenant_id: &str, plugin_name: &str, session_key: Option<&str>) {
+        if let Ok(mut tainted) = self.tainted_plugins.write() {
+            tainted.insert(format!("{}:{}", tenant_id, plugin_name));
+        }
+        if let Some(key) = session_key {
+            if let Ok(db) = TenantDB::open(tenant_id, key) {
+                let _ = db.set_kv(&format!("plugin_status:{}", plugin_name), "TAINTED");
+            }
+        }
+    }
+
     pub async fn reload_plugin_module(
         &mut self,
         path: &str,
         module: Module,
     ) -> Result<(), PluginError> {
-        // En reload_plugin_module asumimos que el watcher ya verificó la firma o lo haremos aquí.
         // Por seguridad, siempre verificamos firma antes de cargar al mapa.
         self.signer
             .verify_plugin(path)
@@ -202,6 +329,9 @@ impl PluginManager {
             .and_then(|s| s.to_str())
             .ok_or_else(|| PluginError::IOError("Invalid plugin path".to_string()))?
             .to_string();
+
+        // Un nuevo binario firmado rehabilita marcas TAINTED previas en memoria.
+        self.clear_tainted_for_plugin(&name);
 
         let initial_metadata = PluginMetadata {
             name: name.clone(),
@@ -276,76 +406,10 @@ impl PluginManager {
             PluginError::SecurityViolation(e.to_string())
         })?;
 
-        let name = Path::new(path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| PluginError::IOError("Invalid plugin path".to_string()))?
-            .to_string();
-
         let module = Module::from_file(&self.engine, path)
             .map_err(|e| PluginError::CompilationFailed(e.to_string()))?;
 
-        // 1. Insert placeholder metadata
-        let initial_metadata = PluginMetadata {
-            name: name.clone(),
-            description: "Loading...".to_string(),
-            version: "1.0.0".to_string(),
-            author: "Loading...".to_string(),
-            parameter_example: "{}".to_string(),
-        };
-
-        self.plugins.insert(
-            name.clone(),
-            Plugin {
-                metadata: initial_metadata,
-                module,
-            },
-        );
-
-        // 2. Discover metadata running the plugin
-        let metadata_input = r#"{"action": "get_metadata"}"#;
-        match self
-            .execute_plugin("system", &name, metadata_input, None)
-            .await
-        {
-            Ok(json_out) => {
-                if let Ok(resp) = serde_json::from_str::<serde_json::Value>(&json_out) {
-                    if let Some(data) = resp.get("data").and_then(|d| d.as_object()) {
-                        let final_metadata = PluginMetadata {
-                            name: name.clone(),
-                            description: data
-                                .get("description")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("No description")
-                                .to_string(),
-                            version: data
-                                .get("version")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("1.0.0")
-                                .to_string(),
-                            author: data
-                                .get("author")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Unknown")
-                                .to_string(),
-                            parameter_example: data
-                                .get("example_json")
-                                .map(|v| v.to_string())
-                                .unwrap_or_else(|| "{}".to_string()),
-                        };
-
-                        // Update the map
-                        if let Some(p) = self.plugins.get_mut(&name) {
-                            p.metadata = final_metadata;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!("Failed to auto-discover plugin {}: {}", name, e);
-            }
-        }
-        Ok(())
+        self.reload_plugin_module(path, module).await
     }
 
     /// Escanea un directorio y carga todos los binarios .wasm encontrados.
@@ -389,11 +453,21 @@ impl PluginManager {
         input_json: &str,
         session_key: Option<&str>,
     ) -> Result<String, PluginError> {
+        validate_tenant_segment(tenant_id)?;
+
         // 0. Interceptar Domain Plugins (Native)
         if let Some(metadata) = self.domain_plugins.get(plugin_name) {
             return self
                 .execute_domain_plugin(tenant_id, session_key, plugin_name, input_json, metadata)
                 .await;
+        }
+
+        // CORE-363: Enforce TAINTED policy before instantiating WASM module.
+        if self.is_plugin_tainted(tenant_id, plugin_name, session_key) {
+            return Err(PluginError::SecurityViolation(format!(
+                "Plugin '{}' is quarantined (TAINTED) for tenant '{}' due to a prior memory safety violation",
+                plugin_name, tenant_id
+            )));
         }
 
         let plugin = self.plugins.get(plugin_name).ok_or_else(|| {
@@ -403,7 +477,6 @@ impl PluginManager {
         // 1. Configurar Stdin/Stdout virtuales
         let mut final_input = input_json.to_string();
         if plugin_name == "std_net" {
-            // ... (keep fetch_url_safe logic) ...
             let req: serde_json::Value = serde_json::from_str(input_json)
                 .map_err(|e| PluginError::LogicError(format!("Invalid JSON for std_net: {}", e)))?;
 
@@ -434,11 +507,15 @@ impl PluginManager {
         }
 
         let stdin = MemoryInputPipe::new(final_input.as_bytes().to_vec());
-        let stdout = MemoryOutputPipe::new(4096 * 10);
+        let stdout = MemoryOutputPipe::new(256 * 1024);
+        let stderr = MemoryOutputPipe::new(64 * 1024);
 
         // 2. Construir el contexto WASI (Dynamic Jailing)
         let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let workspace_path = format!("{}/users/{}/workspace", base_dir, tenant_id);
+        let workspace_path = Path::new(&base_dir)
+            .join("users")
+            .join(tenant_id)
+            .join("workspace");
         std::fs::create_dir_all(&workspace_path)
             .map_err(|e| PluginError::IOError(format!("Failed to create jail: {}", e)))?;
 
@@ -446,6 +523,7 @@ impl PluginManager {
         wasi_builder
             .stdin(stdin)
             .stdout(stdout.clone())
+            .stderr(stderr)
             .preopened_dir(
                 &workspace_path,
                 "/workspace",
@@ -457,11 +535,23 @@ impl PluginManager {
             })?;
         let wasi_ctx = wasi_builder.build_p1();
 
-        let state = PluginState { ctx: wasi_ctx };
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(MAX_WASM_MEMORY_BYTES)
+            .table_elements(16_384)
+            .instances(8)
+            .tables(8)
+            .memories(4)
+            .build();
+
+        let state = PluginState {
+            ctx: wasi_ctx,
+            limits,
+        };
 
         let mut store = Store::new(&self.engine, state);
+        store.limiter(|s| &mut s.limits);
         store
-            .set_fuel(1_000_000)
+            .set_fuel(2_000_000)
             .map_err(|e| PluginError::LogicError(e.to_string()))?;
 
         // 3. Instanciar
@@ -471,40 +561,50 @@ impl PluginManager {
             .await
             .map_err(|e| PluginError::LogicError(e.to_string()))?;
 
-        // 4. Invocar _start
+        // 4. Invocar _start con límite duro de reloj (CORE-363)
         let func = instance
             .get_typed_func::<(), ()>(&mut store, "_start")
             .map_err(|_| PluginError::FunctionNotFound("_start not exported".to_string()))?;
 
-        if let Err(e) = func.call_async(&mut store, ()).await {
-            if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
-                match trap {
-                    wasmtime::Trap::OutOfFuel => return Err(PluginError::ResourceExhaustion),
-                    wasmtime::Trap::MemoryOutOfBounds => {
-                        error!("SECURITY VIOLATION (OOB) in plugin {} for tenant {}. Marking as TAINTED.", plugin_name, tenant_id);
-                        // TAINTED POLICY: Mark in TenantDB
-                        if let Some(key) = session_key {
-                            if let Ok(db) = TenantDB::open(tenant_id, key) {
-                                let _ =
-                                    db.set_kv(&format!("plugin_status:{}", plugin_name), "TAINTED");
-                            }
+        match tokio::time::timeout(MAX_WASM_EXECUTION_TIMEOUT, func.call_async(&mut store, ()))
+            .await
+        {
+            Err(_) => {
+                warn!(
+                    "Plugin '{}' exceeded wall-clock timeout ({:?}) for tenant '{}'",
+                    plugin_name, MAX_WASM_EXECUTION_TIMEOUT, tenant_id
+                );
+                return Err(PluginError::ResourceExhaustion);
+            }
+            Ok(Err(e)) => {
+                if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
+                    match trap {
+                        wasmtime::Trap::OutOfFuel => return Err(PluginError::ResourceExhaustion),
+                        wasmtime::Trap::MemoryOutOfBounds => {
+                            error!(
+                                "SECURITY VIOLATION (OOB) in plugin {} for tenant {}. Marking as TAINTED.",
+                                plugin_name, tenant_id
+                            );
+                            self.mark_plugin_tainted(tenant_id, plugin_name, session_key);
+                            return Err(PluginError::SecurityViolation(
+                                "Memory Out Of Bounds (Potential Buffer Overflow Attack)"
+                                    .to_string(),
+                            ));
                         }
-                        return Err(PluginError::SecurityViolation(
-                            "Memory Out Of Bounds (Potential Buffer Overflow Attack)".to_string(),
-                        ));
-                    }
-                    wasmtime::Trap::StackOverflow => {
-                        return Err(PluginError::LogicError(format!("Runtime Trap: {}", trap)));
-                    }
-                    _ => {
-                        return Err(PluginError::LogicError(format!(
-                            "Unknown or Unreachable Trap: {}",
-                            trap
-                        )))
+                        wasmtime::Trap::StackOverflow => {
+                            return Err(PluginError::LogicError(format!("Runtime Trap: {}", trap)));
+                        }
+                        _ => {
+                            return Err(PluginError::LogicError(format!(
+                                "Unknown or Unreachable Trap: {}",
+                                trap
+                            )))
+                        }
                     }
                 }
+                return Err(PluginError::ExecutionFailed(e.to_string()));
             }
-            return Err(PluginError::ExecutionFailed(e.to_string()));
+            Ok(Ok(())) => {}
         }
 
         // 5. Recuperar resultado
@@ -514,78 +614,127 @@ impl PluginManager {
     }
 
     /// Implementación de seguridad SRE para peticiones HTTP.
-    /// Bloquea ataques SSRF validando que la URL no apunte a rangos locales o privados.
+    /// Bloquea ataques SSRF (incluyendo IPv6 mapeado, CGNAT, DNS rebinding y redirecciones 30x)
+    /// y acota el tamaño máximo descargado en memoria.
     pub async fn fetch_url_safe(&self, url_str: &str) -> Result<String, PluginError> {
-        let url = reqwest::Url::parse(url_str)
+        use futures_util::StreamExt;
+
+        let mut current_url = reqwest::Url::parse(url_str)
             .map_err(|e| PluginError::SecurityViolation(format!("Invalid URL: {}", e)))?;
 
-        let host = url
-            .host_str()
-            .ok_or_else(|| PluginError::SecurityViolation("Missing host in URL".into()))?;
-
-        let port = url.port_or_known_default().unwrap_or(80);
-        let addrs = tokio::net::lookup_host(format!("{}:{}", host, port))
-            .await
-            .map_err(|e| {
-                PluginError::IOError(format!("DNS Resolution failed for {}: {}", host, e))
-            })?;
-
-        for addr in addrs {
-            let ip = addr.ip();
-            if ip.is_loopback() || ip.is_unspecified() {
+        for hop in 0..=MAX_SAFE_REDIRECTS {
+            let scheme = current_url.scheme();
+            if scheme != "http" && scheme != "https" {
                 return Err(PluginError::SecurityViolation(format!(
-                    "SSRF Guard: Loopback/Internal access denied for {}",
-                    ip
+                    "SSRF Guard: Unsupported URL scheme '{}'",
+                    scheme
                 )));
             }
 
-            if let std::net::IpAddr::V4(v4) = ip {
-                if v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_broadcast()
-                    || v4.is_documentation()
-                {
+            let host = current_url
+                .host_str()
+                .ok_or_else(|| PluginError::SecurityViolation("Missing host in URL".into()))?
+                .to_string();
+
+            let port = current_url
+                .port_or_known_default()
+                .unwrap_or(if scheme == "https" { 443 } else { 80 });
+
+            let resolved_addrs: Vec<SocketAddr> =
+                tokio::net::lookup_host(format!("{}:{}", host, port))
+                    .await
+                    .map_err(|e| {
+                        PluginError::IOError(format!("DNS Resolution failed for {}: {}", host, e))
+                    })?
+                    .collect();
+
+            if resolved_addrs.is_empty() {
+                return Err(PluginError::IOError(format!(
+                    "DNS Resolution returned no addresses for {}",
+                    host
+                )));
+            }
+
+            for addr in &resolved_addrs {
+                if is_forbidden_ip(addr.ip()) {
                     return Err(PluginError::SecurityViolation(format!(
-                        "SSRF Guard: Private/Local network access denied for {}",
-                        ip
-                    )));
-                }
-            } else if let std::net::IpAddr::V6(v6) = ip {
-                if (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80 {
-                    return Err(PluginError::SecurityViolation(format!(
-                        "SSRF Guard: Private IPv6 access denied for {}",
-                        ip
+                        "SSRF Guard: Private/Internal network access denied for {}",
+                        addr.ip()
                     )));
                 }
             }
+
+            let mut builder = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(15))
+                .user_agent("AegisNeuralKernel/1.0 (Cognitive SRE)");
+
+            if let Some(domain) = current_url.domain() {
+                builder = builder.resolve_to_addrs(domain, &resolved_addrs);
+            }
+
+            let client = builder
+                .build()
+                .map_err(|e| PluginError::ExecutionFailed(e.to_string()))?;
+
+            let response = client
+                .get(current_url.clone())
+                .send()
+                .await
+                .map_err(|e| PluginError::IOError(format!("Network request failed: {}", e)))?;
+
+            let status = response.status();
+            if status.is_redirection() {
+                if hop == MAX_SAFE_REDIRECTS {
+                    return Err(PluginError::SecurityViolation(
+                        "SSRF Guard: Maximum redirect hops exceeded".into(),
+                    ));
+                }
+                let loc = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|h| h.to_str().ok())
+                    .ok_or_else(|| {
+                        PluginError::IOError("Redirect response missing Location header".into())
+                    })?;
+                current_url = current_url.join(loc).map_err(|e| {
+                    PluginError::SecurityViolation(format!("Invalid redirect URL: {}", e))
+                })?;
+                continue;
+            }
+
+            if !status.is_success() {
+                return Err(PluginError::IOError(format!(
+                    "HTTP Error returned: {}",
+                    status
+                )));
+            }
+
+            if let Some(len) = response.content_length() {
+                if len as usize > MAX_FETCH_BODY_BYTES {
+                    return Err(PluginError::ResourceExhaustion);
+                }
+            }
+
+            let mut body_bytes = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| {
+                    PluginError::IOError(format!("Failed to read response body: {}", e))
+                })?;
+                if body_bytes.len().saturating_add(chunk.len()) > MAX_FETCH_BODY_BYTES {
+                    return Err(PluginError::ResourceExhaustion);
+                }
+                body_bytes.extend_from_slice(&chunk);
+            }
+
+            return Ok(String::from_utf8_lossy(&body_bytes).into_owned());
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .user_agent("AegisNeuralKernel/1.0 (Cognitive SRE)")
-            .build()
-            .map_err(|e| PluginError::ExecutionFailed(e.to_string()))?;
-
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| PluginError::IOError(format!("Network request failed: {}", e)))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(PluginError::IOError(format!(
-                "HTTP Error returned: {}",
-                status
-            )));
-        }
-
-        let body = response
-            .text()
-            .await
-            .map_err(|e| PluginError::IOError(format!("Failed to read response body: {}", e)))?;
-
-        Ok(body)
+        Err(PluginError::SecurityViolation(
+            "SSRF Guard: Redirect loop aborted".into(),
+        ))
     }
 
     /// Genera la "Tarjeta de Habilidades" (Tool Discovery) para inyectar en el System Prompt.
@@ -691,11 +840,7 @@ impl PluginManager {
 
     /// Verifica si un plugin está cargado y activo.
     pub fn is_plugin_active(&self, name: &str) -> bool {
-        if name == "maker" {
-            true // Maker capability is native and always active by default
-        } else {
-            self.plugins.contains_key(name)
-        }
+        name == "maker" || self.domain_plugins.contains_key(name) || self.plugins.contains_key(name)
     }
 }
 
@@ -744,22 +889,63 @@ mod tests {
             .path()
             .to_str()
             .context("Temp file path is not UTF-8")?;
+        let plugin_name = file
+            .path()
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("Missing file stem")?
+            .to_string();
 
-        // 2. Firmar el WASM
+        // 2. Firmar el WASM (hex format test as well as trap test)
         let signature = signing_key.sign(&wasm_bytes);
         let sig_path = file.path().with_extension("wasm.sig");
-        std::fs::write(&sig_path, signature.to_bytes()).context("Failed to write signature")?;
+        std::fs::write(&sig_path, hex::encode(signature.to_bytes()))
+            .context("Failed to write hex signature")?;
 
         manager.load_plugin(path).await?;
         let res = manager
-            .execute_plugin("test_tenant", "test", "{}", None)
+            .execute_plugin("test_tenant", &plugin_name, "{}", None)
             .await;
 
         assert!(res.is_err());
 
-        // Limpiar firma manual
+        // Limpiar firma manual y directorio de prueba
         let _ = std::fs::remove_file(sig_path);
+        let _ = std::fs::remove_dir_all("./users/test_tenant");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_ssrf_guard_blocks_ipv4_mapped_ipv6_and_cgnat() -> anyhow::Result<()> {
+        assert!(is_forbidden_ip("127.0.0.1".parse()?));
+        assert!(is_forbidden_ip("10.0.0.5".parse()?));
+        assert!(is_forbidden_ip("169.254.169.254".parse()?));
+        assert!(is_forbidden_ip("100.64.0.1".parse()?));
+        assert!(is_forbidden_ip("::1".parse()?));
+        assert!(is_forbidden_ip("::ffff:127.0.0.1".parse()?));
+        assert!(is_forbidden_ip("::ffff:10.1.2.3".parse()?));
+        assert!(!is_forbidden_ip("93.184.216.34".parse()?));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn test_tainted_plugin_blocked_on_subsequent_calls() -> anyhow::Result<()> {
+        let _guard = crate::enclave::acquire_test_lock();
+        let manager = PluginManager::new()?;
+        manager.mark_plugin_tainted("tenant_alpha", "rogue_wasm", None);
+
+        let err = manager
+            .execute_plugin("tenant_alpha", "rogue_wasm", "{}", None)
+            .await;
+        assert!(matches!(err, Err(PluginError::SecurityViolation(_))));
+
+        // Tenant isolation: another tenant is not tainted, so it gets FunctionNotFound instead
+        let other = manager
+            .execute_plugin("tenant_beta", "rogue_wasm", "{}", None)
+            .await;
+        assert!(matches!(other, Err(PluginError::FunctionNotFound(_))));
         Ok(())
     }
 

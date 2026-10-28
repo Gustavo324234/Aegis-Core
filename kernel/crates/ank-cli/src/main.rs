@@ -7,15 +7,18 @@ use ank_proto::v1::TenantCreateRequest;
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{self, Command};
+use std::time::Duration;
 use tokio_stream::StreamExt;
 use tonic::codegen::InterceptedService;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 use tonic::Request;
+
+const FALLBACK_STABLE_TAG: &str = "v0.2.0";
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Aegis OS Admin CLI", long_about = None)]
@@ -75,6 +78,9 @@ enum Commands {
         /// Ruta donde guardar la clave pública (.pub)
         #[arg(long, default_value = "plugin_signer.pub")]
         public: String,
+        /// Sobrescribir archivos de claves existentes
+        #[arg(long)]
+        force: bool,
     },
     /// Firma un plugin WASM usando una clave privada
     Sign {
@@ -105,7 +111,7 @@ enum AdminCommands {
     CreateTenant { name: String },
 }
 
-/// Token del interceptor que usaremos para adjuntar los credenciales gRPC
+/// Token del interceptor que adjunta credenciales Citadel compatibles con `ank-server` (CORE-368).
 #[derive(Clone)]
 struct CitadelInterceptor {
     tenant_id: Option<String>,
@@ -115,14 +121,16 @@ struct CitadelInterceptor {
 impl tonic::service::Interceptor for CitadelInterceptor {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, tonic::Status> {
         if let Some(tenant) = &self.tenant_id {
-            if let Ok(val) = MetadataValue::try_from(tenant) {
-                request.metadata_mut().insert("x-aegis-tenant-id", val);
-            }
+            let val = MetadataValue::try_from(tenant).map_err(|_| {
+                tonic::Status::invalid_argument("Invalid ASCII characters in AEGIS_TENANT_ID")
+            })?;
+            request.metadata_mut().insert("x-citadel-tenant", val);
         }
         if let Some(key) = &self.session_key {
-            if let Ok(val) = MetadataValue::try_from(key) {
-                request.metadata_mut().insert("x-aegis-session-key", val);
-            }
+            let val = MetadataValue::try_from(key).map_err(|_| {
+                tonic::Status::invalid_argument("Invalid ASCII characters in AEGIS_SESSION_KEY")
+            })?;
+            request.metadata_mut().insert("x-citadel-key", val);
         }
         Ok(request)
     }
@@ -136,6 +144,8 @@ async fn create_client(
     key: Option<String>,
 ) -> Result<AegisClient> {
     let channel = Channel::from_shared(server_url.to_string())?
+        .connect_timeout(Duration::from_secs(5))
+        .tcp_keepalive(Some(Duration::from_secs(30)))
         .connect()
         .await
         .context("Failed to connect to the ANK Server")?;
@@ -205,7 +215,7 @@ impl ServiceBackend for WindowsBackend {
 
     fn restart(&self) -> Result<()> {
         self.stop()?;
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(Duration::from_secs(2));
         self.start()
     }
 
@@ -226,7 +236,7 @@ impl ServiceBackend for WindowsBackend {
         // Call HTTP health check
         let port = get_http_port();
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
+            .timeout(Duration::from_secs(2))
             .build()?;
         match client
             .get(format!("http://localhost:{}/health", port))
@@ -312,7 +322,7 @@ impl ServiceBackend for WindowsBackend {
                 line.clear();
                 match reader.read_line(&mut line) {
                     Ok(0) => {
-                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        std::thread::sleep(Duration::from_millis(250));
                     }
                     Ok(_) => {
                         print!("{}", line);
@@ -395,7 +405,7 @@ impl ServiceBackend for SystemdBackend {
         // Call HTTP health check
         let port = get_http_port();
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
+            .timeout(Duration::from_secs(2))
             .build()?;
         match client
             .get(format!("http://localhost:{}/health", port))
@@ -459,16 +469,42 @@ impl ServiceBackend for SystemdBackend {
     }
 }
 
+fn parse_port_from_env_content(content: &str) -> Option<u16> {
+    for line in content.lines() {
+        let trim = line.trim();
+        if let Some(val) = trim
+            .strip_prefix("AEGIS_HTTP_PORT=")
+            .or_else(|| trim.strip_prefix("ANK_HTTP_PORT="))
+        {
+            if let Ok(port) = val
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim()
+                .parse::<u16>()
+            {
+                if port > 0 {
+                    return Some(port);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn get_http_port() -> u16 {
     // 1. Honor direct environment variables
     if let Ok(p_str) = std::env::var("AEGIS_HTTP_PORT") {
         if let Ok(port) = p_str.parse::<u16>() {
-            return port;
+            if port > 0 {
+                return port;
+            }
         }
     }
     if let Ok(p_str) = std::env::var("ANK_HTTP_PORT") {
         if let Ok(port) = p_str.parse::<u16>() {
-            return port;
+            if port > 0 {
+                return port;
+            }
         }
     }
 
@@ -495,24 +531,9 @@ fn get_http_port() -> u16 {
 
     for path in &env_paths {
         if path.exists() {
-            if let Ok(file) = File::open(path) {
-                let reader = BufReader::new(file);
-                for line in reader.lines().map_while(Result::ok) {
-                    let trim = line.trim();
-                    if trim.starts_with("AEGIS_HTTP_PORT=") {
-                        if let Some(val) = trim.strip_prefix("AEGIS_HTTP_PORT=") {
-                            if let Ok(port) = val.trim_matches('"').trim().parse::<u16>() {
-                                return port;
-                            }
-                        }
-                    }
-                    if trim.starts_with("ANK_HTTP_PORT=") {
-                        if let Some(val) = trim.strip_prefix("ANK_HTTP_PORT=") {
-                            if let Ok(port) = val.trim_matches('"').trim().parse::<u16>() {
-                                return port;
-                            }
-                        }
-                    }
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Some(port) = parse_port_from_env_content(&content) {
+                    return port;
                 }
             }
         }
@@ -553,6 +574,7 @@ fn get_setup_token() -> Result<()> {
 
     entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
 
+    let port = get_http_port();
     let re = regex::Regex::new(r"setup_token=([a-f0-9]{32})")?;
     for entry in entries.iter().rev() {
         let file = File::open(entry.path())?;
@@ -568,9 +590,10 @@ fn get_setup_token() -> Result<()> {
                     .or_else(|_| std::env::var("HOSTNAME"))
                     .unwrap_or_else(|_| "localhost".to_string());
                 println!(
-                    "\n{} http://{}:8000?setup_token={}",
+                    "\n{} http://{}:{}?setup_token={}",
                     "Setup URL:".green().bold(),
                     hostname,
+                    port,
                     token
                 );
                 return Ok(());
@@ -645,14 +668,90 @@ fn run_diagnostic_report() -> Result<()> {
     Ok(())
 }
 
+fn is_safe_release_tag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag.len() <= 64
+        && tag
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+fn select_stable_release_tag(releases: &serde_json::Value) -> Option<String> {
+    let arr = releases.as_array()?;
+    for item in arr {
+        let is_prerelease = item
+            .get("prerelease")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let is_draft = item.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
+        if is_prerelease || is_draft {
+            continue;
+        }
+        if let Some(tag) = item.get("tag_name").and_then(|v| v.as_str()) {
+            if tag.starts_with('v') && is_safe_release_tag(tag) {
+                return Some(tag.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn resolve_release_tag(beta: bool) -> String {
+    if beta {
+        return "nightly".to_string();
+    }
+
+    if let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .user_agent("aegis-cli")
+        .build()
+    {
+        if let Ok(resp) = client
+            .get("https://api.github.com/repos/Gustavo324234/Aegis-Core/releases")
+            .send()
+        {
+            if resp.status().is_success() {
+                if let Ok(json) = resp.json::<serde_json::Value>() {
+                    if let Some(tag) = select_stable_release_tag(&json) {
+                        return tag;
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!(
+        "{}",
+        format!(
+            "Could not resolve latest stable tag from GitHub API; falling back to {}",
+            FALLBACK_STABLE_TAG
+        )
+        .yellow()
+    );
+    FALLBACK_STABLE_TAG.to_string()
+}
+
 fn run_update(beta: bool) -> Result<()> {
+    let tag = resolve_release_tag(beta);
+    if !is_safe_release_tag(&tag) {
+        return Err(anyhow!("Unsafe release tag rejected: {}", tag));
+    }
+
     #[cfg(target_os = "windows")]
     {
-        let _ = beta;
-        println!("Starting Aegis OS Update on Windows...");
-        let cmd = "powershell -ExecutionPolicy Bypass -c \"irm https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.ps1 | iex\"";
+        println!("Starting Aegis OS Update on Windows (tag: {})...", tag);
+        let ps_cmd = format!(
+            "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.ps1'))) -ReleaseTag '{}'",
+            tag
+        );
         let status = Command::new("powershell")
-            .args(["-ExecutionPolicy", "Bypass", "-c", cmd])
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &ps_cmd,
+            ])
             .status()?;
         if status.success() {
             println!("{}", "Aegis OS updated successfully.".green());
@@ -663,8 +762,7 @@ fn run_update(beta: bool) -> Result<()> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        println!("Starting Aegis OS Update on Linux...");
-        let tag = if beta { "nightly" } else { "latest" };
+        println!("Starting Aegis OS Update on Linux (tag: {})...", tag);
         let cmd = format!(
             "curl -fsSL https://raw.githubusercontent.com/Gustavo324234/Aegis-Core/main/installer/install.sh | sudo bash -s -- --tag {}",
             tag
@@ -677,6 +775,45 @@ fn run_update(beta: bool) -> Result<()> {
             Err(anyhow!("Linux installer update failed"))
         }
     }
+}
+
+fn write_keypair_files(
+    secret_path: &Path,
+    public_path: &Path,
+    secret_hex: &str,
+    public_hex: &str,
+    force: bool,
+) -> Result<()> {
+    if !force && (secret_path.exists() || public_path.exists()) {
+        return Err(anyhow!(
+            "Key file already exists ({} or {}). Pass --force to overwrite.",
+            secret_path.display(),
+            public_path.display()
+        ));
+    }
+
+    let mut sec_opts = OpenOptions::new();
+    sec_opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        sec_opts.mode(0o600);
+    }
+
+    let mut sec_file = sec_opts
+        .open(secret_path)
+        .with_context(|| format!("Failed to write private key to {}", secret_path.display()))?;
+    sec_file.write_all(secret_hex.as_bytes()).with_context(|| {
+        format!(
+            "Failed to write private key bytes to {}",
+            secret_path.display()
+        )
+    })?;
+
+    std::fs::write(public_path, public_hex)
+        .with_context(|| format!("Failed to write public key to {}", public_path.display()))?;
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -721,26 +858,35 @@ async fn main() -> Result<()> {
             run_diagnostic_report()?;
             return Ok(());
         }
-        Commands::Update { beta, stable: _ } => {
-            run_update(*beta)?;
+        Commands::Update { beta, stable } => {
+            let use_beta = *beta && !*stable;
+            run_update(use_beta)?;
             return Ok(());
         }
-        Commands::Keygen { secret, public } => {
+        Commands::Keygen {
+            secret,
+            public,
+            force,
+        } => {
             use ed25519_dalek::SigningKey;
             use rand::RngCore;
 
             let mut secret_bytes = [0u8; 32];
             rand::rngs::OsRng.fill_bytes(&mut secret_bytes);
             let signing_key = SigningKey::from_bytes(&secret_bytes);
+            secret_bytes.fill(0);
             let verifying_key = signing_key.verifying_key();
 
             let secret_hex = hex::encode(signing_key.to_bytes());
             let public_hex = hex::encode(verifying_key.to_bytes());
 
-            std::fs::write(secret, &secret_hex)
-                .context(format!("Failed to write private key to {}", secret))?;
-            std::fs::write(public, &public_hex)
-                .context(format!("Failed to write public key to {}", public))?;
+            write_keypair_files(
+                Path::new(secret),
+                Path::new(public),
+                &secret_hex,
+                &public_hex,
+                *force,
+            )?;
 
             println!(
                 "{}",
@@ -776,8 +922,9 @@ async fn main() -> Result<()> {
             let mut key_arr = [0u8; 32];
             key_arr.copy_from_slice(&secret_bytes);
             let signing_key = SigningKey::from_bytes(&key_arr);
+            key_arr.fill(0);
 
-            let wasm_path = std::path::Path::new(plugin);
+            let wasm_path = Path::new(plugin);
             if !wasm_path.exists() {
                 return Err(anyhow!("WASM plugin file does not exist: {:?}", wasm_path));
             }
@@ -798,12 +945,12 @@ async fn main() -> Result<()> {
         Commands::Version => {
             println!("Aegis OS Admin CLI v{}", env!("CARGO_PKG_VERSION"));
             let port = get_http_port();
-            // Try to get server version via HTTP
+            // CORE-368: Query /api/system/sync_version (which exposes the kernel version)
             let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(1))
+                .timeout(Duration::from_secs(2))
                 .build()?;
             if let Ok(resp) = client
-                .get(format!("http://localhost:{}/health", port))
+                .get(format!("http://localhost:{}/api/system/sync_version", port))
                 .send()
             {
                 if let Ok(json) = resp.json::<serde_json::Value>() {
@@ -924,6 +1071,7 @@ async fn main() -> Result<()> {
                             match payload {
                                 ank_proto::v1::task_event::Payload::Thought(t) => {
                                     print!("{}", t);
+                                    let _ = std::io::stdout().flush();
                                 }
                                 ank_proto::v1::task_event::Payload::Syscall(s) => {
                                     println!("\n[SYSCALL] {} ({:?})", s.name, s.arguments);
@@ -980,5 +1128,76 @@ fn handle_grpc_err(err: tonic::Status) {
         eprintln!("Access denied: Please check your Citadel credentials (AEGIS_TENANT_ID / AEGIS_SESSION_KEY)");
     } else {
         eprintln!("gRPC Error ({}): {}", err.code(), err.message());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use tonic::service::Interceptor;
+
+    #[test]
+    fn citadel_interceptor_injects_server_expected_headers() {
+        let mut interceptor = CitadelInterceptor {
+            tenant_id: Some("tenant_alpha".to_string()),
+            session_key: Some("secret_key_123".to_string()),
+        };
+        let req = interceptor.call(Request::new(())).expect("valid metadata");
+        assert_eq!(
+            req.metadata()
+                .get("x-citadel-tenant")
+                .and_then(|v| v.to_str().ok()),
+            Some("tenant_alpha")
+        );
+        assert_eq!(
+            req.metadata()
+                .get("x-citadel-key")
+                .and_then(|v| v.to_str().ok()),
+            Some("secret_key_123")
+        );
+        assert!(req.metadata().get("x-aegis-tenant-id").is_none());
+    }
+
+    #[test]
+    fn parse_port_from_env_handles_quotes_and_comments() {
+        let env_content =
+            "# Config\nAEGIS_DATA_DIR=\"C:/ProgramData/Aegis\"\nAEGIS_HTTP_PORT=\"8088\"\n";
+        assert_eq!(parse_port_from_env_content(env_content), Some(8088));
+        assert_eq!(
+            parse_port_from_env_content("ANK_HTTP_PORT=9090"),
+            Some(9090)
+        );
+        assert_eq!(parse_port_from_env_content("AEGIS_HTTP_PORT=0"), None);
+    }
+
+    #[test]
+    fn select_stable_release_tag_skips_crate_tags_and_prereleases() {
+        let payload = serde_json::json!([
+            { "tag_name": "nightly", "prerelease": true, "draft": false },
+            { "tag_name": "ank-server-v0.1.94", "prerelease": false, "draft": false },
+            { "tag_name": "v0.2.3", "prerelease": false, "draft": false },
+            { "tag_name": "v0.2.0", "prerelease": false, "draft": false }
+        ]);
+        assert_eq!(
+            select_stable_release_tag(&payload).as_deref(),
+            Some("v0.2.3")
+        );
+        assert!(!is_safe_release_tag("v0.2.0; rm -rf /"));
+    }
+
+    #[test]
+    fn keygen_refuses_overwrite_without_force() {
+        let tmp = std::env::temp_dir().join(format!("aegis_cli_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let sec = tmp.join("signer.key");
+        let pubk = tmp.join("signer.pub");
+
+        write_keypair_files(&sec, &pubk, "aa", "bb", false).expect("initial write");
+        assert!(write_keypair_files(&sec, &pubk, "cc", "dd", false).is_err());
+        write_keypair_files(&sec, &pubk, "cc", "dd", true).expect("forced overwrite");
+        assert_eq!(std::fs::read_to_string(&sec).expect("read sec"), "cc");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

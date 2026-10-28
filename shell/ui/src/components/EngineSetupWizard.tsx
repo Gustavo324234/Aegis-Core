@@ -53,7 +53,12 @@ const EngineSetupWizard: React.FC = () => {
     useEffect(() => {
         const checkGlobal = async () => {
             try {
-                const res = await fetch('/api/engine/status');
+                const headers: Record<string, string> = {};
+                if (tenantId && sessionKey) {
+                    headers['x-citadel-tenant'] = tenantId;
+                    headers['x-citadel-key'] = sessionKey;
+                }
+                const res = await fetch('/api/engine/status', { headers });
                 if (res.ok) {
                     const data = await res.json();
                     setGlobalEngine(data);
@@ -65,7 +70,7 @@ const EngineSetupWizard: React.FC = () => {
             }
         };
         checkGlobal();
-    }, []);
+    }, [tenantId, sessionKey]);
 
     const handleSelectProvider = (key: ProviderType) => {
         setSelectedProvider(key);

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { X, RefreshCw, Smartphone, Globe, Shield } from 'lucide-react';
+import { useAegisStore } from '../store/useAegisStore';
 
 interface ConnectionInfo {
   local_url: string;
@@ -10,15 +11,21 @@ interface ConnectionInfo {
 }
 
 export const ConnectionQR: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+  const { tenantId, sessionKey } = useAegisStore();
   const [info, setInfo] = useState<ConnectionInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchInfo = async () => {
+  const fetchInfo = useCallback(async () => {
     try {
-      const res = await fetch('/api/system/connection-info');
+      const headers: Record<string, string> = {};
+      if (tenantId && sessionKey) {
+        headers['x-citadel-tenant'] = tenantId;
+        headers['x-citadel-key'] = sessionKey;
+      }
+      const res = await fetch('/api/system/connection-info', { headers });
       if (!res.ok) throw new Error('Failed to fetch connection info');
-      const data = await res.json();
+      const data = (await res.json()) as ConnectionInfo;
       setInfo(data);
       setError(null);
     } catch (err) {
@@ -26,13 +33,15 @@ export const ConnectionQR: React.FC<{ onClose: () => void }> = ({ onClose }) => 
     } finally {
       setLoading(false);
     }
-  };
+  }, [tenantId, sessionKey]);
 
   useEffect(() => {
-    fetchInfo();
-    const timer = setInterval(fetchInfo, 30000);
+    void fetchInfo();
+    const timer = setInterval(() => {
+      void fetchInfo();
+    }, 30000);
     return () => clearInterval(timer);
-  }, []);
+  }, [fetchInfo]);
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
