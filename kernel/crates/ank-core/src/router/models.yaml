@@ -689,3 +689,421 @@
     analysis: 4
     summarization: 4
     extraction: 3
+- model_id: anthropic/claude-3-7-sonnet
+  provider: anthropic
+  display_name: Claude 3.7 Sonnet
+  context_window: 200000
+  cost_input_per_mtok: 3.0
+  cost_output_per_mtok: 15.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1800
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: anthropic/claude-3-5-sonnet
+  provider: anthropic
+  display_name: Claude 3.5 Sonnet
+  context_window: 200000
+  cost_input_per_mtok: 3.0
+  cost_output_per_mtok: 15.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1800
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: anthropic/claude-3-5-haiku
+  provider: anthropic
+  display_name: Claude 3.5 Haiku
+  context_window: 200000
+  cost_input_per_mtok: 0.8
+  cost_output_per_mtok: 4.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 600
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+- model_id: anthropic/claude-sonnet-5.5
+  provider: anthropic
+  display_name: Claude Sonnet 5.5
+  context_window: 1000000
+  cost_input_per_mtok: 2.0
+  cost_output_per_mtok: 10.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1600
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: anthropic/claude-haiku-5.5
+  provider: anthropic
+  display_name: Claude Haiku 5.5
+  context_window: 1000000
+  cost_input_per_mtok: 0.1
+  cost_output_per_mtok: 0.5
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 500
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+- model_id: openai/o1
+  provider: openai
+  display_name: o1
+  context_window: 200000
+  cost_input_per_mtok: 15.0
+  cost_output_per_mtok: 60.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 3500
+  task_scores:
+    chat: 4
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 4
+    extraction: 5
+- model_id: openai/o1-mini
+  provider: openai
+  display_name: o1-mini
+  context_window: 128000
+  cost_input_per_mtok: 3.0
+  cost_output_per_mtok: 12.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 2000
+  task_scores:
+    chat: 3
+    coding: 5
+    planning: 5
+    analysis: 4
+    summarization: 3
+    extraction: 4
+- model_id: openai/o3-mini
+  provider: openai
+  display_name: o3-mini
+  context_window: 200000
+  cost_input_per_mtok: 1.1
+  cost_output_per_mtok: 4.4
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1600
+  task_scores:
+    chat: 4
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 4
+    extraction: 5
+- model_id: openai/gpt-4.5-preview
+  provider: openai
+  display_name: GPT-4.5 Preview
+  context_window: 128000
+  cost_input_per_mtok: 75.0
+  cost_output_per_mtok: 150.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 2500
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: gemini-2.0-flash
+  provider: gemini
+  display_name: Gemini 2.0 Flash
+  context_window: 1048576
+  cost_input_per_mtok: 0.1
+  cost_output_per_mtok: 0.4
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 400
+  free_tier_rpm: 15
+  free_tier_rpd: 1500
+  task_scores:
+    chat: 5
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 5
+    extraction: 5
+- model_id: gemini-1.5-pro
+  provider: gemini
+  display_name: Gemini 1.5 Pro
+  context_window: 2097152
+  cost_input_per_mtok: 1.25
+  cost_output_per_mtok: 5.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1800
+  free_tier_rpm: 2
+  free_tier_rpd: 50
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: gemini-1.5-flash
+  provider: gemini
+  display_name: Gemini 1.5 Flash
+  context_window: 1048576
+  cost_input_per_mtok: 0.075
+  cost_output_per_mtok: 0.3
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 500
+  free_tier_rpm: 15
+  free_tier_rpd: 1500
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+- model_id: deepseek/deepseek-chat
+  provider: deepseek
+  display_name: DeepSeek V3 (Chat)
+  context_window: 163840
+  cost_input_per_mtok: 0.14
+  cost_output_per_mtok: 0.28
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1000
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 4
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: deepseek/deepseek-reasoner
+  provider: deepseek
+  display_name: DeepSeek R1 (Reasoner)
+  context_window: 163840
+  cost_input_per_mtok: 0.55
+  cost_output_per_mtok: 2.19
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 3000
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 4
+    extraction: 5
+- model_id: deepseek/deepseek-v4.1-flash
+  provider: deepseek
+  display_name: DeepSeek V4.1 Flash
+  context_window: 1048576
+  cost_input_per_mtok: 0.14
+  cost_output_per_mtok: 0.42
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 800
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 4
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: groq/deepseek-r1-distill-llama-70b
+  provider: groq
+  display_name: DeepSeek R1 Distill Llama 70B (Groq)
+  context_window: 131072
+  cost_input_per_mtok: 0.59
+  cost_output_per_mtok: 0.79
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 400
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 4
+    extraction: 5
+- model_id: groq/llama-3.1-8b-instant
+  provider: groq
+  display_name: Llama 3.1 8B Instant (Groq)
+  context_window: 131072
+  cost_input_per_mtok: 0.05
+  cost_output_per_mtok: 0.08
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 250
+  task_scores:
+    chat: 4
+    coding: 3
+    planning: 3
+    analysis: 3
+    summarization: 4
+    extraction: 4
+- model_id: groq/mixtral-8x7b-32768
+  provider: groq
+  display_name: Mixtral 8x7B (Groq)
+  context_window: 32768
+  cost_input_per_mtok: 0.24
+  cost_output_per_mtok: 0.24
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 300
+  task_scores:
+    chat: 4
+    coding: 3
+    planning: 3
+    analysis: 3
+    summarization: 4
+    extraction: 3
+- model_id: nvidia/nemotron-3.5-super-vl:free
+  provider: openrouter
+  display_name: Nemotron 3.5 Super VL (free)
+  context_window: 1000000
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1200
+  free_tier_rpm: 20
+  task_scores:
+    chat: 5
+    coding: 4
+    planning: 4
+    analysis: 5
+    summarization: 4
+    extraction: 4
+- model_id: nvidia/nemotron-3.5-lightning:free
+  provider: openrouter
+  display_name: Nemotron 3.5 Lightning (free)
+  context_window: 1000000
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 600
+  free_tier_rpm: 20
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+- model_id: google/gemma-4-26b-a4b-it:free
+  provider: openrouter
+  display_name: Gemma 4 26B A4B (free)
+  context_window: 262144
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 900
+  free_tier_rpm: 20
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+- model_id: liquid/lfm-2.5-2.6b:free
+  provider: openrouter
+  display_name: Liquid LFM 2.5 2.6B (free)
+  context_window: 65536
+  cost_input_per_mtok: 0.0
+  cost_output_per_mtok: 0.0
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 400
+  free_tier_rpm: 20
+  task_scores:
+    chat: 3
+    coding: 3
+    planning: 3
+    analysis: 3
+    summarization: 3
+    extraction: 3
+- model_id: meta-llama/llama-4-maverick
+  provider: openrouter
+  display_name: Llama 4 Maverick (OpenRouter)
+  context_window: 524288
+  cost_input_per_mtok: 0.19
+  cost_output_per_mtok: 0.65
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 1000
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: meta-llama/llama-4-scout
+  provider: openrouter
+  display_name: Llama 4 Scout (OpenRouter)
+  context_window: 1310720
+  cost_input_per_mtok: 0.1
+  cost_output_per_mtok: 0.3
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 800
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
