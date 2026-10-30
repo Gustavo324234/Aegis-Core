@@ -46,6 +46,8 @@ ignore = [
     "RUSTSEC-2026-0398",
     "RUSTSEC-2026-0403",
     "RUSTSEC-2026-0410",
+    # libz-sys build script leaks environment variables in build directory
+    "RUSTSEC-2026-0418",
 ]
 
 [bans]
