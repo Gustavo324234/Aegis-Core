@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.85](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.84...ank-core-v0.1.85) (2026-10-28)
+
+
+### Features
+
+* **security,kernel,http,ui:** comprehensive security hardening, multi-tenant isolation, Citadel auth & distro reliability (CORE-346..CORE-371) ([#373](https://github.com/Gustavo324234/Aegis-Core/issues/373)) ([7cb679f](https://github.com/Gustavo324234/Aegis-Core/commit/7cb679f9bd6e90c2c225b5417471be1b8c6db8aa))
+
 ## [0.1.84](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.83...ank-core-v0.1.84) (2026-08-02)
 
 
