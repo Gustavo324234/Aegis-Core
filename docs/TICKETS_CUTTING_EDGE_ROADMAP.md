@@ -6,8 +6,9 @@ Este documento define la arquitectura y el desglose de tickets de desarrollo (CO
 
 ## CORE-376: Soporte Nativo de Tool Calling / Function Calling en Router Cognitivo
 
+- **Estado:** ✅ Completado (PR / Branch: `feat/core-376-native-tool-calling`)
 - **Tipo:** Feature / Architecture
-- **Crates / Componentes:** `ank-core::router`, `ank-core::pcb`, `ank-http::routes`
+- **Crates / Componentes:** `ank-core::router`, `ank-core::pcb`, `ank-core::agents::tool_registry`
 - **Prioridad:** Alta
 - **Objetivo:**
   Permitir que los modelos invocados a través del [`CognitiveRouter`](file:///e:/Aegis/Aegis-Core/kernel/crates/ank-core/src/router/mod.rs) reciban esquemas de herramientas (JSON Schema) y devuelvan llamadas estructuradas (`tool_calls`), ejecutables con sandboxing criptográfico a través de Citadel.

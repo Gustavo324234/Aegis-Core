@@ -56,6 +56,26 @@ pub struct ToolDefinition {
     pub parameters: Value,
 }
 
+impl From<&ToolDefinition> for crate::pcb::ToolDefinition {
+    fn from(def: &ToolDefinition) -> Self {
+        Self {
+            name: def.name.to_string(),
+            description: def.description.to_string(),
+            parameters: def.parameters.clone(),
+        }
+    }
+}
+
+impl From<ToolDefinition> for crate::pcb::ToolDefinition {
+    fn from(def: ToolDefinition) -> Self {
+        Self {
+            name: def.name.to_string(),
+            description: def.description.to_string(),
+            parameters: def.parameters,
+        }
+    }
+}
+
 /// Registra y serializa las herramientas del Agent Protocol v2 (EPIC 47).
 ///
 /// Cada agente recibe un set de herramientas según su rol:
@@ -133,6 +153,137 @@ impl ToolRegistry {
                 "parameters": def.parameters,
             }
         })
+    }
+
+    /// CORE-376: Serializa una herramienta al formato nativo del proveedor o formato OpenAI compatible.
+    pub fn serialize_for_driver(
+        def: &ToolDefinition,
+        provider: &ProviderKind,
+        native_format: bool,
+    ) -> Value {
+        if !native_format {
+            return Self::serialize(def, provider);
+        }
+
+        match provider {
+            ProviderKind::Anthropic => json!({
+                "name": def.name,
+                "description": def.description,
+                "input_schema": def.parameters,
+            }),
+            ProviderKind::Gemini => json!({
+                "name": def.name,
+                "description": def.description,
+                "parameters": def.parameters,
+            }),
+            _ => Self::serialize(def, provider),
+        }
+    }
+
+    /// CORE-376: Deserializa llamadas a herramientas estructuradas de cualquier proveedor soportado.
+    pub fn deserialize_tool_calls(
+        provider: &ProviderKind,
+        payload: &Value,
+    ) -> Result<Vec<crate::pcb::ToolCall>, String> {
+        let mut calls = Vec::new();
+
+        match provider {
+            ProviderKind::Anthropic => {
+                let blocks = if let Some(arr) = payload.as_array() {
+                    arr
+                } else if let Some(arr) = payload.get("content").and_then(|c| c.as_array()) {
+                    arr
+                } else {
+                    return Ok(calls);
+                };
+
+                for block in blocks {
+                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                        let id = block
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("toolu_unknown")
+                            .to_string();
+                        let name = block
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| "Missing 'name' in Anthropic tool_use".to_string())?
+                            .to_string();
+                        let input = block.get("input").cloned().unwrap_or(Value::Object(Default::default()));
+                        calls.push(crate::pcb::ToolCall::new(id, name, input));
+                    }
+                }
+            }
+            ProviderKind::Gemini => {
+                let parts = if let Some(parts) = payload
+                    .get("candidates")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c0| c0.get("content"))
+                    .and_then(|cnt| cnt.get("parts"))
+                    .and_then(|p| p.as_array())
+                {
+                    parts
+                } else if let Some(parts) = payload.get("parts").and_then(|p| p.as_array()) {
+                    parts
+                } else {
+                    return Ok(calls);
+                };
+
+                for (idx, part) in parts.iter().enumerate() {
+                    if let Some(fc) = part.get("functionCall") {
+                        let name = fc
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| "Missing 'name' in Gemini functionCall".to_string())?
+                            .to_string();
+                        let args = fc.get("args").cloned().unwrap_or(Value::Object(Default::default()));
+                        let id = format!("call_gemini_{}", idx);
+                        calls.push(crate::pcb::ToolCall::new(id, name, args));
+                    }
+                }
+            }
+            _ => {
+                let tool_calls_arr = if let Some(arr) = payload.as_array() {
+                    arr
+                } else if let Some(arr) = payload.get("tool_calls").and_then(|t| t.as_array()) {
+                    arr
+                } else if let Some(arr) = payload
+                    .get("choices")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c0| c0.get("message"))
+                    .and_then(|m| m.get("tool_calls"))
+                    .and_then(|t| t.as_array())
+                {
+                    arr
+                } else {
+                    return Ok(calls);
+                };
+
+                for tc in tool_calls_arr {
+                    let id = tc
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("call_unknown")
+                        .to_string();
+                    let func = tc.get("function").ok_or_else(|| "Missing 'function' in tool_call".to_string())?;
+                    let name = func
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| "Missing 'name' in tool_call function".to_string())?
+                        .to_string();
+                    let args = match func.get("arguments") {
+                        Some(Value::String(s)) => {
+                            serde_json::from_str::<Value>(s).unwrap_or(Value::String(s.clone()))
+                        }
+                        Some(v) => v.clone(),
+                        None => Value::Object(Default::default()),
+                    };
+                    calls.push(crate::pcb::ToolCall::new(id, name, args));
+                }
+            }
+        }
+
+        Ok(calls)
     }
 
     // --- Definiciones de las tres herramientas del protocolo ---
@@ -594,5 +745,88 @@ mod tests {
             ProviderKind::from_string("unknown_provider"),
             ProviderKind::OpenAI
         );
+    }
+
+    #[test]
+    fn test_core_376_multi_provider_tool_serialization() {
+        let def = ToolDefinition {
+            name: "test_calc",
+            description: "Calculator",
+            parameters: json!({"type": "object", "properties": {"expr": {"type": "string"}}}),
+        };
+
+        // Native Anthropic
+        let anthropic = ToolRegistry::serialize_for_driver(&def, &ProviderKind::Anthropic, true);
+        assert_eq!(anthropic["name"], "test_calc");
+        assert!(anthropic.get("input_schema").is_some());
+        assert!(anthropic.get("type").is_none());
+
+        // Native Gemini
+        let gemini = ToolRegistry::serialize_for_driver(&def, &ProviderKind::Gemini, true);
+        assert_eq!(gemini["name"], "test_calc");
+        assert!(gemini.get("parameters").is_some());
+        assert!(gemini.get("type").is_none());
+
+        // OpenAI format
+        let openai = ToolRegistry::serialize_for_driver(&def, &ProviderKind::OpenAI, false);
+        assert_eq!(openai["type"], "function");
+        assert_eq!(openai["function"]["name"], "test_calc");
+    }
+
+    #[test]
+    fn test_core_376_tool_deserialization() {
+        // OpenAI payload
+        let openai_payload = json!({
+            "choices": [{
+                "message": {
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "spawn_agent",
+                            "arguments": "{\"role\":\"supervisor\",\"scope\":\"audit\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+        let calls = ToolRegistry::deserialize_tool_calls(&ProviderKind::OpenAI, &openai_payload).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_123");
+        assert_eq!(calls[0].name, "spawn_agent");
+        assert_eq!(calls[0].arguments["role"], "supervisor");
+
+        // Anthropic payload
+        let anthropic_payload = json!({
+            "content": [{
+                "type": "tool_use",
+                "id": "toolu_abc",
+                "name": "report",
+                "input": { "status": "completed", "summary": "done" }
+            }]
+        });
+        let calls = ToolRegistry::deserialize_tool_calls(&ProviderKind::Anthropic, &anthropic_payload).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "toolu_abc");
+        assert_eq!(calls[0].name, "report");
+        assert_eq!(calls[0].arguments["status"], "completed");
+
+        // Gemini payload
+        let gemini_payload = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "name": "ask_user",
+                            "args": { "question": "Are you sure?" }
+                        }
+                    }]
+                }
+            }]
+        });
+        let calls = ToolRegistry::deserialize_tool_calls(&ProviderKind::Gemini, &gemini_payload).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "ask_user");
+        assert_eq!(calls[0].arguments["question"], "Are you sure?");
     }
 }
