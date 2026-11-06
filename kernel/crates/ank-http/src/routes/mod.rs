@@ -5,6 +5,7 @@ pub mod chat_history;
 pub mod engine;
 pub mod fs;
 pub mod mcp_api;
+pub mod memory_api;
 pub mod music_api;
 pub mod oauth_api;
 pub mod openapi;
@@ -60,6 +61,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/music", music_api::router())
         .nest("/api/train", train::router())
         .nest("/api/mcp", mcp_api::router())
+        .nest("/api/memory", memory_api::router())
         // WebSocket Routes
         .nest("/ws/chat", ws::chat::router())
         .nest("/ws/siren", ws::siren::router())

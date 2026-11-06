@@ -40,8 +40,9 @@ Este documento define la arquitectura y el desglose de tickets de desarrollo (CO
 
 ## CORE-378: Motor de Memoria Semántica y RAG Local Embebido
 
+- **Estado:** ✅ Completado (PR / Branch: `feat/core-378-semantic-memory-rag`)
 - **Tipo:** Feature / Storage & AI
-- **Crates / Componentes:** `ank-core::memory`, `ank-core::vector`
+- **Crates / Componentes:** `ank-core::chal::drivers::embeddings`, `ank-core::vcm`, `ank-http::routes::memory_api`
 - **Prioridad:** Media
 - **Objetivo:**
   Dotar a Aegis de memoria persistente episódica y contextual sin depender de servicios en la nube para embeddings ni bases vectoriales externas.

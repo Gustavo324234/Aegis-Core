@@ -430,7 +430,10 @@ impl CognitiveHAL {
                 ),
             ))
         } else {
-            None
+            // CORE-378: Fallback nativo a LocalEmbeddingDriver determinista y local
+            Some(Arc::new(
+                crate::chal::drivers::embeddings::LocalEmbeddingDriver::default(),
+            ))
         };
 
         Ok(Self {
@@ -761,6 +764,7 @@ impl CognitiveHAL {
 
         const MAX_ITERATIONS: usize = 10;
         let mut finished = false;
+        let mut last_assistant_text = String::new();
 
         for iteration in 0..MAX_ITERATIONS {
             let mut autocorrect_retries = 0;
@@ -1512,6 +1516,7 @@ impl CognitiveHAL {
             }
 
             if tool_calls.is_empty() {
+                last_assistant_text = assistant_text.clone();
                 finished = true;
                 break;
             }
@@ -1562,6 +1567,17 @@ impl CognitiveHAL {
                 .tracker_ref()
                 .record_success_for_task(&active_model_id, pcb.task_type)
                 .await;
+        }
+
+        // CORE-378: Indexación episódica semántica automática del turno conversacional
+        if finished && !last_assistant_text.is_empty() {
+            let tenant = pcb.tenant_id.as_deref().unwrap_or("default");
+            let memory_entry = format!(
+                "User: {}\nAssistant: {}",
+                pcb.memory_pointers.l1_instruction,
+                last_assistant_text.trim()
+            );
+            let _ = self.store_memory(tenant, &memory_entry).await;
         }
 
         Ok(())
@@ -3033,6 +3049,24 @@ impl CognitiveHAL {
             .store_fragment(tenant_id, text, vector)
             .await
             .map_err(|e| SystemError::HardwareFailure(format!("Swap storage failed: {}", e)))
+    }
+
+    /// CORE-378: Realiza una búsqueda semántica en la memoria L3 del tenant
+    pub async fn search_memory(
+        &self,
+        tenant_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::vcm::swap::MemoryFragment>, SystemError> {
+        let driver = self.embedding_driver.as_ref().ok_or_else(|| {
+            SystemError::HardwareFailure("No embedding driver configured for memory search".into())
+        })?;
+
+        let query_vec = driver.embed(query).await?;
+        self.swap_manager
+            .search(tenant_id, query_vec, limit)
+            .await
+            .map_err(|e| SystemError::HardwareFailure(format!("Swap search failed: {}", e)))
     }
 
     /// Detecta si un modelo Ollama soporta tool use y actualiza el catálogo (CORE-237).
