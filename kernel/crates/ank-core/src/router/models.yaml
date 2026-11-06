@@ -269,6 +269,57 @@
     analysis: 3
     summarization: 3
     extraction: 3
+- model_id: groq/gpt-oss-120b
+  provider: groq
+  display_name: GPT OSS 120B (Groq)
+  context_window: 131072
+  cost_input_per_mtok: 0.15
+  cost_output_per_mtok: 0.60
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 350
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 5
+    analysis: 5
+    summarization: 5
+    extraction: 5
+- model_id: groq/gpt-oss-20b
+  provider: groq
+  display_name: GPT OSS 20B (Groq)
+  context_window: 131072
+  cost_input_per_mtok: 0.05
+  cost_output_per_mtok: 0.10
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 200
+  task_scores:
+    chat: 4
+    coding: 4
+    planning: 4
+    analysis: 4
+    summarization: 4
+    extraction: 4
+- model_id: qwen/qwen3.8-27b
+  provider: groq
+  display_name: Qwen 3.8 27B (Groq)
+  context_window: 131072
+  cost_input_per_mtok: 0.20
+  cost_output_per_mtok: 0.40
+  supports_tools: true
+  supports_json_mode: true
+  is_local: false
+  avg_latency_ms: 300
+  task_scores:
+    chat: 5
+    coding: 5
+    planning: 4
+    analysis: 5
+    summarization: 5
+    extraction: 5
 - model_id: groq/llama-3.3-70b-versatile
   provider: groq
   display_name: Llama 3.3 70B (Groq)

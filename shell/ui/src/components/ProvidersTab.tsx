@@ -212,13 +212,18 @@ const sortModelsByRecency = (models: string[]): string[] => {
     return [...models].sort((a, b) => {
         const score = (name: string) => {
             const n = name.toLowerCase();
-            if (n.includes('gemini-4') || n.includes('argon')) return 100;
-            if (n.includes('3.8-flash')) return 90;
-            if (n.includes('3.8-live')) return 85;
+            // Groq 2026 models
+            if (n.includes('gpt-oss-120b')) return 120;
+            if (n.includes('qwen3.8') || n.includes('qwen-3.8')) return 115;
+            if (n.includes('gpt-oss-20b')) return 110;
+            // Stable, production-ready Gemini models first so they don't 404/quota lock
+            if (n.includes('2.5-flash')) return 100;
+            if (n.includes('2.5-pro')) return 95;
+            if (n.includes('2.0-flash')) return 90;
+            if (n.includes('3.5-flash')) return 85;
             if (n.includes('3.6-flash')) return 80;
-            if (n.includes('3.5-flash')) return 75;
-            if (n.includes('2.5-flash')) return 50;
-            if (n.includes('2.5-pro')) return 45;
+            if (n.includes('3.8-flash')) return 70;
+            if (n.includes('gemini-4') || n.includes('argon')) return 60;
             return 10;
         };
         const diff = score(b) - score(a);
@@ -373,7 +378,9 @@ const ProviderModal: React.FC<{
                 const displayModels = sortModelsByRecency(combined);
                 setModels(displayModels);
                 if (!isEdit) {
-                    const topPicks = displayModels.filter(m => (m.includes('2.5-flash') || m.includes('2.5-pro') || m.includes('3.8-flash') || m.includes('4-argon') || m.includes('3.6-flash') || m.includes('3.5-flash')) && !m.includes('preview'));
+                    const topPicks = displayModels.filter(m => 
+                        (m.includes('gpt-oss') || m.includes('qwen') || m.includes('2.5-flash') || m.includes('2.5-pro') || m.includes('3.5-flash')) && !m.includes('preview')
+                    );
                     setSelectedModels(topPicks.length > 0 ? topPicks : displayModels.slice(0, 3));
                 }
                 setStep('models');

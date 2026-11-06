@@ -23,7 +23,7 @@ export const PROVIDER_PRESETS = {
   groq: {
     label: "Groq",
     url: "https://api.groq.com/openai/v1/chat/completions",
-    model: "llama-3.3-70b-versatile",
+    model: "gpt-oss-120b",
     keyLink: "https://console.groq.com/keys",
     provider: "groq"
   },

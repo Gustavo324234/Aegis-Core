@@ -23,11 +23,12 @@ export const PROVIDERS: Provider[] = [
     name: 'Groq',
     baseUrl: 'https://api.groq.com/openai',
     format: 'openai-compat',
-    defaultModel: 'llama-3.3-70b-versatile',
+    defaultModel: 'gpt-oss-120b',
     models: [
+      'gpt-oss-120b',
+      'gpt-oss-20b',
+      'qwen/qwen3.8-27b',
       'llama-3.3-70b-versatile',
-      'llama-3.1-405b-reasoning',
-      'llama-3.1-70b-versatile',
       'llama-3.1-8b-instant',
       'mixtral-8x7b-32768',
       'gemma2-9b-it'
