@@ -707,7 +707,7 @@ impl CognitiveHAL {
         );
 
         let provider = ProviderKind::from_string(&decision.provider);
-        let tools = {
+        let mut tools = {
             let defs = ToolRegistry::tools_for(&AgentRole::ChatAgent, &provider);
             if defs.is_empty() {
                 None
@@ -715,6 +715,22 @@ impl CognitiveHAL {
                 Some(defs)
             }
         };
+
+        // CORE-377: Inyectar herramientas dinámicas descubiertas vía MCP
+        let mcp_tools = self.mcp_registry.list_tools().await;
+        if !mcp_tools.is_empty() {
+            let mut list = tools.unwrap_or_default();
+            for mcp_tool in mcp_tools {
+                let canonical = crate::pcb::ToolDefinition::new(
+                    mcp_tool.name,
+                    mcp_tool.description,
+                    mcp_tool.input_schema,
+                );
+                let serialized = ToolRegistry::serialize_canonical(&canonical, &provider);
+                list.push(serialized);
+            }
+            tools = Some(list);
+        }
 
         let (mut messages, build_warnings) = self.build_messages_with_warnings(pcb, persona).await;
 
@@ -2949,7 +2965,60 @@ impl CognitiveHAL {
                 }
             }
 
-            other => format!("{{\"error\":\"Unknown tool: {}\"}}", other),
+            other => {
+                // CORE-377: Check if the tool is registered in the MCP Registry
+                if self.mcp_registry.has_tool(other).await {
+                    // CORE-377 Criterion 4: Aislamiento de permisos contra políticas de tenant / Citadel
+                    if let Some(tenant_id) = &pcb.tenant_id {
+                        let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                        if let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) {
+                            let tool_policy_key = format!("mcp_tool_policy:{}", other);
+                            if let Ok(Some(policy)) = db.get_kv(&tool_policy_key) {
+                                if policy == "deny" {
+                                    tracing::warn!(
+                                        pid = %_pid,
+                                        tool = %other,
+                                        tenant = %tenant_id,
+                                        "CORE-377: MCP tool call denied by tenant policy"
+                                    );
+                                    return format!(
+                                        "{{\"error\": \"Permission denied: tool '{}' is restricted for this tenant.\"}}",
+                                        other
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    match ank_mcp::registry::McpToolDispatcher::execute(
+                        &self.mcp_registry,
+                        other,
+                        args,
+                    )
+                    .await
+                    {
+                        Ok(val) => {
+                            tracing::info!(
+                                pid = %_pid,
+                                tool = %other,
+                                "CORE-377: MCP tool successfully executed"
+                            );
+                            val.to_string()
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                pid = %_pid,
+                                tool = %other,
+                                error = %e,
+                                "CORE-377: MCP tool execution failed"
+                            );
+                            format!("{{\"error\":\"mcp_execution_failed\",\"detail\":\"{}\"}}", e)
+                        }
+                    }
+                } else {
+                    format!("{{\"error\":\"Unknown tool: {}\"}}", other)
+                }
+            }
         }
     }
 

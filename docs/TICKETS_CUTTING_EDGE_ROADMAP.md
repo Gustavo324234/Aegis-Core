@@ -23,8 +23,9 @@ Este documento define la arquitectura y el desglose de tickets de desarrollo (CO
 
 ## CORE-377: Integración del Protocolo MCP (Model Context Protocol)
 
+- **Estado:** ✅ Completado (PR / Branch: `feat/core-377-mcp-integration`)
 - **Tipo:** Feature / Integration
-- **Crates / Componentes:** `ank-core::mcp`, `ank-server`
+- **Crates / Componentes:** `ank-mcp`, `ank-core::chal`, `ank-http::routes::mcp_api`, `ank-server`
 - **Prioridad:** Alta
 - **Objetivo:**
   Implementar cliente MCP nativo en Rust para conectar Aegis con servidores de herramientas y recursos externos (archivos locales, navegadores, terminales, GitHub, PostgreSQL, etc.) de forma transparente y estandarizada.

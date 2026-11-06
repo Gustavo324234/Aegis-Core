@@ -146,7 +146,100 @@ impl McpToolRegistry {
         self.tools.read().await.get(name).cloned()
     }
 
-    /// Carga e inicializa servidores MCP definidos en un archivo JSON (`mcpServers`),
+    /// CORE-377: Retorna si una herramienta está registrada.
+    pub async fn has_tool(&self, name: &str) -> bool {
+        self.tools.read().await.contains_key(name)
+    }
+
+    /// CORE-377: Retorna un listado de todas las herramientas registradas.
+    pub async fn list_tools(&self) -> Vec<McpTool> {
+        self.tools.read().await.values().cloned().collect()
+    }
+
+    /// CORE-377: Desregistra una herramienta por nombre.
+    pub async fn unregister_tool(&self, name: &str) -> bool {
+        self.tools.write().await.remove(name).is_some()
+    }
+
+    /// CORE-377: Conecta y registra un servidor MCP individual a partir de su definición JSON/YAML.
+    pub async fn connect_and_register_server(
+        &self,
+        server_name: &str,
+        cfg: &Value,
+        default_cwd: &std::path::Path,
+    ) -> Result<usize, McpError> {
+        let session = if let Some(cmd) = cfg.get("command").and_then(|v| v.as_str()) {
+            let args: Vec<String> = cfg
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let envs: HashMap<String, String> = cfg
+                .get("env")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let cwd = cfg
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| default_cwd.to_path_buf());
+
+            let t = crate::stdio::StdioTransport::new(cmd, args, envs, cwd).map_err(|e| McpError::Transport(e.to_string()))?;
+            McpClientSession::new(t)
+        } else if let Some(sse_str) = cfg
+            .get("sseUrl")
+            .or_else(|| cfg.get("sse_url"))
+            .and_then(|v| v.as_str())
+        {
+            let post_str = cfg
+                .get("postUrl")
+                .or_else(|| cfg.get("post_url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(sse_str);
+
+            let sse_url = reqwest::Url::parse(sse_str)
+                .map_err(|e| McpError::Transport(format!("Invalid sseUrl: {}", e)))?;
+            let post_url = reqwest::Url::parse(post_str)
+                .map_err(|e| McpError::Transport(format!("Invalid postUrl: {}", e)))?;
+
+            let t = crate::sse::SseTransport::new(
+                sse_url,
+                post_url,
+                std::time::Duration::from_secs(15),
+            ).map_err(|e| McpError::Transport(e.to_string()))?;
+            McpClientSession::new(t)
+        } else {
+            return Err(McpError::DiscoveryFailed(format!(
+                "Servidor '{}' no define 'command' ni 'sseUrl'",
+                server_name
+            )));
+        };
+
+        if let Err(e) = session
+            .initialize("aegis-ank-mcp", env!("CARGO_PKG_VERSION"))
+            .await
+        {
+            warn!(
+                "ANK-MCP: Handshake initialize falló en '{}' (intentando tools/list igual): {}",
+                server_name, e
+            );
+        }
+
+        self.discover_tools(session).await
+    }
+
+    /// Carga e inicializa servidores MCP definidos en un archivo JSON o YAML (`aegis.yaml` o `mcpServers`),
     /// ejecutando el handshake `initialize` + `discover_tools` por cada servidor habilitado.
     pub async fn load_from_config_file(&self, config_path: &std::path::Path) -> usize {
         if !config_path.exists() {
@@ -164,21 +257,38 @@ impl McpToolRegistry {
             }
         };
 
-        let parsed: Value = match serde_json::from_str(&raw) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!("ANK-MCP: JSON inválido en {:?}: {}", config_path, e);
-                return 0;
+        let is_yaml = config_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml"))
+            .unwrap_or(false);
+
+        let parsed: Value = if is_yaml {
+            match serde_yaml::from_str(&raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("ANK-MCP: YAML inválido en {:?}: {}", config_path, e);
+                    return 0;
+                }
+            }
+        } else {
+            match serde_json::from_str(&raw) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!("ANK-MCP: JSON inválido en {:?}: {}", config_path, e);
+                    return 0;
+                }
             }
         };
 
         let Some(servers) = parsed
             .get("mcpServers")
+            .or_else(|| parsed.get("mcp_servers"))
             .or_else(|| parsed.get("servers"))
             .and_then(|v| v.as_object())
         else {
             warn!(
-                "ANK-MCP: {:?} no contiene objeto 'mcpServers' ni 'servers'",
+                "ANK-MCP: {:?} no contiene objeto 'mcpServers', 'mcp_servers' ni 'servers'",
                 config_path
             );
             return 0;
@@ -204,95 +314,7 @@ impl McpToolRegistry {
                 continue;
             }
 
-            let session_opt: Option<Arc<McpClientSession>> =
-                if let Some(cmd) = cfg.get("command").and_then(|v| v.as_str()) {
-                    let args: Vec<String> = cfg
-                        .get("args")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|x| x.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    let envs: HashMap<String, String> = cfg
-                        .get("env")
-                        .and_then(|v| v.as_object())
-                        .map(|obj| {
-                            obj.iter()
-                                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    let cwd = cfg
-                        .get("cwd")
-                        .and_then(|v| v.as_str())
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|| default_cwd.clone());
-
-                    match crate::stdio::StdioTransport::new(cmd, args, envs, cwd) {
-                        Ok(t) => Some(McpClientSession::new(t)),
-                        Err(e) => {
-                            warn!(
-                                "ANK-MCP: Falló arranque StdIO para '{}': {}",
-                                server_name, e
-                            );
-                            None
-                        }
-                    }
-                } else if let Some(sse_str) = cfg
-                    .get("sseUrl")
-                    .or_else(|| cfg.get("sse_url"))
-                    .and_then(|v| v.as_str())
-                {
-                    let post_str = cfg
-                        .get("postUrl")
-                        .or_else(|| cfg.get("post_url"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(sse_str);
-
-                    match (reqwest::Url::parse(sse_str), reqwest::Url::parse(post_str)) {
-                        (Ok(sse_url), Ok(post_url)) => match crate::sse::SseTransport::new(
-                            sse_url,
-                            post_url,
-                            std::time::Duration::from_secs(15),
-                        ) {
-                            Ok(t) => Some(McpClientSession::new(t)),
-                            Err(e) => {
-                                warn!("ANK-MCP: Falló creación SSE para '{}': {}", server_name, e);
-                                None
-                            }
-                        },
-                        _ => {
-                            warn!("ANK-MCP: URLs SSE inválidas en servidor '{}'", server_name);
-                            None
-                        }
-                    }
-                } else {
-                    warn!(
-                        "ANK-MCP: Servidor '{}' no define 'command' ni 'sseUrl'",
-                        server_name
-                    );
-                    None
-                };
-
-            let Some(session) = session_opt else {
-                continue;
-            };
-
-            if let Err(e) = session
-                .initialize("aegis-ank-mcp", env!("CARGO_PKG_VERSION"))
-                .await
-            {
-                warn!(
-                    "ANK-MCP: Handshake initialize falló en '{}' (intentando tools/list igual): {}",
-                    server_name, e
-                );
-            }
-
-            match self.discover_tools(session).await {
+            match self.connect_and_register_server(server_name, cfg, &default_cwd).await {
                 Ok(count) => {
                     info!(
                         "ANK-MCP: Servidor '{}' conectado ({} herramientas registradas)",
@@ -302,7 +324,7 @@ impl McpToolRegistry {
                 }
                 Err(e) => {
                     warn!(
-                        "ANK-MCP: Falló descubrimiento de herramientas en '{}': {}",
+                        "ANK-MCP: Falló conexión/descubrimiento en '{}': {}",
                         server_name, e
                     );
                 }
@@ -460,5 +482,32 @@ mod tests {
         // Missing required field 'query' must be rejected immediately with ValidationError
         let err = McpToolDispatcher::execute(&registry, "test_tool", serde_json::json!({})).await;
         assert!(matches!(err, Err(McpError::ValidationError(_))));
+
+        // CORE-377 tests
+        assert!(registry.has_tool("test_tool").await);
+        let list = registry.list_tools().await;
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "test_tool");
+
+        assert!(registry.unregister_tool("test_tool").await);
+        assert!(!registry.has_tool("test_tool").await);
+    }
+
+    #[tokio::test]
+    async fn test_core_377_yaml_config_loading() {
+        let registry = McpToolRegistry::new();
+        let yaml_content = r#"
+mcp_servers:
+  disabled_server:
+    command: "nonexistent"
+    disabled: true
+"#;
+        let tmp_dir = std::env::temp_dir();
+        let yaml_path = tmp_dir.join("test_mcp_aegis.yaml");
+        std::fs::write(&yaml_path, yaml_content).unwrap();
+
+        let count = registry.load_from_config_file(&yaml_path).await;
+        assert_eq!(count, 0); // disabled server should be skipped without panic
+        let _ = std::fs::remove_file(yaml_path);
     }
 }

@@ -155,6 +155,33 @@ impl ToolRegistry {
         })
     }
 
+    /// CORE-376 / CORE-377: Serializa una `crate::pcb::ToolDefinition` canónica al formato del proveedor.
+    pub fn serialize_canonical(
+        def: &crate::pcb::ToolDefinition,
+        provider: &ProviderKind,
+    ) -> Value {
+        match provider {
+            ProviderKind::Anthropic => json!({
+                "name": def.name,
+                "description": def.description,
+                "input_schema": def.parameters,
+            }),
+            ProviderKind::Gemini => json!({
+                "name": def.name,
+                "description": def.description,
+                "parameters": def.parameters,
+            }),
+            _ => json!({
+                "type": "function",
+                "function": {
+                    "name": def.name,
+                    "description": def.description,
+                    "parameters": def.parameters,
+                }
+            }),
+        }
+    }
+
     /// CORE-376: Serializa una herramienta al formato nativo del proveedor o formato OpenAI compatible.
     pub fn serialize_for_driver(
         def: &ToolDefinition,
