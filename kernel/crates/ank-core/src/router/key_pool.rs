@@ -712,6 +712,41 @@ impl KeyPool {
         global.iter().find(|k| k.key_id == key_id).cloned()
     }
 
+    /// Returns an unredacted entry for the given provider.
+    /// Prefers active/available keys; searches tenant keys first if tenant_id is Some,
+    /// then falls back to global keys.
+    pub async fn get_raw_key_for_provider(
+        &self,
+        provider: &str,
+        tenant_id: Option<&str>,
+    ) -> Option<ApiKeyEntry> {
+        let canonical = crate::router::normalize_provider_id(provider);
+        if let Some(tid) = tenant_id {
+            let tenants = self.tenant_keys.read().await;
+            if let Some(keys) = tenants.get(tid) {
+                if let Some(entry) = keys
+                    .iter()
+                    .find(|k| k.provider == canonical && k.is_available())
+                    .cloned()
+                {
+                    return Some(entry);
+                }
+                if let Some(entry) = keys.iter().find(|k| k.provider == canonical).cloned() {
+                    return Some(entry);
+                }
+            }
+        }
+        let global = self.global_keys.read().await;
+        if let Some(entry) = global
+            .iter()
+            .find(|k| k.provider == canonical && k.is_available())
+            .cloned()
+        {
+            return Some(entry);
+        }
+        global.iter().find(|k| k.provider == canonical).cloned()
+    }
+
     /// Check if there's an OpenRouter key available (used by CatalogSyncer)
     pub async fn has_openrouter_key(&self) -> bool {
         let global = self.global_keys.read().await;

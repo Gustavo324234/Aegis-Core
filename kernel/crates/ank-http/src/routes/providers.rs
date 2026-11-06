@@ -75,8 +75,8 @@ fn validate_api_url(url: &str) -> Result<(), AegisHttpError> {
 /// available via the newer `/api/router/keys/probe-models` endpoint when the
 /// UI is ready to consume it.
 async fn list_provider_models(
-    State(_state): State<AppState>,
-    _auth: CitadelAuthenticated,
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
     Json(req): Json<ProviderModelsRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
     // Only validate when the operator passed a non-empty custom URL — the
@@ -89,7 +89,21 @@ async fn list_provider_models(
         Some(req.api_url.as_str())
     };
 
-    let discovered = fetch_provider_models(&req.provider, api_url, &req.api_key)
+    let router = state.router.read().await;
+    let api_key = if !req.api_key.trim().is_empty() {
+        req.api_key
+    } else if let Some(entry) = router
+        .get_raw_key_for_provider(&req.provider, Some(&auth.tenant_id))
+        .await
+    {
+        entry.api_key
+    } else {
+        return Err(AegisHttpError::BadRequest(
+            "api_key is required when no key is configured for provider".into(),
+        ));
+    };
+
+    let discovered = fetch_provider_models(&req.provider, api_url, &api_key)
         .await
         .map_err(|e| {
             AegisHttpError::BadGateway(format!(

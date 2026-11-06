@@ -57,7 +57,7 @@ pub async fn probe_models(
 ) -> Result<Json<ProbeModelsResponse>, AegisHttpError> {
     let router = state.router.read().await;
 
-    let (api_key, api_url) = if let Some(key_id) = &req.key_id {
+    let (api_key, api_url) = if let Some(key_id) = req.key_id.as_deref().filter(|k| !k.trim().is_empty()) {
         if let Some(entry) = router.get_raw_key_by_id(key_id, None).await.or(router
             .get_raw_key_by_id(key_id, Some(&auth.tenant_id))
             .await)
@@ -72,17 +72,28 @@ pub async fn probe_models(
             let key = req.api_key.filter(|k| !k.trim().is_empty());
             if is_keyless_provider(&req.provider) {
                 (key.unwrap_or_default(), req.api_url.clone())
-            } else {
-                let k = key.ok_or_else(|| {
-                    AegisHttpError::BadRequest("api_key is required to probe this provider".into())
-                })?;
+            } else if let Some(k) = key {
                 (k, req.api_url.clone())
+            } else if let Some(entry) = router
+                .get_raw_key_for_provider(&req.provider, Some(&auth.tenant_id))
+                .await
+            {
+                (entry.api_key, req.api_url.or(entry.api_url))
+            } else {
+                return Err(AegisHttpError::BadRequest(
+                    "api_key is required to probe this provider".into(),
+                ));
             }
         }
     } else if let Some(key) = req.api_key.filter(|k| !k.trim().is_empty()) {
         (key, req.api_url.clone())
     } else if is_keyless_provider(&req.provider) {
         (String::new(), req.api_url.clone())
+    } else if let Some(entry) = router
+        .get_raw_key_for_provider(&req.provider, Some(&auth.tenant_id))
+        .await
+    {
+        (entry.api_key, req.api_url.or(entry.api_url))
     } else {
         return Err(AegisHttpError::BadRequest(
             "api_key or key_id is required to probe this provider".into(),

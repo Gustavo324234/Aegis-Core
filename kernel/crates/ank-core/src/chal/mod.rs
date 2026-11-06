@@ -257,6 +257,10 @@ fn summarise_provider_failure(err: &SystemError) -> String {
                 (HTTP 404)."
             .to_string();
     }
+    if lower.contains("400") || lower.contains("bad request") {
+        return "El proveedor rechazó la solicitud (HTTP 400). Verificá que el modelo seleccionado sea compatible con chat y que la API key tenga permisos para invocarlo."
+            .to_string();
+    }
     if lower.contains("timeout") || lower.contains("timed out") {
         return "El proveedor no respondió a tiempo (timeout).".to_string();
     }

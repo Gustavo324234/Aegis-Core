@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Cpu, Globe, Zap, Box, Server, ShieldCheck, Eye, EyeOff, Terminal, Check, ArrowRight, Activity, AlertTriangle, Bot } from 'lucide-react';
+import { Cpu, Globe, Zap, Box, Server, ShieldCheck, Eye, EyeOff, Terminal, Check, ArrowRight, Activity, AlertTriangle, Bot, Loader2 } from 'lucide-react';
 import { useAegisStore, TaskTypeValue } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -43,6 +43,10 @@ const EngineSetupWizard: React.FC = () => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
+    const [isVerifyingKey, setIsVerifyingKey] = useState(false);
+    const [verifySuccessMsg, setVerifySuccessMsg] = useState<string | null>(null);
+
     const [showAgentNameStep, setShowAgentNameStep] = useState(false);
     const [agentNameInput, setAgentNameInput] = useState('Aegis');
     const [isSavingName, setIsSavingName] = useState(false);
@@ -78,6 +82,79 @@ const EngineSetupWizard: React.FC = () => {
         setApiUrl(preset.url);
         setModel(preset.model);
         if (key === 'ollama') setApiKey('');
+        setDiscoveredModels([]);
+        setVerifySuccessMsg(null);
+        setError(null);
+    };
+
+    const handleProbeModels = async (keyOverride?: string) => {
+        const key = keyOverride !== undefined ? keyOverride : apiKey;
+        if (selectedProvider !== 'ollama' && selectedProvider !== 'custom' && !key.trim()) {
+            setError(t('api_key_required'));
+            return;
+        }
+        setIsVerifyingKey(true);
+        setError(null);
+        setVerifySuccessMsg(null);
+        try {
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (tenantId && sessionKey) {
+                headers['x-citadel-tenant'] = tenantId;
+                headers['x-citadel-key'] = sessionKey;
+            }
+            const res = await fetch('/api/providers/models', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                    provider: selectedProvider,
+                    api_key: key.trim(),
+                    api_url: apiUrl || PROVIDER_PRESETS[selectedProvider].url,
+                })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const rawList: string[] = Array.isArray(data.models) ? data.models : [];
+                const list = rawList.filter(id => {
+                    const lower = id.toLowerCase();
+                    return !(
+                        lower.includes('embedding') ||
+                        lower.includes('aqa') ||
+                        lower.includes('tts') ||
+                        lower.includes('image') ||
+                        lower.includes('imagen') ||
+                        lower.includes('computer-use') ||
+                        lower.includes('deep-research') ||
+                        lower.includes('robotics') ||
+                        lower.includes('learnlm')
+                    );
+                });
+                const displayList = list.length > 0 ? list : rawList;
+                if (displayList.length > 0) {
+                    setDiscoveredModels(displayList);
+                    if (!displayList.includes(model)) {
+                        const preferred = displayList.find(m => m === 'gemini-2.5-flash' || m.includes('2.5-flash') || m.includes('3.8-flash') || m.includes('4-argon') || m.includes('3.6-flash') || m.includes('3.5-flash')) || displayList[0];
+                        setModel(preferred);
+                    }
+                    setVerifySuccessMsg(`✓ Clave válida — ${displayList.length} modelos detectados`);
+                } else {
+                    setDiscoveredModels([]);
+                    setError('La API respondió pero no se encontraron modelos compatibles con generación.');
+                }
+            } else {
+                setDiscoveredModels([]);
+                let errDetail = '';
+                try {
+                    const errJson = await res.json();
+                    errDetail = errJson.error || errJson.detail || '';
+                } catch { /* ignore */ }
+                setError(errDetail ? `Error del proveedor: ${errDetail}` : 'Clave de API rechazada o proveedor inalcanzable.');
+            }
+        } catch {
+            setDiscoveredModels([]);
+            setError('Error de conexión al verificar la clave.');
+        } finally {
+            setIsVerifyingKey(false);
+        }
     };
 
     const handleUseGlobal = async () => {
@@ -391,29 +468,6 @@ const EngineSetupWizard: React.FC = () => {
                                 </div>
 
                                 <form onSubmit={handleSubmitCustom} className="space-y-4 pt-4 border-t border-white/5">
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">API URL</label>
-                                            <input
-                                                type="url"
-                                                value={apiUrl}
-                                                onChange={(e) => setApiUrl(e.target.value)}
-                                                className="w-full bg-black/60 border border-white/10 rounded-lg py-3 px-4 text-xs font-mono focus:border-aegis-cyan/50"
-                                                required
-                                            />
-                                        </div>
-                                        <div className="space-y-1">
-                                            <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">{t('model')}</label>
-                                            <input
-                                                type="text"
-                                                value={model}
-                                                onChange={(e) => setModel(e.target.value)}
-                                                className="w-full bg-black/60 border border-white/10 rounded-lg py-3 px-4 text-xs font-mono focus:border-aegis-cyan/50"
-                                                required
-                                            />
-                                        </div>
-                                    </div>
-
                                     {(selectedProvider !== 'ollama' && selectedProvider !== 'custom') && (
                                         <div className="space-y-2">
                                             <div className="flex justify-between items-center px-1">
@@ -429,24 +483,89 @@ const EngineSetupWizard: React.FC = () => {
                                                     </a>
                                                 )}
                                             </div>
-                                            <div className="relative">
-                                                <input
-                                                    type={showKey ? 'text' : 'password'}
-                                                    value={apiKey}
-                                                    onChange={(e) => setApiKey(e.target.value)}
-                                                    className="w-full bg-black/60 border border-white/10 rounded-lg py-3 px-4 pr-10 text-xs font-mono focus:border-aegis-cyan/50 tracking-widest"
-                                                    required
-                                                />
+                                            <div className="flex gap-2">
+                                                <div className="relative flex-1">
+                                                    <input
+                                                        type={showKey ? 'text' : 'password'}
+                                                        value={apiKey}
+                                                        onChange={(e) => {
+                                                            setApiKey(e.target.value);
+                                                            setVerifySuccessMsg(null);
+                                                        }}
+                                                        placeholder="Pega tu clave de API aquí..."
+                                                        className="w-full bg-black/60 border border-white/10 rounded-lg py-3 px-4 pr-10 text-xs font-mono focus:border-aegis-cyan/50 tracking-widest"
+                                                        required
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowKey(!showKey)}
+                                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50"
+                                                    >
+                                                        {showKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                                    </button>
+                                                </div>
                                                 <button
                                                     type="button"
-                                                    onClick={() => setShowKey(!showKey)}
-                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50"
+                                                    onClick={() => handleProbeModels()}
+                                                    disabled={isVerifyingKey || !apiKey.trim()}
+                                                    className="px-4 py-2.5 bg-aegis-cyan/10 hover:bg-aegis-cyan/20 border border-aegis-cyan/30 text-aegis-cyan text-[10px] font-mono font-bold uppercase rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-40"
                                                 >
-                                                    {showKey ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                                    {isVerifyingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                                                    <span>{isVerifyingKey ? 'Verificando...' : 'Verificar'}</span>
                                                 </button>
                                             </div>
+                                            {verifySuccessMsg && (
+                                                <p className="text-[10px] font-mono text-emerald-400 mt-1 flex items-center gap-1">
+                                                    <Check className="w-3 h-3" /> {verifySuccessMsg}
+                                                </p>
+                                            )}
                                         </div>
                                     )}
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="space-y-1">
+                                            <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">API URL</label>
+                                            <input
+                                                type="url"
+                                                value={apiUrl}
+                                                onChange={(e) => setApiUrl(e.target.value)}
+                                                className="w-full bg-black/60 border border-white/10 rounded-lg py-3 px-4 text-xs font-mono focus:border-aegis-cyan/50"
+                                                required
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <div className="flex justify-between items-center px-1">
+                                                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest">{t('model')}</label>
+                                                {discoveredModels.length > 0 && (
+                                                    <span className="text-[9px] font-mono text-aegis-cyan/70">
+                                                        {discoveredModels.length} activos
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {discoveredModels.length > 0 ? (
+                                                <select
+                                                    value={model}
+                                                    onChange={(e) => setModel(e.target.value)}
+                                                    className="w-full bg-black/80 border border-aegis-cyan/40 rounded-lg py-3 px-3 text-xs font-mono text-aegis-cyan focus:border-aegis-cyan focus:outline-none"
+                                                >
+                                                    {discoveredModels.map((m) => (
+                                                        <option key={m} value={m} className="bg-neutral-900 text-white">
+                                                            {m}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            ) : (
+                                                <input
+                                                    type="text"
+                                                    value={model}
+                                                    onChange={(e) => setModel(e.target.value)}
+                                                    placeholder="Ej: gemini-3.5-flash"
+                                                    className="w-full bg-black/60 border border-white/10 rounded-lg py-3 px-4 text-xs font-mono focus:border-aegis-cyan/50"
+                                                    required
+                                                />
+                                            )}
+                                        </div>
+                                    </div>
 
                                     {error && (
                                         <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-lg flex items-center gap-2">

@@ -157,6 +157,16 @@ impl CognitiveRouter {
         self.key_pool.get_raw_key_by_id(key_id, tenant_id).await
     }
 
+    /// Returns the full (unredacted) entry for a provider. Used when probing
+    /// models or testing connectivity without an explicit key_id.
+    pub async fn get_raw_key_for_provider(
+        &self,
+        provider: &str,
+        tenant_id: Option<&str>,
+    ) -> Option<key_pool::ApiKeyEntry> {
+        self.key_pool.get_raw_key_for_provider(provider, tenant_id).await
+    }
+
     /// Dynamic Domain Module loading interface.
     pub async fn load_modules(&self, path: &std::path::Path) -> anyhow::Result<usize> {
         let loaded = modules::load_modules_from_dir(path)?;
