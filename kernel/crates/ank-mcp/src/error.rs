@@ -19,3 +19,9 @@ pub enum McpError {
     #[error("Fallo al descubrir herramientas: {0}")]
     DiscoveryFailed(String),
 }
+
+impl From<anyhow::Error> for McpError {
+    fn from(err: anyhow::Error) -> Self {
+        Self::Transport(err.to_string())
+    }
+}

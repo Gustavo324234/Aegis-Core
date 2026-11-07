@@ -261,12 +261,19 @@ pub(crate) async fn run_server() -> Result<()> {
     {
         let mcp_registry_boot = hal.mcp_registry.clone();
         let mcp_cfg_path = data_dir.join("mcp_servers.json");
+        let aegis_yaml_data = data_dir.join("aegis.yaml");
+        let aegis_yaml_cwd = std::path::PathBuf::from("aegis.yaml");
         tokio::spawn(async move {
-            let count = mcp_registry_boot.load_from_config_file(&mcp_cfg_path).await;
+            let mut count = mcp_registry_boot.load_from_config_file(&mcp_cfg_path).await;
+            if aegis_yaml_data.exists() {
+                count += mcp_registry_boot.load_from_config_file(&aegis_yaml_data).await;
+            } else if aegis_yaml_cwd.exists() {
+                count += mcp_registry_boot.load_from_config_file(&aegis_yaml_cwd).await;
+            }
             if count > 0 {
                 info!(
-                    "MCP Bootstrap: {} external MCP tools registered from {:?}",
-                    count, mcp_cfg_path
+                    "MCP Bootstrap: {} external MCP tools registered",
+                    count
                 );
             }
         });

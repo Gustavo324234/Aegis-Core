@@ -246,32 +246,31 @@ impl VirtualContextManager {
         let mut l3_added = false;
         let mut l3_str = String::new();
 
-        if !pcb.memory_pointers.swap_refs.is_empty() {
-            for _swap_query in &pcb.memory_pointers.swap_refs {
-                let query_vector = if let Some(driver) = embedding_driver {
-                    driver
-                        .embed(&pcb.memory_pointers.l1_instruction)
-                        .await
-                        .unwrap_or_else(|_| vec![0.0; 128])
-                } else {
-                    vec![0.0; 128]
-                };
+        // CORE-378: Búsqueda semántica automática en memoria L3 si swap_refs existe o consultando la instrucción actual
+        let queries_to_search: Vec<String> = if !pcb.memory_pointers.swap_refs.is_empty() {
+            pcb.memory_pointers.swap_refs.clone()
+        } else {
+            vec![pcb.memory_pointers.l1_instruction.clone()]
+        };
 
-                if let Ok(fragments) = swap_manager.search(tenant_id, query_vector, 5).await {
-                    for fragment in fragments {
-                        let fragment_text =
-                            format!("[Memory ID: {}]\n{}\n", fragment.id, fragment.text);
-                        let fragment_tokens = estimate_tokens(&fragment_text) + 10;
-                        if current_tokens + fragment_tokens <= actual_token_limit {
-                            if !l3_added {
-                                l3_str.push_str("\n## L3 SEMANTIC MEMORY\n");
-                                l3_added = true;
+        if let Some(driver) = embedding_driver {
+            for query_text in &queries_to_search {
+                if let Ok(query_vector) = driver.embed(query_text).await {
+                    if let Ok(fragments) = swap_manager.search(tenant_id, query_vector, 3).await {
+                        for fragment in fragments {
+                            let fragment_text =
+                                format!("[Memory ID: {}]\n{}\n", fragment.id, fragment.text);
+                            let fragment_tokens = estimate_tokens(&fragment_text) + 10;
+                            if current_tokens + fragment_tokens <= actual_token_limit {
+                                if !l3_added {
+                                    l3_str.push_str("\n## L3 SEMANTIC MEMORY\n");
+                                    l3_added = true;
+                                }
+                                l3_str.push_str(&fragment_text);
+                                current_tokens += fragment_tokens;
+                            } else {
+                                break;
                             }
-                            l3_str.push_str(&fragment_text);
-                            current_tokens += fragment_tokens;
-                        } else {
-                            // Se reduce la cantidad de fragmentos devueltos al quedarse sin memoria
-                            break;
                         }
                     }
                 }

@@ -262,7 +262,7 @@ async fn fetch_gemini(
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("gemini response has no `models` array"))?;
 
-    Ok(models
+    let mut list: Vec<DiscoveredModel> = models
         .iter()
         .filter_map(|m| {
             // name looks like "models/gemini-2.5-flash"
@@ -276,6 +276,22 @@ async fn fetch_gemini(
             if !supports_generate {
                 return None;
             }
+
+            // Exclude specialized / non-chat models that fail standard chat completions
+            let lower = id.to_lowercase();
+            if lower.contains("embedding")
+                || lower.contains("aqa")
+                || lower.contains("tts")
+                || lower.contains("image")
+                || lower.contains("imagen")
+                || lower.contains("computer-use")
+                || lower.contains("deep-research")
+                || lower.contains("robotics")
+                || lower.contains("learnlm")
+            {
+                return None;
+            }
+
             let display_name = m["displayName"].as_str().unwrap_or(&id).to_string();
             let context_window = m["inputTokenLimit"].as_u64().map(|v| v as u32);
             Some(DiscoveredModel {
@@ -287,7 +303,29 @@ async fn fetch_gemini(
                 supports_tools: None,
             })
         })
-        .collect())
+        .collect();
+
+    list.sort_by(|a, b| {
+        let score = |id: &str| -> i32 {
+            let n = id.to_lowercase();
+            if n.contains("gemini-4") || n.contains("argon") { 100 }
+            else if n.contains("3.8-flash") { 95 }
+            else if n.contains("3.8") { 90 }
+            else if n.contains("3.6-flash") { 85 }
+            else if n.contains("3.5-flash") { 80 }
+            else if n == "gemini-2.5-flash" { 75 }
+            else if n == "gemini-2.5-pro" { 70 }
+            else if n.contains("2.5-flash") { 65 }
+            else if n.contains("2.5-pro") { 60 }
+            else if n.contains("2.0-flash") { 50 }
+            else if n.contains("1.5-flash") { 40 }
+            else if n.contains("1.5-pro") { 35 }
+            else { 10 }
+        };
+        score(&b.model_id).cmp(&score(&a.model_id)).then_with(|| a.model_id.cmp(&b.model_id))
+    });
+
+    Ok(list)
 }
 
 /// Anthropic native `/v1/models`. Auth uses `x-api-key` header plus the

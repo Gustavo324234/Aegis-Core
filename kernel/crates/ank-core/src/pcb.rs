@@ -238,9 +238,106 @@ pub enum ProcessState {
     WaitingSyscall,
     /// CORE-154: Supervisor suspended until all spawned workers report back.
     WaitingWorkers,
+    /// CORE-376: Suspended awaiting tool call execution or results.
+    WaitingToolCall,
     Completed,
     Failed,
     Preempted,
+}
+
+/// CORE-376: Definición canónica de una herramienta para el router cognitivo y agentes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+impl ToolDefinition {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: serde_json::Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters,
+        }
+    }
+}
+
+/// CORE-376: Llamada estructurada a una herramienta emitida por un modelo cognitivo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+impl ToolCall {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: serde_json::Value,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+        }
+    }
+
+    pub fn to_record(&self) -> crate::chal::ToolCallRecord {
+        crate::chal::ToolCallRecord {
+            id: self.id.clone(),
+            type_: "function".to_string(),
+            function: crate::chal::FunctionCallRecord {
+                name: self.name.clone(),
+                arguments: if self.arguments.is_string() {
+                    self.arguments.as_str().unwrap_or_default().to_string()
+                } else {
+                    self.arguments.to_string()
+                },
+            },
+        }
+    }
+
+    pub fn from_record(record: &crate::chal::ToolCallRecord) -> Self {
+        let args = serde_json::from_str(&record.function.arguments)
+            .unwrap_or_else(|_| serde_json::Value::String(record.function.arguments.clone()));
+        Self {
+            id: record.id.clone(),
+            name: record.function.name.clone(),
+            arguments: args,
+        }
+    }
+}
+
+/// CORE-376: Resultado de la ejecución de una herramienta.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolResult {
+    pub call_id: String,
+    pub content: String,
+    pub is_error: bool,
+}
+
+impl ToolResult {
+    pub fn success(call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            call_id: call_id.into(),
+            content: content.into(),
+            is_error: false,
+        }
+    }
+
+    pub fn error(call_id: impl Into<String>, error_message: impl Into<String>) -> Self {
+        Self {
+            call_id: call_id.into(),
+            content: error_message.into(),
+            is_error: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -327,6 +424,10 @@ pub struct PCB {
     /// (agentes, tareas internas) — esos siguen con la clave por tenant.
     #[serde(default)]
     pub conversation_id: Option<String>,
+
+    /// CORE-376: Llamadas a herramientas pendientes de ejecución.
+    #[serde(default)]
+    pub pending_tool_calls: Vec<ToolCall>,
 }
 
 use std::cmp::Ordering;
@@ -423,7 +524,26 @@ impl PCB {
             message_history: Vec::new(),
             model_override: None,
             conversation_id: None,
+            pending_tool_calls: Vec::new(),
         }
+    }
+
+    /// CORE-376: Pausa el proceso esperando la resolución de llamadas a herramientas.
+    pub fn pause_for_tool_calls(&mut self, calls: Vec<ToolCall>) {
+        self.pending_tool_calls = calls;
+        self.state = ProcessState::WaitingToolCall;
+    }
+
+    /// CORE-376: Reanuda el proceso tras recibir los resultados de las herramientas.
+    pub fn resume_with_tool_results(&mut self, results: &[ToolResult]) {
+        for res in results {
+            self.registers.temp_vars.insert(
+                format!("tool_result_{}", res.call_id),
+                res.content.clone(),
+            );
+        }
+        self.pending_tool_calls.clear();
+        self.state = ProcessState::Ready;
     }
 
     pub fn to_json(&self) -> anyhow::Result<String> {
@@ -604,6 +724,41 @@ mod tests {
         assert_eq!(pcb.pid, "proc_old");
         assert_eq!(pcb.task_type, TaskType::Chat);
         assert_eq!(pcb.public_id, None);
+        assert!(pcb.pending_tool_calls.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn test_core_376_tool_call_lifecycle() {
+        let mut pcb = PCB::new("ToolProc".to_string(), 10, "Run tools".to_string());
+        assert_eq!(pcb.state, ProcessState::New);
+
+        let call = ToolCall::new(
+            "call_001",
+            "read_file",
+            serde_json::json!({"path": "src/main.rs"}),
+        );
+        let record = call.to_record();
+        assert_eq!(record.id, "call_001");
+        assert_eq!(record.function.name, "read_file");
+
+        let from_rec = ToolCall::from_record(&record);
+        assert_eq!(from_rec.id, call.id);
+        assert_eq!(from_rec.name, call.name);
+
+        // Pause for tools
+        pcb.pause_for_tool_calls(vec![call]);
+        assert_eq!(pcb.state, ProcessState::WaitingToolCall);
+        assert_eq!(pcb.pending_tool_calls.len(), 1);
+
+        // Resume with tool results
+        let results = vec![ToolResult::success("call_001", "fn main() {}")];
+        pcb.resume_with_tool_results(&results);
+        assert_eq!(pcb.state, ProcessState::Ready);
+        assert!(pcb.pending_tool_calls.is_empty());
+        assert_eq!(
+            pcb.registers.temp_vars.get("tool_result_call_001"),
+            Some(&"fn main() {}".to_string())
+        );
     }
 }

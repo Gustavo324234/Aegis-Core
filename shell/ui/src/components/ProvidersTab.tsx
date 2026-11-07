@@ -25,6 +25,7 @@ const ProviderCard: React.FC<{
     const { t } = useTranslation();
     const [isToggling, setIsToggling] = useState(false);
     const isRateLimited = provider.rate_limited_until && new Date(provider.rate_limited_until) > new Date();
+    const [isModelsExpanded, setIsModelsExpanded] = useState(false);
     const providerLabel = PROVIDER_PRESETS[provider.provider as ProviderType]?.label ?? provider.provider;
 
     const handleToggle = async () => {
@@ -86,10 +87,38 @@ const ProviderCard: React.FC<{
                             {provider.label || providerLabel}
                         </h3>
                         {provider.active_models && provider.active_models.length > 0 && (
-                            <p className="text-[10px] font-mono text-white/30 mt-0.5">
-                                Models: {provider.active_models.slice(0, 2).join(', ')}
-                                {provider.active_models.length > 2 && ` +${provider.active_models.length - 2}`}
-                            </p>
+                            <div className="mt-2 space-y-1.5">
+                                <div className="flex items-center gap-2">
+                                    <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
+                                        Modelos activos ({provider.active_models.length}):
+                                    </p>
+                                    {provider.active_models.length > 3 && (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); setIsModelsExpanded(v => !v); }}
+                                            className="text-[10px] font-mono text-aegis-cyan/80 hover:text-aegis-cyan transition-colors underline"
+                                        >
+                                            {isModelsExpanded ? 'Ocultar' : 'Ver todos (' + provider.active_models.length + ')'}
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                                    {(isModelsExpanded ? provider.active_models : provider.active_models.slice(0, 3)).map(m => (
+                                        <span
+                                            key={m}
+                                            className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-white/80 font-mono text-[10px] flex items-center gap-1.5"
+                                        >
+                                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                                            {m}
+                                        </span>
+                                    ))}
+                                    {!isModelsExpanded && provider.active_models.length > 3 && (
+                                        <span className="px-2 py-0.5 rounded-md bg-white/5 border border-white/5 text-white/30 font-mono text-[10px]">
+                                            +{provider.active_models.length - 3} más
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
                         )}
                     </div>
                 </div>
@@ -179,11 +208,58 @@ const ProviderCard: React.FC<{
 };
 
 
+const sortModelsByRecency = (models: string[]): string[] => {
+    return [...models].sort((a, b) => {
+        const score = (name: string) => {
+            const n = name.toLowerCase();
+            // Groq 2026 models
+            if (n.includes('gpt-oss-120b')) return 120;
+            if (n.includes('qwen3.8') || n.includes('qwen-3.8')) return 115;
+            if (n.includes('gpt-oss-20b')) return 110;
+            // Stable, production-ready Gemini models first so they don't 404/quota lock
+            if (n.includes('2.5-flash')) return 100;
+            if (n.includes('2.5-pro')) return 95;
+            if (n.includes('2.0-flash')) return 90;
+            if (n.includes('3.5-flash')) return 85;
+            if (n.includes('3.6-flash')) return 80;
+            if (n.includes('3.8-flash')) return 70;
+            if (n.includes('gemini-4') || n.includes('argon')) return 60;
+            return 10;
+        };
+        const diff = score(b) - score(a);
+        if (diff !== 0) return diff;
+        return a.localeCompare(b);
+    });
+};
+
+const isChatCompatibleModel = (modelId: string): boolean => {
+    const id = modelId.toLowerCase();
+    if (
+        id.includes('embedding') ||
+        id.includes('aqa') ||
+        id.includes('tts') ||
+        id.includes('image') ||
+        id.includes('imagen') ||
+        id.includes('computer-use') ||
+        id.includes('deep-research') ||
+        id.includes('robotics') ||
+        id.includes('learnlm') ||
+        id.includes('whisper') ||
+        id.includes('dall-e') ||
+        id.includes('moderation')
+    ) {
+        return false;
+    }
+    return true;
+};
+
 const ModelSelector: React.FC<{ 
     models: string[]; 
     selectedModels: string[]; 
     onChange: (selected: string[]) => void;
-}> = ({ models, selectedModels, onChange }) => {
+    onRefresh?: () => void;
+    isVerifying?: boolean;
+}> = ({ models, selectedModels, onChange, onRefresh, isVerifying }) => {
     const { t } = useTranslation();
     const [search, setSearch] = useState('');
     const filtered = models.filter(m => m.toLowerCase().includes(search.toLowerCase()));
@@ -199,12 +275,26 @@ const ModelSelector: React.FC<{
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between">
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
-                    {t('models_detected', { selected: selectedModels.length.toString(), total: models.length.toString() })}
-                </label>
-                <div className="flex gap-3">
-                    <button onClick={() => onChange(filtered)} className="text-[9px] font-mono text-aegis-cyan/60 hover:text-aegis-cyan uppercase tracking-widest">{t('all')}</button>
-                    <button onClick={() => onChange([])} className="text-[9px] font-mono text-white/20 hover:text-white/40 uppercase tracking-widest">{t('none')}</button>
+                <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
+                        {t('models_detected', { selected: selectedModels.length.toString(), total: models.length.toString() })}
+                    </label>
+                    {isVerifying && <Loader2 className="w-3 h-3 text-aegis-cyan animate-spin" />}
+                </div>
+                <div className="flex gap-3 items-center">
+                    {onRefresh && (
+                        <button 
+                            type="button" 
+                            onClick={onRefresh} 
+                            disabled={isVerifying}
+                            className="text-[9px] font-mono text-aegis-cyan hover:underline uppercase tracking-widest flex items-center gap-1 disabled:opacity-40"
+                            title="Consultar al proveedor la lista completa de modelos"
+                        >
+                            {isVerifying ? 'Cargando...' : 'Detectar modelos'}
+                        </button>
+                    )}
+                    <button type="button" onClick={() => onChange(filtered)} className="text-[9px] font-mono text-aegis-cyan/60 hover:text-aegis-cyan uppercase tracking-widest">{t('all')}</button>
+                    <button type="button" onClick={() => onChange([])} className="text-[9px] font-mono text-white/20 hover:text-white/40 uppercase tracking-widest">{t('none')}</button>
                 </div>
             </div>
 
@@ -262,7 +352,7 @@ const ProviderModal: React.FC<{
     const [showKey, setShowKey] = useState(false);
     const [isVerifying, setIsVerifying] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
-    const [models, setModels] = useState<string[]>([]);
+    const [models, setModels] = useState<string[]>(initialProvider?.active_models || []);
     const [selectedModels, setSelectedModels] = useState<string[]>(initialProvider?.active_models || []);
     const [isFreeTier, setIsFreeTier] = useState<boolean>(initialProvider?.is_free_tier ?? false);
     const [isActive, setIsActive] = useState<boolean>(initialProvider?.is_active ?? true);
@@ -274,43 +364,46 @@ const ProviderModal: React.FC<{
         setIsVerifying(true);
         setVerifyError(null);
         try {
-            const res = await fetch('/api/providers/models', {
+            const reqBody: Record<string, string> = {
+                provider: selectedProvider,
+                api_url: PROVIDER_PRESETS[selectedProvider].url
+            };
+            if (apiKey.trim()) {
+                reqBody.api_key = apiKey.trim();
+            } else if (initialProvider?.key_id) {
+                reqBody.key_id = initialProvider.key_id;
+            }
+
+            const res = await fetch('/api/router/keys/probe-models', {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
                     'x-citadel-tenant': tenantId!,
                     'x-citadel-key': sessionKey!
                 },
-                body: JSON.stringify({
-                    provider: selectedProvider,
-                    // Keyless providers (ollama, custom) don't need a real api_key.
-                    // For cloud providers in edit mode with no new key, send empty string
-                    // so the backend fetches the stored one (not the literal 'redacted').
-                    ...(isKeylessProvider(selectedProvider) ? {} : { api_key: apiKey || '' }),
-                    api_url: PROVIDER_PRESETS[selectedProvider].url
-                })
+                body: JSON.stringify(reqBody)
             });
             if (res.ok) {
                 const data = await res.json();
-                // CORE-FIX: defensive — the backend should always return
-                // `models: string[]`, but if the upstream returns an empty
-                // body or an unexpected shape we don't want the modal to
-                // crash. Empty array means "no models available for this key"
-                // and the user can still proceed (selectedModels can be set
-                // manually) or back out.
-                const models = Array.isArray(data.models) ? data.models : [];
-                setModels(models);
-                if (!isEdit) setSelectedModels(models);
+                const rawList = Array.isArray(data.models) ? data.models : [];
+                const rawModels: string[] = rawList.map((m: any) =>
+                    typeof m === 'object' && m !== null && 'model_id' in m ? String(m.model_id) : String(m)
+                );
+                const chatModels = rawModels.filter(isChatCompatibleModel);
+                const combined = Array.from(new Set([...(initialProvider?.active_models || []), ...(chatModels.length > 0 ? chatModels : rawModels)]));
+                const displayModels = sortModelsByRecency(combined);
+                setModels(displayModels);
+                if (!isEdit) {
+                    const topPicks = displayModels.filter(m => 
+                        (m.includes('gpt-oss') || m.includes('qwen') || m.includes('2.5-flash') || m.includes('2.5-pro') || m.includes('3.5-flash')) && !m.includes('preview')
+                    );
+                    setSelectedModels(topPicks.length > 0 ? topPicks : displayModels.slice(0, 3));
+                }
                 setStep('models');
-                if (models.length === 0) {
+                if (displayModels.length === 0) {
                     setVerifyError(t('no_models_returned'));
                 }
             } else {
-                // CORE-FIX: the backend returns either { error: "..." } (the
-                // standard AegisHttpError shape) or { detail: "..." } (older
-                // handlers). Show whichever has content, falling back to the
-                // generic message. Status 502 (BadGateway) typically means
-                // the provider rejected the key — surface that distinction.
                 let errMessage = '';
                 try {
                     const errData = await res.json();
@@ -321,19 +414,19 @@ const ProviderModal: React.FC<{
                 const prefix = res.status === 502 ? `${t('provider_rejected_key')}: ` : '';
                 setVerifyError(prefix + (errMessage || t('invalid_api_key_error')));
             }
-        } catch (err) {
+        } catch {
             setVerifyError(t('provider_connection_error'));
         } finally {
             setIsVerifying(false);
         }
-    }, [apiKey, isEdit, selectedProvider, sessionKey, t, tenantId]);
+    }, [apiKey, initialProvider, isEdit, selectedProvider, sessionKey, t, tenantId]);
 
-    // Fetch models if in edit mode and models are empty
+    // Automatically probe provider to load full models catalog on edit mode
     React.useEffect(() => {
-        if (isEdit && models.length === 0) {
+        if (isEdit) {
             handleVerify();
         }
-    }, [isEdit, models.length, handleVerify]);
+    }, [isEdit, handleVerify]);
 
     const handleSave = async () => {
         setIsSaving(true);
@@ -514,7 +607,18 @@ const ProviderModal: React.FC<{
                                 exit={{ opacity: 0, x: -20 }}
                                 className="space-y-6"
                             >
-                                <ModelSelector models={models} selectedModels={selectedModels} onChange={setSelectedModels} />
+                                <ModelSelector 
+                                    models={models} 
+                                    selectedModels={selectedModels} 
+                                    onChange={setSelectedModels} 
+                                    onRefresh={handleVerify}
+                                    isVerifying={isVerifying}
+                                />
+                                {verifyError && (
+                                    <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs font-mono">
+                                        {verifyError}
+                                    </div>
+                                )}
 
                                 <div className="space-y-3">
                                     {/* Active state toggle */}
@@ -750,19 +854,20 @@ const AdminPlaygroundDrawer: React.FC<{
     sessionKey: string;
 }> = ({ providers, tenantId, sessionKey }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const [selectedProvider, setSelectedProvider] = useState<string>(providers[0]?.provider || 'gemini');
+    const [selectedKeyId, setSelectedKeyId] = useState<string>(providers[0]?.key_id || '');
     const [selectedModel, setSelectedModel] = useState<string>('');
     const [prompt, setPrompt] = useState('Hola, responde brevemente en 1 frase.');
     const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant' | 'system'; content: string; latencyMs?: number }>>([]);
     const [isSending, setIsSending] = useState(false);
 
     useEffect(() => {
-        if (providers.length > 0 && !selectedProvider) {
-            setSelectedProvider(providers[0].provider);
+        if (providers.length > 0 && (!selectedKeyId || !providers.some(p => p.key_id === selectedKeyId))) {
+            setSelectedKeyId(providers[0].key_id);
         }
-    }, [providers, selectedProvider]);
+    }, [providers, selectedKeyId]);
 
-    const activeProviderObj = providers.find(p => p.provider === selectedProvider);
+    const activeProviderObj = providers.find(p => p.key_id === selectedKeyId) || providers[0];
+    const selectedProvider = activeProviderObj?.provider || 'gemini';
     const availableModels = activeProviderObj?.active_models || [];
 
     const handleSendTest = async (e: React.FormEvent) => {
@@ -776,18 +881,18 @@ const AdminPlaygroundDrawer: React.FC<{
 
         const startTime = Date.now();
         try {
-            const res = await fetch('/api/router/keys/probe-models', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-citadel-tenant': tenantId,
-                    'x-citadel-key': sessionKey
-                },
-                body: JSON.stringify({
-                    provider: selectedProvider,
-                    key_id: activeProviderObj?.key_id
-                })
-            });
+                const targetKeyId = activeProviderObj?.key_id || (providers.length > 0 ? providers[0]?.key_id : undefined);
+                const reqBody: Record<string, string> = { provider: selectedProvider };
+                if (targetKeyId) reqBody.key_id = targetKeyId;
+                const res = await fetch('/api/router/keys/probe-models', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-citadel-tenant': tenantId,
+                        'x-citadel-key': sessionKey
+                    },
+                    body: JSON.stringify(reqBody)
+                });
 
             const latencyMs = Date.now() - startTime;
 
@@ -865,12 +970,12 @@ const AdminPlaygroundDrawer: React.FC<{
                         <div>
                             <label className="block text-[10px] text-white/40 uppercase tracking-widest mb-1">Proveedor a probar</label>
                             <select
-                                value={selectedProvider}
-                                onChange={e => setSelectedProvider(e.target.value)}
+                                value={selectedKeyId}
+                                onChange={e => setSelectedKeyId(e.target.value)}
                                 className="w-full bg-black border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:border-aegis-cyan/50 outline-none"
                             >
                                 {providers.map(p => (
-                                    <option key={p.key_id} value={p.provider}>
+                                    <option key={p.key_id} value={p.key_id}>
                                         {p.label || p.provider} ({p.is_active ? 'Activo' : 'Inactivo'})
                                     </option>
                                 ))}

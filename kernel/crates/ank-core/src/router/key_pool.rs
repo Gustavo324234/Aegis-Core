@@ -97,6 +97,20 @@ fn model_id_matches(catalog_id: &str, stored_id: &str) -> bool {
     if catalog_id.ends_with(&format!("/{}", stored_id)) {
         return true;
     }
+    // Strip prefixes from both and compare bare IDs (e.g. "openai/gpt-oss-120b" vs "groq/gpt-oss-120b")
+    if let Some(stored_bare) = stored_id.split_once('/').map(|(_, s)| s) {
+        if catalog_id == stored_bare {
+            return true;
+        }
+        if let Some(cat_bare) = catalog_id.split_once('/').map(|(_, s)| s) {
+            if cat_bare == stored_bare {
+                return true;
+            }
+        }
+    }
+    if stored_id.ends_with(&format!("/{}", catalog_id)) {
+        return true;
+    }
     false
 }
 
@@ -712,6 +726,41 @@ impl KeyPool {
         global.iter().find(|k| k.key_id == key_id).cloned()
     }
 
+    /// Returns an unredacted entry for the given provider.
+    /// Prefers active/available keys; searches tenant keys first if tenant_id is Some,
+    /// then falls back to global keys.
+    pub async fn get_raw_key_for_provider(
+        &self,
+        provider: &str,
+        tenant_id: Option<&str>,
+    ) -> Option<ApiKeyEntry> {
+        let canonical = crate::router::normalize_provider_id(provider);
+        if let Some(tid) = tenant_id {
+            let tenants = self.tenant_keys.read().await;
+            if let Some(keys) = tenants.get(tid) {
+                if let Some(entry) = keys
+                    .iter()
+                    .find(|k| k.provider == canonical && k.is_available())
+                    .cloned()
+                {
+                    return Some(entry);
+                }
+                if let Some(entry) = keys.iter().find(|k| k.provider == canonical).cloned() {
+                    return Some(entry);
+                }
+            }
+        }
+        let global = self.global_keys.read().await;
+        if let Some(entry) = global
+            .iter()
+            .find(|k| k.provider == canonical && k.is_available())
+            .cloned()
+        {
+            return Some(entry);
+        }
+        global.iter().find(|k| k.provider == canonical).cloned()
+    }
+
     /// Check if there's an OpenRouter key available (used by CatalogSyncer)
     pub async fn has_openrouter_key(&self) -> bool {
         let global = self.global_keys.read().await;
@@ -1035,6 +1084,41 @@ mod tests {
             !pool.has_key_for_model("groq", "groq/unknown-model").await,
             "Model not in active_models should be rejected"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_groq_2026_models_matching() -> anyhow::Result<()> {
+        let pool = KeyPool::new(Arc::new(NoopPersistor));
+
+        pool.add_global_key(ApiKeyEntry {
+            key_id: "groq-key-2026".to_string(),
+            provider: "groq".to_string(),
+            api_key: "gsk_test".to_string(),
+            api_url: None,
+            label: None,
+            is_active: true,
+            rate_limited_until: None,
+            active_models: Some(vec![
+                "gpt-oss-120b".to_string(),
+                "gpt-oss-20b".to_string(),
+                "qwen/qwen3.8-27b".to_string(),
+            ]),
+            is_free_tier: true,
+        })
+        .await?;
+
+        // 1. Matches groq/gpt-oss-120b
+        assert!(pool.has_key_for_model("groq", "groq/gpt-oss-120b").await);
+        // 2. Matches bare gpt-oss-120b
+        assert!(pool.has_key_for_model("groq", "gpt-oss-120b").await);
+        // 3. Matches groq/gpt-oss-20b
+        assert!(pool.has_key_for_model("groq", "groq/gpt-oss-20b").await);
+        // 4. Matches qwen/qwen3.8-27b verbatim
+        assert!(pool.has_key_for_model("groq", "qwen/qwen3.8-27b").await);
+        // 5. Matches nested groq/qwen/qwen3.8-27b
+        assert!(pool.has_key_for_model("groq", "groq/qwen/qwen3.8-27b").await);
 
         Ok(())
     }

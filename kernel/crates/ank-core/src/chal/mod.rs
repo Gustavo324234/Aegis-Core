@@ -257,6 +257,10 @@ fn summarise_provider_failure(err: &SystemError) -> String {
                 (HTTP 404)."
             .to_string();
     }
+    if lower.contains("400") || lower.contains("bad request") {
+        return "El proveedor rechazó la solicitud (HTTP 400). Verificá que el modelo seleccionado sea compatible con chat y que la API key tenga permisos para invocarlo."
+            .to_string();
+    }
     if lower.contains("timeout") || lower.contains("timed out") {
         return "El proveedor no respondió a tiempo (timeout).".to_string();
     }
@@ -430,7 +434,10 @@ impl CognitiveHAL {
                 ),
             ))
         } else {
-            None
+            // CORE-378: Fallback nativo a LocalEmbeddingDriver determinista y local
+            Some(Arc::new(
+                crate::chal::drivers::embeddings::LocalEmbeddingDriver::default(),
+            ))
         };
 
         Ok(Self {
@@ -707,7 +714,7 @@ impl CognitiveHAL {
         );
 
         let provider = ProviderKind::from_string(&decision.provider);
-        let tools = {
+        let mut tools = {
             let defs = ToolRegistry::tools_for(&AgentRole::ChatAgent, &provider);
             if defs.is_empty() {
                 None
@@ -715,6 +722,22 @@ impl CognitiveHAL {
                 Some(defs)
             }
         };
+
+        // CORE-377: Inyectar herramientas dinámicas descubiertas vía MCP
+        let mcp_tools = self.mcp_registry.list_tools().await;
+        if !mcp_tools.is_empty() {
+            let mut list = tools.unwrap_or_default();
+            for mcp_tool in mcp_tools {
+                let canonical = crate::pcb::ToolDefinition::new(
+                    mcp_tool.name,
+                    mcp_tool.description,
+                    mcp_tool.input_schema,
+                );
+                let serialized = ToolRegistry::serialize_canonical(&canonical, &provider);
+                list.push(serialized);
+            }
+            tools = Some(list);
+        }
 
         let (mut messages, build_warnings) = self.build_messages_with_warnings(pcb, persona).await;
 
@@ -745,6 +768,7 @@ impl CognitiveHAL {
 
         const MAX_ITERATIONS: usize = 10;
         let mut finished = false;
+        let mut last_assistant_text = String::new();
 
         for iteration in 0..MAX_ITERATIONS {
             let mut autocorrect_retries = 0;
@@ -1496,6 +1520,7 @@ impl CognitiveHAL {
             }
 
             if tool_calls.is_empty() {
+                last_assistant_text = assistant_text.clone();
                 finished = true;
                 break;
             }
@@ -1546,6 +1571,17 @@ impl CognitiveHAL {
                 .tracker_ref()
                 .record_success_for_task(&active_model_id, pcb.task_type)
                 .await;
+        }
+
+        // CORE-378: Indexación episódica semántica automática del turno conversacional
+        if finished && !last_assistant_text.is_empty() {
+            let tenant = pcb.tenant_id.as_deref().unwrap_or("default");
+            let memory_entry = format!(
+                "User: {}\nAssistant: {}",
+                pcb.memory_pointers.l1_instruction,
+                last_assistant_text.trim()
+            );
+            let _ = self.store_memory(tenant, &memory_entry).await;
         }
 
         Ok(())
@@ -2949,7 +2985,60 @@ impl CognitiveHAL {
                 }
             }
 
-            other => format!("{{\"error\":\"Unknown tool: {}\"}}", other),
+            other => {
+                // CORE-377: Check if the tool is registered in the MCP Registry
+                if self.mcp_registry.has_tool(other).await {
+                    // CORE-377 Criterion 4: Aislamiento de permisos contra políticas de tenant / Citadel
+                    if let Some(tenant_id) = &pcb.tenant_id {
+                        let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                        if let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) {
+                            let tool_policy_key = format!("mcp_tool_policy:{}", other);
+                            if let Ok(Some(policy)) = db.get_kv(&tool_policy_key) {
+                                if policy == "deny" {
+                                    tracing::warn!(
+                                        pid = %_pid,
+                                        tool = %other,
+                                        tenant = %tenant_id,
+                                        "CORE-377: MCP tool call denied by tenant policy"
+                                    );
+                                    return format!(
+                                        "{{\"error\": \"Permission denied: tool '{}' is restricted for this tenant.\"}}",
+                                        other
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    match ank_mcp::registry::McpToolDispatcher::execute(
+                        &self.mcp_registry,
+                        other,
+                        args,
+                    )
+                    .await
+                    {
+                        Ok(val) => {
+                            tracing::info!(
+                                pid = %_pid,
+                                tool = %other,
+                                "CORE-377: MCP tool successfully executed"
+                            );
+                            val.to_string()
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                pid = %_pid,
+                                tool = %other,
+                                error = %e,
+                                "CORE-377: MCP tool execution failed"
+                            );
+                            format!("{{\"error\":\"mcp_execution_failed\",\"detail\":\"{}\"}}", e)
+                        }
+                    }
+                } else {
+                    format!("{{\"error\":\"Unknown tool: {}\"}}", other)
+                }
+            }
         }
     }
 
@@ -2964,6 +3053,24 @@ impl CognitiveHAL {
             .store_fragment(tenant_id, text, vector)
             .await
             .map_err(|e| SystemError::HardwareFailure(format!("Swap storage failed: {}", e)))
+    }
+
+    /// CORE-378: Realiza una búsqueda semántica en la memoria L3 del tenant
+    pub async fn search_memory(
+        &self,
+        tenant_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::vcm::swap::MemoryFragment>, SystemError> {
+        let driver = self.embedding_driver.as_ref().ok_or_else(|| {
+            SystemError::HardwareFailure("No embedding driver configured for memory search".into())
+        })?;
+
+        let query_vec = driver.embed(query).await?;
+        self.swap_manager
+            .search(tenant_id, query_vec, limit)
+            .await
+            .map_err(|e| SystemError::HardwareFailure(format!("Swap search failed: {}", e)))
     }
 
     /// Detecta si un modelo Ollama soporta tool use y actualiza el catálogo (CORE-237).
