@@ -257,7 +257,9 @@ const ModelSelector: React.FC<{
     models: string[]; 
     selectedModels: string[]; 
     onChange: (selected: string[]) => void;
-}> = ({ models, selectedModels, onChange }) => {
+    onRefresh?: () => void;
+    isVerifying?: boolean;
+}> = ({ models, selectedModels, onChange, onRefresh, isVerifying }) => {
     const { t } = useTranslation();
     const [search, setSearch] = useState('');
     const filtered = models.filter(m => m.toLowerCase().includes(search.toLowerCase()));
@@ -273,12 +275,26 @@ const ModelSelector: React.FC<{
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between">
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
-                    {t('models_detected', { selected: selectedModels.length.toString(), total: models.length.toString() })}
-                </label>
-                <div className="flex gap-3">
-                    <button onClick={() => onChange(filtered)} className="text-[9px] font-mono text-aegis-cyan/60 hover:text-aegis-cyan uppercase tracking-widest">{t('all')}</button>
-                    <button onClick={() => onChange([])} className="text-[9px] font-mono text-white/20 hover:text-white/40 uppercase tracking-widest">{t('none')}</button>
+                <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
+                        {t('models_detected', { selected: selectedModels.length.toString(), total: models.length.toString() })}
+                    </label>
+                    {isVerifying && <Loader2 className="w-3 h-3 text-aegis-cyan animate-spin" />}
+                </div>
+                <div className="flex gap-3 items-center">
+                    {onRefresh && (
+                        <button 
+                            type="button" 
+                            onClick={onRefresh} 
+                            disabled={isVerifying}
+                            className="text-[9px] font-mono text-aegis-cyan hover:underline uppercase tracking-widest flex items-center gap-1 disabled:opacity-40"
+                            title="Consultar al proveedor la lista completa de modelos"
+                        >
+                            {isVerifying ? 'Cargando...' : 'Detectar modelos'}
+                        </button>
+                    )}
+                    <button type="button" onClick={() => onChange(filtered)} className="text-[9px] font-mono text-aegis-cyan/60 hover:text-aegis-cyan uppercase tracking-widest">{t('all')}</button>
+                    <button type="button" onClick={() => onChange([])} className="text-[9px] font-mono text-white/20 hover:text-white/40 uppercase tracking-widest">{t('none')}</button>
                 </div>
             </div>
 
@@ -405,12 +421,12 @@ const ProviderModal: React.FC<{
         }
     }, [apiKey, initialProvider, isEdit, selectedProvider, sessionKey, t, tenantId]);
 
-    // Fetch models if in edit mode and models are empty
+    // Automatically probe provider to load full models catalog on edit mode
     React.useEffect(() => {
-        if (isEdit && models.length === 0) {
+        if (isEdit) {
             handleVerify();
         }
-    }, [isEdit, models.length, handleVerify]);
+    }, [isEdit, handleVerify]);
 
     const handleSave = async () => {
         setIsSaving(true);
@@ -591,7 +607,18 @@ const ProviderModal: React.FC<{
                                 exit={{ opacity: 0, x: -20 }}
                                 className="space-y-6"
                             >
-                                <ModelSelector models={models} selectedModels={selectedModels} onChange={setSelectedModels} />
+                                <ModelSelector 
+                                    models={models} 
+                                    selectedModels={selectedModels} 
+                                    onChange={setSelectedModels} 
+                                    onRefresh={handleVerify}
+                                    isVerifying={isVerifying}
+                                />
+                                {verifyError && (
+                                    <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs font-mono">
+                                        {verifyError}
+                                    </div>
+                                )}
 
                                 <div className="space-y-3">
                                     {/* Active state toggle */}
