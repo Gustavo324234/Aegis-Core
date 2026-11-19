@@ -1,7 +1,7 @@
 # Aegis Core — Architecture
 
 > **Version:** 1.2.0
-> **Updated:** 2026-05-26
+> **Updated:** 2026-11-18
 
 ---
 
@@ -49,30 +49,44 @@ Browser / Aegis-App
         ▼
  ank-server  (único binario Rust)
         │
-        ├── crate: ank-http   ← servidor Axum (HTTP :8000)
+        ├── crate: ank-http   ← servidor Axum (HTTP :8000 / sandbox :8090)
         │     ├── /api/auth          autenticación Citadel
-        │     ├── /api/admin         gestión de tenants
+        │     ├── /api/admin         gestión de tenants y system-config
         │     ├── /api/engine        configuración de modelos
+        │     ├── /api/oauth         Google OAuth + Spotify (Cuentas Conectadas)
+        │     ├── /api/whatsapp      proxy + anti-spam hacia sidecar Baileys (:8100)
+        │     ├── /api/router        ruteo cognitivo y catálogo CMR v2
+        │     ├── /api/chat          historial paginado, ui-state y visual-clear
+        │     ├── /api/personal      resumen personal, hechos, recordatorios y Chronos
+        │     ├── /api/chronos/events eventos próximos de recordatorios
         │     ├── /api/workspace     configuración del workspace
         │     ├── /api/fs            árbol de archivos + contenido (Epic 44)
         │     ├── /api/prs           ciclo de vida de PRs (Epic 44)
         │     ├── /api/git           status / branches / commits (Epic 44)
         │     ├── /api/agents        orquestador jerárquico (Epic 43)
-        │     ├── /api/providers     pool de API keys
-        │     ├── /ws/chat/          streaming cognitivo
-        │     ├── /ws/siren/         audio bidireccional
+        │     ├── /api/antigravity   bridge e IDE hooks de Google Antigravity SDK
+        │     ├── /api/providers     pool de API keys y modelos activos
+        │     ├── /api/siren         STT/TTS y configuración Siren
+        │     ├── /api/video         Aegis Video Studio (proyectos, escenas, render MP4 y diagnóstico PC/APIs)
+        │     ├── /api/persona / /api/mcp / /api/memory / /api/status / /api/system
+        │     ├── /ws/chat           streaming cognitivo
+        │     ├── /ws/siren          audio bidireccional
+        │     ├── /ws/agents         eventos de agentes en vivo
         │     └── /assets/*          SPA React embebida
         │
         ├── crate: ank-core   ← motor cognitivo
         │     ├── CognitiveScheduler
-        │     ├── CognitiveHAL + drivers
+        │     ├── CognitiveHAL + drivers + StreamTextSanitizer + failover dinámico
         │     ├── VCM (Virtual Context Manager)
-        │     ├── Citadel Protocol
+        │     ├── Citadel Protocol (TenantDB cifrada con SQLCipher)
         │     ├── DAG compiler
+        │     ├── OAuth + Google Calendar (`google_calendar.rs`)
+        │     ├── WhatsAppService (`whatsapp/`) — anti-spam, cola pendiente y alias
+        │     ├── Video Studio (`video_studio/`, `docs/VIDEO_STUDIO.md`) — pipeline MP4 1-paso, Pollinations Flux/Pixabay/Edge TTS/FFmpeg, fallbacks y advisor HW
         │     ├── Plugin system (Wasm)
         │     ├── Siren Protocol (VAD+STT+TTS)
         │     ├── MCP client
-        │     ├── AgentOrchestrator (Epic 43)
+        │     ├── AgentOrchestrator + AntigravityRunner (Epic 43 / 59)
         │     └── Developer Workspace (Epic 44)
         │           ├── WorkspaceConfig  — config cifrada por tenant
         │           ├── TerminalExecutor — comandos con streaming + allowlist
@@ -103,6 +117,7 @@ aegis-core/
 │   │   ├── aegis-supervisor/ process manager
 │   │   ├── aegis-sdk/        SDK plugins Wasm
 │   │   └── aegis-connect-relay/ relay de Aegis Connect (túneles WebSocket persistentes)
+│   ├── modules/              módulos de dominio del microkernel (`aegis-biz`, `aegis-creator`, `aegis-dev`, `aegis-video`)
 │   └── proto/
 │       ├── kernel.proto      contrato gRPC externo
 │       └── siren.proto       contrato audio
@@ -110,12 +125,20 @@ aegis-core/
 ├── shell/
 │   └── ui/                   React 18 + Vite + TypeScript + Zustand + Tailwind
 │
+├── tools/
+│   ├── agent_sandbox/        simulador Python + launcher web aislado (:8090)
+│   ├── whatsapp_bridge/      sidecar Node.js (Baileys) para sesiones WhatsApp QR (:8100)
+│   └── antigravity_bridge/   worker Python + hooks IDE para Google Antigravity SDK
+│
 ├── app/                      React Native + Expo SDK 52
 │
 ├── installer/
 │   ├── install.sh            instalador unificado
 │   ├── docker-compose.yml    modo Docker (opcional)
 │   └── setup-service.sh      configuración de servicio nativo
+│
+├── run_sandbox.bat           lanzador sandbox Windows (web :8090 + CLI)
+├── update.bat / update.ps1   scripts de actualización de binario y UI en Windows
 │
 ├── governance/
 │   ├── TICKETS_MASTER.md
@@ -142,6 +165,9 @@ aegis-core/
 | Epic 52 | Voice Quality (Siren audio WebRTC streaming stabilization & mic-mute) | ✅ Done |
 | Epic 53 | Stabilization (Real LLM agent loop, observability dashboard, SRE fixes) | ✅ Done |
 | Epic 54 | Aegis Connect (Persistent WebSocket tunnels mapped to Orion ID) | ✅ Done |
+| Epic 58 | Personal Assistant Experience, Zero-Friction UX & Community Onboarding | ✅ Done |
+| Epic 59 | Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio | ✅ Done |
+| Epic 60 | Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience (`CORE-387..393`) | ✅ Done |
 | CORE-150 | Sandbox scripting (Maker Capability - autonomous JS sandbox) | ✅ Done |
 | CORE-151 | Project context integration (Git/VCM active context tracking) | ✅ Done |
 

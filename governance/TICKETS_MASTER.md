@@ -21,6 +21,10 @@
 | EPIC 55 | Mobile App (Orion ID & Web Redirection) | ✅ Completa | 100% |
 | EPIC 56 | Public MVP / Thesis Validation | ✅ Completa | 100% |
 | EPIC 57 | Linux Distro & Native Hardware Integration | ✅ Completa | 100% |
+| EPIC 58 | Personal Assistant Experience, Zero-Friction UX & Community Onboarding | ✅ Completa | 100% |
+| EPIC 59 | Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio | ✅ Completa | 100% |
+| EPIC 60 | Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience | ✅ Completa | 100% |
+| EPIC 61 | Sandbox Promotion, Security Hardening & SRE Maturation | 🚧 En Progreso | 31% (4/13) |
 
 ## EPIC 49 — Cognitive Loop
 
@@ -30,6 +34,7 @@
 | CORE-260 | feat | PCB: historial de mensajes + SessionHistoryCache | ✅ Done | Crítica | Kernel Engineer |
 | CORE-261 | feat | CognitiveHAL: bucle ReAct interno — tool call → resultado → LLM | ✅ Done | Crítica | Kernel Engineer |
 | CORE-262 | feat | AgentOrchestrator: inferencia LLM real en run_agent_loop | ✅ Done | Crítica | Kernel Engineer |
+| CORE-263 | feat | Comunicación Bottom-Up: herramienta ask_user + estado WaitingUser | ✅ Done | Alta | Kernel Engineer |
 | CORE-264 | fix | Dispatch automático al ProjectSupervisor tras spawn_agent del Chat Agent | ✅ Done | Crítica | Kernel Engineer |
 | CORE-267 | fix | mark_rate_limited al recibir 429 en CloudProxyDriver | ✅ Done | Alta | Kernel Engineer |
 | CORE-268 | feat | Kernel: emitir `AgentEvent` por WebSocket al tenant | ✅ Done | Crítica | Kernel Engineer |
@@ -52,6 +57,9 @@
 | CORE-287 | fix | Kernel: fix project_id usa scope en lugar de nombre | ✅ Done | Alta | Kernel Engineer |
 | CORE-288 | fix | Kernel: fix síntesis de reportes hijos (loop infinito potencial) | ✅ Done | Alta | Kernel Engineer |
 | CORE-289 | feat | Kernel: herramienta `get_agent_status` para el chat_agent | ✅ Done | Alta | Kernel Engineer |
+| CORE-297 | fix | chat_agent.md: flujo automático de proyectos y delegación | ✅ Done | Crítica | Arquitecto IA |
+| CORE-349 | fix | Encrypt L3 Swap Fragments in SQLCipher and Fix Vector Dimension Initialization | ✅ Done | Crítica | Kernel Engineer |
+| CORE-352 | perf | Optimize VCM Git & Governance Context Assembly with Native `git2` and TTL Cache | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 51 — Model Intelligence
 
@@ -63,19 +71,27 @@
 | CORE-293 | feat | `models.yaml`: Agregar modelos Ollama Cloud | ✅ Done | Media | Arquitecto IA |
 | CORE-294 | feat | Shell: CatalogViewer — columna Benchmark y badge Ollama Cloud | ✅ Done | Alta | Shell Engineer |
 | CORE-296 | feat | Installer: puerto HTTP configurable + soporte entorno multi-servicio | ✅ Done | Crítica | DevOps Engineer |
-| CORE-297 | fix | chat_agent.md: flujo automático de proyectos y delegación | ✅ Done | Crítica | Arquitecto IA |
 | CORE-298 | feat | Kernel: CatalogSyncer actualiza modelos free de OpenRouter al registrar key | ✅ Done | Alta | Kernel Engineer |
 | CORE-299 | feat | Kernel: soporte de `model_override` en WebSocket chat | ✅ Done | Crítica | Kernel Engineer |
 | CORE-300 | feat | Shell: selector de modelo en el chat | ✅ Done | Crítica | Shell Engineer |
 | CORE-301 | feat | CMR v2: scoring contextual + latencia real + fix peso fantasma | ✅ Done | Alta | Kernel Engineer |
 | CORE-305 | feat | Kernel: Arquitectura de Ruteo Cognitivo Asimétrico (Local-First) | ✅ Done | Alta | Arquitecto IA + Kernel Engineer |
+| CORE-319 | fix | Kernel: CMR Router hardening — sticky cache, señales del tracker y catálogo | ✅ Done | Crítica | Kernel Engineer |
+| CORE-320 | feat | Kernel: CMR Scoring v3 — confiabilidad observada, tool-use degradado y pooling multi-key | ✅ Done | Alta | Kernel Engineer |
+| CORE-322 | feat | Kernel: persistencia del ModelUsageTracker y endpoint /api/router/stats | ✅ Done | Alta | Kernel Engineer |
+| CORE-323 | chore | Catálogo: curaduría de models.yaml (modelos retirados y IDs corregidos) | ✅ Done | Media | Arquitecto IA |
+| CORE-324 | feat | Kernel: CMR scoring v3.1 — EWMA de latencia, half-open breaker y costo ponderado por tarea | ✅ Done | Media | Kernel Engineer |
+| CORE-327 | feat | Kernel: conversation_id en el PCB + sticky cache por conversación | ✅ Done | Media | Kernel Engineer |
+| CORE-328 | feat | Kernel: confiabilidad task-aware — outcomes por (modelo, tarea) | ✅ Done | Media | Kernel Engineer |
+| CORE-331 | feat | Shell: Native Training Engine UI & Progress Stream | ✅ Done | Alta | UI/Shell Engineer + AI Architect |
+| CORE-348 | fix | Update Gemini Catalog with Official 3.5/3.6 Flash Production IDs | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 52 — Voice Quality
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
-| CORE-295-p2 | fix | Shell: preservar stt_provider al guardar config de voz | ✅ Done | Alta | UI Engineer |
 | CORE-295 | fix | Voice: fix voz metálica (Mock fallback) + key admin como fallback TTS | ✅ Done | Crítica |  |
+| CORE-295-p2 | fix | Shell: preservar stt_provider al guardar config de voz | ✅ Done | Alta | UI Engineer |
 | CORE-302 | fix | Shell: mutear micrófono durante reproducción TTS (feedback loop) | ✅ Done | Crítica | Shell Engineer |
 | CORE-304 | feat | Voice: Migrar Siren Protocol de WebSockets a WebRTC/WebTransport | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
 
@@ -83,6 +99,9 @@
 
 | ID | Tipo | Título | Estado | Prioridad | Asignado a |
 |---|---|---|---|---|---|
+| CORE-213 | fix | Kernel: loguear error en key_pool.load() | ✅ Done | Media | Kernel Engineer |
+| CORE-224 | chore | Limpiar directorios temporales | ✅ Done | Baja | Tavo |
+| CORE-225 | chore | License field en Cargo.toml → MIT | ✅ Done | Alta | Kernel Engineer |
 | CORE-245 | feat | Admin: toggle habilitar/deshabilitar provider sin eliminarlo | ✅ Done | Alta | Shell Engineer |
 | CORE-246 | feat | Tenant: visualización de modelos disponibles por provider en tab Motor | ✅ Done | Alta | Shell Engineer |
 | CORE-247 | feat | Historial de chat persistente: cargar al conectar y unificar entre IP y Cloudflare | ✅ Done | Crítica | Kernel + Shell |
@@ -96,13 +115,27 @@
 | CORE-256 | feat | Admin: panel de gestión del servicio del sistema (start/stop/restart/status) | ✅ Done | Alta | Shell + Kernel |
 | CORE-257 | fix | Kernel: Tunnel Manager no debe reintentar si cloudflared no está instalado | ✅ Done | Media | Kernel Engineer |
 | CORE-258 | feat | CLI: soporte multiplataforma (Windows + Linux) en ank-cli | ✅ Done | Alta | Kernel Engineer |
-| CORE-263 | feat | Comunicación Bottom-Up: herramienta ask_user + estado WaitingUser | ✅ Done | Alta | Kernel Engineer |
 | CORE-265 | fix | ank-server: leer aegis.env antes de buscar variables de entorno | ✅ Done | Crítica | Kernel Engineer |
 | CORE-266 | fix | ank-server: Windows Service Control Manager handshake | ✅ Done | Crítica | Kernel Engineer |
 | CORE-281 | fix | Kernel: deduplicación de supervisores + project_name en system prompt | ✅ Done | Alta | Kernel Engineer |
 | CORE-286 | fix | Kernel: timeout en run_agent_loop + cleanup de tasks zombies | ✅ Done | Alta | Kernel Engineer |
 | CORE-303 | feat | Kernel: Defensive Cognitive Loops & Boundary Autocorrection | ✅ Done | Crítica | Kernel Engineer |
 | CORE-306 | chore | Project: Consolidar Estabilización del Kernel y Congelamiento de Características Secundarias | ✅ Done | Alta | Tavo |
+| CORE-314 | fix | Kernel/Shell: Deshabilitación de proveedores en KeyPool/UI no persiste | ✅ Done | Alta | Tavo + Kernel Engineer + Shell Engineer |
+| CORE-315 | feat | Kernel/Shell: Exportar/importar configuración de llaves cifrada con contraseña | ✅ Done | Media | Kernel Engineer + UI Engineer |
+| CORE-316 | fix | postcss >= 8.5.10 en shell/ui para mitigar XSS (GHSA-qx2v-qp2m-jg93) | ✅ Done | Alta | UI Engineer |
+| CORE-317 | chore | Clippy fixes: simplificar lógicas booleanas, mut innecesarios y rangos | ✅ Done | Alta | Kernel Engineer |
+| CORE-318 | chore | UX fixes: skeletons de telemetría y accesibilidad ARIA en DynamicModulePanel | ✅ Done | Alta | UI Engineer |
+| CORE-321 | chore | App/Android: deshabilitar el file-watcher nativo de Gradle (crashes JVM en Windows) | ✅ Done | Alta | DevOps Engineer |
+| CORE-325 | chore | Kernel: deduplicar el feed de señales del fallback walk en chal/mod.rs | ✅ Done | Media | Kernel Engineer |
+| CORE-326 | fix | Kernel: handshake SCM oportunista para ImagePath legacy sin --service | ✅ Done | Alta | Kernel Engineer |
+| CORE-329 | fix | Installer: self-update atómico, canal stable funcional y versión de producto | ✅ Done | Crítica | DevOps Engineer |
+| CORE-330 | feat | Kernel/Shell: Clear logs and history via UI button | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
+| CORE-346 | fix | Purge Physical Tenant Directory & L3 Swap on Delete | ✅ Done | Crítica | Kernel Engineer |
+| CORE-347 | fix | Clear Local Messages State on Tenant Delete and User Authentication | ✅ Done | Alta | Shell Engineer |
+| CORE-350 | fix | Enforce Tenant Isolation, Secret Redaction, and Tool Use v2 in Fine-Tuning Dataset | ✅ Done | Crítica | Kernel Engineer |
+| CORE-353 | perf | gRPC Channel Pool for Microkernel Domain Modules | ✅ Done | Alta | Kernel Engineer |
+| CORE-354 | feat | Real Ollama Modelfile Export and Model Registration in TrainingManager | ✅ Done | Alta | Kernel Engineer |
 
 ## EPIC 54 — Aegis Connect: Persistent WebSocket Tunneling
 
@@ -165,9 +198,6 @@
 | CORE-210 | fix | fix(chat_agent): declarar ausencia de contexto cuando no hay proyecto activo | ✅ Done | Alta | Kernel Engineer |
 | CORE-211 | fix | fix(shell): manejo graceful de errores en fetchActiveProjects y connectAgentStream | ✅ Done | Alta | Shell Engineer |
 | CORE-212 | fix | fix(shell): provider gemini en KeyManager y visibilidad de modelos en CatalogViewer | ✅ Done | Crítica | Shell Engineer |
-| CORE-213 | fix | Kernel: loguear error en key_pool.load() | ✅ Done | Media | Kernel Engineer |
-| CORE-224 | chore | Limpiar directorios temporales | ✅ Done | Baja | Tavo |
-| CORE-225 | chore | License field en Cargo.toml → MIT | ✅ Done | Alta | Kernel Engineer |
 | CORE-226 | fix | fix(ank-core): Chat Agent usa SYSTEM_PROMPT_MASTER genérico en lugar de chat_agent.md | ✅ Done | Crítica | Kernel Engineer |
 | CORE-227 | fix | fix(ank-core): SPAWN_INSTRUCTIONS usa sintaxis obsoleta — divergencia con parser | ✅ Done | Crítica | Kernel Engineer |
 | CORE-228 | fix | fix(ank-server): SyscallExecutor se crea sin AgentOrchestrator — SYS_AGENT_SPAWN siempre falla | ✅ Done | Crítica | Kernel Engineer |
@@ -187,42 +217,13 @@
 | CORE-242 | fix | fix(ank-core): eliminar MAKER_INSTRUCTIONS del prompt del Chat Agent | ✅ Done | Alta | Kernel Engineer |
 | CORE-243 | feat | fix(ank-core): SyscallExecutor permite spawn desde Chat Agent (PCB sin agent_id) | ✅ Done | Alta | Kernel Engineer |
 | CORE-244 | fix | HAL Runner: enviar StatusUpdate al event_broker en el path de error | ✅ Done | Crítica | Kernel Engineer |
-| CORE-314 | fix | Kernel/Shell: Deshabilitación de proveedores en KeyPool/UI no persiste | ✅ Done | Alta | Tavo + Kernel Engineer + Shell Engineer |
-| CORE-315 | feat | Kernel/Shell: Exportar/importar configuración de llaves cifrada con contraseña | ✅ Done | Media | Kernel Engineer + UI Engineer |
-| CORE-316 | fix | postcss >= 8.5.10 en shell/ui para mitigar XSS (GHSA-qx2v-qp2m-jg93) | ✅ Done | Alta | UI Engineer |
-| CORE-317 | chore | Clippy fixes: simplificar lógicas booleanas, mut innecesarios y rangos | ✅ Done | Alta | Kernel Engineer |
-| CORE-318 | chore | UX fixes: skeletons de telemetría y accesibilidad ARIA en DynamicModulePanel | ✅ Done | Alta | UI Engineer |
-| CORE-319 | fix | Kernel: CMR Router hardening — sticky cache, señales del tracker y catálogo | ✅ Done | Crítica | Kernel Engineer |
-| CORE-320 | feat | Kernel: CMR Scoring v3 — confiabilidad observada, tool-use degradado y pooling multi-key | ✅ Done | Alta | Kernel Engineer |
-| CORE-321 | chore | App/Android: deshabilitar el file-watcher nativo de Gradle (crashes JVM en Windows) | ✅ Done | Alta | DevOps Engineer |
-| CORE-322 | feat | Kernel: persistencia del ModelUsageTracker y endpoint /api/router/stats | ✅ Done | Alta | Kernel Engineer |
-| CORE-323 | chore | Catálogo: curaduría de models.yaml (modelos retirados y IDs corregidos) | ✅ Done | Media | Arquitecto IA |
-| CORE-324 | feat | Kernel: CMR scoring v3.1 — EWMA de latencia, half-open breaker y costo ponderado por tarea | ✅ Done | Media | Kernel Engineer |
-| CORE-325 | chore | Kernel: deduplicar el feed de señales del fallback walk en chal/mod.rs | ✅ Done | Media | Kernel Engineer |
-| CORE-326 | fix | Kernel: handshake SCM oportunista para ImagePath legacy sin --service | ✅ Done | Alta | Kernel Engineer |
-| CORE-327 | feat | Kernel: conversation_id en el PCB + sticky cache por conversación | ✅ Done | Media | Kernel Engineer |
-| CORE-328 | feat | Kernel: confiabilidad task-aware — outcomes por (modelo, tarea) | ✅ Done | Media | Kernel Engineer |
-| CORE-329 | fix | Installer: self-update atómico, canal stable funcional y versión de producto | ✅ Done | Crítica | DevOps Engineer |
-| CORE-330 | feat | Kernel/Shell: Clear logs and history via UI button | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
-| CORE-331 | feat | Shell: Native Training Engine UI & Progress Stream | ✅ Done | Alta | UI/Shell Engineer + AI Architect |
-| CORE-339 | fix | Instalador Windows: CLI roto en PowerShell 5.1, canal de update divergente y docs de CLI desactualizadas | ✅ Done | Crítica | DevOps Engineer |
-| CORE-340 | fix | Windows: `aegis update` canal stable descargaba de un tag "latest" inexistente (404) | ✅ Done | Alta | DevOps Engineer |
-| CORE-341 | fix | Release pipeline: build Windows roto por CMake 4.x y fallos de plataforma silenciados | ✅ Done | Crítica | DevOps Engineer |
 | CORE-342 | feat | Modularización de NixOS Flake & Configuración de Entrega Dual (Server vs. Kiosk) | ✅ Done | Alta | DevOps Engineer |
 | CORE-343 | feat | Kernel Syscall & Tool: Telemetría de Hardware Nativa (`SYS_HW_TELEMETRY`) | ✅ Done | Alta | Kernel Engineer |
 | CORE-344 | feat | Kernel Syscall & Tool: Control de Audio PipeWire (`SYS_AUDIO_CONTROL`) | ✅ Done | Alta | Kernel Engineer |
 | CORE-345 | docs | Guía de Compilación de Imagen ISO de NixOS y Despliegue Bare-Metal | ✅ Done | Alta | DevOps Engineer |
-| CORE-346 | fix | Purge Physical Tenant Directory & L3 Swap on Delete | ✅ Done | Crítica | Kernel Engineer |
-| CORE-347 | fix | Clear Local Messages State on Tenant Delete and User Authentication | ✅ Done | Alta | Shell Engineer |
-| CORE-348 | fix | Update Gemini Catalog with Official 3.5/3.6 Flash Production IDs | ✅ Done | Alta | Kernel Engineer |
-| CORE-349 | fix | Encrypt L3 Swap Fragments in SQLCipher and Fix Vector Dimension Initialization | ✅ Done | Crítica | Kernel Engineer |
-| CORE-350 | fix | Enforce Tenant Isolation, Secret Redaction, and Tool Use v2 in Fine-Tuning Dataset | ✅ Done | Crítica | Kernel Engineer |
 | CORE-351 | fix | Create Missing `profile-server.nix` for Headless NixOS Flake | ✅ Done | Alta | DevOps Engineer |
-| CORE-352 | perf | Optimize VCM Git & Governance Context Assembly with Native `git2` and TTL Cache | ✅ Done | Alta | Kernel Engineer |
-| CORE-353 | perf | gRPC Channel Pool for Microkernel Domain Modules | ✅ Done | Alta | Kernel Engineer |
-| CORE-354 | feat | Real Ollama Modelfile Export and Model Registration in TrainingManager | ✅ Done | Alta | Kernel Engineer |
-| CORE-355 | refactor | Modularize `syscalls/mod.rs` into `parser.rs` and `oauth_integrations.rs` | ✅ Done | Media | Kernel Engineer |
-| CORE-356 | refactor | Modularize and Deduplicate `router_api.rs` into Submodules | ✅ Done | Media | Kernel Engineer |
+| CORE-355 | refactor | Modularización de `syscalls/mod.rs` en `parser.rs` y `oauth_integrations.rs` | ✅ Done | Media | Kernel Engineer |
+| CORE-356 | refactor | Modularización y Deduplicación de `router_api.rs` | ✅ Done | Media | Kernel Engineer |
 | CORE-357 | fix | Fix WebSocket Real-Time Token Streaming and Evict Completed PIDs from `event_broker` | ✅ Done | Crítica | Kernel Engineer |
 | CORE-358 | fix | Enforce `CitadelAuthenticated` Verification and Multi-Tenant Agent/Persona Isolation | ✅ Done | Crítica | Kernel Engineer |
 | CORE-359 | fix | Sandbox Tenant `project_root`, Add Default Workspace Fallback, and Prune RateLimiter/Onboarding State | ✅ Done | Alta | Kernel Engineer |
@@ -238,6 +239,11 @@
 | CORE-369 | fix | Harden Shell UI: Chat Auto-Reconnect, Logout State Purge, Agent/Train WS Protocol Alignment, Siren STT Recovery, and Audio Safety | ✅ Done | Crítica | Shell Engineer |
 | CORE-370 | fix | Harden ank-server gRPC: Mandatory Setup Token & Hashing, Process Auth/IDOR Guard, Loopback Default Bind, Live Telemetry, and Full Tenant Purge | ✅ Done | Crítica | Kernel Engineer |
 | CORE-371 | fix | Harden Bootstrap Setup & Cognitive Engine Auth, Purge Tenant Keys on Delete, and Clean Tracked Test Databases | ✅ Done | Crítica | Kernel Engineer + Shell Engineer |
+| CORE-375-p5 | feat | Catálogo 2026 Embebido en `models.yaml` (Fase 5 — Alias Histórico de Commit `CORE-375`) | ✅ Done | Alta | Kernel Engineer |
+| CORE-376-p5 | feat | Soporte Nativo de Tool Calling / Function Calling en Router Cognitivo (Fase 5) | ✅ Done | Alta | Kernel Engineer |
+| CORE-377-p5 | feat | Integración del Protocolo MCP (Model Context Protocol) (Fase 5) | ✅ Done | Alta | Kernel Engineer |
+| CORE-378-p5 | feat | Motor de Memoria Semántica y RAG Local Embebido (Fase 5) | ✅ Done | Media | Kernel Engineer |
+| CORE-379-p5 | feat | Modernización de Interfaz Web (UI/UX) y Generative Artifacts (Fase 5) | 🚧 In Progress | Media | Shell Engineer |
 
 ## EPIC 55 — Mobile App (Orion ID & Web Redirection)
 
@@ -258,6 +264,64 @@
 | CORE-336 | chore | B5 — On-ramp: Instalador robusto, releases taggeadas y verificación SHA256 | ✅ Done | Alta | DevOps Engineer |
 | CORE-337 | feat | B6 — Citadel: Generación de firmas ed25519 automáticas al arranque local (keygen) | ✅ Done | Crítica | Kernel Engineer |
 | CORE-338 | docs | B8 — Transparencia: Publicación de notas honestas de dogfooding y uso diario | ✅ Done | Media | Arquitecto IA |
+| CORE-339 | fix | Instalador Windows: CLI roto en PowerShell 5.1, canal de update divergente y docs de CLI desactualizadas | ✅ Done | Crítica | DevOps Engineer |
+| CORE-340 | fix | Windows: `aegis update` canal stable descargaba de un tag "latest" inexistente (404) | ✅ Done | Alta | DevOps Engineer |
+| CORE-341 | fix | Release pipeline: build Windows roto por CMake 4.x y fallos de plataforma silenciados | ✅ Done | Crítica | DevOps Engineer |
+
+## EPIC 58 — Personal Assistant Experience, Zero-Friction UX & Community Onboarding
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-372 | feat | Agent Sandbox & Personal Assistant Simulator (`tools/agent_sandbox/`) | ✅ Done | Crítica | Arquitecto IA |
+| CORE-373 | fix | Kernel Multi-Agent Auto-Dispatch & Direct Supervisor Execution (`ank-core`) | ✅ Done | Crítica | Kernel Engineer |
+| CORE-374 | chore | Limpieza de Raíz del Repositorio y Actualización de `.gitignore` | ✅ Done | Alta | DevOps Engineer |
+| CORE-375 | feat | Kernel Personal Assistant Tools (`log_expense_or_entry`, `query_ledger`, `remember_fact`, `manage_reminder`) en `ank-core` | ✅ Done | Crítica | Kernel Engineer |
+| CORE-376 | feat | Chronos Real Conversation Consolidation en `ank-core/src/chronos` | ✅ Done | Alta | Kernel Engineer |
+| CORE-377 | feat | Zero-Friction Personal Onboarding Wizard (1-Step Local Setup) en `shell/ui` y `ank-http` | ✅ Done | Crítica | Shell Engineer + Kernel Engineer |
+| CORE-378 | fix | Persistencia de Sesión tras Recarga (`F5`) en `shell/ui/src/App.tsx` | ✅ Done | Alta | Shell Engineer |
+| CORE-379 | feat | Humanización de Interfaz Web y Panel de Vida Personal (Memoria, Gastos y Tareas en Segundo Plano) en `shell/ui` | ✅ Done | Alta | Shell Engineer |
+| CORE-380 | docs | Rediseño de `README.md` y `README.es.md` con Enfoque de Asistente Personal y Casos de Uso | ✅ Done | Crítica | Arquitecto IA |
+| CORE-381 | docs | Guía de Colaboración Rápida con Agent Sandbox y `Good First Issues` en `CONTRIBUTING.md` | ✅ Done | Alta | Arquitecto IA |
+
+## EPIC 59 — Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-382 | feat | Motor de Voz Natural (Femenina/Masculina), Simplificación de Audio en Chat y Estudio de Avatar/Identidad (`shell/ui`) | ✅ Done | Crítica | Shell Engineer |
+| CORE-383 | feat | Python Worker Daemon para `google-antigravity` SDK con Streaming de Thoughts y Tool Calls (`tools/antigravity_bridge/`) | ✅ Done | Crítica | AI Architect / Python Engineer |
+| CORE-384 | feat | Integración de `AntigravityRunner` en `AgentOrchestrator` para Delegación de Subagentes sin Consumo de API Externa (`ank-core`) | ✅ Done | Crítica | Kernel Engineer |
+| CORE-385 | feat | Puente Bidireccional con Antigravity IDE vía Lifecycle Hooks (`Stop`/`PreInvocation`) y Endpoints `/api/antigravity/*` (`ank-http`) | ✅ Done | Alta | Kernel Engineer |
+| CORE-386 | feat | Panel de Control de Integración Antigravity SDK y Monitoreo en Vivo en `shell/ui` | ✅ Done | Alta | Shell Engineer |
+
+## EPIC 60 — Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-387 | feat | Observabilidad Proveedor/Modelo Activo, Tools de Proveedores/Módulos y Tablas GFM en Chat (`ank-core`, `shell/ui`) | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
+| CORE-388 | feat | Launcher Web Aislado para Sandbox (`:8090`) y Scripts de Actualización Windows (`tools/agent_sandbox/`, raíz) | ✅ Done | Alta | DevOps Engineer |
+| CORE-389 | feat | CRUD Completo de Recordatorios e Historial de Chat Infinito con Limpieza Visual (`ank-core`, `ank-http`, `shell/ui`) | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
+| CORE-390 | feat | Integración Google Calendar y Google OAuth PKCE S256 Compartible (`ank-core/oauth`, `ank-http`, `shell/ui`) | ✅ Done | Crítica | Kernel Engineer + Shell Engineer |
+| CORE-391 | feat | Conector WhatsApp QR Multi-Tenant con Anti-Spam, Confirmación y Directorio/Alias Inteligente (`tools/whatsapp_bridge/`, `ank-core/whatsapp`, `ank-http`, `shell/ui`) | ✅ Done | Crítica | Kernel Engineer + Shell Engineer + AI Architect |
+| CORE-392 | fix | Failover Dinámico Multi-Proveedor en Bucle ReAct, Streaming SSE UTF-8 Seguro y Recuperación Post-Tool (`ank-core/chal`, `ank-core/router`) | ✅ Done | Crítica | Kernel Engineer |
+| CORE-393 | docs | Sincronización de Documentación, Changelog, Arquitectura, Sidecar Docs y Gobernanza (`docs`, `governance/`) | ✅ Done | Alta | Arquitecto IA |
+
+## EPIC 61 — Sandbox Promotion, Security Hardening & SRE Maturation
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-394 | feat | Promoción de Mejoras del Sandbox al Código General (Creator Studio, Hub de Módulos, Respuestas con Descargas y Textarea Autoajustable) | ✅ Done | Crítica | Kernel Engineer + Shell Engineer |
+| CORE-395 | fix | CI Verde — Reparar `cargo clippy`, `cargo fmt` y ESLint en `shell/ui` | ✅ Done | Crítica | Kernel Engineer + Shell Engineer |
+| CORE-396 | chore | Higiene Git y Gobernanza — Limpieza de Worktrees Huérfanos, Reconciliación de IDs `CORE-375..379` y Rama Limpia hacia `main` | ✅ Done | Alta | DevOps Engineer |
+| CORE-397 | feat | Paridad Sandbox → Producción en Instaladores, Updates y `ide_hook.py` | ✅ Done | Crítica | DevOps Engineer |
+| CORE-398 | fix | Hardening HTTP/WS — CORS, `is_direct_local_cli_probe`, `quick_personal_setup` y Auth Pre-Upgrade en WebSockets | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-399 | fix | Integridad `TenantDB` y Symlink Jail (`safe_resolve` en `ReadFile`, `ScribeManager` y `fs.rs`) | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-400 | fix | Aislamiento Multi-Tenant y SSRF (`agents.rs`, `chal/mod.rs`, `antigravity_bridge`, `vcm/mod.rs`, `video_api`, `engine.rs`, `admin.rs`) | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-401 | fix | Supply Chain y Secretos (`runtime_deps.rs`, `whatsapp_bridge`, permisos `0600`, `deny.toml`) | 📥 Todo | Alta | Kernel Engineer + DevOps Engineer |
+| CORE-402 | perf | Tokens de Sesión Citadel, Argon2id en `spawn_blocking` y Pool LRU de `TenantDB` (ADR-034) | 📥 Todo | Alta | Kernel Engineer |
+| CORE-403 | fix | Estabilidad y Límites SRE (`video_api`, logs acotados, graceful shutdown, `env::set_var` y `AntigravityRunner`) | 📥 Todo | Alta | Kernel Engineer |
+| CORE-404 | perf | Optimización Frontend (`shell/ui`: selectores `useAegisStore`, `React.lazy()`, optimización de SVGs y `apiClient.ts`) | 📥 Todo | Media | Shell Engineer |
+| CORE-405 | refactor | Modularización de God Files (`chal/mod.rs`, `useAegisStore.ts`, `ModulesAppHub.tsx`, `VideoStudioPanel.tsx`, scripts Python externos) | 📥 Todo | Media | Kernel Engineer + Shell Engineer |
+| CORE-406 | chore | Tests UI (Vitest), CI Extendido (`app/`, bridges, `update.ps1`, `sync_tickets_master.py`) y Actualización/Protección de OpenAPI (`/api/docs`) | 📥 Todo | Media | Shell Engineer + DevOps Engineer |
 
 ## Governance & Tooling
 
