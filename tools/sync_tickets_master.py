@@ -28,6 +28,10 @@ ACTIVE_SECTIONS = [
     "Otras Características Consolidadas",
     "EPIC 55 — Mobile App (Orion ID & Web Redirection)",
     "EPIC 56 — Public MVP / Thesis Validation",
+    "EPIC 58 — Personal Assistant Experience, Zero-Friction UX & Community Onboarding",
+    "EPIC 59 — Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio",
+    "EPIC 60 — Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience",
+    "EPIC 61 — Sandbox Promotion, Security Hardening & SRE Maturation",
     "Governance & Tooling"
 ]
 
@@ -71,7 +75,7 @@ def parse_ticket_file(filepath):
         if line.strip() == "---":
             break
             
-        match_kv = re.match(r"^\s*[-\s]*\**([a-zA-Z\s]+)\**\s*:\s*(.+)$", line)
+        match_kv = re.match(r"^\s*[-\s]*\**([a-zA-ZéÉ\s]+)\**\s*:\s*(.+)$", line)
         if match_kv:
 
             key = match_kv.group(1).strip("* ").lower()
@@ -127,6 +131,16 @@ def get_target_section(ticket):
         return "EPIC 55 — Mobile App (Orion ID & Web Redirection)"
     elif "EPIC 56" in epic or "Public MVP" in epic or "Thesis Validation" in epic:
         return "EPIC 56 — Public MVP / Thesis Validation"
+    elif "EPIC 58" in epic or "Personal Assistant" in epic:
+        return "EPIC 58 — Personal Assistant Experience, Zero-Friction UX & Community Onboarding"
+    elif "EPIC 59" in epic or "Antigravity" in epic:
+        return "EPIC 59 — Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio"
+    elif "EPIC 60" in epic or "Real-World Channels" in epic:
+        return "EPIC 60 — Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience"
+    elif "EPIC 61" in epic or "Sandbox Promotion" in epic:
+        return "EPIC 61 — Sandbox Promotion, Security Hardening & SRE Maturation"
+    elif "Fase 5" in epic or "Otras Características" in epic:
+        return "Otras Características Consolidadas"
     elif "Governance" in epic or "Tooling" in epic or ticket_id == "CORE-313":
         return "Governance & Tooling"
     elif ticket_id in ["CORE-150", "CORE-151"]:
@@ -134,7 +148,15 @@ def get_target_section(ticket):
         
     # Clasificación por rangos numéricos si no especifica épica
     num = int(ticket_id.split("-")[1])
-    if 290 <= num <= 306:
+    if 372 <= num <= 381:
+        return "EPIC 58 — Personal Assistant Experience, Zero-Friction UX & Community Onboarding"
+    elif 382 <= num <= 386:
+        return "EPIC 59 — Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio"
+    elif 387 <= num <= 393:
+        return "EPIC 60 — Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience"
+    elif num >= 394:
+        return "EPIC 61 — Sandbox Promotion, Security Hardening & SRE Maturation"
+    elif 290 <= num <= 306:
         # En base a models.yaml / update_models / SirenRouter / CMR v2 / Asymmetric routing
         if num in [295, 302, 304]:
             return "EPIC 52 — Voice Quality"
@@ -198,7 +220,7 @@ def parse_master_file(master_path):
                             val = cols[i]
                             # Limpiar formato de links
                             if h == "ID":
-                                val = re.sub(r"\[(CORE-\d+)\]\(.*?\)", r"\1", val)
+                                val = re.sub(r"\[(CORE-\d+(?:-[a-zA-Z0-9]+)?)\]\(.*?\)", r"\1", val)
                                 val = re.sub(r"[`'\"]+", "", val)
                             elif h == "Título":
                                 val = re.sub(r"^[`'\"]+", "", val)
@@ -218,7 +240,7 @@ def generate_markdown_table(tickets):
     # Ordenar tickets por número de ID
     tickets_sorted = sorted(
         tickets, 
-        key=lambda x: int(x["ID"].split("-")[1])
+        key=lambda x: (int(x["ID"].split("-")[1]), x["ID"])
     )
     
     # Decidir si la tabla necesita columna 'Asignado a'

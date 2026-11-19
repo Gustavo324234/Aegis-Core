@@ -374,15 +374,64 @@ function cmd_update {
         Write-Yellow "  UI not available in this release — keeping current."
     }
 
+    function Update-OptionalArchive {
+        param(
+            [string]$ArchiveName,
+            [string]$TargetDir,
+            [string]$Label,
+            [string]$FallbackMsg
+        )
+        $tmpPath = "$env:TEMP\$($ArchiveName -replace '\.tar\.gz$', '-update.tar.gz')"
+        try {
+            Invoke-WebRequest -Uri "https://github.com/$GITHUB_ORG/$GITHUB_REPO/releases/download/$tag/$ArchiveName" -OutFile $tmpPath -UseBasicParsing
+            if (-not (Test-Path $TargetDir)) {
+                New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+            }
+            tar -xzf $tmpPath -C $TargetDir
+            Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+            Write-Green "  $Label updated."
+            return $true
+        } catch {
+            Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+            Write-Yellow "  $FallbackMsg"
+            return $false
+        }
+    }
+
     Write-Cyan "  Downloading agent config..."
-    $agentPath = "$env:TEMP\agents-update.tar.gz"
-    try {
-        Invoke-WebRequest -Uri "https://github.com/$GITHUB_ORG/$GITHUB_REPO/releases/download/$tag/agents-config.tar.gz" -OutFile $agentPath -UseBasicParsing
-        tar -xzf $agentPath -C "$DATA_DIR\agents"
-        Remove-Item $agentPath -Force
-        Write-Green "  Agent config updated."
-    } catch {
-        Write-Yellow "  Agent config not available — using binary fallbacks."
+    Update-OptionalArchive -ArchiveName "agents-config.tar.gz" -TargetDir "$DATA_DIR\agents" -Label "Agent config" -FallbackMsg "Agent config not available — using binary fallbacks." | Out-Null
+
+    Write-Cyan "  Downloading domain modules..."
+    Update-OptionalArchive -ArchiveName "modules-config.tar.gz" -TargetDir "$DATA_DIR\modules" -Label "Domain modules" -FallbackMsg "Domain modules not available in this release — keeping current." | Out-Null
+
+    Write-Cyan "  Downloading WhatsApp bridge..."
+    Update-OptionalArchive -ArchiveName "whatsapp-bridge.tar.gz" -TargetDir "$DATA_DIR\whatsapp_bridge" -Label "WhatsApp bridge" -FallbackMsg "WhatsApp bridge not available in this release — keeping current." | Out-Null
+
+    Write-Cyan "  Downloading Antigravity bridge..."
+    Update-OptionalArchive -ArchiveName "antigravity-bridge.tar.gz" -TargetDir "$DATA_DIR\antigravity_bridge" -Label "Antigravity bridge" -FallbackMsg "Antigravity bridge not available in this release — keeping current." | Out-Null
+
+    $envFile = "$DATA_DIR\aegis.env"
+    if (Test-Path $envFile) {
+        $envLines = @(Get-Content $envFile)
+        $envChanged = $false
+        $parityMap = [ordered]@{
+            "AEGIS_MODULES_DIR"            = "$DATA_DIR\modules"
+            "AEGIS_WHATSAPP_BRIDGE_DIR"    = "$DATA_DIR\whatsapp_bridge"
+            "AEGIS_ANTIGRAVITY_BRIDGE_DIR" = "$DATA_DIR\antigravity_bridge"
+        }
+        foreach ($kv in $parityMap.GetEnumerator()) {
+            $k = $kv.Key
+            $rawVal = $kv.Value.Replace("\", "/")
+            $fmtVal = if ($rawVal -match " ") { "`"$rawVal`"" } else { $rawVal }
+            if (-not ($envLines | Where-Object { $_ -match "^$k=" })) {
+                $envLines += "$k=$fmtVal"
+                $envChanged = $true
+            }
+        }
+        if ($envChanged) {
+            Set-Content -Path $envFile -Value $envLines -Encoding UTF8
+            Write-Green "  Updated aegis.env with module/bridge paths."
+        }
     }
 
     Write-Cyan "  Starting service..."

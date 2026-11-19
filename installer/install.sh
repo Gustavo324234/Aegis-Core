@@ -37,6 +37,14 @@ AI_PROVIDER="none"
 AI_API_KEY=""
 AI_MODEL=""
 AEGIS_HTTP_PORT="8000"
+ADVANCED_INSTALL="${AEGIS_ADVANCED_INSTALL:-false}"
+
+for arg in "$@"; do
+    case "$arg" in
+        --advanced|-a) ADVANCED_INSTALL="true" ;;
+        --docker)      INSTALL_MODE="2" ;;
+    esac
+done
 
 log()     { echo "[INFO] $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${CYAN}  ->${NC} $1"; }
 success() { echo "[OK]   $(date '+%H:%M:%S') - $1" >> "$LOG_FILE"; echo -e "${GREEN}  [OK]${NC} $1"; }
@@ -180,7 +188,11 @@ run_system_audit() {
 
 # --- UI Menus ---
 show_main_menu() {
-    # RECONEXIÓN A TTY: Si estamos en un pipe (curl | bash), reconectamos stdin para ser interactivos
+    if [[ "$ADVANCED_INSTALL" != "true" ]]; then
+        print_banner
+        log "Modo Express activado (Nativo + Setup Web en 1 paso). Usa --advanced para opciones de Docker/Caddy."
+        return
+    fi
     if [ ! -t 0 ]; then
         log "Non-interactive shell detected. Defaulting to Native mode."
         return
@@ -323,8 +335,7 @@ show_main_menu() {
 }
 
 show_inference_profile_menu() {
-    if [ ! -t 0 ]; then
-        log "Non-interactive shell. Defaulting to inference profile: cloud."
+    if [[ "$ADVANCED_INSTALL" != "true" ]] || [ ! -t 0 ]; then
         INFERENCE_PROFILE="cloud"
         return
     fi
@@ -495,22 +506,40 @@ install_native() {
     chown -R aegis:aegis "$UI_DIST_PATH"
     success "UI assets → ${UI_DIST_PATH}"
 
-    log "Downloading agent instruction files..."
-    mkdir -p "$CONFIG_DIR/agents"
-    if curl -L --fail --progress-bar \
-        "${release_url}/agents-config.tar.gz" -o "/tmp/agents-config.tar.gz" 2>/dev/null; then
-        local agents_sha
-        agents_sha=$(curl -L --fail --silent "${release_url}/agents-config.tar.gz.sha256" | awk '{print $1}')
-        if [[ -n "$agents_sha" ]]; then
-            verify_sha256 "/tmp/agents-config.tar.gz" "$agents_sha"
+    download_release_tarball() {
+        local archive="$1"
+        local target_dir="$2"
+        local label="$3"
+        local missing_msg="$4"
+        mkdir -p "$target_dir"
+        if curl -L --fail --progress-bar \
+            "${release_url}/${archive}" -o "/tmp/${archive}" 2>/dev/null; then
+            local archive_sha
+            archive_sha=$(curl -L --fail --silent "${release_url}/${archive}.sha256" | awk '{print $1}')
+            if [[ -n "$archive_sha" ]]; then
+                verify_sha256 "/tmp/${archive}" "$archive_sha"
+            fi
+            tar -xzf "/tmp/${archive}" -C "$target_dir"
+            rm -f "/tmp/${archive}"
+            chown -R aegis:aegis "$target_dir"
+            success "${label} → ${target_dir}"
+        else
+            rm -f "/tmp/${archive}"
+            warn "${missing_msg}"
         fi
-        tar -xzf "/tmp/agents-config.tar.gz" -C "$CONFIG_DIR/agents"
-        rm -f "/tmp/agents-config.tar.gz"
-        chown -R aegis:aegis "$CONFIG_DIR/agents"
-        success "Agent instruction files → ${CONFIG_DIR}/agents"
-    else
-        warn "agents-config.tar.gz not in release — using compiled-in fallbacks"
-    fi
+    }
+
+    log "Downloading agent instruction files..."
+    download_release_tarball "agents-config.tar.gz" "$CONFIG_DIR/agents" "Agent instruction files" "agents-config.tar.gz not in release — using compiled-in fallbacks"
+
+    log "Downloading domain modules..."
+    download_release_tarball "modules-config.tar.gz" "$CONFIG_DIR/modules" "Domain modules" "modules-config.tar.gz not in release — skipping"
+
+    log "Downloading WhatsApp bridge..."
+    download_release_tarball "whatsapp-bridge.tar.gz" "$INSTALL_ROOT/whatsapp_bridge" "WhatsApp bridge" "whatsapp-bridge.tar.gz not in release — skipping"
+
+    log "Downloading Antigravity bridge..."
+    download_release_tarball "antigravity-bridge.tar.gz" "$INSTALL_ROOT/antigravity_bridge" "Antigravity bridge" "antigravity-bridge.tar.gz not in release — skipping"
 
     # Install aegis CLI
     log "Installing aegis CLI..."
@@ -567,6 +596,9 @@ install_native() {
 AEGIS_ROOT_KEY=${root_key}
 AEGIS_DATA_DIR=${DATA_DIR}
 AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents
+AEGIS_MODULES_DIR=${CONFIG_DIR}/modules
+AEGIS_WHATSAPP_BRIDGE_DIR=${INSTALL_ROOT}/whatsapp_bridge
+AEGIS_ANTIGRAVITY_BRIDGE_DIR=${INSTALL_ROOT}/antigravity_bridge
 AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}
 AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}
 ANK_HTTP_PORT=${AEGIS_HTTP_PORT}
@@ -601,12 +633,15 @@ EOF
     else
         warn "Existing ${ENV_FILE} preserved."
         # Asegurar que las vars requeridas están presentes
-        grep -q "UI_DIST_PATH"              "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}"                   >> "$ENV_FILE"
-        grep -q "AEGIS_DATA_DIR"            "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                     >> "$ENV_FILE"
-        grep -q "AEGIS_MODEL_PROFILE"       "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"       >> "$ENV_FILE"
-        grep -q "AEGIS_AGENTS_CONFIG_DIR"   "$ENV_FILE" || echo "AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents"   >> "$ENV_FILE"
-        grep -q "AEGIS_HTTP_PORT"           "$ENV_FILE" || echo "AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}"             >> "$ENV_FILE"
-        grep -q "ANK_HTTP_PORT"             "$ENV_FILE" || echo "ANK_HTTP_PORT=${AEGIS_HTTP_PORT}"               >> "$ENV_FILE"
+        grep -q "UI_DIST_PATH"                  "$ENV_FILE" || echo "UI_DIST_PATH=${UI_DIST_PATH}"                                       >> "$ENV_FILE"
+        grep -q "AEGIS_DATA_DIR"                "$ENV_FILE" || echo "AEGIS_DATA_DIR=${DATA_DIR}"                                         >> "$ENV_FILE"
+        grep -q "AEGIS_MODEL_PROFILE"           "$ENV_FILE" || echo "AEGIS_MODEL_PROFILE=${INFERENCE_PROFILE}"                           >> "$ENV_FILE"
+        grep -q "AEGIS_AGENTS_CONFIG_DIR"       "$ENV_FILE" || echo "AEGIS_AGENTS_CONFIG_DIR=${CONFIG_DIR}/agents"                       >> "$ENV_FILE"
+        grep -q "AEGIS_MODULES_DIR"             "$ENV_FILE" || echo "AEGIS_MODULES_DIR=${CONFIG_DIR}/modules"                            >> "$ENV_FILE"
+        grep -q "AEGIS_WHATSAPP_BRIDGE_DIR"     "$ENV_FILE" || echo "AEGIS_WHATSAPP_BRIDGE_DIR=${INSTALL_ROOT}/whatsapp_bridge"          >> "$ENV_FILE"
+        grep -q "AEGIS_ANTIGRAVITY_BRIDGE_DIR"  "$ENV_FILE" || echo "AEGIS_ANTIGRAVITY_BRIDGE_DIR=${INSTALL_ROOT}/antigravity_bridge"    >> "$ENV_FILE"
+        grep -q "AEGIS_HTTP_PORT"               "$ENV_FILE" || echo "AEGIS_HTTP_PORT=${AEGIS_HTTP_PORT}"                                 >> "$ENV_FILE"
+        grep -q "ANK_HTTP_PORT"                 "$ENV_FILE" || echo "ANK_HTTP_PORT=${AEGIS_HTTP_PORT}"                                   >> "$ENV_FILE"
         
         # Backfill on upgrade
         if ! grep -qE "^(AEGIS_PLUGIN_ROOT_KEY|AEGIS_ALLOW_INSECURE_PLUGINS)=" "$ENV_FILE"; then
@@ -640,7 +675,7 @@ ExecStart=${BIN_DIR}/ank-server
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=10s
-ReadWritePaths=${DATA_DIR} ${CONFIG_DIR}
+ReadWritePaths=${DATA_DIR} ${CONFIG_DIR} ${INSTALL_ROOT}
 StandardOutput=journal+console
 StandardError=journal+console
 NoNewPrivileges=true
@@ -758,7 +793,7 @@ wait_and_show() {
         if [[ "${AI_PROVIDER:-none}" != "none" ]]; then
             echo -e "  Motor de IA: ${CYAN}${AI_PROVIDER} / ${AI_MODEL}${NC}"
         else
-            echo -e "  ${YELLOW}⚠ Motor de IA: No configurado — configurá en Settings → Engine${NC}"
+            echo -e "  Configuracion inicial: ${GREEN}Setup Rapido de 1 paso en el navegador${NC}"
         fi
         echo ""
 
@@ -780,15 +815,13 @@ wait_and_show() {
             echo ""
         fi
 
+        echo -e "${GREEN}  Abri tu navegador para completar el Setup en 1 paso:${NC}"
+        echo -e "    Local:   ${CYAN}${PROTOCOL}://localhost:${AEGIS_HTTP_PORT}${NC}"
+        echo -e "    Red LAN: ${CYAN}${PROTOCOL}://${ip}:${AEGIS_HTTP_PORT}${NC}"
         if [[ -n "$token" ]]; then
-            echo -e "${CYAN}  Local Setup URL:${NC}"
-            echo -e "  ${GREEN}${PROTOCOL}://${ip}:${AEGIS_HTTP_PORT}?setup_token=${token}${NC}"
             echo ""
-            echo -e "  Token expires in 30 minutes."
-            echo -e "  To regenerate: ${CYAN}sudo aegis token${NC}"
-        else
-            echo -e "  Local Access (HTTP): ${CYAN}${PROTOCOL}://${ip}:${AEGIS_HTTP_PORT}${NC}"
-            echo -e "  Run ${CYAN}sudo aegis token${NC} to get the setup URL."
+            echo -e "  Setup Enterprise / Remoto (opcional):"
+            echo -e "    ${PROTOCOL}://${ip}:${AEGIS_HTTP_PORT}?setup_token=${token}"
         fi
 
         if [[ "$SETUP_HTTPS" != "true" && -z "$tunnel_url" ]]; then

@@ -1,0 +1,40 @@
+[
+  {
+    "id": "aegis_expense_super",
+    "name": "Semantic Expense Inference ('super' -> comida)",
+    "user_message": "Agregá 10000 de súper",
+    "expected_action": "personal_tool",
+    "expected_tool": "log_expense_or_entry",
+    "description": "Must infer 'super' belongs to 'comida' and record 10000."
+  },
+  {
+    "id": "aegis_expense_carniceria",
+    "name": "Cumulative Category Expense ('carnicería' -> comida)",
+    "user_message": "Sumá también 4500 de carnicería",
+    "expected_action": "personal_tool",
+    "expected_tool": "log_expense_or_entry",
+    "description": "Must add 4500 to 'comida' and know the running total is 14500."
+  },
+  {
+    "id": "aegis_memory_fact",
+    "name": "Long-Term Memory Learning",
+    "user_message": "Acordate que soy intolerante a la lactosa y que entreno los martes y jueves a las 19hs.",
+    "expected_action": "personal_tool",
+    "expected_tool": "remember_fact",
+    "description": "Must save personal facts to long-term memory."
+  },
+  {
+    "id": "aegis_contextual_recall",
+    "name": "Contextual Memory + Expense Recall",
+    "user_message": "¿Cuánto llevo gastado en comida en total y qué días te dije que entreno?",
+    "expected_action": "direct_reply",
+    "description": "Must answer accurately using injected memory ($14,500 and martes/jueves 19hs)."
+  },
+  {
+    "id": "code_script_creation",
+    "name": "Background Worker Delegation",
+    "user_message": "Creame un script en python llamado 'resumen_gastos.py' que lea aegis_memory.json y muestre el total de gastos.",
+    "expected_action": "spawn_agent",
+    "description": "Must delegate heavy coding work to the worker via spawn_agent."
+  }
+]

@@ -518,21 +518,62 @@ cmd_update() {
         printf '%b%s%b\n' "$YELLOW" "  Aviso: UI no disponible en este release, manteniendo actual." "$NC"
     fi
 
+    update_optional_tarball() {
+        local archive="$1"
+        local target_dir="$2"
+        local label="$3"
+        local tmp_file="/tmp/${archive%.tar.gz}-update.tar.gz"
+        if curl -L --fail --progress-bar \
+            "${RELEASE_URL}/${archive}" \
+            -o "$tmp_file" 2>/dev/null; then
+            sudo mkdir -p "$target_dir"
+            sudo tar -xzf "$tmp_file" -C "$target_dir"
+            sudo chown -R aegis:aegis "$target_dir" 2>/dev/null || true
+            rm -f "$tmp_file"
+            printf '%b  → %s → %s%b\n' "$GREEN" "$label" "$target_dir" "$NC"
+            return 0
+        fi
+        rm -f "$tmp_file"
+        return 1
+    }
+
     printf "  → Actualizando archivos de instrucciones de agentes...\n"
-    if curl -L --fail --progress-bar \
-        "${RELEASE_URL}/agents-config.tar.gz" \
-        -o /tmp/agents-update.tar.gz 2>/dev/null; then
-        sudo mkdir -p /etc/aegis/agents
-        sudo tar -xzf /tmp/agents-update.tar.gz -C /etc/aegis/agents
-        rm -f /tmp/agents-update.tar.gz
-        # Ensure AEGIS_AGENTS_CONFIG_DIR is in the env file
+    if update_optional_tarball "agents-config.tar.gz" "/etc/aegis/agents" "Instruction files updated"; then
         if [[ -f /etc/aegis/aegis.env ]]; then
             grep -q "AEGIS_AGENTS_CONFIG_DIR" /etc/aegis/aegis.env \
                 || echo "AEGIS_AGENTS_CONFIG_DIR=/etc/aegis/agents" | sudo tee -a /etc/aegis/aegis.env > /dev/null
         fi
-        printf '%b  → Instruction files updated → /etc/aegis/agents%b\n' "$GREEN" "$NC"
     else
         printf '%b  → Aviso: agents-config no disponible en este release — se usan los fallbacks del binario%b\n' "$YELLOW" "$NC"
+    fi
+
+    printf "  → Actualizando módulos de dominio...\n"
+    if update_optional_tarball "modules-config.tar.gz" "/etc/aegis/modules" "Modules updated"; then
+        if [[ -f /etc/aegis/aegis.env ]]; then
+            grep -q "AEGIS_MODULES_DIR" /etc/aegis/aegis.env \
+                || echo "AEGIS_MODULES_DIR=/etc/aegis/modules" | sudo tee -a /etc/aegis/aegis.env > /dev/null
+        fi
+    else
+        printf '%b  → Aviso: modules-config no disponible en este release — manteniendo actuales%b\n' "$YELLOW" "$NC"
+    fi
+
+    printf "  → Actualizando bridges (WhatsApp y Antigravity)...\n"
+    if update_optional_tarball "whatsapp-bridge.tar.gz" "/opt/aegis/whatsapp_bridge" "WhatsApp bridge updated"; then
+        if [[ -f /etc/aegis/aegis.env ]]; then
+            grep -q "AEGIS_WHATSAPP_BRIDGE_DIR" /etc/aegis/aegis.env \
+                || echo "AEGIS_WHATSAPP_BRIDGE_DIR=/opt/aegis/whatsapp_bridge" | sudo tee -a /etc/aegis/aegis.env > /dev/null
+        fi
+    else
+        printf '%b  → Aviso: whatsapp-bridge no disponible en este release%b\n' "$YELLOW" "$NC"
+    fi
+
+    if update_optional_tarball "antigravity-bridge.tar.gz" "/opt/aegis/antigravity_bridge" "Antigravity bridge updated"; then
+        if [[ -f /etc/aegis/aegis.env ]]; then
+            grep -q "AEGIS_ANTIGRAVITY_BRIDGE_DIR" /etc/aegis/aegis.env \
+                || echo "AEGIS_ANTIGRAVITY_BRIDGE_DIR=/opt/aegis/antigravity_bridge" | sudo tee -a /etc/aegis/aegis.env > /dev/null
+        fi
+    else
+        printf '%b  → Aviso: antigravity-bridge no disponible en este release%b\n' "$YELLOW" "$NC"
     fi
 
     # CORE-FIX: release builds added by PR #277 refuse to start without
