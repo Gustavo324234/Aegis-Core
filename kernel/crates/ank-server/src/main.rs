@@ -461,7 +461,10 @@ pub(crate) async fn run_server() -> Result<()> {
                         )
                     };
 
-                    let persona = if !tenant_id.is_empty() && !session_key.is_empty() {
+                    let persona = if !tenant_id.is_empty()
+                        && !session_key.trim().is_empty()
+                        && session_key.trim() != "default"
+                    {
                         ank_core::enclave::TenantDB::open(&tenant_id, &session_key)
                             .ok()
                             .and_then(|db| db.get_persona().unwrap_or(None))

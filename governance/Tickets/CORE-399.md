@@ -1,7 +1,7 @@
 # CORE-399: Integridad `TenantDB` y Symlink Jail (`safe_resolve` en `ReadFile`, `ScribeManager` y `fs.rs`)
 
 - **Tipo:** fix
-- **Estado:** 📥 Todo
+- **Estado:** ✅ Done
 - **Prioridad:** Crítica
 - **Épica:** EPIC 61
 - **Asignado a:** Kernel Engineer
@@ -17,6 +17,6 @@ Proteger la base de datos cifrada de cada tenant contra cuarentena accidental y 
 
 ## Acceptance Criteria
 
-- [ ] Un PCB sin `session_key` jamás puede renombrar o recrear el `memory.db` de un tenant existente.
-- [ ] Symlinks dentro del workspace apuntando fuera de la raíz son rechazados por `ReadFile`, `WriteFile` (`ScribeManager`) y `fs_tree`/`fs_file`.
-- [ ] Tests de regresión cubren ambos escenarios.
+- [x] Un PCB sin `session_key` jamás puede renombrar o recrear el `memory.db` de un tenant existente.
+- [x] Symlinks dentro del workspace apuntando fuera de la raíz son rechazados por `ReadFile`, `WriteFile` (`ScribeManager`) y `fs_tree`/`fs_file`.
+- [x] Tests de regresión cubren ambos escenarios.

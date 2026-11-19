@@ -18,6 +18,47 @@ pub use parser::{
     init_syscall_regexes, parse_syscall, parse_task_type, StreamInterceptor, StreamItem,
 };
 
+fn valid_pcb_session_key(pcb: &crate::pcb::PCB) -> Option<&str> {
+    pcb.session_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty() && *k != "default")
+}
+
+pub(crate) fn is_sensitive_filename(path: &std::path::Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if name == ".env.example" {
+        return false;
+    }
+    if name == ".env" || name == "aegis.env" {
+        return true;
+    }
+    for ext in [".key", ".pem", ".p12"] {
+        if name.ends_with(ext) {
+            return true;
+        }
+    }
+    for word in [
+        "credentials",
+        "service_account",
+        "client_secret",
+        "secret",
+        "password",
+        "token",
+        "apikey",
+        "api_key",
+    ] {
+        if name.contains(word) {
+            return true;
+        }
+    }
+    false
+}
+
 /// --- SYSCALL ENUM ---
 /// Representa las operaciones privilegiadas que la IA puede solicitar al Kernel.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -227,14 +268,28 @@ impl SyscallExecutor {
                     )));
                 }
 
-                // Intentamos leer el archivo usando el motor de contexto (VCM)
-                // Pero como ReadFile es una Syscall puntual, delegamos a la lógica de Jailing del VCM
                 let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-                let tenant_root = format!("{}/users/{}/workspace", base_dir, tenant_id);
-                let full_path = std::path::Path::new(&tenant_root).join(file_path);
+                let tenant_root = std::path::PathBuf::from(&base_dir)
+                    .join("users")
+                    .join(tenant_id)
+                    .join("workspace");
+                let resolved =
+                    crate::vcm::safe_resolve(&tenant_root, file_path).ok_or_else(|| {
+                        SyscallError::SecurityViolation(format!(
+                            "Symlink or path escape blocked: {}",
+                            file_path
+                        ))
+                    })?;
+
+                if is_sensitive_filename(&resolved) {
+                    return Err(SyscallError::SecurityViolation(format!(
+                        "Access denied to sensitive file: {}",
+                        file_path
+                    )));
+                }
 
                 let content =
-                    tokio::fs::read_to_string(&full_path)
+                    tokio::fs::read_to_string(&resolved)
                         .await
                         .map_err(|e: std::io::Error| {
                             SyscallError::IOError(format!("Read failed for {}: {}", uri, e))
@@ -292,7 +347,11 @@ impl SyscallExecutor {
                     };
 
                 if let Some(manifest) = matched_manifest {
-                    let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                    let session_key = valid_pcb_session_key(pcb).ok_or_else(|| {
+                        SyscallError::SecurityViolation(
+                            "Missing valid session_key in PCB".to_string(),
+                        )
+                    })?;
                     tracing::info!(
                         "Microkernel: Executing tool '{}' for module '{}' ({})",
                         tool_name,
@@ -328,7 +387,9 @@ impl SyscallExecutor {
                 Ok(format!("[SYSTEM_RESULT: {}]", result))
             }
             Syscall::MusicSearch { query, max_results } => {
-                let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                let session_key = valid_pcb_session_key(pcb).ok_or_else(|| {
+                    SyscallError::SecurityViolation("Missing valid session_key in PCB".to_string())
+                })?;
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
                 // Check connected status synchronously before awaiting token refresh.
@@ -388,7 +449,9 @@ impl SyscallExecutor {
                     .to_string())
             }
             Syscall::GoogleCalendar { days, max_results } => {
-                let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                let session_key = valid_pcb_session_key(pcb).ok_or_else(|| {
+                    SyscallError::SecurityViolation("Missing valid session_key in PCB".to_string())
+                })?;
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
                 let connected = TenantDB::open(tenant_id, session_key)
@@ -415,7 +478,9 @@ impl SyscallExecutor {
                 }
             }
             Syscall::GoogleDrive { query, max_results } => {
-                let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                let session_key = valid_pcb_session_key(pcb).ok_or_else(|| {
+                    SyscallError::SecurityViolation("Missing valid session_key in PCB".to_string())
+                })?;
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
                 let connected = TenantDB::open(tenant_id, session_key)
@@ -440,7 +505,9 @@ impl SyscallExecutor {
                 self.google_drive(token, &query, max_results).await
             }
             Syscall::Gmail { query, max_results } => {
-                let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                let session_key = valid_pcb_session_key(pcb).ok_or_else(|| {
+                    SyscallError::SecurityViolation("Missing valid session_key in PCB".to_string())
+                })?;
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
                 let connected = TenantDB::open(tenant_id, session_key)
@@ -539,7 +606,9 @@ impl SyscallExecutor {
 
             // Privileged call to dynamically install/enable a discovered Microkernel Module
             Syscall::EnableModule { module_id } => {
-                let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                let session_key = valid_pcb_session_key(pcb).ok_or_else(|| {
+                    SyscallError::SecurityViolation("Missing valid session_key in PCB".to_string())
+                })?;
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
                 match TenantDB::open(tenant_id, session_key) {
@@ -991,5 +1060,26 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_is_sensitive_filename_and_valid_pcb_session_key() {
+        use std::path::Path;
+        assert!(is_sensitive_filename(Path::new(".env")));
+        assert!(is_sensitive_filename(Path::new("aegis.env")));
+        assert!(is_sensitive_filename(Path::new("keys/signing.key")));
+        assert!(is_sensitive_filename(Path::new("credentials.json")));
+        assert!(is_sensitive_filename(Path::new("service_account.json")));
+        assert!(!is_sensitive_filename(Path::new(".env.example")));
+        assert!(!is_sensitive_filename(Path::new("src/main.rs")));
+
+        let mut pcb = crate::pcb::PCB::new("t".to_string(), 1, "p".to_string());
+        assert!(valid_pcb_session_key(&pcb).is_none());
+        pcb.session_key = Some("".to_string());
+        assert!(valid_pcb_session_key(&pcb).is_none());
+        pcb.session_key = Some("default".to_string());
+        assert!(valid_pcb_session_key(&pcb).is_none());
+        pcb.session_key = Some("real_hash_123".to_string());
+        assert_eq!(valid_pcb_session_key(&pcb), Some("real_hash_123"));
     }
 }

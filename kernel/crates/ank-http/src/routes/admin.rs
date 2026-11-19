@@ -343,6 +343,8 @@ pub async fn reset_password(
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
+    let _ = ank_core::enclave::TenantDB::quarantine_for_password_reset(&body.tenant_id);
+
     Ok(Json(PasswordResetResponse {
         success: true,
         message: "Password reset successful".to_string(),

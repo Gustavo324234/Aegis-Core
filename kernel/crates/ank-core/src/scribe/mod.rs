@@ -128,13 +128,57 @@ impl ScribeManager {
         let repo = Repository::open(&tenant_path)
             .map_err(|e| ScribeError::GitError(format!("Failed to open repo: {}", e)))?;
 
-        // 2. Escritura física asíncrona - Aseguramos que el directorio exista
-        let full_path = Path::new(&tenant_path).join(file_path);
-        if let Some(parent) = full_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        // 2. Escritura física asíncrona - Verificar symlink jail antes de crear subdirectorios o escribir
+        let tenant_root = Path::new(&tenant_path);
+        let tenant_canon = tenant_root.canonicalize().map_err(|e| {
+            ScribeError::GitError(format!("Failed to canonicalize workspace: {}", e))
+        })?;
+        let full_path = tenant_root.join(file_path);
+
+        let mut ancestor = full_path.parent();
+        while let Some(dir) = ancestor {
+            if dir.exists() {
+                let dir_canon = dir.canonicalize().map_err(|_| {
+                    ScribeError::SecurityViolation(format!(
+                        "Path '{}' escapes tenant workspace for '{}'",
+                        file_path, tenant_id
+                    ))
+                })?;
+                if !dir_canon.starts_with(&tenant_canon) {
+                    return Err(ScribeError::SecurityViolation(format!(
+                        "Symlink ancestor '{}' escapes tenant workspace for '{}'",
+                        file_path, tenant_id
+                    )));
+                }
+                break;
+            }
+            ancestor = dir.parent();
         }
 
-        tokio::fs::write(&full_path, content)
+        if let Some(parent) = full_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ScribeError::FileWriteError(file_path.to_string(), e.to_string()))?;
+        }
+
+        if full_path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(ScribeError::SecurityViolation(format!(
+                "Refusing to write through symlink '{}' in workspace '{}'",
+                file_path, tenant_id
+            )));
+        }
+
+        let resolved_path = crate::vcm::safe_resolve(tenant_root, file_path).ok_or_else(|| {
+            ScribeError::SecurityViolation(format!(
+                "Symlink target '{}' escapes tenant workspace for '{}'",
+                file_path, tenant_id
+            ))
+        })?;
+
+        tokio::fs::write(&resolved_path, content)
             .await
             .map_err(|e| ScribeError::FileWriteError(file_path.to_string(), e.to_string()))?;
 
@@ -326,6 +370,36 @@ mod tests {
             "Expected SecurityViolation, got: {:?}",
             e
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_scribe_blocks_symlink_escape() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().context("Failed to create tempdir")?;
+        let outside = tempdir().context("Failed to create outside dir")?;
+        let root = dir.path().to_str().context("Tempdir path is not UTF-8")?;
+        let scribe = ScribeManager::new(root);
+        let tenant_id = "user_symlink_sec";
+        scribe.init_repo(tenant_id).await?;
+
+        let outside_target = outside.path().join("pwned.txt");
+        let link_path = dir.path().join(tenant_id).join("escape.txt");
+        symlink(&outside_target, &link_path)?;
+
+        let metadata = CommitMetadata {
+            task_id: "sec-symlink".into(),
+            version_increment: VersionType::Patch,
+            summary: "Symlink escape attempt".into(),
+            impact: ImpactLevel::Critical,
+        };
+
+        let result = scribe
+            .write_and_commit(tenant_id, "escape.txt", b"malicious", metadata)
+            .await;
+        assert!(matches!(result, Err(ScribeError::SecurityViolation(_))));
+        assert!(!outside_target.exists());
         Ok(())
     }
 }

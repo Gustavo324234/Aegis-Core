@@ -1855,7 +1855,7 @@ impl CognitiveHAL {
         // el esquema si el router hace failover hacia otro proveedor en medio del turno.
         let cached_mcp_tools = self.mcp_registry.list_tools().await;
         let module_tenant = pcb.tenant_id.as_deref().unwrap_or("default").to_string();
-        let module_skey = pcb.session_key.as_deref().unwrap_or("default").to_string();
+        let module_skey_opt = Self::valid_pcb_session_key(pcb).map(ToString::to_string);
 
         let is_video_req =
             Self::has_video_context(&pcb.memory_pointers.l1_instruction, &pcb.message_history);
@@ -1870,24 +1870,26 @@ impl CognitiveHAL {
                     )
                 })
                 .collect();
-            if is_video_req {
-                if let Ok(db) = crate::enclave::TenantDB::open(&module_tenant, &module_skey) {
-                    if db
-                        .get_kv("module_active:aegis.domain.video")
-                        .unwrap_or(None)
-                        .as_deref()
-                        != Some("true")
-                    {
-                        let _ = db.set_kv("module_active:aegis.domain.video", "true");
+            if let Some(ref module_skey) = module_skey_opt {
+                if is_video_req {
+                    if let Ok(db) = crate::enclave::TenantDB::open(&module_tenant, module_skey) {
+                        if db
+                            .get_kv("module_active:aegis.domain.video")
+                            .unwrap_or(None)
+                            .as_deref()
+                            != Some("true")
+                        {
+                            let _ = db.set_kv("module_active:aegis.domain.video", "true");
+                        }
                     }
                 }
-            }
-            if let Some(r) = self.router_ref.read().await.clone() {
-                let router_guard = r.read().await;
-                let mod_tools = router_guard
-                    .get_enabled_module_tools(&module_tenant, &module_skey)
-                    .await;
-                list.extend(mod_tools);
+                if let Some(r) = self.router_ref.read().await.clone() {
+                    let router_guard = r.read().await;
+                    let mod_tools = router_guard
+                        .get_enabled_module_tools(&module_tenant, module_skey)
+                        .await;
+                    list.extend(mod_tools);
+                }
             }
             list
         };
@@ -3758,9 +3760,18 @@ impl CognitiveHAL {
             .join("workspace")
     }
 
+    fn valid_pcb_session_key(pcb: &PCB) -> Option<&str> {
+        pcb.session_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty() && *k != "default")
+    }
+
     async fn get_approved_paths(pcb: &PCB) -> Vec<String> {
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-        let session_key = pcb.session_key.as_deref().unwrap_or("");
+        let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+            return vec![];
+        };
         match crate::enclave::TenantDB::open(tenant_id, session_key) {
             Ok(db) => db.get_approved_paths().unwrap_or_default(),
             Err(_) => vec![],
@@ -3789,7 +3800,9 @@ impl CognitiveHAL {
             }
         };
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-        let session_key = pcb.session_key.as_deref().unwrap_or("");
+        let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+            return false;
+        };
         match crate::enclave::TenantDB::open(tenant_id, session_key) {
             Ok(db) => db.is_project_autonomous(&project_id),
             Err(_) => false,
@@ -4178,7 +4191,9 @@ impl CognitiveHAL {
                     Some(t) => t.clone(),
                     None => return "{\"error\":\"no_tenant_id\"}".to_string(),
                 };
-                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+                    return "{\"error\":\"missing_session_key\"}".to_string();
+                };
 
                 match crate::enclave::TenantDB::open(&tenant_id, session_key) {
                     Ok(db) => match db.add_approved_path(&path) {
@@ -4850,7 +4865,9 @@ impl CognitiveHAL {
                     Some(t) => t.clone(),
                     None => return "{\"error\":\"no_tenant_id\"}".to_string(),
                 };
-                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+                    return "{\"error\":\"missing_session_key\"}".to_string();
+                };
 
                 let raw_category = args["category"].as_str().unwrap_or("general");
                 let description = args["description"].as_str().unwrap_or("");
@@ -4883,7 +4900,9 @@ impl CognitiveHAL {
                     Some(t) => t.clone(),
                     None => return "{\"error\":\"no_tenant_id\"}".to_string(),
                 };
-                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+                    return "{\"error\":\"missing_session_key\"}".to_string();
+                };
 
                 let category_opt = args["category"].as_str();
 
@@ -4901,7 +4920,9 @@ impl CognitiveHAL {
                     Some(t) => t.clone(),
                     None => return "{\"error\":\"no_tenant_id\"}".to_string(),
                 };
-                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+                    return "{\"error\":\"missing_session_key\"}".to_string();
+                };
 
                 let action = args["action"]
                     .as_str()
@@ -4991,7 +5012,9 @@ impl CognitiveHAL {
                     Some(t) => t.clone(),
                     None => return "{\"error\":\"no_tenant_id\"}".to_string(),
                 };
-                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+                    return "{\"error\":\"missing_session_key\"}".to_string();
+                };
 
                 let action = args["action"].as_str().unwrap_or("list").trim();
                 let id_arg = args.get("id").and_then(|v| {
@@ -5371,12 +5394,12 @@ impl CognitiveHAL {
                                 }
                                 if p == "elevenlabs" {
                                     let masked = Self::mask_single_key(&k);
-                                    let session_key =
-                                        pcb.session_key.as_deref().unwrap_or("default");
-                                    if let Ok(db) =
-                                        crate::enclave::TenantDB::open(tenant_id, session_key)
-                                    {
-                                        let _ = db.set_kv("elevenlabs_api_key", &k);
+                                    if let Some(session_key) = Self::valid_pcb_session_key(pcb) {
+                                        if let Ok(db) =
+                                            crate::enclave::TenantDB::open(tenant_id, session_key)
+                                        {
+                                            let _ = db.set_kv("elevenlabs_api_key", &k);
+                                        }
                                     }
                                     added_list.push(serde_json::json!({
                                         "provider": "elevenlabs",
@@ -5437,9 +5460,12 @@ impl CognitiveHAL {
 
                         if provider == "elevenlabs" {
                             let masked = Self::mask_single_key(&raw_key);
-                            let session_key = pcb.session_key.as_deref().unwrap_or("default");
-                            if let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) {
-                                let _ = db.set_kv("elevenlabs_api_key", &raw_key);
+                            if let Some(session_key) = Self::valid_pcb_session_key(pcb) {
+                                if let Ok(db) =
+                                    crate::enclave::TenantDB::open(tenant_id, session_key)
+                                {
+                                    let _ = db.set_kv("elevenlabs_api_key", &raw_key);
+                                }
                             }
                             return serde_json::json!({
                                 "status": "added",
@@ -5633,7 +5659,6 @@ impl CognitiveHAL {
                     .to_lowercase();
                 let module_id = args["module_id"].as_str().unwrap_or("").trim();
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-                let session_key = pcb.session_key.as_deref().unwrap_or("default");
 
                 let router_opt = self.router_ref.read().await.clone();
                 let Some(router_rw) = router_opt else {
@@ -5642,7 +5667,8 @@ impl CognitiveHAL {
 
                 let router = router_rw.read().await;
                 let modules_map = router.modules.read().await;
-                let db_opt = crate::enclave::TenantDB::open(tenant_id, session_key).ok();
+                let db_opt = Self::valid_pcb_session_key(pcb)
+                    .and_then(|skey| crate::enclave::TenantDB::open(tenant_id, skey).ok());
 
                 match action.as_str() {
                     "list" => {
@@ -5748,7 +5774,9 @@ impl CognitiveHAL {
                     Some(t) => t.clone(),
                     None => return "{\"error\":\"no_tenant_id\"}".to_string(),
                 };
-                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+                    return "{\"error\":\"missing_session_key\"}".to_string();
+                };
                 let action = args["action"]
                     .as_str()
                     .unwrap_or("list")
@@ -5880,7 +5908,9 @@ impl CognitiveHAL {
                     Some(t) => t.clone(),
                     None => return "{\"error\":\"no_tenant_id\"}".to_string(),
                 };
-                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+                    return "{\"error\":\"missing_session_key\"}".to_string();
+                };
                 let action = args["action"]
                     .as_str()
                     .unwrap_or("status")
@@ -6090,7 +6120,9 @@ impl CognitiveHAL {
                     };
                     if let Some(manifest) = manifest_opt {
                         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-                        let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                        let Some(session_key) = Self::valid_pcb_session_key(pcb) else {
+                            return "{\"error\":\"missing_session_key\"}".to_string();
+                        };
                         if let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) {
                             let active_key = format!("module_active:{}", manifest.module_id);
                             if db.get_kv(&active_key).unwrap_or(None).as_deref() != Some("true") {
@@ -6151,21 +6183,22 @@ impl CognitiveHAL {
                 if self.mcp_registry.has_tool(other).await {
                     // CORE-377 Criterion 4: Aislamiento de permisos contra políticas de tenant / Citadel
                     if let Some(tenant_id) = &pcb.tenant_id {
-                        let session_key = pcb.session_key.as_deref().unwrap_or("default");
-                        if let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) {
-                            let tool_policy_key = format!("mcp_tool_policy:{}", other);
-                            if let Ok(Some(policy)) = db.get_kv(&tool_policy_key) {
-                                if policy == "deny" {
-                                    tracing::warn!(
-                                        pid = %_pid,
-                                        tool = %other,
-                                        tenant = %tenant_id,
-                                        "CORE-377: MCP tool call denied by tenant policy"
-                                    );
-                                    return format!(
-                                        "{{\"error\": \"Permission denied: tool '{}' is restricted for this tenant.\"}}",
-                                        other
-                                    );
+                        if let Some(session_key) = Self::valid_pcb_session_key(pcb) {
+                            if let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) {
+                                let tool_policy_key = format!("mcp_tool_policy:{}", other);
+                                if let Ok(Some(policy)) = db.get_kv(&tool_policy_key) {
+                                    if policy == "deny" {
+                                        tracing::warn!(
+                                            pid = %_pid,
+                                            tool = %other,
+                                            tenant = %tenant_id,
+                                            "CORE-377: MCP tool call denied by tenant policy"
+                                        );
+                                        return format!(
+                                            "{{\"error\": \"Permission denied: tool '{}' is restricted for this tenant.\"}}",
+                                            other
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -6463,19 +6496,22 @@ impl CognitiveHAL {
         };
 
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-        let session_key = pcb.session_key.as_deref().unwrap_or("default");
 
         let modules_tool_prompt = if casual_turn {
             String::new()
-        } else if let Some(ref router_lock) = *self.router.read().await {
-            let router = router_lock.read().await;
-            router
-                .generate_modules_prompt(
-                    &pcb.memory_pointers.l1_instruction,
-                    tenant_id,
-                    session_key,
-                )
-                .await
+        } else if let Some(session_key) = Self::valid_pcb_session_key(pcb) {
+            if let Some(ref router_lock) = *self.router.read().await {
+                let router = router_lock.read().await;
+                router
+                    .generate_modules_prompt(
+                        &pcb.memory_pointers.l1_instruction,
+                        tenant_id,
+                        session_key,
+                    )
+                    .await
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         };
