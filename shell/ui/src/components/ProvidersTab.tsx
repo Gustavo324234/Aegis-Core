@@ -386,8 +386,10 @@ const ProviderModal: React.FC<{
             if (res.ok) {
                 const data = await res.json();
                 const rawList = Array.isArray(data.models) ? data.models : [];
-                const rawModels: string[] = rawList.map((m: any) =>
-                    typeof m === 'object' && m !== null && 'model_id' in m ? String(m.model_id) : String(m)
+                const rawModels: string[] = rawList.map((m: unknown) =>
+                    typeof m === 'object' && m !== null && 'model_id' in m
+                        ? String((m as { model_id: unknown }).model_id)
+                        : String(m)
                 );
                 const chatModels = rawModels.filter(isChatCompatibleModel);
                 const combined = Array.from(new Set([...(initialProvider?.active_models || []), ...(chatModels.length > 0 ? chatModels : rawModels)]));

@@ -9,6 +9,7 @@ import AdminDashboard from './components/AdminDashboard';
 import ForcePasswordChangeScreen from './components/ForcePasswordChangeScreen';
 import BootstrapSetup from './components/BootstrapSetup';
 import EngineSetupWizard from './components/EngineSetupWizard';
+import { PersonalQuickSetup } from './components/PersonalQuickSetup';
 import Dashboard from '@/components/Dashboard';
 import { AgentInboxList } from './components/AgentInboxList';
 import { AgentThread } from './components/AgentThread';
@@ -163,16 +164,8 @@ function App() {
                             />
                         </motion.div>
                     ) : systemState === 'STATE_INITIALIZING' ? (
-                        <motion.div key="admin_setup_lock" className="min-h-screen bg-black flex items-center justify-center p-4">
-                            <div className="glass p-8 rounded-2xl border border-red-500/30 text-center space-y-4">
-                                <h1 className="text-2xl font-bold tracking-widest text-red-500 uppercase">Ring 0 Identity Required</h1>
-                                <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest max-w-xs mx-auto">
-                                    Secure Bootstrap Directive: Administrator identity not found. Verify your Setup Token for system initialization.
-                                </p>
-                                <div className="pt-4 flex justify-center">
-                                    <Shield className="w-8 h-8 text-red-500/20 animate-pulse" />
-                                </div>
-                            </div>
+                        <motion.div key="admin_setup_lock">
+                            <PersonalQuickSetup setupToken={setupToken} />
                         </motion.div>
                     ) : !isAuthenticated ? (
                         <motion.div key="login" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, scale: 0.95, filter: 'blur(10px)' }} transition={{ duration: 0.5 }} className="w-full">
@@ -198,7 +191,7 @@ function App() {
                             </div>
                             <div className="text-center">
                                 <h1 className="text-4xl font-bold tracking-[0.3em] mb-2 uppercase text-white">Aegis <span className="text-aegis-cyan">Shell</span></h1>
-                                <p className="text-aegis-steel font-mono tracking-widest text-[10px] animate-pulse">ESTABLISHING RING 0 NEURAL LINK...</p>
+                                <p className="text-aegis-steel font-mono tracking-widest text-[10px] animate-pulse">CONECTANDO CON TU ASISTENTE PERSONAL...</p>
                             </div>
                         </motion.div>
                     ) : (

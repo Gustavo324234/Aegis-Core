@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { ttsPlayer } from '../audio/TTSPlayer';
+import { speakNaturalText, stopSpeaking, loadVoicePrefs } from '../audio/naturalVoice';
 import { useMusicStore } from './musicStore';
 import { useTerminalStore } from './terminalStore';
 import { usePrStore } from './prStore';
@@ -8,6 +9,8 @@ import { useAgentInboxStore } from './agentInboxStore';
 import type { AgentEventPayload as SupervisorEventPayload } from '../types/agentEvents';
 
 // CORE-204 — CAA agent types
+export const TAB_SESSION_KEY = 'aegis-tab-session-key';
+
 export type AgentRole =
     | { type: 'ChatAgent' }
     | { type: 'ProjectSupervisor'; project_id: string }
@@ -105,6 +108,15 @@ export interface SystemMetrics {
     active_workers: number;
 }
 
+export interface PendingRetryPrompt {
+    prompt: string;
+    displayPrompt: string;
+    modelOverride?: string | null;
+    retryAfterSecs?: number;
+    errorMessage?: string;
+    autoRetryCount: number;
+}
+
 interface CustomWindow extends Window {
     _aegis_webrtc_peer?: RTCPeerConnection;
     _aegis_webrtc_dc?: RTCDataChannel;
@@ -117,6 +129,12 @@ interface CustomWindow extends Window {
 
 interface AegisState {
     messages: Message[];
+    historyTotalCount: number;
+    nextHistoryBeforeIndex: number | null;
+    hasMoreHistory: boolean;
+    isLoadingHistory: boolean;
+    cleanOnOpen: boolean;
+    historyPrependedSeq: number;
     status: SystemStatus;
     system_metrics: SystemMetrics;
     tenants: string[];
@@ -132,7 +150,15 @@ interface AegisState {
     isEngineConfigured: boolean;
     taskType: TaskTypeValue;
     lastRoutingInfo: RoutingInfo | null;
+    liveToolProgress: { stage?: string; message?: string; progress?: number; done?: boolean } | null;
     lastError: string | null;
+    lastSubmittedPrompt: {
+        prompt: string;
+        displayPrompt: string;
+        modelOverride?: string | null;
+        autoRetryCount: number;
+    } | null;
+    pendingRetryPrompt: PendingRetryPrompt | null;
     _hydrated: boolean;
     needsPasswordReset: boolean;
     adminActiveTab: string;
@@ -184,7 +210,9 @@ interface AegisState {
     fetchSirenConfig: () => Promise<void>;
     connect: (tenantId: string, sessionKey: string) => Promise<void>;
     disconnect: () => void;
-    sendMessage: (prompt: string, modelOverride?: string | null) => void;
+    sendMessage: (prompt: string, modelOverride?: string | null, isRetry?: boolean) => void;
+    retryPendingMessage: (newModelOverride?: string | null) => void;
+    dismissPendingRetry: () => void;
     appendToken: (msgId: string, token: string, type: MessageType) => void;
     setStatus: (status: SystemStatus) => void;
     clearHistory: () => Promise<void>;
@@ -208,6 +236,9 @@ interface AegisState {
     setTaskType: (taskType: TaskTypeValue) => void;
     setLastRoutingInfo: (info: RoutingInfo) => void;
     loadChatHistory: (tenantId: string, sessionKey: string) => Promise<void>;
+    loadOlderHistory: (limit?: number) => Promise<number>;
+    clearChatView: () => Promise<void>;
+    setCleanOnOpen: (val: boolean) => Promise<void>;
 }
 
 interface AegisAudioRefs {
@@ -232,6 +263,31 @@ let chatReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let chatReconnectAttempts = 0;
 let chatAuthRejected = false;
 let chatManualDisconnect = false;
+let pendingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+const clearPendingRetryTimer = () => {
+    if (pendingRetryTimer) {
+        clearTimeout(pendingRetryTimer);
+        pendingRetryTimer = null;
+    }
+};
+
+function resolveAutoRetryDelaySecs(message: string, explicitSecs?: number): number | undefined {
+    if (typeof explicitSecs === 'number' && Number.isFinite(explicitSecs) && explicitSecs > 0) {
+        return Math.min(Math.max(Math.round(explicitSecs), 3), 90);
+    }
+    const secMatch = message.match(/~?(\d+)\s*s\b/i) ?? message.match(/en\s+(\d+)\s*segundos/i);
+    if (secMatch) {
+        const parsed = parseInt(secMatch[1], 10);
+        if (parsed > 0 && parsed <= 90) {
+            return Math.max(parsed, 3);
+        }
+    }
+    if (/saturad|l[íi]mite|cooldown|esper[áa]|segundos|429|timeout|no devolvi[óo] respuesta|no tengo modelos/i.test(message)) {
+        return 15;
+    }
+    return undefined;
+}
 
 function normalizeAgentState(rawState: unknown): AgentNodeState {
     if (
@@ -392,12 +448,6 @@ function normalizeAgentEvent(raw: Record<string, unknown>): AgentEventPayload | 
     }
 }
 
-function detectLanguage(text: string): string {
-    const spanishChars = /[áéíóúñÁÉÍÓÚÑ]/;
-    const commonSpanish = /\b(el|la|los|las|un|una|en|es|y|o|pero|por|para|si|no)\b/i;
-    return (spanishChars.test(text) || commonSpanish.test(text)) ? 'es-ES' : 'en-US';
-}
-
 function formatAgentRole(role: AgentRole): string {
     if (!role) return 'Agente';
     if (role.type === 'ChatAgent') return 'Chat Agent';
@@ -407,6 +457,19 @@ function formatAgentRole(role: AgentRole): string {
     return 'Agente';
 }
 
+function mapHistoricalMessages(
+    items: Array<{ role: string; content: string; timestamp: string }>,
+    startIndex: number,
+): Message[] {
+    return items.map((m, idx) => ({
+        id: `hist-${startIndex + idx}-${m.timestamp}`,
+        role: m.role?.toLowerCase() === 'user' ? 'user' : 'assistant',
+        content: m.content,
+        timestamp: new Date(m.timestamp).getTime(),
+        type: 'text',
+    }));
+}
+
 // CORE-369: bump version to clear legacy plaintext messages from localStorage
 const STORE_VERSION = 5;
 
@@ -414,6 +477,12 @@ export const useAegisStore = create<AegisState>()(
     persist(
         (set, get) => ({
             messages: [],
+            historyTotalCount: 0,
+            nextHistoryBeforeIndex: null,
+            hasMoreHistory: false,
+            isLoadingHistory: false,
+            cleanOnOpen: true,
+            historyPrependedSeq: 0,
             status: 'disconnected',
             system_metrics: { cpu_load: 0, vram_allocated_mb: 0, vram_total_mb: 0, total_processes: 0, active_workers: 0 },
             tenants: [],
@@ -430,6 +499,8 @@ export const useAegisStore = create<AegisState>()(
             taskType: 'chat',
             lastRoutingInfo: null,
             lastError: null,
+            lastSubmittedPrompt: null,
+            pendingRetryPrompt: null,
             _hydrated: false,
             needsPasswordReset: false,
             adminActiveTab: 'users',
@@ -445,6 +516,7 @@ export const useAegisStore = create<AegisState>()(
             voiceEnabled: false,
             agentName: null,
             isWakewordListening: false,
+            liveToolProgress: null,
 
             // CORE-204 — initial agent stream values
             agentTree: [],
@@ -470,7 +542,10 @@ export const useAegisStore = create<AegisState>()(
                     get().fetchAgentName().then(() => get().startWakewordListener());
                 }
             },
-            setVoiceEnabled: (val) => set({ voiceEnabled: val }),
+            setVoiceEnabled: (val) => {
+                if (!val) stopSpeaking();
+                set({ voiceEnabled: val });
+            },
             setNeedsPasswordReset: (val) => set({ needsPasswordReset: val }),
             setAdminActiveTab: (tab) => set({ adminActiveTab: tab }),
 
@@ -486,9 +561,10 @@ export const useAegisStore = create<AegisState>()(
                     });
                     if (res.ok) {
                         const data = await res.json() as { stt_available?: boolean; stt_provider?: string; stt_api_key?: string };
+                        const resolvedProvider = data.stt_provider ?? 'browser';
                         set({
-                            sttAvailable: data.stt_available ?? true,
-                            sttProvider: data.stt_provider ?? 'browser',
+                            sttAvailable: resolvedProvider === 'browser' ? true : (data.stt_available ?? true),
+                            sttProvider: resolvedProvider,
                             sttApiKey: data.stt_api_key ?? '',
                         });
                     }
@@ -573,7 +649,7 @@ export const useAegisStore = create<AegisState>()(
 
             loadChatHistory: async (tenantId: string, sessionKey: string) => {
                 try {
-                    const res = await fetch('/api/chat/history?limit=50', {
+                    const res = await fetch('/api/chat/history?respect_clean=true&limit=25', {
                         headers: {
                             'x-citadel-tenant': tenantId,
                             'x-citadel-key': sessionKey,
@@ -581,17 +657,110 @@ export const useAegisStore = create<AegisState>()(
                     });
                     if (!res.ok) return;
                     const data = await res.json();
-                    const historicalMessages: Message[] = (data.messages || []).map((m: { role: string; content: string; timestamp: string }) => ({
-                        id: crypto.randomUUID(),
-                        role: m.role?.toLowerCase() === 'user' ? 'user' : 'assistant',
-                        content: m.content,
-                        timestamp: new Date(m.timestamp).getTime(),
-                        type: 'text',
-                    }));
+                    const total = typeof data.total === 'number' ? data.total : (data.messages?.length ?? 0);
+                    const startIndex = typeof data.start_index === 'number' ? data.start_index : 0;
+                    const hasMore = typeof data.has_more === 'boolean' ? data.has_more : startIndex > 0;
+                    const cleanOnOpen = typeof data.clean_on_open === 'boolean' ? data.clean_on_open : get().cleanOnOpen;
+                    const historicalMessages = mapHistoricalMessages(data.messages || [], startIndex);
                     // Setear mensajes históricos ANTES de que el WebSocket empiece a recibir
-                    set({ messages: historicalMessages });
+                    set({
+                        messages: historicalMessages,
+                        historyTotalCount: total,
+                        nextHistoryBeforeIndex: startIndex,
+                        hasMoreHistory: hasMore,
+                        cleanOnOpen,
+                    });
                 } catch {
                     // Silencioso — si falla, el chat arranca vacío (comportamiento actual)
+                }
+            },
+
+            loadOlderHistory: async (limit = 25) => {
+                const { tenantId, sessionKey, isLoadingHistory, hasMoreHistory, nextHistoryBeforeIndex, historyTotalCount } = get();
+                const before = nextHistoryBeforeIndex ?? historyTotalCount;
+                if (!tenantId || !sessionKey || isLoadingHistory || !hasMoreHistory || before <= 0) {
+                    return 0;
+                }
+                set({ isLoadingHistory: true });
+                try {
+                    const res = await fetch(`/api/chat/history?before=${before}&limit=${limit}`, {
+                        headers: {
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        },
+                    });
+                    if (!res.ok) return 0;
+                    const data = await res.json();
+                    const total = typeof data.total === 'number' ? data.total : historyTotalCount;
+                    const startIndex = typeof data.start_index === 'number' ? data.start_index : 0;
+                    const hasMore = typeof data.has_more === 'boolean' ? data.has_more : startIndex > 0;
+                    const older = mapHistoricalMessages(data.messages || [], startIndex);
+                    let prependedCount = 0;
+                    set((state) => {
+                        const existingIds = new Set(state.messages.map((m) => m.id));
+                        const uniqueOlder = older.filter((m) => !existingIds.has(m.id));
+                        prependedCount = uniqueOlder.length;
+                        return {
+                            messages: [...uniqueOlder, ...state.messages],
+                            historyTotalCount: total,
+                            nextHistoryBeforeIndex: startIndex,
+                            hasMoreHistory: hasMore,
+                            historyPrependedSeq: uniqueOlder.length > 0 ? state.historyPrependedSeq + 1 : state.historyPrependedSeq,
+                        };
+                    });
+                    return prependedCount;
+                } catch {
+                    return 0;
+                } finally {
+                    set({ isLoadingHistory: false });
+                }
+            },
+
+            clearChatView: async () => {
+                clearPendingRetryTimer();
+                const { tenantId, sessionKey, historyTotalCount, nextHistoryBeforeIndex } = get();
+                const fallbackTotal = nextHistoryBeforeIndex ?? historyTotalCount;
+                set({ messages: [], lastSubmittedPrompt: null, pendingRetryPrompt: null });
+                if (!tenantId || !sessionKey) return;
+                try {
+                    const res = await fetch('/api/chat/visual-clear', {
+                        method: 'POST',
+                        headers: {
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        },
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        const total = typeof data.total === 'number' ? data.total : fallbackTotal;
+                        set({
+                            historyTotalCount: total,
+                            nextHistoryBeforeIndex: total,
+                            hasMoreHistory: typeof data.has_more === 'boolean' ? data.has_more : total > 0,
+                            cleanOnOpen: typeof data.clean_on_open === 'boolean' ? data.clean_on_open : get().cleanOnOpen,
+                        });
+                    }
+                } catch (e) {
+                    console.error('Failed to persist visual clear:', e);
+                }
+            },
+
+            setCleanOnOpen: async (val: boolean) => {
+                set({ cleanOnOpen: val });
+                const { tenantId, sessionKey } = get();
+                if (!tenantId || !sessionKey) return;
+                try {
+                    await fetch('/api/chat/ui-state', {
+                        method: 'PATCH',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-citadel-tenant': tenantId,
+                            'x-citadel-key': sessionKey,
+                        },
+                        body: JSON.stringify({ clean_on_open: val }),
+                    });
+                } catch (e) {
+                    console.error('Failed to save clean_on_open preference:', e);
                 }
             },
 
@@ -662,7 +831,10 @@ export const useAegisStore = create<AegisState>()(
                         body: JSON.stringify({ tenant_id: targetId, new_passphrase: newPass })
                     });
                     if (res.ok) {
-                        if (tenantId === targetId) set({ sessionKey: newPass });
+                        if (tenantId === targetId) {
+                            try { sessionStorage.setItem(TAB_SESSION_KEY, newPass); } catch { /* ignore */ }
+                            set({ sessionKey: newPass });
+                        }
                         return true;
                     }
                     return false;
@@ -685,6 +857,7 @@ export const useAegisStore = create<AegisState>()(
                     if (res.ok) {
                         chatAuthRejected = false;
                         chatReconnectAttempts = 0;
+                        try { sessionStorage.setItem(TAB_SESSION_KEY, newPass); } catch { /* ignore */ }
                         set({ sessionKey: newPass, needsPasswordReset: false });
                         return true;
                     }
@@ -721,6 +894,43 @@ export const useAegisStore = create<AegisState>()(
                     get().startTelemetryPolling(tenantId);
                     get().connectAgentStream();
                     void get().fetchActiveProjects();
+                    void get().fetchAgentName();
+                    if (get().pendingRetryPrompt) {
+                        setTimeout(() => {
+                            if (get().pendingRetryPrompt && get().status !== 'thinking') {
+                                get().retryPendingMessage();
+                            }
+                        }, 400);
+                    }
+                };
+                const handleFailedTurnRetry = (errText: string, explicitSecs?: number) => {
+                    const lastPrompt = get().lastSubmittedPrompt;
+                    if (!lastPrompt) {
+                        get().addSystemMessage(errText);
+                        return;
+                    }
+                    const retryAfterSecs = resolveAutoRetryDelaySecs(errText, explicitSecs);
+                    clearPendingRetryTimer();
+                    set({
+                        pendingRetryPrompt: {
+                            ...lastPrompt,
+                            retryAfterSecs,
+                            errorMessage: errText,
+                        },
+                    });
+                    if (retryAfterSecs && retryAfterSecs > 0 && retryAfterSecs <= 90 && lastPrompt.autoRetryCount < 2) {
+                        pendingRetryTimer = setTimeout(() => {
+                            pendingRetryTimer = null;
+                            if (get().pendingRetryPrompt && get().status !== 'thinking') {
+                                get().retryPendingMessage();
+                            }
+                        }, retryAfterSecs * 1000);
+                        get().addSystemMessage(
+                            `${errText}\n⏳ Se reintentará automáticamente en ${retryAfterSecs}s (o cambiá de modelo / configurá una API key para responder al instante).`
+                        );
+                    } else {
+                        get().addSystemMessage(errText);
+                    }
                 };
                 socket.onmessage = (event) => {
                     const msg = JSON.parse(event.data as string);
@@ -730,14 +940,21 @@ export const useAegisStore = create<AegisState>()(
                             // CORE-124: no agregar syslog de reconexión al historial persistido
                             break;
                         case 'status':
-                            set({ status: 'thinking' });
+                            set({ status: 'thinking', liveToolProgress: null });
                             if (pid) set({ activePid: pid });
                             break;
                         case 'kernel_event': {
                             const payload = data as Record<string, unknown>;
                             if (payload.routing_info) get().setLastRoutingInfo(payload.routing_info as RoutingInfo);
                             if (payload.thought) { get().appendToken(payload.pid as string, payload.thought as string, 'thought'); set({ status: 'thinking' }); }
-                            else if (payload.output) { get().appendToken(payload.pid as string, payload.output as string, 'text'); set({ status: 'thinking' }); }
+                            else if (payload.output) {
+                                if (get().pendingRetryPrompt || get().lastSubmittedPrompt) {
+                                    clearPendingRetryTimer();
+                                    set({ pendingRetryPrompt: null, lastSubmittedPrompt: null });
+                                }
+                                get().appendToken(payload.pid as string, payload.output as string, 'text');
+                                set({ status: 'thinking' });
+                            }
                             else if (payload.error) {
                                 // CORE-FIX (D): surface the kernel's actual error text
                                 // (e.g. "modelo saturado, reintentá en 15s") instead of a
@@ -745,13 +962,16 @@ export const useAegisStore = create<AegisState>()(
                                 const errText = typeof payload.error === 'string' && payload.error.trim()
                                     ? (payload.error as string)
                                     : 'No pude procesar tu mensaje. Intentá de nuevo en unos segundos.';
-                                get().addSystemMessage(errText);
-                                set({ status: 'error' });
+                                set({ status: 'error', liveToolProgress: null });
+                                handleFailedTurnRetry(errText);
                             }
                             else if (payload.status_update) {
                                 const su = payload.status_update as { state: string };
                                 if (su.state === 'STATE_COMPLETED') {
-                                    set({ status: 'idle', activePid: null });
+                                    set({ status: 'idle', activePid: null, liveToolProgress: null });
+                                    if (get().messages.length <= 10) {
+                                        void get().fetchAgentName();
+                                    }
 
                                     // CORE-FIX: feedback loop fix. Previously, when voiceEnabled was on,
                                     // we (a) spoke the response via browser TTS (window.speechSynthesis),
@@ -767,7 +987,8 @@ export const useAegisStore = create<AegisState>()(
                                     // synthesis if the next user message arrives so we don't pile up.
                                     const reactivateMic = () => {
                                         const mode = get().inputMode;
-                                        if (mode === 'conversation' && !get().isRecording) {
+                                        const autoContinue = loadVoicePrefs().autoContinueMic;
+                                        if ((mode === 'conversation' || autoContinue) && !get().isRecording) {
                                             get().restartMicForConversation().catch(console.error);
                                         } else if (mode === 'wakeword' && !get().isRecording) {
                                             get().startWakewordListener();
@@ -783,35 +1004,14 @@ export const useAegisStore = create<AegisState>()(
                                         && !!lastAssistant?.content;
 
                                     if (speakingViaBrowserTts && lastAssistant?.content) {
-                                        const utterance = new SpeechSynthesisUtterance(lastAssistant.content);
-                                        utterance.lang = detectLanguage(lastAssistant.content);
-                                        utterance.rate = 1.0;
-                                        // Only reactivate mic AFTER the TTS finishes speaking. Both `end`
-                                        // and `error` mean "we're not making sound anymore", so we listen
-                                        // to both.
-                                        let micReactivated = false;
-                                        const handleTtsDone = () => {
-                                            if (micReactivated) return;
-                                            micReactivated = true;
+                                        speakNaturalText(lastAssistant.content, () => {
                                             const mode = get().inputMode;
-                                            if (mode === 'conversation' || mode === 'wakeword') {
-                                                // Tiny extra grace period to let the audio device settle.
+                                            const autoContinue = loadVoicePrefs().autoContinueMic;
+                                            if (mode === 'conversation' || mode === 'wakeword' || autoContinue) {
                                                 setTimeout(reactivateMic, 250);
                                             }
-                                        };
-                                        utterance.onend = handleTtsDone;
-                                        utterance.onerror = handleTtsDone;
-                                        // Safety net: if the browser never fires onend (some engines drop
-                                        // it on long text), give up after speech_length * 60 wpm + 5s.
-                                        const safetyMs = Math.min(
-                                            60_000,
-                                            (lastAssistant.content.split(/\s+/).length / 2.5) * 1000 + 5_000,
-                                        );
-                                        setTimeout(handleTtsDone, safetyMs);
-
-                                        window.speechSynthesis.cancel();
-                                        window.speechSynthesis.speak(utterance);
-                                    } else if (get().inputMode === 'conversation' || get().inputMode === 'wakeword') {
+                                        });
+                                    } else if (get().inputMode === 'conversation' || get().inputMode === 'wakeword' || loadVoicePrefs().autoContinueMic) {
                                         // CORE-184 legacy path: no browser TTS in play, fall back to the
                                         // ttsPlayer-based delay (server-side TTS).
                                         const scheduleReactivation = () => {
@@ -831,12 +1031,12 @@ export const useAegisStore = create<AegisState>()(
                         case 'error': {
                             // CORE-FIX: backend now emits one of two shapes for `error`:
                             //   legacy: data = "AUTH_FAILURE: Access Denied" (string)
-                            //   new:    data = { code, message, detail }    (object)
+                            //   new:    data = { code, message, detail, retry_after_secs } (object)
                             // Normalise here so we accept both without losing the specific
                             // user-facing message for categorised errors (auth_failed,
-                            // scheduler_unavailable, model_override_unknown, etc.).
+                            // scheduler_unavailable, models_unavailable, etc.).
                             const structured = (typeof data === 'object' && data !== null)
-                                ? data as { code?: string; message?: string; detail?: string }
+                                ? data as { code?: string; message?: string; detail?: string; retry_after_secs?: number }
                                 : null;
                             const legacy = (typeof data === 'string') ? data : null;
                             const code = structured?.code ?? '';
@@ -853,24 +1053,62 @@ export const useAegisStore = create<AegisState>()(
 
                             if (isPasswordReset) {
                                 chatAuthRejected = true;
-                                set({ needsPasswordReset: true });
+                                clearPendingRetryTimer();
+                                set({ needsPasswordReset: true, pendingRetryPrompt: null, lastSubmittedPrompt: null });
                             } else if (isAuthFailure) {
                                 chatAuthRejected = true;
+                                clearPendingRetryTimer();
                                 const sock = get().socket;
                                 if (sock) {
                                     sock.onclose = null;
                                     sock.onerror = null;
                                     sock.close();
                                 }
-                                set({ socket: null, status: 'error' });
+                                set({ socket: null, status: 'error', pendingRetryPrompt: null, lastSubmittedPrompt: null });
                             } else {
-                                // Surface the actual message when we have one — falling back
-                                // to the generic "intentá de nuevo" only for unknown errors.
-                                get().addSystemMessage(
+                                handleFailedTurnRetry(
                                     message !== 'Unknown Kernel Panic'
                                         ? message
-                                        : 'No pude procesar tu mensaje. Intentá de nuevo en unos segundos.'
+                                        : 'No pude procesar tu mensaje. Intentá de nuevo en unos segundos.',
+                                    structured?.retry_after_secs
                                 );
+                            }
+                            break;
+                        }
+
+                        case 'provider_keys_updated': {
+                            if (get().pendingRetryPrompt && get().status !== 'thinking') {
+                                get().retryPendingMessage(null);
+                            }
+                            break;
+                        }
+
+                        case 'modules_updated': {
+                            if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('aegis-modules-updated', { detail: data }));
+                            }
+                            break;
+                        }
+
+                        case 'video_studio_progress': {
+                            if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('aegis-video-progress', { detail: data }));
+                            }
+                            break;
+                        }
+
+                        case 'tool_progress': {
+                            const tp = data as {
+                                stage?: string;
+                                message?: string;
+                                progress?: number;
+                                done?: boolean;
+                            };
+                            set({
+                                liveToolProgress: tp?.done ? null : tp,
+                            });
+                            if (typeof window !== 'undefined') {
+                                window.dispatchEvent(new CustomEvent('aegis-video-progress', { detail: data }));
                             }
                             break;
                         }
@@ -977,6 +1215,31 @@ export const useAegisStore = create<AegisState>()(
                             get().addSystemMessage(d.message || '');
                             break;
                         }
+                        case 'reminder_due': {
+                            const d = data as {
+                                id?: number;
+                                description?: string;
+                                remind_at?: string;
+                                next_remind_at?: string | null;
+                                recurrence?: string;
+                            };
+                            if (d.description) {
+                                const timeTag = d.remind_at ? ` (${d.remind_at})` : '';
+                                const nextTag = d.next_remind_at ? ` · próximo: ${d.next_remind_at}` : '';
+                                get().addSystemMessage(`⏰ Recordatorio: ${d.description}${timeTag}${nextTag}`);
+                                if (get().voiceEnabled) {
+                                    speakNaturalText(`Recordatorio: ${d.description}`);
+                                }
+                                if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+                                    try {
+                                        new Notification('Aegis — Recordatorio', { body: d.description });
+                                    } catch {
+                                        // Ignore Notification restrictions in unsupported contexts
+                                    }
+                                }
+                            }
+                            break;
+                        }
                         // CORE-274: eventos de supervisores desde el kernel
                         case 'agent_event': {
                             const payload = data as SupervisorEventPayload;
@@ -991,15 +1254,38 @@ export const useAegisStore = create<AegisState>()(
                                         timestamp: payload.timestamp,
                                         status: 'pending',
                                     });
+                                    if (get().voiceEnabled) {
+                                        speakNaturalText(
+                                            `Pregunta de ${payload.project_name}: ${payload.question}`,
+                                        );
+                                    }
                                     break;
-                                case 'supervisor_completed':
+                                case 'supervisor_completed': {
                                     inbox.markAnswered(payload.agent_id);
-                                    // Surface the result in the chat — otherwise the
-                                    // user is left with "te aviso cuando termine" and
-                                    // never learns what happened.
+                                    const isFailure = payload.summary.trim().startsWith('❌');
                                     get().addSystemMessage(
-                                        `✅ ${payload.project_name}: ${payload.summary}`,
+                                        isFailure
+                                            ? `${payload.project_name}: ${payload.summary}`
+                                            : `✅ ${payload.project_name}: ${payload.summary}`,
                                     );
+                                    if (get().voiceEnabled) {
+                                        speakNaturalText(
+                                            `${payload.project_name}: ${payload.summary}`,
+                                        );
+                                    }
+                                    break;
+                                }
+                                case 'spawned':
+                                    get().addSystemMessage(
+                                        `🤖 Supervisor '${payload.project_id}' iniciado en segundo plano (ID: ${payload.agent_id.slice(0, 8)}).`,
+                                    );
+                                    break;
+                                case 'state_changed':
+                                    if (typeof payload.state === 'string' && payload.state.startsWith('Failed:')) {
+                                        get().addSystemMessage(
+                                            `⚠️ Agente ${payload.agent_id.slice(0, 8)} falló: ${payload.state.slice('Failed:'.length).trim()}`,
+                                        );
+                                    }
                                     break;
                                 case 'supervisor_timed_out':
                                     inbox.markTimedOut(payload.agent_id);
@@ -1096,30 +1382,88 @@ export const useAegisStore = create<AegisState>()(
                 get().disconnectTrainingStream();
             },
 
-            sendMessage: (prompt, modelOverride) => {
+            sendMessage: (prompt, modelOverride, isRetry = false) => {
+                clearPendingRetryTimer();
                 const { socket, messages } = get();
-                if (!socket || socket.readyState !== WebSocket.OPEN) return;
+                const displayPrompt = prompt.replace(
+                    /\b(gsk_|AIza|sk-or-|sk-ant-|xai-|sk-)[A-Za-z0-9_-]{16,}\b/g,
+                    (match) => `${match.slice(0, 4)}••••${match.slice(-4)}`,
+                );
+                const prevAutoCount = isRetry
+                    ? (get().lastSubmittedPrompt?.autoRetryCount ?? get().pendingRetryPrompt?.autoRetryCount ?? 0) + 1
+                    : 0;
+                const nextSubmitted = { prompt, displayPrompt, modelOverride, autoRetryCount: prevAutoCount };
+
+                if (!socket || socket.readyState !== WebSocket.OPEN) {
+                    if (!isRetry) {
+                        set({
+                            messages: [...messages, { id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role: 'user', content: displayPrompt, type: 'text', timestamp: Date.now() }],
+                            lastSubmittedPrompt: nextSubmitted,
+                            pendingRetryPrompt: { ...nextSubmitted, errorMessage: 'Esperando reconexión del chat...' },
+                        });
+                    }
+                    return;
+                }
+
+                stopSpeaking();
                 ttsPlayer.initialize();
                 const musicState = useMusicStore.getState();
                 const musicContext = musicState.isPlayerVisible && musicState.currentTrack
                     ? `[CONTEXT: Currently playing "${musicState.currentTrack.title}"]\n`
                     : '';
                 const finalPrompt = musicContext + prompt;
-                set({ messages: [...messages, { id: `user-${Date.now()}`, role: 'user', content: prompt, type: 'text', timestamp: Date.now() }] });
+
+                if (isRetry) {
+                    const cleanedMessages =
+                        messages.length > 0 && messages[messages.length - 1]?.role === 'system'
+                            ? messages.slice(0, -1)
+                            : messages;
+                    set({
+                        messages: cleanedMessages,
+                        status: 'thinking',
+                        lastSubmittedPrompt: nextSubmitted,
+                        pendingRetryPrompt: null,
+                    });
+                } else {
+                    set({
+                        messages: [...messages, { id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role: 'user', content: displayPrompt, type: 'text', timestamp: Date.now() }],
+                        lastSubmittedPrompt: nextSubmitted,
+                        pendingRetryPrompt: null,
+                    });
+                }
+
                 const payload: Record<string, unknown> = { prompt: finalPrompt, task_type: get().taskType };
                 if (modelOverride) payload.model_override = modelOverride;
                 socket.send(JSON.stringify(payload));
             },
 
+            retryPendingMessage: (newModelOverride) => {
+                const pending = get().pendingRetryPrompt;
+                if (!pending) return;
+                const effectiveOverride = newModelOverride !== undefined ? newModelOverride : pending.modelOverride;
+                get().sendMessage(pending.prompt, effectiveOverride, true);
+            },
+
+            dismissPendingRetry: () => {
+                clearPendingRetryTimer();
+                set({ pendingRetryPrompt: null, lastSubmittedPrompt: null });
+            },
+
             appendToken: (pid, token, type) => {
                 set((state) => {
                     const lastMessage = state.messages[state.messages.length - 1];
-                    if (lastMessage?.role === 'assistant' && lastMessage.type === type && lastMessage.id === pid) {
+                    const matchesStream = lastMessage?.role === 'assistant'
+                        && lastMessage.type === type
+                        && (lastMessage.id === pid || lastMessage.id.startsWith(`${pid}:${type}:`));
+                    if (matchesStream) {
                         const updatedMessages = [...state.messages];
                         updatedMessages[updatedMessages.length - 1] = { ...lastMessage, content: lastMessage.content + token };
                         return { messages: updatedMessages };
                     }
-                    return { messages: [...state.messages, { id: pid, role: 'assistant', content: token, type, timestamp: Date.now() }] };
+                    const nextId = type === 'text' && !state.messages.some((m) => m.id === pid)
+                        ? pid
+                        : `${pid}:${type}:${state.messages.length}-${Date.now()}`;
+                    return { messages: [...state.messages, { id: nextId, role: 'assistant', content: token, type, timestamp: Date.now() }] };
                 });
             },
 
@@ -1127,6 +1471,7 @@ export const useAegisStore = create<AegisState>()(
 
             // CORE-124: clearHistory es acción explícita del usuario — borra mensajes intencionalmente
             clearHistory: async () => {
+                clearPendingRetryTimer();
                 const { tenantId, sessionKey, socket } = get();
                 if (tenantId && sessionKey) {
                     try {
@@ -1144,7 +1489,7 @@ export const useAegisStore = create<AegisState>()(
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     socket.send(JSON.stringify({ action: 'clear_history' }));
                 }
-                set({ messages: [] });
+                set({ messages: [], historyTotalCount: 0, nextHistoryBeforeIndex: 0, hasMoreHistory: false, lastSubmittedPrompt: null, pendingRetryPrompt: null });
             },
 
             clearAgentTraces: async () => {
@@ -1165,10 +1510,13 @@ export const useAegisStore = create<AegisState>()(
             },
 
             addSystemMessage: (content: string) => {
-                set({ messages: [...get().messages, { id: `sys-${Date.now()}`, role: 'system', content, type: 'system', timestamp: Date.now() }] });
+                set({ messages: [...get().messages, { id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role: 'system', content, type: 'system', timestamp: Date.now() }] });
             },
 
-            setAuth: (tenantId, sessionKey) => set({ tenantId, sessionKey, isAuthenticated: true }),
+            setAuth: (tenantId, sessionKey) => {
+                try { sessionStorage.setItem(TAB_SESSION_KEY, sessionKey); } catch { /* ignore */ }
+                set({ tenantId, sessionKey, isAuthenticated: true });
+            },
 
             authenticate: async (tenantId, passphrase) => {
                 try {
@@ -1180,6 +1528,7 @@ export const useAegisStore = create<AegisState>()(
                     if (response.ok) {
                         chatAuthRejected = false;
                         chatReconnectAttempts = 0;
+                        try { sessionStorage.setItem(TAB_SESSION_KEY, passphrase); } catch { /* ignore */ }
                         const data = await response.json() as { status: string; role?: string };
                         if (data.status === 'password_must_change') {
                             set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: false, needsPasswordReset: true, messages: [] });
@@ -1195,9 +1544,11 @@ export const useAegisStore = create<AegisState>()(
             // CORE-369: Purge sensitive in-memory state on logout; server-side SQLCipher
             // history is reloaded automatically via loadChatHistory upon re-authentication.
             logout: () => {
+                try { sessionStorage.removeItem(TAB_SESSION_KEY); } catch { /* ignore */ }
                 chatManualDisconnect = true;
                 chatAuthRejected = false;
                 chatReconnectAttempts = 0;
+                clearPendingRetryTimer();
                 if (chatReconnectTimer) {
                     clearTimeout(chatReconnectTimer);
                     chatReconnectTimer = null;
@@ -1221,9 +1572,15 @@ export const useAegisStore = create<AegisState>()(
                     socket: null,
                     sirenSocket: null,
                     messages: [],
+                    historyTotalCount: 0,
+                    nextHistoryBeforeIndex: null,
+                    hasMoreHistory: false,
+                    isLoadingHistory: false,
                     activePid: null,
                     lastRoutingInfo: null,
                     lastError: null,
+                    lastSubmittedPrompt: null,
+                    pendingRetryPrompt: null,
                     sttApiKey: '',
                     agentTree: [],
                     activeProjects: [],
@@ -1256,6 +1613,7 @@ export const useAegisStore = create<AegisState>()(
                     if (!SpeechRecognitionCtor) throw new Error('WebSpeech API no disponible en este navegador. Usá Chrome o Edge.');
                     await ttsPlayer.initialize();
                     const recognition = new SpeechRecognitionCtor();
+                    recognition.lang = loadVoicePrefs().lang || 'es-AR';
                     recognition.continuous = false;
                     recognition.interimResults = false;
                     set({ isRecording: true, status: 'listening' });
@@ -1266,7 +1624,7 @@ export const useAegisStore = create<AegisState>()(
                             get().sendMessage(transcript);
                         } else {
                             set({ isRecording: false, status: 'idle' });
-                            if (get().inputMode === 'conversation') {
+                            if (get().inputMode === 'conversation' || loadVoicePrefs().autoContinueMic) {
                                 get().restartMicForConversation().catch(console.error);
                             }
                         }
@@ -1367,7 +1725,7 @@ export const useAegisStore = create<AegisState>()(
                             else if (sirenEvent.event_type === 'STT_DONE') {
                                 try {
                                     const payload = JSON.parse(sirenEvent.message) as { transcript: string; pid: string };
-                                    set((state) => ({ messages: [...state.messages, { id: `voice-${Date.now()}`, role: 'user', content: payload.transcript, type: 'text', timestamp: Date.now() }], activePid: payload.pid, status: 'thinking' }));
+                                    set((state) => ({ messages: [...state.messages, { id: `voice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, role: 'user', content: payload.transcript, type: 'text', timestamp: Date.now() }], activePid: payload.pid, status: 'thinking' }));
                                     const chatSocket = get().socket;
                                     if (chatSocket?.readyState === WebSocket.OPEN) chatSocket.send(JSON.stringify({ action: 'watch', pid: payload.pid }));
                                     if (get().inputMode === 'audio') {
@@ -1651,6 +2009,7 @@ export const useAegisStore = create<AegisState>()(
                     if (!SpeechRecognitionCtor) return;
                     await ttsPlayer.initialize();
                     const recognition = new SpeechRecognitionCtor();
+                    recognition.lang = loadVoicePrefs().lang || 'es-AR';
                     recognition.continuous = false;
                     recognition.interimResults = false;
                     set({ isRecording: true, status: 'listening' });
@@ -1661,7 +2020,7 @@ export const useAegisStore = create<AegisState>()(
                             get().sendMessage(transcript);
                         } else {
                             set({ isRecording: false, status: 'idle' });
-                            if (get().inputMode === 'conversation') {
+                            if (get().inputMode === 'conversation' || loadVoicePrefs().autoContinueMic) {
                                 get().restartMicForConversation().catch(console.error);
                             }
                         }
@@ -2097,7 +2456,13 @@ export const useAegisStore = create<AegisState>()(
                         },
                         body: JSON.stringify({ api_url: apiUrl, model_name: model, api_key: apiKey, provider })
                     });
-                    if (response.ok) { set({ isEngineConfigured: true }); return true; }
+                    if (response.ok) {
+                        set({ isEngineConfigured: true });
+                        if (get().pendingRetryPrompt && get().status !== 'thinking') {
+                            get().retryPendingMessage(null);
+                        }
+                        return true;
+                    }
                     return false;
                 } catch (error) { console.error('Engine Setup Error:', error); return false; }
             }
@@ -2106,7 +2471,15 @@ export const useAegisStore = create<AegisState>()(
             name: 'aegis-storage',
             version: STORE_VERSION,
             onRehydrateStorage: () => (state) => {
-                if (state) state.setHydrated(true);
+                if (state) {
+                    try {
+                        const tabKey = sessionStorage.getItem(TAB_SESSION_KEY);
+                        if (state.isAuthenticated && !state.sessionKey && tabKey) {
+                            state.sessionKey = tabKey;
+                        }
+                    } catch { /* ignore */ }
+                    state.setHydrated(true);
+                }
             },
             partialize: (state) => ({
                 isAuthenticated: state.isAuthenticated,
@@ -2122,6 +2495,7 @@ export const useAegisStore = create<AegisState>()(
                 inputMode: state.inputMode,
                 sttProvider: state.sttProvider,  // CORE-231: persistir para que sobreviva recarga
                 voiceEnabled: state.voiceEnabled,
+                cleanOnOpen: state.cleanOnOpen,
             }),
         }
     )

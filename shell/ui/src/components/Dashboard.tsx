@@ -256,8 +256,10 @@ interface ChronosEvent {
 }
 
 function formatRelativeTime(iso: string): string {
-    const diff = new Date(iso).getTime() - Date.now();
-    if (diff <= 0) return 'pasado';
+    const parsed = new Date(iso.replace(' ', 'T')).getTime();
+    if (Number.isNaN(parsed)) return iso;
+    const diff = parsed - Date.now();
+    if (diff <= 0) return 'ahora / pasado';
     const mins = Math.floor(diff / 60000);
     if (mins < 60) return `en ${mins} min`;
     const hours = Math.floor(mins / 60);

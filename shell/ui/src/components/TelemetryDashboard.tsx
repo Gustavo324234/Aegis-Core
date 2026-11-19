@@ -70,17 +70,29 @@ const TelemetryDashboard: React.FC = () => {
                 </div>
             </div>
 
-            {/* Derecha: modelo activo + protocolo */}
+            {/* Derecha: proveedor + modelo activo + protocolo */}
             <div className="flex items-center gap-4">
                 {lastRoutingInfo && (
-                    <div className="hidden lg:flex flex-col items-end gap-0.5">
-                        <span className="text-[9px] font-mono text-white/30 uppercase tracking-widest">Modelo Activo</span>
-                        <span className="text-[11px] font-mono text-aegis-purple font-bold uppercase tracking-wider">
-                            {lastRoutingInfo.model_id.split('/').pop()}
+                    <div
+                        className="hidden sm:flex flex-col items-end gap-0.5"
+                        title={`${lastRoutingInfo.provider} / ${lastRoutingInfo.model_id}`}
+                    >
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] font-mono text-white/30 uppercase tracking-widest">
+                                Modelo Activo
+                            </span>
+                            {lastRoutingInfo.provider && (
+                                <span className="px-1.5 py-0.5 rounded bg-aegis-cyan/10 border border-aegis-cyan/30 text-[9px] font-mono text-aegis-cyan font-bold uppercase tracking-wider">
+                                    {lastRoutingInfo.provider}
+                                </span>
+                            )}
+                        </div>
+                        <span className="text-[11px] font-mono text-aegis-purple font-bold tracking-wider truncate max-w-[220px]">
+                            {lastRoutingInfo.model_id}
                         </span>
                     </div>
                 )}
-                {lastRoutingInfo && <div className="h-8 w-px bg-white/10 hidden lg:block" />}
+                {lastRoutingInfo && <div className="h-8 w-px bg-white/10 hidden sm:block" />}
                 <div className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 hidden sm:flex items-center gap-2 group hover:border-aegis-cyan/30 transition-all">
                     <Zap size={13} className="text-aegis-cyan group-hover:animate-pulse" />
                     <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest">Citadel Protocol</span>

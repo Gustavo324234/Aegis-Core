@@ -37,7 +37,7 @@ export const PROVIDER_PRESETS = {
   openrouter: {
     label: "OpenRouter",
     url: "https://openrouter.ai/api/v1/chat/completions",
-    model: "meta-llama/llama-3.3-70b-instruct",
+    model: "openrouter/free",
     keyLink: "https://openrouter.ai/keys",
     provider: "openrouter"
   },

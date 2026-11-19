@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Settings, X, Save, Cpu, Volume2, Globe, Check, Eye, EyeOff, Loader2, AlertTriangle, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info, Search, RefreshCw, Copy, FileText, Trash2, TrendingUp } from 'lucide-react';
+import { Settings, X, Save, Cpu, Volume2, Globe, Check, Loader2, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info, Search, RefreshCw, Copy, FileText, Trash2, TrendingUp, Play, Square, Upload } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -8,6 +8,19 @@ import TenantKeyManager from './RouterConfig/TenantKeyManager';
 import UserPasswordChange from './UserPasswordChange';
 import ConnectedAccountsTab from './ConnectedAccountsTab';
 import TrainingPanel from './TrainingPanel';
+import SirenConfigTab from './SirenConfigTab';
+import { AssistantAvatar } from './AssistantAvatar';
+import { AVATAR_PRESETS } from '../constants/avatarPresets';
+import {
+    VOICE_STYLE_PRESETS,
+    loadVoicePrefs,
+    saveVoicePrefs,
+    speakNaturalText,
+    stopSpeaking,
+    getScoredVoices,
+    ScoredVoice,
+    VoiceGender,
+} from '../audio/naturalVoice';
 
 interface SettingsPanelProps {
     onClose: () => void;
@@ -51,27 +64,64 @@ function composePersonaString(data: PersonaData): string {
     return p ? `${NAME_PREFIX}${n}. ${p}` : `${NAME_PREFIX}${n}.`;
 }
 
-interface SirenConfig {
-    provider: string;
-    api_key?: string;
-    voice_id: string;
-    stt_available?: boolean;
-    stt_provider?: string;
-    stt_api_key?: string;
-}
-
-interface Voice {
-    id: string;
-    name: string;
-    provider: string;
-}
+const PERSONALITY_CHIPS = [
+    {
+        label: 'Cariñosa y sarcástica',
+        prompt: 'Tenés una personalidad cariñosa, cercana y cómplice, pero con un toque de sarcasmo inteligente y humor sutil. Hablás en español rioplatense natural.',
+    },
+    {
+        label: 'Profesional y preciso',
+        prompt: 'Sos un asistente ejecutivo, analítico, preciso y estructurado. Priorizás respuestas claras, accionables y bien fundamentadas.',
+    },
+    {
+        label: 'Casual y amigable',
+        prompt: 'Sos un asistente cálido, relajado y empático. Explicás todo de forma simple y conversacional, como un buen amigo.',
+    },
+    {
+        label: 'Directo y sin rodeos',
+        prompt: 'Sos ultra conciso y vas directo al grano sin introducciones innecesarias. Priorizás velocidad y brevedad.',
+    },
+    {
+        label: 'Curioso y creativo',
+        prompt: 'Tenés un enfoque creativo, entusiasta y explorador. Proponés ideas originales y miradas alternativas.',
+    },
+];
 
 const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
+    const { fetchAgentName } = useAegisStore();
     const [persona, setPersona] = useState<PersonaData>({ prompt: '', name: '' });
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+    // Estado de Avatar y Tipo de Voz
+    const initialPrefs = loadVoicePrefs();
+    const [avatarId, setAvatarId] = useState<string>(initialPrefs.avatarId || 'orb-cyan');
+    const [customAvatarUrl, setCustomAvatarUrl] = useState<string>(initialPrefs.customAvatarUrl || '');
+    const [voicePreset, setVoicePreset] = useState<string>(initialPrefs.voicePreset || 'female-warm');
+    const [voiceGender, setVoiceGender] = useState<VoiceGender>(initialPrefs.voiceGender || 'female');
+    const [voiceURI, setVoiceURI] = useState<string>(initialPrefs.voiceURI || '');
+    const [availableVoices, setAvailableVoices] = useState<ScoredVoice[]>([]);
+    const [isTestingVoice, setIsTestingVoice] = useState(false);
+    const avatarInputRef = useRef<HTMLInputElement>(null);
+
+    const refreshVoices = useCallback((genderOverride?: VoiceGender) => {
+        const g = genderOverride ?? loadVoicePrefs().voiceGender ?? 'female';
+        setAvailableVoices(getScoredVoices('es', g));
+    }, []);
+
+    useEffect(() => {
+        refreshVoices(voiceGender);
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+            window.speechSynthesis.onvoiceschanged = () => refreshVoices();
+        }
+        return () => {
+            if (typeof window !== 'undefined' && window.speechSynthesis) {
+                window.speechSynthesis.onvoiceschanged = null;
+            }
+        };
+    }, [refreshVoices, voiceGender]);
 
     const getHeaders = useCallback(() => ({
         'Content-Type': 'application/json',
@@ -96,6 +146,77 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
         fetchPersona();
     }, [getHeaders]);
 
+    const handleSelectAvatar = (id: string) => {
+        setAvatarId(id);
+        saveVoicePrefs({ avatarId: id });
+    };
+
+    const handleCustomAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const maxDim = 160;
+                canvas.width = maxDim;
+                canvas.height = maxDim;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    const minSide = Math.min(img.width, img.height);
+                    const sx = (img.width - minSide) / 2;
+                    const sy = (img.height - minSide) / 2;
+                    ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, maxDim, maxDim);
+                    const dataUrl = canvas.toDataURL('image/webp', 0.85);
+                    setCustomAvatarUrl(dataUrl);
+                    setAvatarId('custom');
+                    saveVoicePrefs({ avatarId: 'custom', customAvatarUrl: dataUrl });
+                }
+            };
+            img.src = reader.result as string;
+        };
+        reader.readAsDataURL(file);
+        if (avatarInputRef.current) avatarInputRef.current.value = '';
+    };
+
+    const handleSelectVoicePreset = (presetId: string) => {
+        const found = VOICE_STYLE_PRESETS.find((p) => p.id === presetId);
+        if (!found) return;
+        const next = saveVoicePrefs({
+            voicePreset: found.id,
+            voiceGender: found.gender,
+            voiceURI: '',
+            rate: found.rate,
+            pitch: found.pitch,
+        });
+        setVoicePreset(next.voicePreset);
+        setVoiceGender(next.voiceGender);
+        setVoiceURI(next.voiceURI);
+        refreshVoices(next.voiceGender);
+    };
+
+    const handleSelectSpecificVoice = (uri: string) => {
+        const next = saveVoicePrefs({ voiceURI: uri, voicePreset: 'custom' });
+        setVoiceURI(next.voiceURI);
+        setVoicePreset(next.voicePreset);
+    };
+
+    const handleTestAssistantVoice = () => {
+        if (isTestingVoice) {
+            stopSpeaking();
+            setIsTestingVoice(false);
+            return;
+        }
+        setIsTestingVoice(true);
+        const displayName = persona.name.trim() || 'tu asistente';
+        const sample =
+            voiceGender === 'male'
+                ? `Hola, soy ${displayName}. Así suena mi voz masculina configurada para acompañarte todos los días.`
+                : `Hola, soy ${displayName}. Así suena mi voz natural configurada para acompañarte todos los días.`;
+        speakNaturalText(sample, () => setIsTestingVoice(false));
+    };
+
     const handleSave = async () => {
         setIsSaving(true);
         setMessage(null);
@@ -106,12 +227,13 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
                 body: JSON.stringify({ persona: composePersonaString(persona) }),
             });
             if (res.ok) {
-                setMessage({ type: 'success', text: t('persona_saved') });
+                await fetchAgentName();
+                setMessage({ type: 'success', text: '¡Personalización del asistente guardada!' });
             } else {
                 const err = await res.json();
                 setMessage({ type: 'error', text: err.detail || t('persona_save_error') });
             }
-        } catch (err) {
+        } catch {
             setMessage({ type: 'error', text: t('persona_save_error') });
         } finally {
             setIsSaving(false);
@@ -128,11 +250,12 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
             });
             if (res.ok) {
                 setPersona({ prompt: '', name: '' });
+                await fetchAgentName();
                 setMessage({ type: 'success', text: t('persona_reset') });
             } else {
                 setMessage({ type: 'error', text: t('persona_save_error') });
             }
-        } catch (err) {
+        } catch {
             setMessage({ type: 'error', text: t('persona_save_error') });
         } finally {
             setIsSaving(false);
@@ -147,45 +270,220 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
         );
     }
 
+    const activePresetObj = VOICE_STYLE_PRESETS.find((p) => p.id === voicePreset);
+
     return (
         <div className="space-y-6">
-            <div className="p-4 bg-aegis-cyan/5 border border-aegis-cyan/20 rounded-xl">
-                <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest mb-1">
-                    {t('tab_persona')}
-                </p>
-                <p className="text-sm font-mono text-aegis-cyan">
-                    {t('persona_desc')}
-                </p>
+            {/* Tarjeta de Vista Previa del Asistente */}
+            <div className="p-4 sm:p-5 bg-gradient-to-r from-aegis-cyan/10 via-white/[0.03] to-purple-500/10 border border-white/15 rounded-2xl flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-4">
+                    <AssistantAvatar avatarId={avatarId} customAvatarUrl={customAvatarUrl} size="lg" />
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <h4 className="text-base font-bold text-white tracking-wide">
+                                {persona.name.trim() || 'Aegis'}
+                            </h4>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-aegis-cyan/15 text-aegis-cyan border border-aegis-cyan/30">
+                                {voiceGender === 'male' ? '♂ Voz Masculina' : '♀ Voz Femenina'}
+                            </span>
+                        </div>
+                        <p className="text-xs text-white/50 mt-0.5 line-clamp-1">
+                            {persona.prompt.trim() || 'Personalizá su nombre, avatar, timbre de voz y carácter'}
+                        </p>
+                    </div>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={handleTestAssistantVoice}
+                    className={`px-4 py-2.5 rounded-xl border font-mono text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all ${
+                        isTestingVoice
+                            ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                            : 'bg-aegis-cyan/15 hover:bg-aegis-cyan/25 border-aegis-cyan/40 text-aegis-cyan'
+                    }`}
+                >
+                    {isTestingVoice ? (
+                        <>
+                            <Square className="w-3.5 h-3.5 fill-current" /> Detener
+                        </>
+                    ) : (
+                        <>
+                            <Play className="w-3.5 h-3.5 fill-current" /> Escuchar Voz
+                        </>
+                    )}
+                </button>
             </div>
 
+            {/* 1. Nombre del Asistente */}
             <div>
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-2">
-                    {t('persona_name')}
+                <label className="text-[11px] font-mono text-white/60 uppercase tracking-wider block mb-2">
+                    1. Nombre del Asistente
                 </label>
                 <input
                     type="text"
                     value={persona.name || ''}
                     onChange={(e) => setPersona({ ...persona, name: e.target.value })}
-                    placeholder={t('persona_name_placeholder')}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 px-4 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10"
+                    placeholder="Ej. Aegis, Orion, Atlas, Nova..."
+                    className="w-full bg-black/50 border border-white/15 rounded-xl py-2.5 px-4 text-sm text-white focus:border-aegis-cyan/60 focus:outline-none transition-all placeholder:text-white/25"
                 />
             </div>
 
-            <div>
-                <div className="flex justify-between items-center mb-2">
-                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
-                        {t('persona_prompt')}
+            {/* 2. Selector de Avatar */}
+            <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-mono text-white/60 uppercase tracking-wider">
+                        2. Avatar del Asistente
                     </label>
-                    <span className="text-[10px] font-mono text-white/20">
+                    <input
+                        ref={avatarInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleCustomAvatarUpload}
+                        className="hidden"
+                    />
+                    <button
+                        type="button"
+                        onClick={() => avatarInputRef.current?.click()}
+                        className="text-[11px] font-mono text-aegis-cyan hover:underline flex items-center gap-1.5"
+                    >
+                        <Upload className="w-3.5 h-3.5" /> Subir imagen propia
+                    </button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {AVATAR_PRESETS.map((preset) => {
+                        const selected = avatarId === preset.id;
+                        return (
+                            <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() => handleSelectAvatar(preset.id)}
+                                className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 ${
+                                    selected
+                                        ? 'bg-white/10 border-aegis-cyan shadow-[0_0_15px_rgba(0,242,254,0.15)]'
+                                        : 'bg-white/[0.02] border-white/10 hover:bg-white/[0.06]'
+                                }`}
+                            >
+                                <AssistantAvatar avatarId={preset.id} size="sm" />
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-mono font-bold text-white truncate">{preset.name}</p>
+                                    <p className="text-[10px] text-white/40 truncate">{preset.desc}</p>
+                                </div>
+                            </button>
+                        );
+                    })}
+                    {customAvatarUrl && (
+                        <button
+                            type="button"
+                            onClick={() => handleSelectAvatar('custom')}
+                            className={`p-3 rounded-xl border text-left transition-all flex items-center gap-3 ${
+                                avatarId === 'custom'
+                                    ? 'bg-white/10 border-aegis-cyan shadow-[0_0_15px_rgba(0,242,254,0.15)]'
+                                    : 'bg-white/[0.02] border-white/10 hover:bg-white/[0.06]'
+                            }`}
+                        >
+                            <AssistantAvatar avatarId="custom" customAvatarUrl={customAvatarUrl} size="sm" />
+                            <div className="min-w-0 flex-1">
+                                <p className="text-xs font-mono font-bold text-white truncate">Mi Imagen</p>
+                                <p className="text-[10px] text-white/40 truncate">Avatar personalizado</p>
+                            </div>
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* 3. Tipo de Voz (Femenina / Masculina) */}
+            <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-mono text-white/60 uppercase tracking-wider">
+                        3. Tipo de Voz (Femenina / Masculina)
+                    </label>
+                    {activePresetObj && (
+                        <span className="text-[11px] font-mono text-aegis-cyan">
+                            {activePresetObj.label}
+                        </span>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {VOICE_STYLE_PRESETS.map((preset) => {
+                        const isSelected = voicePreset === preset.id;
+                        return (
+                            <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() => handleSelectVoicePreset(preset.id)}
+                                className={`p-3 rounded-xl border text-left transition-all flex flex-col gap-1 ${
+                                    isSelected
+                                        ? 'bg-aegis-cyan/15 border-aegis-cyan text-white'
+                                        : 'bg-white/[0.02] border-white/10 text-white/60 hover:bg-white/[0.06] hover:text-white'
+                                }`}
+                            >
+                                <span className="text-xs font-mono font-bold flex items-center gap-1">
+                                    <span className={preset.gender === 'male' ? 'text-sky-400' : 'text-amber-300'}>
+                                        {preset.gender === 'male' ? '♂' : '♀'}
+                                    </span>
+                                    {preset.label}
+                                </span>
+                                <span className="text-[10px] text-white/40 leading-tight">{preset.desc}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <div className="pt-1">
+                    <select
+                        value={voiceURI}
+                        onChange={(e) => handleSelectSpecificVoice(e.target.value)}
+                        className="w-full bg-black/50 border border-white/15 rounded-xl py-2.5 px-3 text-xs text-white/80 focus:border-aegis-cyan/60 focus:outline-none cursor-pointer"
+                    >
+                        <option value="">
+                            ✨ Selección automática ({voiceGender === 'male' ? 'Mejor voz masculina neural' : 'Mejor voz femenina neural'})
+                        </option>
+                        {availableVoices.map((item) => {
+                            const gTag = item.gender === 'male' ? '♂ ' : item.gender === 'female' ? '♀ ' : '';
+                            return (
+                                <option key={item.voice.voiceURI} value={item.voice.voiceURI}>
+                                    {item.isNatural ? '✨ ' : ''}
+                                    {gTag}
+                                    {item.label} [{item.voice.lang}]
+                                </option>
+                            );
+                        })}
+                    </select>
+                </div>
+            </div>
+
+            {/* 4. Personalidad */}
+            <div className="space-y-2.5">
+                <div className="flex justify-between items-center">
+                    <label className="text-[11px] font-mono text-white/60 uppercase tracking-wider">
+                        4. Personalidad y Estilo de Respuesta
+                    </label>
+                    <span className="text-[10px] font-mono text-white/25">
                         {persona.prompt.length} / 4000
                     </span>
                 </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                    {PERSONALITY_CHIPS.map((chip) => (
+                        <button
+                            key={chip.label}
+                            type="button"
+                            onClick={() => setPersona({ ...persona, prompt: chip.prompt })}
+                            className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-aegis-cyan/15 border border-white/10 hover:border-aegis-cyan/40 text-[11px] text-white/70 hover:text-aegis-cyan transition-all"
+                        >
+                            + {chip.label}
+                        </button>
+                    ))}
+                </div>
+
                 <textarea
                     value={persona.prompt}
                     onChange={(e) => setPersona({ ...persona, prompt: e.target.value.slice(0, 4000) })}
-                    placeholder={t('persona_prompt_placeholder')}
-                    rows={8}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10 resize-none"
+                    placeholder="Describí cómo querés que te hable y se comporte tu asistente..."
+                    rows={4}
+                    className="w-full bg-black/50 border border-white/15 rounded-xl py-3 px-4 text-sm text-white focus:border-aegis-cyan/60 focus:outline-none transition-all placeholder:text-white/25 resize-none"
                 />
             </div>
 
@@ -193,7 +491,7 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className={`p-3 rounded-lg flex items-center gap-2 text-xs font-mono ${
+                    className={`p-3 rounded-xl flex items-center gap-2 text-xs font-mono ${
                         message.type === 'success'
                             ? 'bg-green-500/10 border border-green-500/30 text-green-400'
                             : 'bg-red-500/10 border border-red-500/30 text-red-400'
@@ -204,24 +502,21 @@ const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenant
                 </motion.div>
             )}
 
-            <div className="flex gap-3 pt-4 border-t border-white/10">
+            <div className="flex gap-3 pt-3 border-t border-white/10">
                 <button
                     onClick={handleReset}
                     disabled={isSaving || (!persona.prompt && !persona.name)}
-                    className="flex-1 px-4 py-2.5 border border-white/10 rounded-lg text-[10px] font-mono text-white/40 hover:text-white hover:bg-white/5 transition-colors uppercase tracking-widest disabled:opacity-30"
+                    className="px-4 py-2.5 border border-white/10 rounded-xl text-[10px] font-mono text-white/40 hover:text-white hover:bg-white/5 transition-colors uppercase tracking-widest disabled:opacity-30"
                 >
-                    <div className="text-left">
-                        <span className="block">{t('persona_reset')}</span>
-                        <span className="text-[8px] opacity-60 normal-case tracking-normal">{t('persona_reset_hint')}</span>
-                    </div>
+                    Restablecer
                 </button>
                 <button
                     onClick={handleSave}
                     disabled={isSaving}
-                    className="flex-1 flex items-center justify-center gap-2 bg-aegis-cyan/20 border border-aegis-cyan/30 rounded-lg text-[10px] font-bold text-aegis-cyan hover:bg-aegis-cyan/30 transition-colors uppercase tracking-widest disabled:opacity-50"
+                    className="flex-1 flex items-center justify-center gap-2 bg-aegis-cyan/20 border border-aegis-cyan/40 rounded-xl py-3 text-xs font-mono font-bold text-aegis-cyan hover:bg-aegis-cyan/30 transition-colors uppercase tracking-widest disabled:opacity-50"
                 >
-                    {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                    {t('save_persona')}
+                    {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    Guardar Personalización
                 </button>
             </div>
         </div>
@@ -242,6 +537,14 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
     const { t } = useTranslation();
     const { lastRoutingInfo, lastError } = useAegisStore();
     const [globalProviders, setGlobalProviders] = useState<GlobalProviderEntry[]>([]);
+    const [agyStatus, setAgyStatus] = useState<{
+        sdk_installed: boolean;
+        version: string;
+        mode: string;
+        use_antigravity_sdk: boolean;
+        pending_outbox_count: number;
+    } | null>(null);
+    const [isTogglingAgy, setIsTogglingAgy] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 
     const getHeaders = useCallback(() => ({
@@ -251,21 +554,48 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
     }), [tenantId, sessionKey]);
 
     useEffect(() => {
-        const fetchGlobalProviders = async () => {
+        const fetchMotorData = async () => {
             try {
-                const res = await fetch('/api/router/keys/global', { headers: getHeaders() });
-                if (res.ok) {
-                    const data = await res.json();
+                const [provRes, agyRes] = await Promise.all([
+                    fetch('/api/router/keys/global', { headers: getHeaders() }),
+                    fetch('/api/antigravity/status', { headers: getHeaders() }),
+                ]);
+                if (provRes.ok) {
+                    const data = await provRes.json();
                     setGlobalProviders(data.keys || []);
                 }
+                if (agyRes.ok) {
+                    const agyData = await agyRes.json();
+                    setAgyStatus(agyData);
+                }
             } catch (err) {
-                console.error('Fetch global providers error:', err);
+                console.error('Fetch motor data error:', err);
             } finally {
                 setIsLoading(false);
             }
         };
-        fetchGlobalProviders();
+        fetchMotorData();
     }, [getHeaders]);
+
+    const handleToggleAgySdk = async () => {
+        if (!agyStatus || isTogglingAgy) return;
+        const nextVal = !agyStatus.use_antigravity_sdk;
+        setIsTogglingAgy(true);
+        try {
+            const res = await fetch('/api/antigravity/config', {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ use_antigravity_sdk: nextVal }),
+            });
+            if (res.ok) {
+                setAgyStatus((prev) => (prev ? { ...prev, use_antigravity_sdk: nextVal } : prev));
+            }
+        } catch (err) {
+            console.error('Toggle Antigravity SDK error:', err);
+        } finally {
+            setIsTogglingAgy(false);
+        }
+    };
 
     if (isLoading) {
         return (
@@ -316,6 +646,46 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
                 <p className={`text-[10px] font-mono mt-2 ${engineStatusBadge.color} flex items-center gap-1.5 uppercase`}>
                     <span>{engineStatusBadge.icon}</span> <span>{engineStatusBadge.text}</span>
                 </p>
+            </div>
+
+            {/* CORE-386: Google Antigravity SDK Card */}
+            <div className="p-4 rounded-xl border border-aegis-purple/30 bg-aegis-purple/10 space-y-3">
+                <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                            <Zap className="w-4 h-4 text-aegis-cyan" />
+                            <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-white">
+                                Google Antigravity SDK (Subagentes y Tareas Complejas)
+                            </h3>
+                            {agyStatus?.sdk_installed ? (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-mono bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                                    SDK v{agyStatus.version} Detectado
+                                </span>
+                            ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-mono bg-amber-500/15 border border-amber-500/30 text-amber-300">
+                                    No detectado
+                                </span>
+                            )}
+                        </div>
+                        <p className="text-[11px] text-white/60 leading-relaxed">
+                            Cuando está activo, tu asistente delega proyectos y subagentes directamente a{' '}
+                            <span className="text-aegis-cyan font-mono">google-antigravity</span>, aprovechando los créditos de tu cuenta de Antigravity en lugar de consumir tokens de tu API de chat.
+                        </p>
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={handleToggleAgySdk}
+                        disabled={isTogglingAgy}
+                        className={`px-3.5 py-2 rounded-xl border text-xs font-mono font-bold uppercase tracking-wider transition-all shrink-0 ${
+                            agyStatus?.use_antigravity_sdk
+                                ? 'bg-aegis-cyan/20 border-aegis-cyan text-aegis-cyan shadow-[0_0_12px_rgba(0,242,254,0.2)]'
+                                : 'bg-white/5 border-white/15 text-white/50 hover:text-white'
+                        }`}
+                    >
+                        {agyStatus?.use_antigravity_sdk ? '⚡ Activo' : 'Desactivado'}
+                    </button>
+                </div>
             </div>
 
             {/* Global Providers Section */}
@@ -384,223 +754,6 @@ const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId
             <div className="pt-2">
                 <TenantKeyManager tenantId={tenantId} sessionKey={sessionKey} />
             </div>
-        </div>
-    );
-};
-
-const VozTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
-    const { t } = useTranslation();
-    const { sttAvailable, fetchSirenConfig } = useAegisStore();
-    const [provider, setProvider] = useState('voxtral');
-    const [apiKey, setApiKey] = useState('');
-    const [voiceId, setVoiceId] = useState('');
-    const [voices, setVoices] = useState<Voice[]>([]);
-    const [showKey, setShowKey] = useState(false);
-    const [sttProvider, setSttProvider] = useState('browser');
-    const [sttApiKey, setSttApiKey] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
-    const [isSaving, setIsSaving] = useState(false);
-    const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-    const isHttpWarning = typeof window !== 'undefined' && 
-        window.location.protocol === 'http:' && 
-        !['localhost', '127.0.0.1'].includes(window.location.hostname);
-
-    const getHeaders = useCallback(() => ({
-        'Content-Type': 'application/json',
-        'x-citadel-tenant': tenantId,
-        'x-citadel-key': sessionKey,
-    }), [tenantId, sessionKey]);
-
-    const fetchConfig = useCallback(async () => {
-        try {
-            const res = await fetch('/api/siren/config', { headers: getHeaders() });
-            if (res.ok) {
-                const data: SirenConfig = await res.json();
-                setProvider(data.provider || 'voxtral');
-                setApiKey(data.api_key || '');
-                setVoiceId(data.voice_id || '');
-                setSttProvider(data.stt_provider || 'browser');
-                setSttApiKey(data.stt_api_key || '');
-            }
-        } catch (err) {
-            console.error('Fetch siren config error:', err);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [getHeaders]);
-
-    const fetchVoices = useCallback(async () => {
-        try {
-            const res = await fetch('/api/siren/voices', { headers: getHeaders() });
-            if (res.ok) {
-                const data = await res.json();
-                setVoices(data.voices || []);
-            }
-        } catch (err) {
-            console.error('Fetch voices error:', err);
-        }
-    }, [getHeaders]);
-
-    useEffect(() => {
-        fetchConfig();
-        fetchVoices();
-        fetchSirenConfig(); // CORE-233: refrescar sttAvailable desde el servidor al abrir la tab
-    }, [fetchConfig, fetchVoices, fetchSirenConfig]);
-
-    const handleSave = async () => {
-        setIsSaving(true);
-        setMessage(null);
-        try {
-            const res = await fetch('/api/siren/config', {
-                method: 'POST',
-                headers: getHeaders(),
-                body: JSON.stringify({ provider, api_key: apiKey, voice_id: voiceId, stt_provider: sttProvider, stt_api_key: sttApiKey }),
-            });
-            if (res.ok) {
-                setMessage({ type: 'success', text: t('siren_saved') });
-                fetchSirenConfig();
-            } else {
-                const err = await res.json();
-                setMessage({ type: 'error', text: err.detail || t('siren_save_error') });
-            }
-        } catch (err) {
-            setMessage({ type: 'error', text: t('siren_save_error') });
-        } finally {
-            setIsSaving(false);
-        }
-    };
-
-    if (isLoading) {
-        return (
-            <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-6 h-6 text-aegis-cyan animate-spin" />
-            </div>
-        );
-    }
-
-    const providersList = [
-        { id: 'voxtral', label: 'Voxtral' },
-        { id: 'mock', label: 'Mock' },
-        { id: 'elevenlabs', label: 'ElevenLabs' },
-    ];
-
-    return (
-        <div className="space-y-6">
-            {isHttpWarning && (
-                <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3">
-                    <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-                    <div>
-                        <p className="text-xs font-mono text-amber-400 uppercase tracking-widest">
-                            {t('https_warning_title')}
-                        </p>
-                        <p className="text-[10px] font-mono text-white/40 mt-1">
-                            {t('https_warning_desc')}
-                        </p>
-                    </div>
-                </div>
-            )}
-
-            <div className="p-4 bg-white/5 border border-white/10 rounded-xl">
-                <div className="flex items-center justify-between">
-                    <div>
-                        <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest">
-                            {t('stt_status')}
-                        </p>
-                        <p className="text-sm font-mono text-aegis-cyan mt-1">
-                            {sttAvailable ? t('stt_available') : t('stt_not_available')}
-                        </p>
-                    </div>
-                    <div className={`w-3 h-3 rounded-full ${sttAvailable ? 'bg-green-500' : 'bg-red-500'}`} />
-                </div>
-            </div>
-
-            <div>
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-3">
-                    {t('tts_provider')}
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                    {providersList.map((p) => (
-                        <button
-                            key={p.id}
-                            onClick={() => setProvider(p.id)}
-                            className={`p-3 rounded-lg border text-center transition-all ${
-                                provider === p.id
-                                    ? 'bg-aegis-cyan/20 border-aegis-cyan text-aegis-cyan'
-                                    : 'bg-white/5 border-white/10 text-white/40 hover:text-white hover:border-white/30'
-                            }`}
-                        >
-                            <span className="text-[10px] font-mono uppercase tracking-widest">{p.label}</span>
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {provider !== 'voxtral' && provider !== 'mock' && (
-                <div>
-                    <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-2">
-                        {t('provider_api_key')}
-                    </label>
-                    <div className="relative">
-                        <input
-                            type={showKey ? 'text' : 'password'}
-                            value={apiKey}
-                            onChange={(e) => setApiKey(e.target.value)}
-                            placeholder={t('api_key_placeholder')}
-                            className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 px-4 pr-10 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10"
-                        />
-                        <button
-                            type="button"
-                            onClick={() => setShowKey(!showKey)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors"
-                        >
-                            {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            <div>
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest block mb-2">
-                    {t('voice_id')}
-                </label>
-                <select
-                    value={voiceId}
-                    onChange={(e) => setVoiceId(e.target.value)}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg py-2.5 px-4 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all appearance-none cursor-pointer"
-                >
-                    <option value="">{t('auto_voice')}</option>
-                    {voices.filter((v) => v.provider === provider).map((v) => (
-                        <option key={v.id} value={v.id}>
-                            {v.name}
-                        </option>
-                    ))}
-                </select>
-            </div>
-
-            {message && (
-                <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className={`p-3 rounded-lg flex items-center gap-2 text-xs font-mono ${
-                        message.type === 'success'
-                            ? 'bg-green-500/10 border border-green-500/30 text-green-400'
-                            : 'bg-red-500/10 border border-red-500/30 text-red-400'
-                    }`}
-                >
-                    {message.type === 'success' && <Check className="w-4 h-4" />}
-                    {message.text}
-                </motion.div>
-            )}
-
-            <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="w-full flex items-center justify-center gap-2 bg-aegis-cyan/20 border border-aegis-cyan/30 rounded-lg py-3 text-[10px] font-bold text-aegis-cyan hover:bg-aegis-cyan/30 transition-colors uppercase tracking-widest disabled:opacity-50"
-            >
-                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                {t('save_voice_config')}
-            </button>
         </div>
     );
 };
@@ -958,7 +1111,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, tenantId, sessio
                             {activeTab === 'perfil' && <PersonaTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'motor' && <MotorTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'entrenamiento' && <TrainingPanel tenantId={tenantId} sessionKey={sessionKey} />}
-                            {activeTab === 'voz' && <VozTab tenantId={tenantId} sessionKey={sessionKey} />}
+                            {activeTab === 'voz' && <SirenConfigTab />}
                             {activeTab === 'logs' && <LogsTab tenantId={tenantId} sessionKey={sessionKey} />}
                             {activeTab === 'cuenta' && <CuentaTab tenantId={tenantId} sessionKey={sessionKey} />}
                         </motion.div>

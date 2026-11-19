@@ -252,6 +252,11 @@ const ModelCatalogViewer: React.FC<{
                                 <tr key={m.model_id} className="border-b border-white/5 hover:bg-white/2">
                                     <td className="py-3 pr-4 text-white/80">
                                         <span>{m.display_name}</span>
+                                        {m.task_scores && ((m.task_scores.chat + m.task_scores.coding + m.task_scores.planning + m.task_scores.analysis) / 4 >= 4.5) && (
+                                            <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-mono bg-amber-500/20 text-amber-400 border border-amber-500/30 inline-flex items-center gap-1" title="Top Benchmark">
+                                                ★ Top
+                                            </span>
+                                        )}
                                         {m.provider === 'ollama_cloud' && (
                                             <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-mono bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
                                                 {'\u2601'} Cloud
