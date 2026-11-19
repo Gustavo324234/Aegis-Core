@@ -277,18 +277,7 @@ async fn fetch_gemini(
                 return None;
             }
 
-            // Exclude specialized / non-chat models that fail standard chat completions
-            let lower = id.to_lowercase();
-            if lower.contains("embedding")
-                || lower.contains("aqa")
-                || lower.contains("tts")
-                || lower.contains("image")
-                || lower.contains("imagen")
-                || lower.contains("computer-use")
-                || lower.contains("deep-research")
-                || lower.contains("robotics")
-                || lower.contains("learnlm")
-            {
+            if !is_supported_gemini_chat_model(&id) {
                 return None;
             }
 
@@ -308,24 +297,71 @@ async fn fetch_gemini(
     list.sort_by(|a, b| {
         let score = |id: &str| -> i32 {
             let n = id.to_lowercase();
-            if n.contains("gemini-4") || n.contains("argon") { 100 }
-            else if n.contains("3.8-flash") { 95 }
-            else if n.contains("3.8") { 90 }
-            else if n.contains("3.6-flash") { 85 }
-            else if n.contains("3.5-flash") { 80 }
-            else if n == "gemini-2.5-flash" { 75 }
-            else if n == "gemini-2.5-pro" { 70 }
-            else if n.contains("2.5-flash") { 65 }
-            else if n.contains("2.5-pro") { 60 }
-            else if n.contains("2.0-flash") { 50 }
-            else if n.contains("1.5-flash") { 40 }
-            else if n.contains("1.5-pro") { 35 }
-            else { 10 }
+            if n.contains("gemini-4") || n.contains("argon") {
+                100
+            } else if n.contains("3.8-flash") {
+                95
+            } else if n.contains("3.8") {
+                90
+            } else if n.contains("3.6-flash") {
+                85
+            } else if n.contains("3.5-flash") {
+                80
+            } else if n == "gemini-2.5-flash" {
+                75
+            } else if n == "gemini-2.5-pro" {
+                70
+            } else if n.contains("2.5-flash") {
+                65
+            } else if n.contains("2.5-pro") {
+                60
+            } else if n.contains("2.0-flash") {
+                50
+            } else if n.contains("1.5-flash") {
+                40
+            } else if n.contains("1.5-pro") {
+                35
+            } else {
+                10
+            }
         };
-        score(&b.model_id).cmp(&score(&a.model_id)).then_with(|| a.model_id.cmp(&b.model_id))
+        score(&b.model_id)
+            .cmp(&score(&a.model_id))
+            .then_with(|| a.model_id.cmp(&b.model_id))
     });
 
     Ok(list)
+}
+
+/// Returns true if a Gemini model ID is a standard text/chat-capable model
+/// suitable for automatic routing (excludes embeddings, TTS, image/audio,
+/// experimental previews, and legacy 1.5 variants).
+fn is_supported_gemini_chat_model(id: &str) -> bool {
+    let lower = id.to_lowercase();
+    ![
+        "embedding",
+        "aqa",
+        "tts",
+        "image",
+        "imagen",
+        "lyria",
+        "computer-use",
+        "deep-research",
+        "robotics",
+        "learnlm",
+        "transcribe",
+        "nano-banana",
+        "omni",
+        "antigravity",
+        "customtools",
+        "live",
+        "-preview",
+        "-exp",
+        "gemini-1.5",
+        "gemini-2.5-flash-lite",
+    ]
+    .iter()
+    .any(|kw| lower.contains(kw))
 }
 
 /// Anthropic native `/v1/models`. Auth uses `x-api-key` header plus the
@@ -634,5 +670,24 @@ mod tests {
     fn url_origin_falls_back_for_unparseable_input() {
         assert_eq!(url_origin("not a url"), "not a url");
         assert_eq!(url_origin(""), "");
+    }
+
+    #[test]
+    fn gemini_chat_filter_excludes_preview_and_specialized_models() {
+        assert!(is_supported_gemini_chat_model("gemini-2.5-flash"));
+        assert!(is_supported_gemini_chat_model("gemini-3.5-flash-lite"));
+        assert!(!is_supported_gemini_chat_model("gemini-2.5-flash-lite"));
+        assert!(!is_supported_gemini_chat_model("lyria-3.5"));
+        assert!(!is_supported_gemini_chat_model("gemini-3-flash-preview"));
+        assert!(!is_supported_gemini_chat_model(
+            "antigravity-preview-latest"
+        ));
+        assert!(!is_supported_gemini_chat_model("gemini-nano-banana-2.1"));
+        assert!(!is_supported_gemini_chat_model("gemini-3.5-transcribe"));
+        assert!(!is_supported_gemini_chat_model("gemini-omni-1.1-flash"));
+        assert!(!is_supported_gemini_chat_model(
+            "gemini-3.1-pro-preview-customtools"
+        ));
+        assert!(!is_supported_gemini_chat_model("gemini-1.5-flash"));
     }
 }

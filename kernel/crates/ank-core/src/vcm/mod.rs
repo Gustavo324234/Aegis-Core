@@ -226,20 +226,26 @@ impl VirtualContextManager {
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
         // --- PROJECT CONTEXT INJECTION (CORE-151 / CORE-352) ---
-        // Project state is best-effort: omitted silently when budget is tight.
+        // Skip heavy Git/Governance repo injection for casual root user Chat turns;
+        // retain it for agents and Code/Planning/Analysis tasks.
         let mut project_state_str = String::new();
-        let git_state = self.fetch_git_state(tenant_id).await;
-        let gov_state = self.fetch_governance_state().await;
-        let mut candidate = String::new();
-        candidate.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
-        candidate.push_str(&git_state);
-        candidate.push_str("\n\n");
-        candidate.push_str(&gov_state);
-        candidate.push('\n');
-        let project_tokens = estimate_tokens(&candidate);
-        if current_tokens + project_tokens <= actual_token_limit {
-            project_state_str = candidate;
-            current_tokens += project_tokens;
+        let include_project_state = pcb.agent_id.is_some()
+            || !matches!(pcb.task_type, crate::pcb::TaskType::Chat)
+            || !pcb.memory_pointers.l2_context_refs.is_empty();
+        if include_project_state {
+            let git_state = self.fetch_git_state(tenant_id).await;
+            let gov_state = self.fetch_governance_state().await;
+            let mut candidate = String::new();
+            candidate.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
+            candidate.push_str(&git_state);
+            candidate.push_str("\n\n");
+            candidate.push_str(&gov_state);
+            candidate.push('\n');
+            let project_tokens = estimate_tokens(&candidate);
+            if current_tokens + project_tokens <= actual_token_limit {
+                project_state_str = candidate;
+                current_tokens += project_tokens;
+            }
         }
 
         // L3 SEMANTIC MEMORY - Medium Priority
@@ -247,10 +253,24 @@ impl VirtualContextManager {
         let mut l3_str = String::new();
 
         // CORE-378: Búsqueda semántica automática en memoria L3 si swap_refs existe o consultando la instrucción actual
-        let queries_to_search: Vec<String> = if !pcb.memory_pointers.swap_refs.is_empty() {
-            pcb.memory_pointers.swap_refs.clone()
-        } else {
+        let is_trivial_chat = pcb.agent_id.is_none()
+            && crate::chal::autocorrect::is_light_task(
+                &pcb.memory_pointers.l1_instruction,
+                pcb.task_type,
+            );
+        let explicit_queries: Vec<String> = pcb
+            .memory_pointers
+            .swap_refs
+            .iter()
+            .filter(|q| !q.trim().is_empty() && q.as_str() != "semantic_memory")
+            .cloned()
+            .collect();
+        let queries_to_search: Vec<String> = if !explicit_queries.is_empty() {
+            explicit_queries
+        } else if !is_trivial_chat && !pcb.memory_pointers.l1_instruction.trim().is_empty() {
             vec![pcb.memory_pointers.l1_instruction.clone()]
+        } else {
+            Vec::new()
         };
 
         if let Some(driver) = embedding_driver {
@@ -532,8 +552,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_vcm_file_omission_on_overflow() -> anyhow::Result<()> {
+        let env = crate::enclave::ScopedTestDataDir::new()?;
         let vcm = VirtualContextManager::new();
-        let swap = LanceSwapManager::new("./test_users");
+        let swap = LanceSwapManager::new(&env.path().join("test_users").to_string_lossy());
 
         let tenant_id = format!(
             "test_tenant_vcm_overflow_{}",
@@ -542,22 +563,13 @@ mod tests {
                 .unwrap_or_else(|_| std::time::Duration::from_secs(0))
                 .as_millis()
         );
-        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let workspace_path = format!("{}/users/{}/workspace", base_dir, tenant_id);
+        let workspace_path = env.path().join("users").join(&tenant_id).join("workspace");
 
-        let mut retries = 5;
-        while retries > 0 {
-            if std::fs::create_dir_all(&workspace_path).is_ok() {
-                break;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            retries -= 1;
-        }
         std::fs::create_dir_all(&workspace_path).context("Failed to create workspace dir")?;
 
         // Crear un archivo temporal con ruta relativa dentro del workspace del tenant
         let file_name = "test_overflow_dummy.txt";
-        let full_path = std::path::Path::new(&workspace_path).join(file_name);
+        let full_path = workspace_path.join(file_name);
 
         let mut file = std::fs::File::create(&full_path).context("Failed to create test file")?;
         let large_content = "X".repeat(2000); // ~500 tokens
@@ -572,9 +584,6 @@ mod tests {
 
         // Límite que permite el contexto base (Project Context) pero no el archivo grande
         let context = vcm.assemble_context(&pcb, &swap, None, 250).await?;
-
-        // Limpiar
-        let _ = std::fs::remove_dir_all(format!("{}/users/{}", base_dir, tenant_id));
 
         assert!(
             context.contains("omitido por falta de memoria")

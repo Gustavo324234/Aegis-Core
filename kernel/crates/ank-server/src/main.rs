@@ -266,15 +266,16 @@ pub(crate) async fn run_server() -> Result<()> {
         tokio::spawn(async move {
             let mut count = mcp_registry_boot.load_from_config_file(&mcp_cfg_path).await;
             if aegis_yaml_data.exists() {
-                count += mcp_registry_boot.load_from_config_file(&aegis_yaml_data).await;
+                count += mcp_registry_boot
+                    .load_from_config_file(&aegis_yaml_data)
+                    .await;
             } else if aegis_yaml_cwd.exists() {
-                count += mcp_registry_boot.load_from_config_file(&aegis_yaml_cwd).await;
+                count += mcp_registry_boot
+                    .load_from_config_file(&aegis_yaml_cwd)
+                    .await;
             }
             if count > 0 {
-                info!(
-                    "MCP Bootstrap: {} external MCP tools registered",
-                    count
-                );
+                info!("MCP Bootstrap: {} external MCP tools registered", count);
             }
         });
     }
@@ -293,6 +294,49 @@ pub(crate) async fn run_server() -> Result<()> {
         tracing::error!("CORE-213: key_pool.load() falló al iniciar — las claves de API no están disponibles: {}", e);
     }
 
+    // Seed keys from environment if present (preserves de-duplication)
+    for (env_var, provider, default_url) in [
+        (
+            "OPENROUTER_API_KEYS",
+            "openrouter",
+            "https://openrouter.ai/api/v1",
+        ),
+        (
+            "OPENROUTER_API_KEY",
+            "openrouter",
+            "https://openrouter.ai/api/v1",
+        ),
+        ("GROQ_API_KEYS", "groq", "https://api.groq.com/openai/v1"),
+        ("GROQ_API_KEY", "groq", "https://api.groq.com/openai/v1"),
+        (
+            "GEMINI_API_KEYS",
+            "gemini",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+        ),
+        (
+            "GEMINI_API_KEY",
+            "gemini",
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+        ),
+    ] {
+        if let Ok(val) = std::env::var(env_var) {
+            for key_str in val.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let entry = ank_core::router::key_pool::ApiKeyEntry {
+                    key_id: uuid::Uuid::new_v4().to_string(),
+                    provider: provider.to_string(),
+                    api_key: key_str.to_string(),
+                    api_url: Some(default_url.to_string()),
+                    label: Some(format!("Env ({})", provider)),
+                    is_active: true,
+                    rate_limited_until: None,
+                    active_models: None,
+                    is_free_tier: true,
+                };
+                let _ = key_pool.add_global_key(entry).await;
+            }
+        }
+    }
+
     let router = Arc::new(RwLock::new(CognitiveRouter::new(
         catalog.clone(),
         key_pool.clone(),
@@ -306,13 +350,40 @@ pub(crate) async fn run_server() -> Result<()> {
     hal.set_router(router.clone()).await;
     hal.set_router_ref(router.clone()).await;
 
-    // Discovery & Loading of Domain Modules (Phase 1)
-    let modules_dir = std::path::Path::new("kernel/modules");
+    // Discovery & Loading of Domain Modules (Microkernel)
+    let modules_dir = {
+        let mut resolved = std::env::var("AEGIS_MODULES_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from);
+        if resolved.as_ref().is_none_or(|p| !p.is_dir()) {
+            let cwd_candidate = std::path::PathBuf::from("kernel/modules");
+            if cwd_candidate.is_dir() {
+                resolved = Some(cwd_candidate);
+            } else if let Ok(exe_path) = std::env::current_exe() {
+                let mut cur = exe_path.parent();
+                while let Some(dir) = cur {
+                    let cand1 = dir.join("kernel/modules");
+                    if cand1.is_dir() {
+                        resolved = Some(cand1);
+                        break;
+                    }
+                    let cand2 = dir.join("modules");
+                    if cand2.is_dir() {
+                        resolved = Some(cand2);
+                        break;
+                    }
+                    cur = dir.parent();
+                }
+            }
+        }
+        resolved.unwrap_or_else(|| std::path::PathBuf::from("kernel/modules"))
+    };
     info!(
         "Microkernel: Discovering modules in {}",
         modules_dir.display()
     );
-    match router.read().await.load_modules(modules_dir).await {
+    match router.read().await.load_modules(&modules_dir).await {
         Ok(count) => {
             info!("Microkernel: Successfully registered {} modules.", count);
         }
@@ -433,14 +504,15 @@ pub(crate) async fn run_server() -> Result<()> {
                             let mut interceptor = StreamInterceptor::new(stream);
                             let mut tokens_emitted = 0;
                             let mut tool_calls_detected = false;
+                            let mut model_error_emitted = false;
                             let mut full_output = String::new();
 
                             while let Some(item) = interceptor.next_item().await {
                                 match item {
                                     ank_core::syscalls::StreamItem::Token(token) => {
                                         // CORE-FIX: meta-tokens emitted by the HAL
-                                        // (__MODEL_SELECTED__, __WARNING__) are control
-                                        // events, NOT model output. The WS handler
+                                        // (__MODEL_SELECTED__, __WARNING__, __MODEL_ERROR__)
+                                        // are control events, NOT model output. The WS handler
                                         // intercepts them before showing them to the
                                         // user, but if we let them through here they
                                         // (a) get aggregated into `full_output` and
@@ -451,13 +523,17 @@ pub(crate) async fn run_server() -> Result<()> {
                                         //      with cogito-2.1:671b).
                                         // Forward them as Output events so the WS
                                         // handler can fan them out as `model_selected`
-                                        // / `warning` events, but DO NOT count them
+                                        // / `warning` / `error` events, but DO NOT count them
                                         // as tokens and DO NOT add them to full_output.
                                         if token.starts_with("__TOOL_CALL__") {
                                             tool_calls_detected = true;
                                         }
+                                        if token.starts_with("__MODEL_ERROR__") {
+                                            model_error_emitted = true;
+                                        }
                                         let is_meta = token.starts_with("__MODEL_SELECTED__")
                                             || token.starts_with("__WARNING__")
+                                            || token.starts_with("__MODEL_ERROR__")
                                             || token.starts_with("__TOOL_CALL__");
                                         if !is_meta {
                                             tokens_emitted += 1;
@@ -557,7 +633,7 @@ pub(crate) async fn run_server() -> Result<()> {
                             // output="" (the exact smoke-test symptom: 429 mid-ReAct
                             // loop → 0 tokens → blank chat). The StatusUpdate below still
                             // fires afterwards to clear activePid and return UI to idle.
-                            if output_is_empty {
+                            if output_is_empty && !model_error_emitted {
                                 let _ = event_tx.send(ank_proto::v1::TaskEvent {
                                     pid: pid.clone(),
                                     timestamp: None,
@@ -678,6 +754,19 @@ pub(crate) async fn run_server() -> Result<()> {
 
     let training_manager = Arc::new(ank_core::trainer::TrainingManager::new(data_dir.clone()));
 
+    let whatsapp = Arc::new(ank_core::whatsapp::WhatsAppManager::new(
+        Arc::clone(&hal.http_client),
+        data_dir.clone(),
+        http_port,
+    ));
+    hal.set_whatsapp(Arc::clone(&whatsapp)).await;
+    {
+        let wa_boot = Arc::clone(&whatsapp);
+        tokio::spawn(async move {
+            wa_boot.auto_start_if_paired().await;
+        });
+    }
+
     let state = AppState {
         scheduler_tx: scheduler_tx.clone(),
         event_broker: Arc::clone(&event_broker),
@@ -696,6 +785,8 @@ pub(crate) async fn run_server() -> Result<()> {
         workspace_events: Arc::clone(&workspace_events),
         agent_event_tx: Arc::clone(&agent_event_tx),
         training_manager,
+        pending_oauth_flows: ank_http::routes::oauth_api::new_pending_oauth_store(),
+        whatsapp,
     };
 
     // 12. Tonic Server

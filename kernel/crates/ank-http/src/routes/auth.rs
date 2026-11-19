@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/setup", post(setup))
         .route("/setup-token", post(setup_token))
         .route("/change_password", post(change_password))
+        .route("/quick-personal-setup", post(quick_personal_setup))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -89,6 +90,28 @@ pub struct SetupTokenResponse {
 pub struct ChangePasswordResponse {
     pub success: bool,
     pub message: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct QuickPersonalSetupRequest {
+    #[schema(example = "alex")]
+    pub username: String,
+    #[schema(format = "password", example = "MiClaveSegura123")]
+    pub passphrase: String,
+    #[schema(example = "gemini")]
+    pub provider: String,
+    #[schema(format = "password", example = "AIzaSy...")]
+    pub api_key: Option<String>,
+    #[schema(example = "gemini-2.5-flash")]
+    pub model_name: Option<String>,
+    #[schema(example = "SETUP-XXXX-XXXX")]
+    pub setup_token: Option<String>,
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct QuickPersonalSetupResponse {
+    pub status: String,
+    pub tenant_id: String,
 }
 
 fn client_ip(maybe_addr: Option<ConnectInfo<SocketAddr>>) -> IpAddr {
@@ -413,6 +436,202 @@ pub async fn change_password(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/auth/quick-personal-setup",
+    tag = "auth",
+    request_body = QuickPersonalSetupRequest,
+    responses(
+        (status = 200, description = "Quick personal setup successful", body = QuickPersonalSetupResponse),
+        (status = 400, description = "Invalid request or weak passphrase"),
+        (status = 401, description = "Unauthorized: setup token required"),
+        (status = 403, description = "Admin already exists"),
+        (status = 429, description = "Rate limit exceeded")
+    )
+)]
+pub async fn quick_personal_setup(
+    State(state): State<AppState>,
+    maybe_addr: Option<ConnectInfo<SocketAddr>>,
+    Json(body): Json<QuickPersonalSetupRequest>,
+) -> Result<Json<QuickPersonalSetupResponse>, AegisHttpError> {
+    let ip = client_ip(maybe_addr);
+
+    match state
+        .auth_rate_limiter
+        .check_and_record_failed(ip, BOOTSTRAP_RATE_BUCKET)
+    {
+        RateLimitOutcome::Blocked { retry_after_secs } => {
+            return Err(AegisHttpError::RateLimitExceeded(retry_after_secs));
+        }
+        RateLimitOutcome::Allowed { .. } => {}
+    }
+
+    let username = body.username.trim().to_lowercase();
+    if username.is_empty() {
+        return Err(AegisHttpError::BadRequest(
+            "Username cannot be empty".to_string(),
+        ));
+    }
+
+    if body.passphrase.len() < 8 {
+        return Err(AegisHttpError::BadRequest(
+            "Passphrase must be at least 8 characters long".to_string(),
+        ));
+    }
+
+    let citadel = state.citadel.lock().await;
+
+    if citadel
+        .enclave
+        .admin_exists()
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?
+    {
+        return Err(AegisHttpError::Forbidden(
+            "Master Admin is already initialized".to_string(),
+        ));
+    }
+
+    let is_loopback = ip.is_loopback();
+    let token_opt = body
+        .setup_token
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    if !is_loopback && token_opt.is_none() {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+    }
+
+    if let Some(tok) = token_opt {
+        let valid = citadel
+            .enclave
+            .validate_setup_token_only(tok)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+        if !valid {
+            return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+        }
+        citadel
+            .enclave
+            .consume_setup_token(tok)
+            .await
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    }
+
+    let hash = hash_passphrase(&body.passphrase);
+
+    citadel
+        .enclave
+        .initialize_master("admin", &hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    citadel
+        .enclave
+        .create_personal_tenant(&username, &hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    drop(citadel);
+
+    let canonical_provider = ank_core::router::normalize_provider_id(&body.provider);
+    let has_key = body
+        .api_key
+        .as_deref()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false);
+
+    if has_key || canonical_provider == "ollama" {
+        let (api_url, default_model): (String, String) = match canonical_provider.as_str() {
+            "ollama" => (
+                "http://localhost:11434/v1/chat/completions".to_string(),
+                "llama3.2".to_string(),
+            ),
+            "gemini" => (
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                    .to_string(),
+                "gemini-2.5-flash".to_string(),
+            ),
+            "openrouter" => (
+                "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                "openrouter/free".to_string(),
+            ),
+            "groq" => (
+                "https://api.groq.com/openai/v1/chat/completions".to_string(),
+                "groq/llama-3.3-70b-versatile".to_string(),
+            ),
+            "anthropic" => (
+                "https://openrouter.ai/api/v1/chat/completions".to_string(),
+                "anthropic/claude-sonnet-4-6".to_string(),
+            ),
+            _ => (
+                "https://api.openai.com/v1/chat/completions".to_string(),
+                "openai/gpt-4o-mini".to_string(),
+            ),
+        };
+
+        let raw_model = body.model_name.unwrap_or(default_model);
+        let model = match raw_model.trim() {
+            "gemini-1.5-flash" | "gemini-1.5-pro" => "gemini-2.5-flash".to_string(),
+            other => other.to_string(),
+        };
+        let key_str = body
+            .api_key
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .unwrap_or_else(|| "ollama".to_string());
+
+        let bare_hal_model = model
+            .strip_prefix("openai/")
+            .or_else(|| model.strip_prefix("groq/"))
+            .unwrap_or(&model)
+            .to_string();
+
+        state
+            .hal
+            .update_cloud_credentials(api_url.clone(), bare_hal_model, key_str.clone())
+            .await;
+
+        let config_to_save = serde_json::json!({
+            "configured": true,
+            "provider": canonical_provider,
+            "api_url": api_url,
+            "model_name": model,
+            "configured_by": username,
+        });
+
+        if let Ok(config_json) = serde_json::to_string_pretty(&config_to_save) {
+            let config_path = state.config.data_dir.join("engine_config.json");
+            let _ = tokio::fs::write(&config_path, config_json).await;
+        }
+
+        let entry = ank_core::router::key_pool::ApiKeyEntry {
+            key_id: uuid::Uuid::new_v4().to_string(),
+            provider: canonical_provider,
+            api_key: key_str,
+            api_url: Some(api_url),
+            label: Some("Quick Setup Key".to_string()),
+            is_active: true,
+            rate_limited_until: None,
+            active_models: Some(vec![model]),
+            is_free_tier: false,
+        };
+
+        let router = state.router.read().await;
+        let _ = router.add_tenant_key(&username, entry.clone()).await;
+        let _ = router.add_global_key(entry).await;
+        router.invalidate_all_sticky().await;
+    }
+
+    state.auth_rate_limiter.reset(ip, BOOTSTRAP_RATE_BUCKET);
+
+    Ok(Json(QuickPersonalSetupResponse {
+        status: "READY".to_string(),
+        tenant_id: username,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +731,23 @@ mod tests {
         .await;
         assert!(matches!(blocked, Err(AegisHttpError::RateLimitExceeded(_))));
         assert!(!enclave.admin_exists().await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_quick_personal_setup_flow() -> anyhow::Result<()> {
+        let enclave = MasterEnclave::new_in_memory().await?;
+        assert!(!enclave.admin_exists().await?);
+
+        let hash = hash_passphrase("mypassword123");
+        enclave.initialize_master("admin", &hash).await?;
+        enclave.create_personal_tenant("alex", &hash).await?;
+
+        assert!(enclave.admin_exists().await?);
+        assert!(enclave.authenticate_master("admin", &hash).await?);
+        // Tenant is authenticated and does NOT require password change
+        assert!(enclave.authenticate_tenant("alex", &hash).await?);
+
         Ok(())
     }
 }

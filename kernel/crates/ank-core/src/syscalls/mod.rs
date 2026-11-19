@@ -184,26 +184,6 @@ impl SyscallExecutor {
         self
     }
 
-    async fn execute_external_module_tool(
-        &self,
-        endpoint: &str,
-        tool_name: &str,
-        args_json: &str,
-        tenant_id: &str,
-    ) -> Result<String, SyscallError> {
-        let response = crate::router::modules::call_module_tool_pooled(
-            endpoint, tool_name, args_json, tenant_id,
-        )
-        .await
-        .map_err(SyscallError::PluginError)?;
-
-        if response.success {
-            Ok(response.result_json)
-        } else {
-            Err(SyscallError::PluginError(response.result_json))
-        }
-    }
-
     pub async fn execute(
         &self,
         pcb: &crate::pcb::PCB,
@@ -299,35 +279,41 @@ impl SyscallExecutor {
                     })?;
 
                 // Check if this tool belongs to a loaded microkernel module
-                let mut is_module_tool = false;
-                let mut target_endpoint = String::new();
-
-                if let Some(ref router_lock) = self.router {
-                    let router = router_lock.read().await;
-                    let modules = router.modules.read().await;
-                    for module in modules.values() {
-                        if module.exposed_tools.iter().any(|t| t.name == tool_name) {
-                            is_module_tool = true;
-                            target_endpoint = module.ipc_transport.endpoint.clone();
-                            break;
-                        }
-                    }
-                }
-
-                if is_module_tool {
-                    tracing::info!(
-                        "Microkernel: Redirecting tool '{}' to external gRPC module at {}",
-                        tool_name,
-                        target_endpoint
-                    );
-                    let result = self
-                        .execute_external_module_tool(
-                            &target_endpoint,
-                            &tool_name,
-                            &args_json,
-                            tenant_id,
+                let (matched_manifest, key_pool_opt, router_clone_opt) =
+                    if let Some(ref router_lock) = self.router {
+                        let router = router_lock.read().await;
+                        (
+                            router.find_module_for_tool(&tool_name).await,
+                            Some(router.key_pool_arc()),
+                            Some(router_lock.clone()),
                         )
-                        .await?;
+                    } else {
+                        (None, None, None)
+                    };
+
+                if let Some(manifest) = matched_manifest {
+                    let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                    tracing::info!(
+                        "Microkernel: Executing tool '{}' for module '{}' ({})",
+                        tool_name,
+                        manifest.module_id,
+                        manifest.ipc_transport.protocol
+                    );
+                    let video_ctx = crate::video_studio::VideoExecContext {
+                        key_pool: key_pool_opt,
+                        router: router_clone_opt,
+                        ..Default::default()
+                    };
+                    let result = crate::router::modules::execute_module_tool_with_context(
+                        &manifest,
+                        &tool_name,
+                        &args_json,
+                        tenant_id,
+                        session_key,
+                        Some(&video_ctx),
+                    )
+                    .await
+                    .map_err(SyscallError::PluginError)?;
                     return Ok(format!("[SYSTEM_RESULT: {}]", result));
                 }
 
@@ -345,32 +331,31 @@ impl SyscallExecutor {
                 let session_key = pcb.session_key.as_deref().unwrap_or("default");
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
-                // Extract tokens synchronously, drop TenantDB before any await (TenantDB: !Sync)
-                let (spotify_token, google_token) = match TenantDB::open(tenant_id, session_key) {
+                // Check connected status synchronously before awaiting token refresh.
+                let (has_spotify, has_google) = match TenantDB::open(tenant_id, session_key) {
                     Err(_) => {
                         return Ok("[SYSTEM_RESULT: No music provider connected. \
                              Tell the user to connect Spotify or Google in Settings.]"
                             .to_string());
                     }
-                    Ok(db) => {
-                        let sp = if db.is_oauth_connected("spotify").unwrap_or(false) {
-                            db.get_valid_access_token("spotify").map_err(|e| {
-                                SyscallError::IOError(format!("Spotify token error: {}", e))
-                            })?
-                        } else {
-                            None
-                        };
-                        let yt = if sp.is_none() && db.is_oauth_connected("google").unwrap_or(false)
-                        {
-                            db.get_valid_access_token("google").map_err(|e| {
-                                SyscallError::IOError(format!("Google token error: {}", e))
-                            })?
-                        } else {
-                            None
-                        };
-                        (sp, yt)
-                        // db dropped here — before any await
-                    }
+                    Ok(db) => (
+                        db.is_oauth_connected("spotify").unwrap_or(false),
+                        db.is_oauth_connected("google").unwrap_or(false),
+                    ),
+                };
+
+                let spotify_token = if has_spotify {
+                    crate::oauth::get_or_refresh_token_for_tenant(
+                        &self.http_client,
+                        tenant_id,
+                        session_key,
+                        "spotify",
+                        false,
+                    )
+                    .await
+                    .ok()
+                } else {
+                    None
                 };
 
                 if let Some(token) = spotify_token {
@@ -378,6 +363,21 @@ impl SyscallExecutor {
                         .search_spotify(&token, &query, max_results, tenant_id)
                         .await;
                 }
+
+                let google_token = if has_google {
+                    crate::oauth::get_or_refresh_token_for_tenant(
+                        &self.http_client,
+                        tenant_id,
+                        session_key,
+                        "google",
+                        false,
+                    )
+                    .await
+                    .ok()
+                } else {
+                    None
+                };
+
                 if let Some(token) = google_token {
                     return self.search_youtube_oauth(&token, &query, max_results).await;
                 }
@@ -391,49 +391,51 @@ impl SyscallExecutor {
                 let session_key = pcb.session_key.as_deref().unwrap_or("default");
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
-                let token = match TenantDB::open(tenant_id, session_key) {
-                    Err(_) => {
-                        return Ok("[SYSTEM_RESULT: Google Calendar not available. \
-                            Tell the user to connect Google in Settings.]"
-                            .to_string());
-                    }
-                    Ok(db) => {
-                        if !db.is_oauth_connected("google").unwrap_or(false) {
-                            return Ok("[SYSTEM_RESULT: Google Calendar not connected. \
-                                Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
-                                .to_string());
-                        }
-                        db.get_valid_access_token("google").map_err(|e| {
-                            SyscallError::IOError(format!("Google token error: {}", e))
-                        })?
-                        // db dropped here
-                    }
-                };
+                let connected = TenantDB::open(tenant_id, session_key)
+                    .map(|db| db.is_oauth_connected("google").unwrap_or(false))
+                    .unwrap_or(false);
+                if !connected {
+                    return Ok("[SYSTEM_RESULT: Google Calendar not connected. \
+                        Tell the user to connect Google in Settings (gear icon → Cuentas Conectadas).]"
+                        .to_string());
+                }
 
-                self.google_calendar(token, days, max_results).await
+                match crate::oauth::google_calendar::list_events(
+                    &self.http_client,
+                    tenant_id,
+                    session_key,
+                    days,
+                    max_results,
+                    None,
+                )
+                .await
+                {
+                    Ok(res) => Ok(format!("[SYSTEM_RESULT: {}]", res)),
+                    Err(e) => Err(SyscallError::IOError(e.to_string())),
+                }
             }
             Syscall::GoogleDrive { query, max_results } => {
                 let session_key = pcb.session_key.as_deref().unwrap_or("default");
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
-                let token = match TenantDB::open(tenant_id, session_key) {
-                    Err(_) => {
-                        return Ok("[SYSTEM_RESULT: Google Drive not available. \
-                            Tell the user to connect Google in Settings.]"
-                            .to_string());
-                    }
-                    Ok(db) => {
-                        if !db.is_oauth_connected("google").unwrap_or(false) {
-                            return Ok("[SYSTEM_RESULT: Google Drive not connected. \
-                                Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
-                                .to_string());
-                        }
-                        db.get_valid_access_token("google").map_err(|e| {
-                            SyscallError::IOError(format!("Google token error: {}", e))
-                        })?
-                        // db dropped here
-                    }
-                };
+                let connected = TenantDB::open(tenant_id, session_key)
+                    .map(|db| db.is_oauth_connected("google").unwrap_or(false))
+                    .unwrap_or(false);
+                if !connected {
+                    return Ok("[SYSTEM_RESULT: Google Drive not connected. \
+                        Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
+                        .to_string());
+                }
+
+                let token = crate::oauth::get_or_refresh_token_for_tenant(
+                    &self.http_client,
+                    tenant_id,
+                    session_key,
+                    "google",
+                    false,
+                )
+                .await
+                .ok();
 
                 self.google_drive(token, &query, max_results).await
             }
@@ -441,24 +443,24 @@ impl SyscallExecutor {
                 let session_key = pcb.session_key.as_deref().unwrap_or("default");
                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
-                let token = match TenantDB::open(tenant_id, session_key) {
-                    Err(_) => {
-                        return Ok("[SYSTEM_RESULT: Gmail not available. \
-                            Tell the user to connect Google in Settings.]"
-                            .to_string());
-                    }
-                    Ok(db) => {
-                        if !db.is_oauth_connected("google").unwrap_or(false) {
-                            return Ok("[SYSTEM_RESULT: Gmail not connected. \
-                                Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
-                                .to_string());
-                        }
-                        db.get_valid_access_token("google").map_err(|e| {
-                            SyscallError::IOError(format!("Google token error: {}", e))
-                        })?
-                        // db dropped here
-                    }
-                };
+                let connected = TenantDB::open(tenant_id, session_key)
+                    .map(|db| db.is_oauth_connected("google").unwrap_or(false))
+                    .unwrap_or(false);
+                if !connected {
+                    return Ok("[SYSTEM_RESULT: Gmail not connected. \
+                        Tell the user to connect Google in Settings (gear icon → Cuentas tab).]"
+                        .to_string());
+                }
+
+                let token = crate::oauth::get_or_refresh_token_for_tenant(
+                    &self.http_client,
+                    tenant_id,
+                    session_key,
+                    "google",
+                    false,
+                )
+                .await
+                .ok();
 
                 self.gmail(token, &query, max_results).await
             }
@@ -816,6 +818,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integration_module_activation_and_execution() -> anyhow::Result<()> {
+        let _env = crate::enclave::ScopedTestDataDir::new()?;
         let manager = Arc::new(tokio::sync::RwLock::new(PluginManager::new()?));
         let vcm = Arc::new(VirtualContextManager::new());
         let scribe = Arc::new(ScribeManager::new("./users_test"));

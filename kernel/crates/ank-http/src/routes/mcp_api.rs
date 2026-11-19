@@ -49,7 +49,9 @@ pub struct ToolPolicyDto {
 }
 
 /// GET /api/mcp/tools — Lista todas las herramientas MCP activas
-async fn list_tools(State(state): State<AppState>) -> Result<Json<Vec<McpToolDto>>, AegisHttpError> {
+async fn list_tools(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<McpToolDto>>, AegisHttpError> {
     let tools = state.hal.mcp_registry.list_tools().await;
     let dtos = tools
         .into_iter()
@@ -93,9 +95,18 @@ async fn register_server(
     let count = state
         .hal
         .mcp_registry
-        .connect_and_register_server(&server_name, &serde_json::Value::Object(cfg_map), &default_cwd)
+        .connect_and_register_server(
+            &server_name,
+            &serde_json::Value::Object(cfg_map),
+            &default_cwd,
+        )
         .await
-        .map_err(|e| AegisHttpError::Kernel(format!("Failed to connect MCP server '{}': {}", server_name, e)))?;
+        .map_err(|e| {
+            AegisHttpError::Kernel(format!(
+                "Failed to connect MCP server '{}': {}",
+                server_name, e
+            ))
+        })?;
 
     Ok(Json(RegisterServerResponse {
         status: "connected".to_string(),
@@ -112,7 +123,10 @@ async fn unregister_tool(
     if state.hal.mcp_registry.unregister_tool(&name).await {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(AegisHttpError::BadRequest(format!("Tool '{}' not found", name)))
+        Err(AegisHttpError::BadRequest(format!(
+            "Tool '{}' not found",
+            name
+        )))
     }
 }
 

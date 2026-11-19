@@ -80,8 +80,6 @@ MAKER — ENTORNO DE EJECUCIÓN JS:\n\
 /// Esta constante se mantiene vacía para no romper los sitios de uso en build_prompt.
 pub const SPAWN_INSTRUCTIONS: &str = "";
 
-/// Template para inyectar la Persona del tenant cuando está configurada (CORE-129).
-/// `{persona}` se reemplaza con el texto libre del operador.
 pub const PERSONA_SECTION_TEMPLATE: &str =
     "\n\n[IDENTIDAD CONFIGURADA POR EL OPERADOR]\n{persona}\n[FIN DE IDENTIDAD]\n";
 
@@ -223,6 +221,8 @@ pub struct CognitiveHAL {
     pub agent_orchestrator: RwLock<Option<Arc<crate::agents::orchestrator::AgentOrchestrator>>>,
     /// CORE-267: Referencia al router para notificar rate-limits desde el driver.
     pub router_ref: RwLock<Option<Arc<RwLock<CognitiveRouter>>>>,
+    /// Gestor de WhatsApp Web (Baileys sidecar + rate limiter + confirmación).
+    pub whatsapp: RwLock<Option<Arc<crate::whatsapp::WhatsAppManager>>>,
 }
 
 #[cfg(test)]
@@ -247,9 +247,26 @@ fn summarise_provider_failure(err: &SystemError) -> String {
         || lower.contains("resource_exhausted")
         || lower.contains("quota")
         || lower.contains("rate")
+        || lower.contains("límite de tokens")
+        || lower.contains("limite de tokens")
+        || lower.contains("límite de solicitudes")
+        || lower.contains("limite de solicitudes")
+        || lower.contains("límite de cuota")
+        || lower.contains("limite de cuota")
+        || lower.contains("reintentá en ~")
+        || lower.contains("reintenta en ~")
     {
         return "Te quedaste sin cuota gratuita o sos rate-limited (HTTP 429). \
                 Esperá unos segundos o agregá billing al proveedor."
+            .to_string();
+    }
+    if lower.contains("503")
+        || lower.contains("502")
+        || lower.contains("529")
+        || lower.contains("overloaded")
+        || lower.contains("service unavailable")
+    {
+        return "El proveedor está temporalmente sobrecargado o no disponible (HTTP 5xx)."
             .to_string();
     }
     if lower.contains("404") {
@@ -306,7 +323,212 @@ fn is_permanent_model_failure(err: &SystemError) -> bool {
             return true;
         }
     }
+    // Deprecated/removed model IDs (e.g. Google AI Studio 404 "no longer available to new users")
+    if lower.contains("404")
+        && (lower.contains("not found")
+            || lower.contains("no longer available")
+            || lower.contains("not supported for generatecontent"))
+    {
+        return true;
+    }
     false
+}
+
+/// Errors that belong to a specific model or credit quota on that model rather
+/// than an outage of the entire provider (402 credits, 404 deprecated model,
+/// 403 plan-gated model, 429 tier-0 limit:0). Recording these at model scope
+/// avoids tripping `provider_failures` across healthy sibling models/keys.
+fn is_model_scoped_failure(err: &SystemError) -> bool {
+    if is_permanent_model_failure(err) {
+        let lower = err.to_string().to_lowercase();
+        // Keep 401 unauthorized at key/provider scope unless explicitly per-model.
+        if !(lower.contains("401") || lower.contains("unauthorized")) {
+            return true;
+        }
+    }
+    let lower = err.to_string().to_lowercase();
+    lower.contains("402")
+        || lower.contains("payment required")
+        || lower.contains("requires more credits")
+        || lower.contains("can only afford")
+        || lower.contains("not a valid model")
+}
+
+/// Summarizes configured API keys cleanly for `manage_ai_provider("list")`:
+/// deduplicates identical key configs into `key_count`, and filters catalog
+/// previews on free-tier keys so paid models (e.g. `claude-sonnet-4-6`,
+/// `openrouter/auto`) are never advertised as available on a free key.
+pub(crate) fn summarize_configured_providers<I>(
+    keys: I,
+    catalog_models: &[crate::router::catalog::ModelEntry],
+) -> Vec<serde_json::Value>
+where
+    I: IntoIterator<Item = crate::router::key_pool::ApiKeyEntry>,
+{
+    let mut summary: Vec<serde_json::Value> = Vec::new();
+    let mut sig_to_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for k in keys {
+        let mut sorted_active = k.active_models.clone().unwrap_or_default();
+        sorted_active.sort();
+        let sig = format!("{}:{}:{:?}", k.provider, k.is_free_tier, sorted_active);
+        if let Some(&idx) = sig_to_idx.get(&sig) {
+            if let Some(obj) = summary.get_mut(idx).and_then(|v| v.as_object_mut()) {
+                let next = obj.get("key_count").and_then(|c| c.as_u64()).unwrap_or(1) + 1;
+                obj.insert("key_count".to_string(), serde_json::json!(next));
+            }
+            continue;
+        }
+
+        let mut matching_entries: Vec<&crate::router::catalog::ModelEntry> = catalog_models
+            .iter()
+            .filter(|m| {
+                let matches_provider = if k.provider == "openrouter" {
+                    m.provider == "openrouter" || (!m.is_local && m.model_id.contains('/'))
+                } else {
+                    m.provider.eq_ignore_ascii_case(&k.provider)
+                };
+                if !matches_provider {
+                    return false;
+                }
+                if k.is_free_tier {
+                    m.model_id != "openrouter/auto"
+                        && (m.free_tier_eligible
+                            || m.model_id.ends_with(":free")
+                            || (m.cost_input_per_mtok == 0.0 && m.cost_output_per_mtok == 0.0))
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        matching_entries.sort_by(|a, b| {
+            let a_or_free = a.model_id == "openrouter/free";
+            let b_or_free = b.model_id == "openrouter/free";
+            let a_free = a.free_tier_eligible || a.model_id.ends_with(":free");
+            let b_free = b.free_tier_eligible || b.model_id.ends_with(":free");
+            b_or_free
+                .cmp(&a_or_free)
+                .then_with(|| b_free.cmp(&a_free))
+                .then_with(|| a.cost_input_per_mtok.total_cmp(&b.cost_input_per_mtok))
+                .then_with(|| a.model_id.cmp(&b.model_id))
+        });
+
+        let matching_catalog: Vec<String> = matching_entries
+            .into_iter()
+            .map(|m| m.model_id.clone())
+            .collect();
+        let models_preview = match k.active_models {
+            Some(ref list) if !list.is_empty() => {
+                if k.is_free_tier && k.provider == "openrouter" {
+                    let filtered: Vec<String> = list
+                        .iter()
+                        .filter(|id| {
+                            let id_l = id.to_lowercase();
+                            id_l == "openrouter/free" || id_l.ends_with(":free")
+                        })
+                        .cloned()
+                        .collect();
+                    if filtered.is_empty() {
+                        matching_catalog.iter().take(15).cloned().collect()
+                    } else {
+                        filtered
+                    }
+                } else {
+                    list.clone()
+                }
+            }
+            _ => matching_catalog.iter().take(15).cloned().collect(),
+        };
+
+        sig_to_idx.insert(sig, summary.len());
+        summary.push(serde_json::json!({
+            "provider": k.provider,
+            "models": models_preview,
+            "catalog_total_models": matching_catalog.len(),
+            "is_active": k.is_active,
+            "is_free_tier": k.is_free_tier,
+            "label": k.label,
+            "key_count": 1u64,
+        }));
+    }
+
+    summary
+}
+
+/// Returns true only for short conversational greetings/acknowledgments on a clean
+/// root chat PCB so we skip injecting heavy tool schemas, VCM wrappers, and plugin docs.
+fn is_casual_chat_turn(pcb: &PCB) -> bool {
+    if pcb.task_type != crate::pcb::TaskType::Chat
+        || pcb.agent_id.is_some()
+        || !pcb.memory_pointers.l2_context_refs.is_empty()
+        || !pcb.memory_pointers.swap_refs.is_empty()
+    {
+        return false;
+    }
+    let cleaned: String = pcb
+        .memory_pointers
+        .l1_instruction
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| !matches!(c, '!' | '?' | '.' | ',' | '¡' | '¿'))
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() || trimmed.len() > 28 {
+        return false;
+    }
+    match trimmed {
+        "hola" | "holi" | "holis" | "buenas" | "buen dia" | "buen día" | "buenos dias"
+        | "buenos días" | "buenas tardes" | "buenas noches" | "hello" | "hi" | "hey"
+        | "que tal" | "qué tal" | "como estas" | "cómo estás" | "todo bien" | "gracias"
+        | "muchas gracias" | "chau" | "adios" | "adiós" => true,
+        // Confirmations like "dale" / "ok" may approve a pending tool workflow when there is prior history.
+        "ok" | "okey" | "dale" | "genial" | "perfecto" => pcb.message_history.is_empty(),
+        _ => false,
+    }
+}
+
+fn collect_rendered_video_card_ids(tool_name: &str, result_json: &str, out: &mut Vec<String>) {
+    if !matches!(
+        tool_name,
+        "video_render_mp4" | "video_produce_auto" | "video_create_project" | "video_get_overview"
+    ) {
+        return;
+    }
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(result_json) else {
+        return;
+    };
+    let mut push_if_rendered = |proj: &serde_json::Value| {
+        let has_mp4 = proj
+            .get("output_mp4")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if has_mp4 {
+            if let Some(pid) = proj.get("id").and_then(|v| v.as_str()) {
+                if !pid.trim().is_empty() && !out.iter().any(|existing| existing == pid) {
+                    out.push(pid.to_string());
+                }
+            }
+        }
+    };
+    if let Some(proj) = val.get("project") {
+        push_if_rendered(proj);
+    }
+    if tool_name == "video_get_overview" {
+        if let Some(arr) = val.get("projects").and_then(|v| v.as_array()) {
+            // Attach only the latest rendered project to avoid flooding unrelated history.
+            if let Some(first_rendered) = arr.iter().find(|p| {
+                p.get("output_mp4")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+            }) {
+                push_if_rendered(first_rendered);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -327,6 +549,8 @@ mod summarise_tests {
             "RESOURCE_EXHAUSTED",
             "rate limit exceeded",
             "quota exhausted",
+            "Alcanzaste el límite de tokens por minuto (TPM) del modelo. Reintentá en ~17s.",
+            "Alcanzaste el límite de solicitudes (RPM) de tu plan. Reintentá en ~12s.",
         ] {
             let e = SystemError::HardwareFailure(body.into());
             assert!(
@@ -393,6 +617,293 @@ mod summarise_tests {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum SanitizerMode {
+    #[default]
+    Normal,
+    InTagPrefix,
+    InThink,
+    InThought,
+    InEndThinkPrefix,
+    InEndThoughtPrefix,
+    InSpecialToken,
+}
+
+/// Stateful per-stream text sanitizer that strips leaked reasoning blocks
+/// (`<think>...</think>`, `<thought>...</thought>`) and special control tokens
+/// (`<|call|>`, `<|im_end|>`, `<|channel|>`, etc.) across arbitrary TCP/SSE chunk splits.
+#[derive(Debug, Default)]
+struct StreamTextSanitizer {
+    mode: SanitizerMode,
+    buf: String,
+}
+
+impl StreamTextSanitizer {
+    fn push(&mut self, chunk: &str) -> String {
+        let mut out = String::new();
+        for ch in chunk.chars() {
+            if ch == '\0' || ch == '\u{FFFD}' {
+                continue;
+            }
+            match self.mode {
+                SanitizerMode::Normal => {
+                    if ch == '<' {
+                        self.buf.clear();
+                        self.buf.push('<');
+                        self.mode = SanitizerMode::InTagPrefix;
+                    } else {
+                        out.push(ch);
+                    }
+                }
+                SanitizerMode::InTagPrefix => {
+                    self.buf.push(ch);
+                    let lc = self.buf.to_ascii_lowercase();
+                    if lc == "<|" {
+                        self.buf.clear();
+                        self.mode = SanitizerMode::InSpecialToken;
+                    } else if lc == "<think>" {
+                        self.buf.clear();
+                        self.mode = SanitizerMode::InThink;
+                    } else if lc == "<thought>" {
+                        self.buf.clear();
+                        self.mode = SanitizerMode::InThought;
+                    } else if "<think>".starts_with(&lc)
+                        || "<thought>".starts_with(&lc)
+                        || "<|".starts_with(&lc)
+                    {
+                        // keep buffering potential tag prefix
+                    } else {
+                        out.push_str(&self.buf);
+                        self.buf.clear();
+                        self.mode = SanitizerMode::Normal;
+                    }
+                }
+                SanitizerMode::InThink => {
+                    if ch == '<' {
+                        self.buf.clear();
+                        self.buf.push('<');
+                        self.mode = SanitizerMode::InEndThinkPrefix;
+                    }
+                }
+                SanitizerMode::InEndThinkPrefix => {
+                    self.buf.push(ch);
+                    let lc = self.buf.to_ascii_lowercase();
+                    if lc == "</think>" {
+                        self.buf.clear();
+                        self.mode = SanitizerMode::Normal;
+                    } else if "</think>".starts_with(&lc) {
+                        // keep matching </think>
+                    } else if ch == '<' {
+                        self.buf.clear();
+                        self.buf.push('<');
+                    } else {
+                        self.buf.clear();
+                        self.mode = SanitizerMode::InThink;
+                    }
+                }
+                SanitizerMode::InThought => {
+                    if ch == '<' {
+                        self.buf.clear();
+                        self.buf.push('<');
+                        self.mode = SanitizerMode::InEndThoughtPrefix;
+                    }
+                }
+                SanitizerMode::InEndThoughtPrefix => {
+                    self.buf.push(ch);
+                    let lc = self.buf.to_ascii_lowercase();
+                    if lc == "</thought>" {
+                        self.buf.clear();
+                        self.mode = SanitizerMode::Normal;
+                    } else if "</thought>".starts_with(&lc) {
+                        // keep matching </thought>
+                    } else if ch == '<' {
+                        self.buf.clear();
+                        self.buf.push('<');
+                    } else {
+                        self.buf.clear();
+                        self.mode = SanitizerMode::InThought;
+                    }
+                }
+                SanitizerMode::InSpecialToken => {
+                    if ch == '>' && self.buf.ends_with('|') {
+                        self.buf.clear();
+                        self.mode = SanitizerMode::Normal;
+                    } else {
+                        self.buf.push(ch);
+                        // Guard against malformed unclosed `<|` sequence
+                        if self.buf.len() > 64 {
+                            out.push_str("<|");
+                            out.push_str(&self.buf);
+                            self.buf.clear();
+                            self.mode = SanitizerMode::Normal;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn flush(&mut self) -> String {
+        match self.mode {
+            SanitizerMode::InTagPrefix => {
+                self.mode = SanitizerMode::Normal;
+                std::mem::take(&mut self.buf)
+            }
+            _ => {
+                self.buf.clear();
+                self.mode = SanitizerMode::Normal;
+                String::new()
+            }
+        }
+    }
+}
+
+fn emit_stream_text_chunk(
+    text_tx: &tokio::sync::mpsc::UnboundedSender<Result<String, ExecutionError>>,
+    chunk: String,
+    emit_to_user: bool,
+    assistant_text: &mut String,
+    has_streamed_text: &mut bool,
+    last_streamed_ends_newline: &mut bool,
+    needs_paragraph_break: &mut bool,
+) {
+    if chunk.is_empty() {
+        return;
+    }
+    if emit_to_user {
+        if *needs_paragraph_break
+            && *has_streamed_text
+            && !*last_streamed_ends_newline
+            && !chunk.starts_with('\n')
+        {
+            let _ = text_tx.send(Ok("\n\n".to_string()));
+        }
+        *needs_paragraph_break = false;
+        *has_streamed_text = true;
+        *last_streamed_ends_newline = chunk.ends_with('\n');
+        let _ = text_tx.send(Ok(chunk.clone()));
+    }
+    assistant_text.push_str(&chunk);
+}
+
+fn format_model_error_meta_token(message: &str, retry_after_secs: u64) -> String {
+    format!(
+        "__MODEL_ERROR__{}",
+        serde_json::json!({
+            "code": "models_unavailable",
+            "message": message,
+            "retry_after_secs": retry_after_secs,
+        })
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn consume_recovery_stream<S>(
+    raw_stream: S,
+    text_tx: &tokio::sync::mpsc::UnboundedSender<Result<String, ExecutionError>>,
+    new_model_id: &str,
+    new_provider: &str,
+    warn_category: &str,
+    warn_message: String,
+    emit_model_event: bool,
+    sanitizer: &mut StreamTextSanitizer,
+    has_streamed_text: &mut bool,
+    last_streamed_ends_newline: &mut bool,
+    needs_paragraph_break: &mut bool,
+    pid: &str,
+    log_label: &str,
+) -> (String, Vec<ToolCallRecord>)
+where
+    S: futures::Stream<Item = Result<String, ExecutionError>>,
+{
+    tokio::pin!(raw_stream);
+    let mut rec_text = String::new();
+    let mut rec_tool_calls: Vec<ToolCallRecord> = Vec::new();
+    let mut announced = false;
+
+    let announce = |announced: &mut bool| {
+        if !*announced {
+            *announced = true;
+            if emit_model_event {
+                let payload = serde_json::json!({
+                    "model_id": new_model_id,
+                    "provider": new_provider,
+                });
+                let _ = text_tx.send(Ok(format!("__MODEL_SELECTED__{}", payload)));
+            }
+            let wpayload = serde_json::json!({
+                "category": warn_category,
+                "provider": new_provider,
+                "message": warn_message,
+            });
+            let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+        }
+    };
+
+    while let Some(tr) = raw_stream.next().await {
+        match tr {
+            Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                announce(&mut announced);
+                let _ = text_tx.send(Ok(token.clone()));
+                let json_str = token.strip_prefix("__TOOL_CALL__").unwrap_or_default();
+                if let Ok(tc) = serde_json::from_str::<DriverToolCallPayload>(json_str) {
+                    rec_tool_calls.push(ToolCallRecord {
+                        id: tc.id,
+                        type_: "function".to_string(),
+                        function: FunctionCallRecord {
+                            name: tc.name,
+                            arguments: tc.arguments.to_string(),
+                        },
+                    });
+                }
+            }
+            Ok(text) => {
+                let clean = sanitizer.push(&text);
+                if !clean.is_empty() {
+                    announce(&mut announced);
+                    emit_stream_text_chunk(
+                        text_tx,
+                        clean,
+                        true,
+                        &mut rec_text,
+                        has_streamed_text,
+                        last_streamed_ends_newline,
+                        needs_paragraph_break,
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    pid = %pid,
+                    model = %new_model_id,
+                    provider = %new_provider,
+                    error = %e,
+                    "{} stream error during recovery",
+                    log_label
+                );
+                break;
+            }
+        }
+    }
+
+    let tail = sanitizer.flush();
+    if !tail.is_empty() {
+        announce(&mut announced);
+        emit_stream_text_chunk(
+            text_tx,
+            tail,
+            true,
+            &mut rec_text,
+            has_streamed_text,
+            last_streamed_ends_newline,
+            needs_paragraph_break,
+        );
+    }
+
+    (rec_text, rec_tool_calls)
+}
+
 impl CognitiveHAL {
     pub fn new(plugin_manager: Arc<RwLock<PluginManager>>) -> Result<Self, SystemError> {
         let http_client = Arc::new(
@@ -453,6 +964,7 @@ impl CognitiveHAL {
             instruction_loader,
             agent_orchestrator: RwLock::new(None),
             router_ref: RwLock::new(None),
+            whatsapp: RwLock::new(None),
         })
     }
 
@@ -465,6 +977,11 @@ impl CognitiveHAL {
     pub async fn set_router_ref(&self, router: Arc<RwLock<CognitiveRouter>>) {
         let mut r = self.router_ref.write().await;
         *r = Some(router);
+    }
+
+    pub async fn set_whatsapp(&self, manager: Arc<crate::whatsapp::WhatsAppManager>) {
+        let mut w = self.whatsapp.write().await;
+        *w = Some(manager);
     }
 
     /// CORE-325: single point for feeding a model failure into the router's
@@ -484,11 +1001,15 @@ impl CognitiveHAL {
         if let Some(r) = self.router_ref.read().await.clone() {
             let router = r.read().await;
             let tracker = router.tracker_ref();
-            // CORE-328: tally under the (model, task) composite too, so the
-            // scorer can learn that a model fails THIS kind of task.
-            tracker
-                .record_failure_for_task(model_id, provider, task)
-                .await;
+            // Record 402/404/subscription/limit:0 at model scope so healthy sibling
+            // models and keys on the same provider stay routable.
+            if err.is_some_and(is_model_scoped_failure) {
+                tracker.record_model_failure_for_task(model_id, task).await;
+            } else {
+                tracker
+                    .record_failure_for_task(model_id, provider, task)
+                    .await;
+            }
             if let Some(e) = err {
                 if is_permanent_model_failure(e) {
                     tracker.record_model_unavailable(model_id).await;
@@ -499,20 +1020,18 @@ impl CognitiveHAL {
 
     /// CORE-325: a 200-OK stream with zero content tokens is an implicit
     /// failure — feed both the per-model empty-response circuit and the
-    /// failure window so decide() reranks away from the silent model.
+    /// model-scoped task failure window without poisoning sibling models on the provider.
     async fn note_empty_response(
         &self,
         model_id: &str,
-        provider: &str,
+        _provider: &str,
         task: crate::pcb::TaskType,
     ) {
         if let Some(r) = self.router_ref.read().await.clone() {
             let router = r.read().await;
             let tracker = router.tracker_ref();
             tracker.record_empty_response(model_id).await;
-            tracker
-                .record_failure_for_task(model_id, provider, task)
-                .await;
+            tracker.record_model_failure_for_task(model_id, task).await;
         }
     }
 
@@ -666,6 +1185,624 @@ impl CognitiveHAL {
         driver.generate_stream(messages, None, None).await
     }
 
+    // --- CHAT AGENT LEVEL 0 DELEGATION & TASK HELPERS ---
+
+    fn normalize_text(text: &str) -> String {
+        text.to_lowercase()
+            .chars()
+            .map(|c| match c {
+                'á' | 'à' | 'ä' => 'a',
+                'é' | 'è' | 'ë' => 'e',
+                'í' | 'ì' | 'ï' => 'i',
+                'ó' | 'ò' | 'ö' => 'o',
+                'ú' | 'ù' | 'ü' => 'u',
+                _ => c,
+            })
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn assistant_claims_delegation(text: &str) -> bool {
+        let norm = Self::normalize_text(text);
+        norm.contains("pidiendo al equipo")
+            || norm.contains("pidiendo al equipazo")
+            || norm.contains("pido al equipo")
+            || norm.contains("pedi al equipo")
+            || norm.contains("le pedi a")
+            || norm.contains("le he pedido a")
+            || norm.contains("equipo de aegis")
+            || norm.contains("equipazo de aegis")
+            || norm.contains("equipo ya esta")
+            || norm.contains("equipo esta")
+            || norm.contains("equipazo ya esta")
+            || norm.contains("equipazo esta")
+            || norm.contains("asignando al supervisor")
+            || norm.contains("asigne al supervisor")
+            || norm.contains("asigne la tarea")
+            || norm.contains("asignar la tarea")
+            || norm.contains("empujoncito al equipo")
+            || norm.contains("empujoncito")
+            || norm.contains("supervisor de proyecto")
+            || norm.contains("supervisor esta trabajando")
+            || norm.contains("te aviso cuando este listo")
+            || norm.contains("te avisare cuando")
+            || norm.contains("estoy creando tu nuevo proyecto")
+            || norm.contains("encargare de generar")
+            || norm.contains("manos a la obra con tu nuevo")
+            || norm.contains("programar eso para")
+            || norm.contains("programando eso para")
+            || norm.contains("en cuanto tenga el script listo")
+            || norm.contains("en cuanto este listo el script")
+            || norm.contains("en cuanto tenga el codigo listo")
+            || norm.contains("en cuanto este listo el codigo")
+    }
+
+    pub fn is_video_production_request(prompt: &str) -> bool {
+        if Self::is_status_query(prompt) {
+            return false;
+        }
+        let lower = prompt.to_lowercase();
+        let norm = Self::normalize_text(prompt);
+
+        let explicit_video_markers = [
+            "video_produce_auto",
+            "video_create_project",
+            "video_render_mp4",
+            "gemini_studio",
+            "free_builtin",
+            "hybrid_pro",
+            "video con ia",
+            "video ia",
+            "exportar mp4",
+            "exportalo a mp4",
+            "exporta el mp4",
+        ];
+        if explicit_video_markers
+            .iter()
+            .any(|m| lower.contains(m) || norm.contains(m))
+        {
+            return true;
+        }
+
+        let has_video_noun = norm.split_whitespace().any(|w| {
+            matches!(
+                w,
+                "video" | "videos" | "mp4" | "reel" | "reels" | "short" | "shorts" | "cortometraje"
+            )
+        }) || lower.contains("9:16")
+            || lower.contains("16:9")
+            || norm.contains("video studio");
+
+        if !has_video_noun {
+            return false;
+        }
+
+        let action_verbs = [
+            "crea",
+            "creame",
+            "crear",
+            "genera",
+            "generame",
+            "generar",
+            "hace",
+            "haceme",
+            "hacer",
+            "arma",
+            "armame",
+            "armar",
+            "edita",
+            "editar",
+            "renderiza",
+            "renderizar",
+            "exporta",
+            "exportar",
+            "produci",
+            "producir",
+            "promocionando",
+            "promocional",
+        ];
+        norm.split_whitespace().any(|w| action_verbs.contains(&w))
+            || lower.contains("4 escenas")
+            || lower.contains("escenas")
+    }
+
+    pub fn assistant_claims_video_execution(text: &str) -> bool {
+        let norm = Self::normalize_text(text);
+        let markers = [
+            "aqui va tu video",
+            "aqui tienes tu video",
+            "aqui tenes tu video",
+            "aqui va el intento",
+            "aqui va la llamada a la herramienta",
+            "va la herramienta",
+            "llamar a la herramienta",
+            "invocar la herramienta",
+            "preparando la invocacion",
+            "a punto de invocar la herramienta",
+            "video produce auto",
+            "videoproduceauto",
+            "video create project",
+            "voy a crearlo con la herramienta",
+            "estoy creando tu nuevo proyecto",
+            "creando tu video",
+        ];
+        markers.iter().any(|m| norm.contains(m))
+    }
+
+    pub fn is_video_followup_nudge(prompt: &str) -> bool {
+        let norm = Self::normalize_text(prompt);
+        let markers = [
+            "lo vas a hacer",
+            "vas a seguir durmiendo",
+            "y donde esta",
+            "donde esta el video",
+            "no muestra que este haciendo nada",
+            "no hace nada",
+            "no hizo nada",
+            "estas inventando",
+            "no enviaste nada",
+            "cuanto vas a tardar",
+            "hace 10 minutos",
+            "hacelo",
+            "si hacelo",
+            "dale hacelo",
+            "generalo",
+            "terminalo",
+            "proba de nuevo",
+            "vamos a que",
+        ];
+        markers.iter().any(|m| norm.contains(m))
+    }
+
+    pub fn resolve_video_request_prompt(
+        prompt: &str,
+        history: &[ChatMessage],
+        assistant_text: &str,
+    ) -> Option<String> {
+        let trimmed = prompt.trim();
+        if Self::is_video_production_request(trimmed) {
+            return Some(trimmed.to_string());
+        }
+        if Self::is_status_query(trimmed) || Self::is_video_advisory_or_followup_query(trimmed) {
+            return None;
+        }
+        if Self::is_video_followup_nudge(trimmed)
+            || (!assistant_text.trim().is_empty()
+                && Self::assistant_claims_video_execution(assistant_text))
+        {
+            for msg in history.iter().rev() {
+                if msg.role == ChatRole::User {
+                    if let Some(ref content) = msg.content {
+                        let c = content.trim();
+                        if Self::is_video_production_request(c) {
+                            return Some(c.to_string());
+                        }
+                    }
+                }
+            }
+            if !assistant_text.trim().is_empty()
+                && Self::assistant_claims_video_execution(assistant_text)
+                && !trimmed.is_empty()
+            {
+                return Some(trimmed.to_string());
+            }
+        }
+        None
+    }
+
+    pub fn has_video_context(prompt: &str, history: &[ChatMessage]) -> bool {
+        Self::resolve_video_request_prompt(prompt, history, "").is_some()
+    }
+
+    fn is_status_query(prompt: &str) -> bool {
+        let norm = Self::normalize_text(prompt);
+        norm == "que paso"
+            || norm.starts_with("que paso")
+            || norm == "como va"
+            || norm.starts_with("como va")
+            || norm.contains("novedades")
+            || norm.contains("alguna novedad")
+            || norm == "estado"
+            || norm == "status"
+            || norm.starts_with("como venimos")
+            || norm.starts_with("termino")
+            || norm == "terminaste"
+            || norm == "ya esta"
+            || norm.starts_with("ya esta listo")
+            || norm.starts_with("ya esta terminad")
+            || norm.starts_with("ya estan listo")
+            || norm.starts_with("ya termino")
+    }
+
+    pub fn is_video_advisory_or_followup_query(prompt: &str) -> bool {
+        if Self::is_video_production_request(prompt) {
+            return false;
+        }
+        let norm = Self::normalize_text(prompt);
+        let advisory_markers = [
+            "que necesitas",
+            "que necesitaria",
+            "salga mejor",
+            "salio mal",
+            "otras apis",
+            "otra api",
+            "cual api",
+            "que api",
+            "como mejorar",
+            "por que salio",
+            "que motor",
+            "cual motor",
+            "mejor calidad",
+            "conviene api",
+            "api o local",
+            "gemini pago",
+            "tier 1",
+        ];
+        if advisory_markers.iter().any(|m| norm.contains(m)) {
+            return true;
+        }
+        let media_terms = [
+            "video",
+            "videos",
+            "mp4",
+            "reel",
+            "escena",
+            "escenas",
+            "freebuiltin",
+            "geministudio",
+            "hybridpro",
+            "elevenlabs",
+            "pexels",
+        ];
+        norm.contains("calidad") && media_terms.iter().any(|m| norm.contains(m))
+    }
+
+    fn is_technical_request(prompt: &str) -> bool {
+        if Self::is_status_query(prompt)
+            || Self::is_video_production_request(prompt)
+            || Self::is_video_advisory_or_followup_query(prompt)
+        {
+            return false;
+        }
+        let norm = Self::normalize_text(prompt);
+        let technical_keywords = [
+            "script",
+            "codigo",
+            "python",
+            "rust",
+            "javascript",
+            "typescript",
+            "programa",
+            "programar",
+            "desarrollar",
+            "desarrolla",
+            "crea un",
+            "crear un",
+            "hace un",
+            "hacer un",
+            "implementa",
+            "implementar",
+            "escribe un",
+            "escribir un",
+            "analiza",
+            "analizar",
+            "corrige",
+            "corregir",
+            "revisa",
+            "revisar",
+            "refactor",
+            "bug",
+            "endpoint",
+            "clona",
+            "clonar",
+            "clones",
+            "repositorio",
+            "compila",
+            "compilar",
+            "depura",
+            "depurar",
+            "pull request",
+        ];
+        technical_keywords.iter().any(|kw| norm.contains(kw))
+    }
+
+    fn has_technical_context(prompt: &str, history: &[ChatMessage]) -> bool {
+        if Self::is_status_query(prompt)
+            || Self::is_video_production_request(prompt)
+            || Self::is_video_advisory_or_followup_query(prompt)
+        {
+            return false;
+        }
+        if Self::is_technical_request(prompt) {
+            return true;
+        }
+        let short_reply = prompt.trim().len() < 50;
+        if short_reply {
+            for msg in history.iter().rev() {
+                if msg.role == ChatRole::User {
+                    if let Some(ref content) = msg.content {
+                        if Self::is_technical_request(content) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn derive_task_scope(prompt: &str, history: &[ChatMessage]) -> String {
+        let trimmed = prompt.trim();
+        if trimmed.len() < 50 {
+            for msg in history.iter().rev() {
+                if msg.role == ChatRole::User {
+                    if let Some(ref content) = msg.content {
+                        if Self::is_technical_request(content) {
+                            return format!("{}. Parámetros/Detalles: {}", content.trim(), trimmed);
+                        }
+                    }
+                }
+            }
+        }
+        trimmed.to_string()
+    }
+
+    fn derive_task_project_name(scope: &str) -> String {
+        let lower = scope.to_lowercase();
+        if lower.contains("python") && (lower.contains("disco") || lower.contains("espacio")) {
+            "Script Espacio Disco".to_string()
+        } else if lower.contains("python") {
+            "Script Python".to_string()
+        } else if lower.contains("script") {
+            "Script Automatización".to_string()
+        } else {
+            let clean: String = scope
+                .chars()
+                .take(35)
+                .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '-')
+                .collect();
+            let trimmed = clean.trim();
+            if trimmed.is_empty() {
+                "Proyecto".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        }
+    }
+
+    /// Detecta si un token parece una clave API real (Groq, Gemini, OpenRouter, OpenAI, Anthropic, xAI).
+    fn is_likely_api_key_token(token: &str) -> bool {
+        let clean = token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']'
+            )
+        });
+        if clean.len() < 20 {
+            return false;
+        }
+        clean.starts_with("gsk_")
+            || clean.starts_with("AIza")
+            || clean.starts_with("sk-or-")
+            || clean.starts_with("sk-ant-")
+            || clean.starts_with("xai-")
+            || clean.starts_with("sk-")
+    }
+
+    /// Extrae la primera clave API reconocible dentro de un texto libre del usuario.
+    pub fn extract_api_key_from_text(text: &str) -> Option<String> {
+        Self::extract_all_api_keys_from_text(text)
+            .into_iter()
+            .map(|(_, k)| k)
+            .next()
+    }
+
+    /// Extrae todas las claves API reconocibles dentro del texto junto con su proveedor inferido.
+    pub fn extract_all_api_keys_from_text(text: &str) -> Vec<(String, String)> {
+        let mut results = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for line in text.lines() {
+            let line_trim = line.trim();
+            for word in line_trim.split_whitespace() {
+                let clean = word.trim_matches(|c: char| {
+                    matches!(
+                        c,
+                        '"' | '\''
+                            | '`'
+                            | ','
+                            | '.'
+                            | ';'
+                            | ':'
+                            | '('
+                            | ')'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                            | '='
+                    )
+                });
+                let is_key = Self::is_likely_api_key_token(clean)
+                    || (clean.len() >= 24
+                        && (line_trim.to_lowercase().contains("ollama")
+                            || line_trim.to_lowercase().contains("elevenlabs")
+                            || (clean.contains('.') && clean.len() >= 30)));
+
+                if is_key && seen.insert(clean.to_string()) {
+                    let prov = Self::infer_provider_from_key_or_text("", clean, line_trim);
+                    results.push((prov, clean.to_string()));
+                }
+            }
+        }
+        results
+    }
+
+    /// Enmascara una clave API individual (`gsk_••••1234`) para no exponerla en logs ni respuestas.
+    pub fn mask_single_key(key: &str) -> String {
+        let trimmed = key.trim();
+        let chars: Vec<char> = trimmed.chars().collect();
+        if chars.len() <= 8 {
+            return "••••".to_string();
+        }
+        let prefix: String = chars[..4].iter().collect();
+        let suffix: String = chars[chars.len() - 4..].iter().collect();
+        format!("{}••••{}", prefix, suffix)
+    }
+
+    /// Enmascara cualquier clave API presente en un texto antes de persistirlo en historial o memoria.
+    pub fn mask_api_keys_in_text(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.char_indices().peekable();
+
+        while let Some(&(start, ch)) = chars.peek() {
+            let is_ws = ch.is_whitespace();
+            let mut end = text.len();
+            while let Some(&(idx, next_ch)) = chars.peek() {
+                if next_ch.is_whitespace() != is_ws {
+                    end = idx;
+                    break;
+                }
+                chars.next();
+            }
+            let slice = &text[start..end];
+            if is_ws {
+                out.push_str(slice);
+            } else {
+                let clean = slice.trim_matches(|c: char| {
+                    matches!(
+                        c,
+                        '"' | '\'' | '`' | ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']'
+                    )
+                });
+                if Self::is_likely_api_key_token(clean)
+                    || (clean.len() >= 30
+                        && (clean.contains('.') || clean.chars().all(|c| c.is_ascii_hexdigit())))
+                {
+                    out.push_str(&slice.replace(clean, &Self::mask_single_key(clean)));
+                } else {
+                    out.push_str(slice);
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Infiere el ID canónico del proveedor a partir del prefijo de la API key o del texto.
+    pub fn infer_provider_from_key_or_text(
+        raw_provider: &str,
+        api_key: &str,
+        hint_text: &str,
+    ) -> String {
+        let k = api_key.trim();
+        if k.starts_with("gsk_") {
+            return "groq".to_string();
+        }
+        if k.starts_with("AIza") {
+            return "gemini".to_string();
+        }
+        if k.starts_with("sk-or-") {
+            return "openrouter".to_string();
+        }
+        if k.starts_with("sk-ant-") {
+            return "anthropic".to_string();
+        }
+        if k.starts_with("xai-") {
+            return "xai".to_string();
+        }
+
+        if !raw_provider.trim().is_empty() {
+            return crate::router::normalize_provider_id(raw_provider);
+        }
+
+        let lower = hint_text.to_lowercase();
+        for (kw, prov) in [
+            ("elevenlabs", "elevenlabs"),
+            ("openrouter", "openrouter"),
+            ("gemini", "gemini"),
+            ("google", "gemini"),
+            ("groq", "groq"),
+            ("anthropic", "anthropic"),
+            ("claude", "anthropic"),
+            ("deepseek", "deepseek"),
+            ("mistral", "mistral"),
+            ("ollama", "ollama_cloud"),
+            ("xai", "xai"),
+            ("grok", "xai"),
+            ("openai", "openai"),
+            ("gpt", "openai"),
+        ] {
+            if lower.contains(kw) {
+                return prov.to_string();
+            }
+        }
+
+        if k.starts_with("sk-") {
+            return "openai".to_string();
+        }
+
+        String::new()
+    }
+
+    /// Retorna `(default_model, default_api_url)` para cada proveedor soportado.
+    pub fn default_model_and_url_for_provider(provider: &str) -> (&'static str, &'static str) {
+        match provider {
+            "groq" => ("openai/gpt-oss-120b", "https://api.groq.com/openai/v1"),
+            "gemini" => (
+                "gemini-2.5-flash",
+                "https://generativelanguage.googleapis.com/v1beta/openai",
+            ),
+            "openrouter" => ("openrouter/free", "https://openrouter.ai/api/v1"),
+            "ollama_cloud" => ("gpt-oss:120b", "https://ollama.com"),
+            "ollama" => ("llama3.2", "http://localhost:11434/v1"),
+            "openai" => ("gpt-4o-mini", "https://api.openai.com/v1"),
+            "anthropic" => ("claude-3-5-sonnet-latest", "https://api.anthropic.com/v1"),
+            "deepseek" => ("deepseek-chat", "https://api.deepseek.com/v1"),
+            "xai" => ("grok-2-latest", "https://api.x.ai/v1"),
+            "mistral" => ("mistral-small-latest", "https://api.mistral.ai/v1"),
+            _ => ("gpt-4o-mini", "https://api.openai.com/v1"),
+        }
+    }
+
+    async fn cooldown_and_invalidate_sticky(&self, providers: &[&str], tenant_id: &str) -> u64 {
+        let mut max_cooldown: u64 = 0;
+        if let Some(r) = self.router_ref.read().await.clone() {
+            let tr = r.read().await;
+            let tracker = tr.tracker_ref();
+            for prov in providers {
+                if let Some(s) = tracker.provider_cooldown_remaining_secs(prov).await {
+                    max_cooldown = max_cooldown.max(s);
+                }
+            }
+            tr.invalidate_sticky(tenant_id).await;
+        }
+        max_cooldown
+    }
+
+    fn effective_retry_after_secs(max_cooldown: u64, err_text: &str) -> u64 {
+        if max_cooldown > 0 {
+            return max_cooldown;
+        }
+        let lc = err_text.to_lowercase();
+        if lc.contains("429")
+            || lc.contains("rate")
+            || lc.contains("quota")
+            || lc.contains("satur")
+            || lc.contains("timed out")
+            || lc.contains("timeout")
+            || lc.contains("502")
+            || lc.contains("503")
+        {
+            15
+        } else {
+            0
+        }
+    }
+
     /// CORE-261: Bucle ReAct — tool call → resultado → LLM, hasta MAX_ITERATIONS.
     /// Envía tokens de texto al caller via `text_tx`; nunca reenvía `__TOOL_CALL__` tokens.
     async fn execute_with_decision(
@@ -713,33 +1850,77 @@ impl CognitiveHAL {
             make_rate_limited_cb(decision.key_id.clone()),
         );
 
-        let provider = ProviderKind::from_string(&decision.provider);
-        let mut tools = {
-            let defs = ToolRegistry::tools_for(&AgentRole::ChatAgent, &provider);
-            if defs.is_empty() {
-                None
-            } else {
-                Some(defs)
+        let casual_turn = is_casual_chat_turn(pcb);
+        // CORE-377: Cachear herramientas dinámicas descubiertas vía MCP para poder reconstruir
+        // el esquema si el router hace failover hacia otro proveedor en medio del turno.
+        let cached_mcp_tools = self.mcp_registry.list_tools().await;
+        let module_tenant = pcb.tenant_id.as_deref().unwrap_or("default").to_string();
+        let module_skey = pcb.session_key.as_deref().unwrap_or("default").to_string();
+
+        let is_video_req =
+            Self::has_video_context(&pcb.memory_pointers.l1_instruction, &pcb.message_history);
+        let load_extra_tools = || async {
+            let mut list: Vec<crate::pcb::ToolDefinition> = cached_mcp_tools
+                .iter()
+                .map(|m| {
+                    crate::pcb::ToolDefinition::new(
+                        m.name.clone(),
+                        m.description.clone(),
+                        m.input_schema.clone(),
+                    )
+                })
+                .collect();
+            if is_video_req {
+                if let Ok(db) = crate::enclave::TenantDB::open(&module_tenant, &module_skey) {
+                    if db
+                        .get_kv("module_active:aegis.domain.video")
+                        .unwrap_or(None)
+                        .as_deref()
+                        != Some("true")
+                    {
+                        let _ = db.set_kv("module_active:aegis.domain.video", "true");
+                    }
+                }
             }
+            if let Some(r) = self.router_ref.read().await.clone() {
+                let router_guard = r.read().await;
+                let mod_tools = router_guard
+                    .get_enabled_module_tools(&module_tenant, &module_skey)
+                    .await;
+                list.extend(mod_tools);
+            }
+            list
         };
 
-        // CORE-377: Inyectar herramientas dinámicas descubiertas vía MCP
-        let mcp_tools = self.mcp_registry.list_tools().await;
-        if !mcp_tools.is_empty() {
-            let mut list = tools.unwrap_or_default();
-            for mcp_tool in mcp_tools {
-                let canonical = crate::pcb::ToolDefinition::new(
-                    mcp_tool.name,
-                    mcp_tool.description,
-                    mcp_tool.input_schema,
-                );
-                let serialized = ToolRegistry::serialize_canonical(&canonical, &provider);
-                list.push(serialized);
-            }
-            tools = Some(list);
-        }
+        let mut extra_tools = if casual_turn {
+            Vec::new()
+        } else {
+            load_extra_tools().await
+        };
 
-        let (mut messages, build_warnings) = self.build_messages_with_warnings(pcb, persona).await;
+        let build_tools_for = |prov_str: &str,
+                               dyn_tools: &[crate::pcb::ToolDefinition]|
+         -> Option<Vec<serde_json::Value>> {
+            if casual_turn {
+                return None;
+            }
+            let prov_kind = ProviderKind::from_string(prov_str);
+            let mut list = ToolRegistry::tools_for(&AgentRole::ChatAgent, &prov_kind);
+            for dyn_tool in dyn_tools {
+                list.push(ToolRegistry::serialize_canonical(dyn_tool, &prov_kind));
+            }
+            if list.is_empty() {
+                None
+            } else {
+                Some(list)
+            }
+        };
+        let mut active_key_id = decision.key_id.clone();
+        let mut tools = build_tools_for(&decision.provider, &extra_tools);
+
+        let (mut messages, build_warnings) = self
+            .build_messages_for_chat_with_warnings(pcb, persona)
+            .await;
 
         // CORE-FIX (A2): tell the client which model is about to answer so
         // the UI can render a "Claude Sonnet 4.6" / "GPT-4o" badge. The token
@@ -769,6 +1950,13 @@ impl CognitiveHAL {
         const MAX_ITERATIONS: usize = 10;
         let mut finished = false;
         let mut last_assistant_text = String::new();
+        let primary_model_id = decision.model_id.clone();
+        let mut tried_models: std::collections::HashSet<String> = std::collections::HashSet::new();
+        tried_models.insert(decision.model_id.clone());
+        let mut pending_fallback_warning: Option<(String, String, &'static str, String)> = None;
+        let mut has_streamed_text = false;
+        let mut last_streamed_ends_newline = false;
+        let mut rendered_video_ids: Vec<String> = Vec::new();
 
         for iteration in 0..MAX_ITERATIONS {
             let mut autocorrect_retries = 0;
@@ -776,6 +1964,7 @@ impl CognitiveHAL {
 
             let mut assistant_text = String::new();
             let mut tool_calls: Vec<ToolCallRecord> = Vec::new();
+            let mut needs_paragraph_break = has_streamed_text && !last_streamed_ends_newline;
 
             loop {
                 // CORE-FIX (B1): on the FIRST iteration, if the primary model
@@ -818,7 +2007,11 @@ impl CognitiveHAL {
                             // quota ran out, here's a Groq response" and "your Gemini
                             // quota ran out, here's a response from your other
                             // Gemini key".
-                            if let Some(r) = &tracker {
+                            let err_lc = primary_err.to_string().to_lowercase();
+                            let skip_key_rotation = is_model_scoped_failure(&primary_err)
+                                || err_lc.contains("timed out")
+                                || err_lc.contains("error sending request");
+                            if let (false, Some(r)) = (skip_key_rotation, &tracker) {
                                 let kp = r.read().await.key_pool_ref();
                                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                                 let mut tried: std::collections::HashSet<String> =
@@ -826,7 +2019,7 @@ impl CognitiveHAL {
                                 if let Some(ref kid) = decision.key_id {
                                     tried.insert(kid.clone());
                                 }
-                                for attempt in 0..3u32 {
+                                for attempt in 0..2u32 {
                                     // CORE-362: Use get_available_key_excluding so we never
                                     // re-pick a key already in `tried` even if the spawned
                                     // mark_key_rate_limited task has not acquired the lock yet.
@@ -864,19 +2057,18 @@ impl CognitiveHAL {
                                         .await
                                     {
                                         Ok(s) => {
-                                            let wpayload = serde_json::json!({
-                                                "category": "key_rotated",
-                                                "provider": active_provider,
-                                                "attempt": attempt + 1,
-                                                "message": format!(
+                                            pending_fallback_warning = Some((
+                                                active_model_id.clone(),
+                                                active_provider.clone(),
+                                                "key_rotated",
+                                                format!(
                                                     "La key primaria de {} se agotó; \
                                                      cambié a otra del mismo proveedor.",
                                                     active_provider
                                                 ),
-                                            });
-                                            let _ = text_tx
-                                                .send(Ok(format!("__WARNING__{}", wpayload)));
+                                            ));
                                             driver = alt_driver;
+                                            active_key_id = Some(alt.key_id.clone());
                                             recovered = Some(s);
                                             break;
                                         }
@@ -901,36 +2093,12 @@ impl CognitiveHAL {
                                 }
                             }
 
-                            // If rotation didn't help AND we have no fallback chain,
-                            // surface a user-visible message before bubbling the
-                            // original error up — otherwise the chat shows nothing.
-                            if recovered.is_none() && decision.fallback_chain.is_empty() {
-                                if let Some(r) = &tracker {
-                                    let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-                                    r.read().await.invalidate_sticky(tenant_id).await;
-                                }
-                                let summary = summarise_provider_failure(&primary_err);
-                                let msg = format!(
-                                    "No pude responder con '{}'. {} No tengo modelos \
-                                     de respaldo configurados — revisá las API keys \
-                                     o agregá otro proveedor.",
-                                    active_model_id, summary
-                                );
-                                let _ = text_tx.send(Ok(msg.clone()));
-                                let wpayload = serde_json::json!({
-                                    "category": "all_models_failed",
-                                    "primary_model": active_model_id,
-                                    "primary_provider": active_provider,
-                                    "reason": summary,
-                                    "message": msg,
-                                });
-                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
-                                return Err(primary_err);
-                            }
-
                             for fb in &decision.fallback_chain {
                                 if recovered.is_some() {
                                     break;
+                                }
+                                if !tried_models.insert(fb.model_id.clone()) {
+                                    continue;
                                 }
                                 let fb_driver = CloudProxyDriver::new_with_callback(
                                     Arc::clone(&self.http_client),
@@ -940,28 +2108,26 @@ impl CognitiveHAL {
                                     fb.key_id.clone(),
                                     make_rate_limited_cb(fb.key_id.clone()),
                                 );
+                                let fb_tools = build_tools_for(&fb.provider, &extra_tools);
                                 match fb_driver
-                                    .generate_stream(local_messages.clone(), None, tools.clone())
+                                    .generate_stream(local_messages.clone(), None, fb_tools.clone())
                                     .await
                                 {
                                     Ok(s) => {
                                         active_model_id = fb.model_id.clone();
                                         active_provider = fb.provider.clone();
+                                        active_key_id = fb.key_id.clone();
+                                        tools = fb_tools;
                                         driver = fb_driver;
-                                        send_model_event(
-                                            &text_tx,
-                                            &active_model_id,
-                                            &active_provider,
-                                        );
-                                        let wpayload = serde_json::json!({
-                                            "category": "model_fallback",
-                                            "message": format!(
-                                                "El modelo primario falló; respondiendo con {}.",
-                                                fb.model_id
-                                            )
-                                        });
-                                        let _ =
-                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                        pending_fallback_warning = Some((
+                                            fb.model_id.clone(),
+                                            fb.provider.clone(),
+                                            "model_fallback",
+                                            format!(
+                                                "El modelo primario ({}) falló; respondiendo con {}.",
+                                                primary_model_id, fb.model_id
+                                            ),
+                                        ));
                                         recovered = Some(s);
                                         break;
                                     }
@@ -983,20 +2149,91 @@ impl CognitiveHAL {
                                 }
                             }
 
+                            if recovered.is_none() {
+                                if let Some(r) = &tracker {
+                                    for _hop in 0..3u32 {
+                                        let dyn_dec = match r
+                                            .read()
+                                            .await
+                                            .decide_excluding(pcb, &tried_models)
+                                            .await
+                                        {
+                                            Ok(d) => d,
+                                            Err(_) => break,
+                                        };
+                                        if !tried_models.insert(dyn_dec.model_id.clone()) {
+                                            break;
+                                        }
+                                        let dyn_driver = CloudProxyDriver::new_with_callback(
+                                            Arc::clone(&self.http_client),
+                                            dyn_dec.api_url.clone(),
+                                            dyn_dec.api_key.clone(),
+                                            dyn_dec.model_id.clone(),
+                                            dyn_dec.key_id.clone(),
+                                            make_rate_limited_cb(dyn_dec.key_id.clone()),
+                                        );
+                                        let dyn_tools =
+                                            build_tools_for(&dyn_dec.provider, &extra_tools);
+                                        match dyn_driver
+                                            .generate_stream(
+                                                local_messages.clone(),
+                                                None,
+                                                dyn_tools.clone(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(s) => {
+                                                active_model_id = dyn_dec.model_id.clone();
+                                                active_provider = dyn_dec.provider.clone();
+                                                active_key_id = dyn_dec.key_id.clone();
+                                                tools = dyn_tools;
+                                                driver = dyn_driver;
+                                                pending_fallback_warning = Some((
+                                                    dyn_dec.model_id.clone(),
+                                                    dyn_dec.provider.clone(),
+                                                    "model_fallback",
+                                                    format!(
+                                                        "El modelo primario ({}) falló; respondiendo con {}.",
+                                                        primary_model_id, dyn_dec.model_id
+                                                    ),
+                                                ));
+                                                recovered = Some(s);
+                                                break;
+                                            }
+                                            Err(dyn_err) => {
+                                                self.note_model_failure(
+                                                    &dyn_dec.model_id,
+                                                    &dyn_dec.provider,
+                                                    pcb.task_type,
+                                                    Some(&dyn_err),
+                                                )
+                                                .await;
+                                                warn!(
+                                                    pid = %pid,
+                                                    fallback = %dyn_dec.model_id,
+                                                    error = %dyn_err,
+                                                    "dynamic router fallback also failed"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             match recovered {
                                 Some(s) => s,
                                 None => {
-                                    // All fallbacks failed too. Invalidate sticky so
-                                    // the next request re-evaluates from scratch, and
-                                    // surface a user-visible message — without this
-                                    // the chat appears silent on cascading failures
-                                    // (smoke-test symptom: Gemini quota exhausted +
-                                    // all OpenRouter fallbacks 401).
-                                    if let Some(r) = &tracker {
-                                        let tenant_id =
-                                            pcb.tenant_id.as_deref().unwrap_or("default");
-                                        r.read().await.invalidate_sticky(tenant_id).await;
+                                    let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                                    let mut providers: Vec<&str> = vec![active_provider.as_str()];
+                                    for fb in &decision.fallback_chain {
+                                        providers.push(fb.provider.as_str());
                                     }
+                                    let max_cooldown = self
+                                        .cooldown_and_invalidate_sticky(&providers, tenant_id)
+                                        .await;
+                                    let err_str = primary_err.to_string();
+                                    let retry_after =
+                                        Self::effective_retry_after_secs(max_cooldown, &err_str);
                                     let summary = summarise_provider_failure(&primary_err);
                                     let attempted: Vec<String> = decision
                                         .fallback_chain
@@ -1008,7 +2245,7 @@ impl CognitiveHAL {
                                          Probamos '{}' y los respaldos ({}) sin \
                                          éxito. {} Reintentá en unos segundos o \
                                          configurá otro proveedor.",
-                                        active_model_id,
+                                        primary_model_id,
                                         if attempted.is_empty() {
                                             "sin respaldos".to_string()
                                         } else {
@@ -1016,23 +2253,22 @@ impl CognitiveHAL {
                                         },
                                         summary
                                     );
-                                    let _ = text_tx.send(Ok(msg.clone()));
-                                    let wpayload = serde_json::json!({
-                                        "category": "all_models_failed",
-                                        "primary_model": active_model_id,
-                                        "primary_provider": active_provider,
-                                        "attempted_fallbacks": attempted,
-                                        "reason": summary,
-                                        "message": msg,
-                                    });
-                                    let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                    if !has_streamed_text {
+                                        let _ = text_tx.send(Ok(format_model_error_meta_token(
+                                            &msg,
+                                            retry_after,
+                                        )));
+                                    } else {
+                                        let _ = text_tx.send(Ok(msg));
+                                    }
                                     return Err(primary_err);
                                 }
                             }
                         }
                     }
                 } else {
-                    // Subsequent retries of the autocorrect loop: call driver directly
+                    // Subsequent retries of the autocorrect loop: call driver directly,
+                    // recovering via alternate keys or fallback_chain if the provider fails mid-turn.
                     match driver
                         .generate_stream(local_messages.clone(), None, tools.clone())
                         .await
@@ -1046,7 +2282,228 @@ impl CognitiveHAL {
                                 Some(&e),
                             )
                             .await;
-                            return Err(e);
+
+                            let err_lc = e.to_string().to_lowercase();
+                            let skip_keys = is_model_scoped_failure(&e)
+                                || err_lc.contains("timed out")
+                                || err_lc.contains("error sending request");
+                            let mut recovered_stream = None;
+
+                            if !skip_keys {
+                                if let Some(r) = self.router_ref.read().await.clone() {
+                                    let kp = r.read().await.key_pool_ref();
+                                    let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                                    let mut tried: std::collections::HashSet<String> =
+                                        std::collections::HashSet::new();
+                                    if let Some(kid) = driver.current_key_id() {
+                                        tried.insert(kid.to_string());
+                                    }
+                                    for _attempt in 0..2u32 {
+                                        let Some(alt) = kp
+                                            .get_available_key_excluding(
+                                                &active_provider,
+                                                &active_model_id,
+                                                tenant_id,
+                                                &tried,
+                                            )
+                                            .await
+                                        else {
+                                            break;
+                                        };
+                                        tried.insert(alt.key_id.clone());
+                                        driver.swap_api_key(
+                                            alt.api_key.clone(),
+                                            Some(alt.key_id.clone()),
+                                            make_rate_limited_cb(Some(alt.key_id.clone())),
+                                        );
+                                        match driver
+                                            .generate_stream(
+                                                local_messages.clone(),
+                                                None,
+                                                tools.clone(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(s) => {
+                                                tracing::info!(
+                                                    pid = %pid,
+                                                    provider = %active_provider,
+                                                    model = %active_model_id,
+                                                    key_id = %alt.key_id,
+                                                    "ReAct continuation recovered via alternate key"
+                                                );
+                                                active_key_id = Some(alt.key_id.clone());
+                                                recovered_stream = Some(s);
+                                                break;
+                                            }
+                                            Err(alt_err) => {
+                                                self.note_model_failure(
+                                                    &active_model_id,
+                                                    &active_provider,
+                                                    pcb.task_type,
+                                                    Some(&alt_err),
+                                                )
+                                                .await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if recovered_stream.is_none() {
+                                for fb in &decision.fallback_chain {
+                                    if !tried_models.insert(fb.model_id.clone()) {
+                                        continue;
+                                    }
+                                    let fb_driver = CloudProxyDriver::new_with_callback(
+                                        Arc::clone(&self.http_client),
+                                        fb.api_url.clone(),
+                                        fb.api_key.clone(),
+                                        fb.model_id.clone(),
+                                        fb.key_id.clone(),
+                                        make_rate_limited_cb(fb.key_id.clone()),
+                                    );
+                                    let fb_tools = build_tools_for(&fb.provider, &extra_tools);
+                                    match fb_driver
+                                        .generate_stream(
+                                            local_messages.clone(),
+                                            None,
+                                            fb_tools.clone(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(s) => {
+                                            let prev = active_model_id.clone();
+                                            let reason = summarise_provider_failure(&e);
+                                            active_model_id = fb.model_id.clone();
+                                            active_provider = fb.provider.clone();
+                                            active_key_id = fb.key_id.clone();
+                                            tools = fb_tools;
+                                            driver = fb_driver;
+                                            pending_fallback_warning = Some((
+                                                fb.model_id.clone(),
+                                                fb.provider.clone(),
+                                                "model_fallback",
+                                                format!(
+                                                    "El modelo ({}) falló ({}); respondiendo con {}.",
+                                                    prev, reason, fb.model_id
+                                                ),
+                                            ));
+                                            recovered_stream = Some(s);
+                                            break;
+                                        }
+                                        Err(fb_err) => {
+                                            self.note_model_failure(
+                                                &fb.model_id,
+                                                &fb.provider,
+                                                pcb.task_type,
+                                                Some(&fb_err),
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if recovered_stream.is_none() {
+                                if let Some(r) = self.router_ref.read().await.clone() {
+                                    for _hop in 0..3u32 {
+                                        let dyn_dec = match r
+                                            .read()
+                                            .await
+                                            .decide_excluding(pcb, &tried_models)
+                                            .await
+                                        {
+                                            Ok(d) => d,
+                                            Err(_) => break,
+                                        };
+                                        if !tried_models.insert(dyn_dec.model_id.clone()) {
+                                            break;
+                                        }
+                                        let dyn_driver = CloudProxyDriver::new_with_callback(
+                                            Arc::clone(&self.http_client),
+                                            dyn_dec.api_url.clone(),
+                                            dyn_dec.api_key.clone(),
+                                            dyn_dec.model_id.clone(),
+                                            dyn_dec.key_id.clone(),
+                                            make_rate_limited_cb(dyn_dec.key_id.clone()),
+                                        );
+                                        let dyn_tools =
+                                            build_tools_for(&dyn_dec.provider, &extra_tools);
+                                        match dyn_driver
+                                            .generate_stream(
+                                                local_messages.clone(),
+                                                None,
+                                                dyn_tools.clone(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(s) => {
+                                                let prev = active_model_id.clone();
+                                                let reason = summarise_provider_failure(&e);
+                                                active_model_id = dyn_dec.model_id.clone();
+                                                active_provider = dyn_dec.provider.clone();
+                                                active_key_id = dyn_dec.key_id.clone();
+                                                tools = dyn_tools;
+                                                driver = dyn_driver;
+                                                pending_fallback_warning = Some((
+                                                    dyn_dec.model_id.clone(),
+                                                    dyn_dec.provider.clone(),
+                                                    "model_fallback",
+                                                    format!(
+                                                        "El modelo ({}) falló ({}); respondiendo con {}.",
+                                                        prev, reason, dyn_dec.model_id
+                                                    ),
+                                                ));
+                                                recovered_stream = Some(s);
+                                                break;
+                                            }
+                                            Err(dyn_err) => {
+                                                self.note_model_failure(
+                                                    &dyn_dec.model_id,
+                                                    &dyn_dec.provider,
+                                                    pcb.task_type,
+                                                    Some(&dyn_err),
+                                                )
+                                                .await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(s) = recovered_stream {
+                                s
+                            } else {
+                                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                                let mut providers: Vec<&str> = vec![active_provider.as_str()];
+                                for fb in &decision.fallback_chain {
+                                    providers.push(fb.provider.as_str());
+                                }
+                                let max_cooldown = self
+                                    .cooldown_and_invalidate_sticky(&providers, tenant_id)
+                                    .await;
+                                let err_str = e.to_string();
+                                let retry_after =
+                                    Self::effective_retry_after_secs(max_cooldown, &err_str);
+                                let summary = summarise_provider_failure(&e);
+                                let msg = format!(
+                                    "No pude completar la respuesta tras ejecutar la herramienta ({}). Reintentá en unos segundos.",
+                                    summary
+                                );
+                                if !has_streamed_text {
+                                    let _ = text_tx
+                                        .send(Ok(format_model_error_meta_token(&msg, retry_after)));
+                                } else {
+                                    let prefix = if !last_streamed_ends_newline {
+                                        "\n\n"
+                                    } else {
+                                        ""
+                                    };
+                                    let _ = text_tx.send(Ok(format!("{}{}", prefix, msg)));
+                                }
+                                return Ok(());
+                            }
                         }
                     }
                 };
@@ -1055,10 +2512,24 @@ impl CognitiveHAL {
 
                 assistant_text = String::new();
                 tool_calls = Vec::new();
+                let mut stream_sanitizer = StreamTextSanitizer::default();
 
                 while let Some(token_result) = raw_stream.next().await {
                     match token_result {
                         Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                            if let Some((fb_model, fb_prov, cat, warn_msg)) =
+                                pending_fallback_warning.take()
+                            {
+                                if cat == "model_fallback" {
+                                    send_model_event(&text_tx, &fb_model, &fb_prov);
+                                }
+                                let wpayload = serde_json::json!({
+                                    "category": cat,
+                                    "provider": fb_prov,
+                                    "message": warn_msg,
+                                });
+                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                            }
                             if autocorrect_retries == 0 {
                                 let _ = text_tx.send(Ok(token.clone()));
                             }
@@ -1092,51 +2563,128 @@ impl CognitiveHAL {
                                 });
                                 continue; // never emit legacy token to output
                             }
-                            assistant_text.push_str(&text);
-                            if autocorrect_retries == 0 {
-                                let _ = text_tx.send(Ok(text));
+                            let clean_text = stream_sanitizer.push(&text);
+                            if clean_text.is_empty() {
+                                continue;
                             }
+                            if let Some((fb_model, fb_prov, cat, warn_msg)) =
+                                pending_fallback_warning.take()
+                            {
+                                if cat == "model_fallback" {
+                                    send_model_event(&text_tx, &fb_model, &fb_prov);
+                                }
+                                let wpayload = serde_json::json!({
+                                    "category": cat,
+                                    "provider": fb_prov,
+                                    "message": warn_msg,
+                                });
+                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                            }
+                            emit_stream_text_chunk(
+                                &text_tx,
+                                clean_text,
+                                autocorrect_retries == 0,
+                                &mut assistant_text,
+                                &mut has_streamed_text,
+                                &mut last_streamed_ends_newline,
+                                &mut needs_paragraph_break,
+                            );
                         }
                         Err(e) => {
+                            let sys_err = SystemError::HardwareFailure(format!("{}", e));
+                            self.note_model_failure(
+                                &active_model_id,
+                                &active_provider,
+                                pcb.task_type,
+                                Some(&sys_err),
+                            )
+                            .await;
+                            if autocorrect_retries == 0
+                                && assistant_text.is_empty()
+                                && tool_calls.is_empty()
+                                && !has_streamed_text
+                            {
+                                warn!(
+                                    pid = %pid,
+                                    model = %active_model_id,
+                                    provider = %active_provider,
+                                    error = %e,
+                                    "CHAL: stream interrupted with 0 tokens emitted — triggering empty-stream failover"
+                                );
+                                break;
+                            }
+                            if iteration == 0
+                                && autocorrect_retries == 0
+                                && pcb.agent_id.is_none()
+                                && is_video_req
+                                && tool_calls.is_empty()
+                            {
+                                warn!(
+                                    pid = %pid,
+                                    model = %active_model_id,
+                                    provider = %active_provider,
+                                    error = %e,
+                                    "CHAL: stream interrupted mid-video-request before tool call — falling through to CHAL Guard video_produce_auto"
+                                );
+                                if has_streamed_text && !last_streamed_ends_newline {
+                                    needs_paragraph_break = true;
+                                }
+                                break;
+                            }
                             if autocorrect_retries == 0 {
                                 let _ = text_tx.send(Err(e.clone()));
                             }
-                            return Err(SystemError::HardwareFailure(format!("{}", e)));
+                            return Err(sys_err);
                         }
                     }
                 }
 
-                // CORE-FIX (A): the smoke test caught cogito-2.1:671b on ollama_cloud
-                // returning 200 OK with zero content tokens.
-                let stream_was_empty = iteration == 0
-                    && autocorrect_retries == 0
-                    && assistant_text.is_empty()
-                    && tool_calls.is_empty();
+                let sanitized_tail = stream_sanitizer.flush();
+                if !sanitized_tail.is_empty() {
+                    emit_stream_text_chunk(
+                        &text_tx,
+                        sanitized_tail,
+                        autocorrect_retries == 0,
+                        &mut assistant_text,
+                        &mut has_streamed_text,
+                        &mut last_streamed_ends_newline,
+                        &mut needs_paragraph_break,
+                    );
+                }
+
+                // CORE-FIX (A): recover when ANY turn (including post-tool ReAct
+                // continuations on iteration > 0) returns 200 OK with zero tokens.
+                let stream_was_empty =
+                    autocorrect_retries == 0 && assistant_text.is_empty() && tool_calls.is_empty();
 
                 if stream_was_empty {
+                    // Discard any unconfirmed fallback notice since 0 tokens arrived.
+                    pending_fallback_warning = None;
                     self.note_empty_response(&active_model_id, &active_provider, pcb.task_type)
                         .await;
                     warn!(
                         pid = %pid,
+                        iteration = iteration,
                         model = %active_model_id,
-                        "primary returned 0 content tokens — trying key rotation then fallback chain"
+                        "model returned 0 content tokens — trying key rotation then fallback chain"
                     );
 
                     let mut recovered = false;
 
-                    // CORE-FIX: same key-rotation logic as the 429 path. If the
-                    // current key gave us an empty stream, try other keys of the
-                    // SAME (provider, model) before switching models.
+                    // 1. Try other keys of the SAME (provider, model).
                     if let Some(r) = self.router_ref.read().await.clone() {
                         let kp = r.read().await.key_pool_ref();
                         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                         let mut tried: std::collections::HashSet<String> =
                             std::collections::HashSet::new();
-                        if let Some(ref kid) = decision.key_id {
+                        if let Some(ref kid) = active_key_id {
                             tried.insert(kid.clone());
                         }
-                        for attempt in 0..3u32 {
-                            let alt = match kp
+                        if let Some(kid) = driver.current_key_id() {
+                            tried.insert(kid.to_string());
+                        }
+                        for attempt in 0..2u32 {
+                            let Some(alt) = kp
                                 .get_available_key_excluding(
                                     &active_provider,
                                     &active_model_id,
@@ -1144,9 +2692,8 @@ impl CognitiveHAL {
                                     &tried,
                                 )
                                 .await
-                            {
-                                Some(k) => k,
-                                None => break,
+                            else {
+                                break;
                             };
                             tried.insert(alt.key_id.clone());
                             let alt_url = alt
@@ -1166,61 +2713,35 @@ impl CognitiveHAL {
                                 .await
                             {
                                 Ok(s) => {
-                                    tokio::pin!(s);
-                                    let mut alt_text = String::new();
-                                    let mut alt_tool_calls: Vec<ToolCallRecord> = Vec::new();
-                                    while let Some(tr) = s.next().await {
-                                        match tr {
-                                            Ok(token) if token.starts_with("__TOOL_CALL__") => {
-                                                let _ = text_tx.send(Ok(token.clone()));
-                                                let json_str = token
-                                                    .strip_prefix("__TOOL_CALL__")
-                                                    .unwrap_or_default();
-                                                if let Ok(tc) =
-                                                    serde_json::from_str::<DriverToolCallPayload>(
-                                                        json_str,
-                                                    )
-                                                {
-                                                    alt_tool_calls.push(ToolCallRecord {
-                                                        id: tc.id,
-                                                        type_: "function".to_string(),
-                                                        function: FunctionCallRecord {
-                                                            name: tc.name,
-                                                            arguments: tc.arguments.to_string(),
-                                                        },
-                                                    });
-                                                }
-                                            }
-                                            Ok(text) => {
-                                                alt_text.push_str(&text);
-                                                let _ = text_tx.send(Ok(text));
-                                            }
-                                            Err(e) => {
-                                                let _ = text_tx.send(Err(e));
-                                            }
-                                        }
-                                    }
+                                    let mut rec_sanitizer = StreamTextSanitizer::default();
+                                    let warn_msg = format!(
+                                        "El modelo no respondió con la primera key; cambié a otra del mismo proveedor ({}).",
+                                        active_provider
+                                    );
+                                    let (alt_text, alt_tool_calls) = consume_recovery_stream(
+                                        s,
+                                        &text_tx,
+                                        &active_model_id,
+                                        &active_provider,
+                                        "key_rotated",
+                                        warn_msg,
+                                        false,
+                                        &mut rec_sanitizer,
+                                        &mut has_streamed_text,
+                                        &mut last_streamed_ends_newline,
+                                        &mut needs_paragraph_break,
+                                        pid,
+                                        "alternate key",
+                                    )
+                                    .await;
                                     if !alt_text.is_empty() || !alt_tool_calls.is_empty() {
-                                        let wpayload = serde_json::json!({
-                                            "category": "key_rotated",
-                                            "provider": active_provider,
-                                            "attempt": attempt + 1,
-                                            "message": format!(
-                                                "El modelo no respondió con la \
-                                                 primera key; cambié a otra del \
-                                                 mismo proveedor ({}).",
-                                                active_provider
-                                            ),
-                                        });
-                                        let _ =
-                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                         driver = alt_driver;
+                                        active_key_id = Some(alt.key_id.clone());
                                         assistant_text = alt_text;
                                         tool_calls = alt_tool_calls;
                                         recovered = true;
                                         break;
                                     } else {
-                                        // Alt key also empty — record + try next.
                                         self.note_empty_response(
                                             &active_model_id,
                                             &active_provider,
@@ -1257,13 +2778,12 @@ impl CognitiveHAL {
                         }
                     }
 
-                    if recovered {
-                        if tool_calls.is_empty() {
-                            finished = true;
-                            break;
-                        }
-                    } else {
+                    // 2. Try static fallback chain models.
+                    if !recovered {
                         for fb in &decision.fallback_chain {
+                            if !tried_models.insert(fb.model_id.clone()) {
+                                continue;
+                            }
                             let fb_driver = CloudProxyDriver::new_with_callback(
                                 Arc::clone(&self.http_client),
                                 fb.api_url.clone(),
@@ -1272,69 +2792,44 @@ impl CognitiveHAL {
                                 fb.key_id.clone(),
                                 make_rate_limited_cb(fb.key_id.clone()),
                             );
+                            let fb_tools = build_tools_for(&fb.provider, &extra_tools);
                             match fb_driver
-                                .generate_stream(local_messages.clone(), None, tools.clone())
+                                .generate_stream(local_messages.clone(), None, fb_tools.clone())
                                 .await
                             {
                                 Ok(s) => {
-                                    tokio::pin!(s);
-                                    let mut fb_text = String::new();
-                                    let mut fb_tool_calls: Vec<ToolCallRecord> = Vec::new();
-                                    while let Some(tr) = s.next().await {
-                                        match tr {
-                                            Ok(token) if token.starts_with("__TOOL_CALL__") => {
-                                                let _ = text_tx.send(Ok(token.clone()));
-                                                let json_str = token
-                                                    .strip_prefix("__TOOL_CALL__")
-                                                    .unwrap_or_default();
-                                                if let Ok(tc) =
-                                                    serde_json::from_str::<DriverToolCallPayload>(
-                                                        json_str,
-                                                    )
-                                                {
-                                                    fb_tool_calls.push(ToolCallRecord {
-                                                        id: tc.id,
-                                                        type_: "function".to_string(),
-                                                        function: FunctionCallRecord {
-                                                            name: tc.name,
-                                                            arguments: tc.arguments.to_string(),
-                                                        },
-                                                    });
-                                                }
-                                            }
-                                            Ok(text) => {
-                                                fb_text.push_str(&text);
-                                                let _ = text_tx.send(Ok(text));
-                                            }
-                                            Err(e) => {
-                                                let _ = text_tx.send(Err(e));
-                                            }
-                                        }
-                                    }
+                                    let mut rec_sanitizer = StreamTextSanitizer::default();
+                                    let warn_msg = format!(
+                                        "El modelo ({}) no respondió; cambiamos a {}.",
+                                        active_model_id, fb.model_id
+                                    );
+                                    let (fb_text, fb_tool_calls) = consume_recovery_stream(
+                                        s,
+                                        &text_tx,
+                                        &fb.model_id,
+                                        &fb.provider,
+                                        "model_fallback",
+                                        warn_msg,
+                                        true,
+                                        &mut rec_sanitizer,
+                                        &mut has_streamed_text,
+                                        &mut last_streamed_ends_newline,
+                                        &mut needs_paragraph_break,
+                                        pid,
+                                        "fallback",
+                                    )
+                                    .await;
                                     if !fb_text.is_empty() || !fb_tool_calls.is_empty() {
                                         active_model_id = fb.model_id.clone();
                                         active_provider = fb.provider.clone();
+                                        active_key_id = fb.key_id.clone();
+                                        tools = fb_tools;
                                         driver = fb_driver;
-                                        send_model_event(
-                                            &text_tx,
-                                            &active_model_id,
-                                            &active_provider,
-                                        );
-                                        let wpayload = serde_json::json!({
-                                            "category": "model_fallback",
-                                            "message": format!(
-                                                "El modelo primario no respondió; cambiamos a {}.",
-                                                fb.model_id
-                                            )
-                                        });
-                                        let _ =
-                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                         assistant_text = fb_text;
                                         tool_calls = fb_tool_calls;
                                         recovered = true;
                                         break;
                                     } else {
-                                        // Fallback also returned empty. Record and try next.
                                         self.note_empty_response(
                                             &fb.model_id,
                                             &fb.provider,
@@ -1367,30 +2862,100 @@ impl CognitiveHAL {
                         }
                     }
 
+                    // 3. Dynamic router failover across any remaining healthy providers/models.
                     if !recovered {
-                        // CORE-FIX (B): emit a user-visible message before bailing,
-                        // so the chat doesn't show a silent empty response.
-                        let mut max_cooldown: u64 = 0;
                         if let Some(r) = self.router_ref.read().await.clone() {
-                            let tr = r.read().await;
-                            let tracker = tr.tracker_ref();
-                            if let Some(s) = tracker
-                                .provider_cooldown_remaining_secs(&active_provider)
-                                .await
-                            {
-                                max_cooldown = max_cooldown.max(s);
-                            }
-                            for fb in &decision.fallback_chain {
-                                if let Some(s) =
-                                    tracker.provider_cooldown_remaining_secs(&fb.provider).await
+                            for _hop in 0..3u32 {
+                                let dyn_dec =
+                                    match r.read().await.decide_excluding(pcb, &tried_models).await
+                                    {
+                                        Ok(d) => d,
+                                        Err(_) => break,
+                                    };
+                                if !tried_models.insert(dyn_dec.model_id.clone()) {
+                                    break;
+                                }
+                                let dyn_driver = CloudProxyDriver::new_with_callback(
+                                    Arc::clone(&self.http_client),
+                                    dyn_dec.api_url.clone(),
+                                    dyn_dec.api_key.clone(),
+                                    dyn_dec.model_id.clone(),
+                                    dyn_dec.key_id.clone(),
+                                    make_rate_limited_cb(dyn_dec.key_id.clone()),
+                                );
+                                let dyn_tools = build_tools_for(&dyn_dec.provider, &extra_tools);
+                                match dyn_driver
+                                    .generate_stream(
+                                        local_messages.clone(),
+                                        None,
+                                        dyn_tools.clone(),
+                                    )
+                                    .await
                                 {
-                                    max_cooldown = max_cooldown.max(s);
+                                    Ok(s) => {
+                                        let mut rec_sanitizer = StreamTextSanitizer::default();
+                                        let warn_msg = format!(
+                                            "El modelo ({}) no respondió; cambiamos a {}.",
+                                            active_model_id, dyn_dec.model_id
+                                        );
+                                        let (dyn_text, dyn_tool_calls) = consume_recovery_stream(
+                                            s,
+                                            &text_tx,
+                                            &dyn_dec.model_id,
+                                            &dyn_dec.provider,
+                                            "model_fallback",
+                                            warn_msg,
+                                            true,
+                                            &mut rec_sanitizer,
+                                            &mut has_streamed_text,
+                                            &mut last_streamed_ends_newline,
+                                            &mut needs_paragraph_break,
+                                            pid,
+                                            "dynamic fallback",
+                                        )
+                                        .await;
+                                        if !dyn_text.is_empty() || !dyn_tool_calls.is_empty() {
+                                            active_model_id = dyn_dec.model_id.clone();
+                                            active_provider = dyn_dec.provider.clone();
+                                            active_key_id = dyn_dec.key_id.clone();
+                                            tools = dyn_tools;
+                                            driver = dyn_driver;
+                                            assistant_text = dyn_text;
+                                            tool_calls = dyn_tool_calls;
+                                            recovered = true;
+                                            break;
+                                        } else {
+                                            self.note_empty_response(
+                                                &dyn_dec.model_id,
+                                                &dyn_dec.provider,
+                                                pcb.task_type,
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.note_model_failure(
+                                            &dyn_dec.model_id,
+                                            &dyn_dec.provider,
+                                            pcb.task_type,
+                                            Some(&e),
+                                        )
+                                        .await;
+                                    }
                                 }
                             }
-                            // Invalidate sticky so next request re-evaluates from scratch.
-                            let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-                            tr.invalidate_sticky(tenant_id).await;
                         }
+                    }
+
+                    if !recovered {
+                        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                        let mut providers: Vec<&str> = vec![active_provider.as_str()];
+                        for fb in &decision.fallback_chain {
+                            providers.push(fb.provider.as_str());
+                        }
+                        let max_cooldown = self
+                            .cooldown_and_invalidate_sticky(&providers, tenant_id)
+                            .await;
 
                         let msg = if max_cooldown > 0 {
                             format!(
@@ -1402,7 +2967,7 @@ impl CognitiveHAL {
                         } else if decision.fallback_chain.is_empty() {
                             format!(
                                 "El modelo '{}' no devolvió respuesta y no hay \
-                                 modelos de respaldo configurados. Revisá tu \
+                                 otros modelos disponibles ahora. Revisá tu \
                                  selección de proveedor o agregá una alternativa.",
                                 active_model_id
                             )
@@ -1415,22 +2980,108 @@ impl CognitiveHAL {
                             )
                         };
 
-                        // Visible to the user as assistant text.
-                        let _ = text_tx.send(Ok(msg.clone()));
-                        // Also surface as a structured warning event for the UI.
-                        let wpayload = serde_json::json!({
-                            "category": "all_models_failed",
-                            "primary_model": active_model_id,
-                            "primary_provider": active_provider,
-                            "cooldown_secs": max_cooldown,
-                            "message": msg.clone(),
-                        });
-                        let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
-
-                        drop(msg); // mark used so clippy is happy
+                        if !has_streamed_text {
+                            let _ =
+                                text_tx.send(Ok(format_model_error_meta_token(&msg, max_cooldown)));
+                        } else {
+                            let prefix = if !last_streamed_ends_newline {
+                                "\n\n"
+                            } else {
+                                ""
+                            };
+                            let _ = text_tx.send(Ok(format!("{}{}", prefix, msg)));
+                        }
                         tool_calls.clear();
                         finished = true;
                         break;
+                    }
+                }
+
+                // CORE-ARCH / GUARD: Si el ChatAgent (Nivel 0) no emitió tool calls pero prometió en texto
+                // que el equipo/supervisor trabajaría, o si el pedido del usuario es técnico (script, código, etc.),
+                // NO permitir alucinación en texto sin ejecución real. Sintetizar spawn_agent para garantizar
+                // que el supervisor se cree, aparezca en el Dashboard y ejecute la tarea en segundo plano.
+                if tool_calls.is_empty() && pcb.agent_id.is_none() && iteration == 0 {
+                    if Self::is_status_query(&pcb.memory_pointers.l1_instruction) {
+                        info!(
+                            pid = %pid,
+                            "CHAL Guard: ChatAgent Level 0 status query intercepted without tool call. Auto-synthesizing get_agent_status."
+                        );
+                        tool_calls.push(ToolCallRecord {
+                            id: format!("call_status_{}", uuid::Uuid::new_v4()),
+                            type_: "function".to_string(),
+                            function: FunctionCallRecord {
+                                name: "get_agent_status".to_string(),
+                                arguments: serde_json::json!({}).to_string(),
+                            },
+                        });
+                    } else if let Some(resolved_video_prompt) = Self::resolve_video_request_prompt(
+                        &pcb.memory_pointers.l1_instruction,
+                        &pcb.message_history,
+                        &assistant_text,
+                    ) {
+                        info!(
+                            pid = %pid,
+                            "CHAL Guard: ChatAgent Level 0 video request/nudge intercepted without tool call. Auto-synthesizing video_produce_auto."
+                        );
+                        tool_calls.push(ToolCallRecord {
+                            id: format!("call_video_{}", uuid::Uuid::new_v4()),
+                            type_: "function".to_string(),
+                            function: FunctionCallRecord {
+                                name: "video_produce_auto".to_string(),
+                                arguments: serde_json::json!({
+                                    "prompt": resolved_video_prompt,
+                                })
+                                .to_string(),
+                            },
+                        });
+                    } else {
+                        let is_video_advisory = Self::is_video_advisory_or_followup_query(
+                            &pcb.memory_pointers.l1_instruction,
+                        );
+                        let task_is_technical = !is_video_advisory
+                            && Self::has_technical_context(
+                                &pcb.memory_pointers.l1_instruction,
+                                &pcb.message_history,
+                            );
+                        let claims_delegation = Self::assistant_claims_delegation(&assistant_text);
+
+                        if claims_delegation || task_is_technical {
+                            let project_scope = Self::derive_task_scope(
+                                &pcb.memory_pointers.l1_instruction,
+                                &pcb.message_history,
+                            );
+                            let project_name = Self::derive_task_project_name(&project_scope);
+                            let task_type_str = match crate::pcb::infer_task_type(&project_scope) {
+                                crate::pcb::TaskType::Code => "code",
+                                crate::pcb::TaskType::Analysis => "analysis",
+                                crate::pcb::TaskType::Planning => "planning",
+                                _ => "code",
+                            };
+
+                            info!(
+                                pid = %pid,
+                                project = %project_name,
+                                claims_delegation,
+                                task_is_technical,
+                                "CHAL Guard: ChatAgent Level 0 delegating via synthesized spawn_agent tool call"
+                            );
+
+                            tool_calls.push(ToolCallRecord {
+                                id: format!("call_auto_{}", uuid::Uuid::new_v4()),
+                                type_: "function".to_string(),
+                                function: FunctionCallRecord {
+                                    name: "spawn_agent".to_string(),
+                                    arguments: serde_json::json!({
+                                        "role": "project_supervisor",
+                                        "name": project_name,
+                                        "scope": project_scope,
+                                        "task_type": task_type_str,
+                                    })
+                                    .to_string(),
+                                },
+                            });
+                        }
                     }
                 }
 
@@ -1444,7 +3095,39 @@ impl CognitiveHAL {
                 let role = AgentRole::ChatAgent;
 
                 for tc in &tool_calls {
-                    match autocorrect::validate_and_sanitize_tool_call(tc, &role) {
+                    // Never allow ChatAgent to hijack a video request into a background ProjectSupervisor.
+                    let rewritten_tc;
+                    let target_tc = if is_video_req && tc.function.name == "spawn_agent" {
+                        info!(
+                            pid = %pid,
+                            "CHAL Guard: Redirecting accidental spawn_agent on video request to video_produce_auto"
+                        );
+                        let resolved_prompt = Self::resolve_video_request_prompt(
+                            &pcb.memory_pointers.l1_instruction,
+                            &pcb.message_history,
+                            &assistant_text,
+                        )
+                        .unwrap_or_else(|| pcb.memory_pointers.l1_instruction.clone());
+                        rewritten_tc = ToolCallRecord {
+                            id: tc.id.clone(),
+                            type_: "function".to_string(),
+                            function: FunctionCallRecord {
+                                name: "video_produce_auto".to_string(),
+                                arguments: serde_json::json!({
+                                    "prompt": resolved_prompt,
+                                })
+                                .to_string(),
+                            },
+                        };
+                        &rewritten_tc
+                    } else {
+                        tc
+                    };
+                    match autocorrect::validate_and_sanitize_tool_call_with_extra(
+                        target_tc,
+                        &role,
+                        &extra_tools,
+                    ) {
                         Ok(sanitized) => validated_calls.push(sanitized),
                         Err(e) => validation_errors.push(e),
                     }
@@ -1521,6 +3204,19 @@ impl CognitiveHAL {
 
             if tool_calls.is_empty() {
                 last_assistant_text = assistant_text.clone();
+                if !rendered_video_ids.is_empty() {
+                    let mut suffix = String::new();
+                    for vid_id in &rendered_video_ids {
+                        let tag = format!("[AEGIS_VIDEO_CARD:{}]", vid_id);
+                        if !last_assistant_text.contains(&tag) {
+                            suffix.push_str(&format!("\n\n{}", tag));
+                        }
+                    }
+                    if !suffix.is_empty() {
+                        let _ = text_tx.send(Ok(suffix.clone()));
+                        last_assistant_text.push_str(&suffix);
+                    }
+                }
                 finished = true;
                 break;
             }
@@ -1538,8 +3234,36 @@ impl CognitiveHAL {
             });
 
             // Ejecutar cada tool call e inyectar resultado
+            let mut refresh_module_tools = false;
             for tc in &tool_calls {
-                let result = self.execute_tool_call_internal(tc, pid, pcb).await;
+                if tc.function.name == "manage_modules" {
+                    refresh_module_tools = true;
+                }
+                if tc.function.name.starts_with("video_") {
+                    let msg = if tc.function.name == "video_produce_auto" {
+                        "🎬 Iniciando Aegis Video Studio: preparando escenas, locución y exportación MP4...".to_string()
+                    } else {
+                        format!(
+                            "🎬 Ejecutando {} en Aegis Video Studio...",
+                            tc.function.name
+                        )
+                    };
+                    let start_prog = serde_json::json!({
+                        "stage": tc.function.name,
+                        "progress": 0.05,
+                        "message": msg,
+                        "done": false,
+                    });
+                    let _ = text_tx.send(Ok(format!("__PROGRESS__{}", start_prog)));
+                }
+                let result = self
+                    .execute_tool_call_with_progress(tc, pid, pcb, Some(&text_tx))
+                    .await;
+                collect_rendered_video_card_ids(
+                    &tc.function.name,
+                    &result,
+                    &mut rendered_video_ids,
+                );
                 tracing::info!(
                     pid = %pid,
                     tool = %tc.function.name,
@@ -1552,6 +3276,10 @@ impl CognitiveHAL {
                     name: Some(tc.function.name.clone()),
                     ..Default::default()
                 });
+            }
+            if refresh_module_tools && !casual_turn {
+                extra_tools = load_extra_tools().await;
+                tools = build_tools_for(&active_provider, &extra_tools);
             }
         }
 
@@ -1576,10 +3304,11 @@ impl CognitiveHAL {
         // CORE-378: Indexación episódica semántica automática del turno conversacional
         if finished && !last_assistant_text.is_empty() {
             let tenant = pcb.tenant_id.as_deref().unwrap_or("default");
+            let safe_user_text = Self::mask_api_keys_in_text(&pcb.memory_pointers.l1_instruction);
+            let safe_assistant_text = Self::mask_api_keys_in_text(last_assistant_text.trim());
             let memory_entry = format!(
                 "User: {}\nAssistant: {}",
-                pcb.memory_pointers.l1_instruction,
-                last_assistant_text.trim()
+                safe_user_text, safe_assistant_text
             );
             let _ = self.store_memory(tenant, &memory_entry).await;
         }
@@ -1649,7 +3378,7 @@ impl CognitiveHAL {
         let mut messages = messages;
         const MAX_ITERATIONS: usize = 10;
 
-        let agent_task_type = {
+        let (agent_task_type, agent_role_meta, agent_model_pref) = {
             let orch = self.agent_orchestrator.read().await.clone();
             match orch {
                 Some(o) => o
@@ -1657,9 +3386,34 @@ impl CognitiveHAL {
                     .read()
                     .await
                     .get(&agent_id)
-                    .map(|n| n.task_type)
-                    .unwrap_or(crate::pcb::TaskType::Code),
-                None => crate::pcb::TaskType::Code,
+                    .map(|n| (n.task_type, n.role.clone(), n.model_preference))
+                    .unwrap_or((
+                        crate::pcb::TaskType::Code,
+                        AgentRole::Supervisor {
+                            name: "Agent".to_string(),
+                            scope: "generic".to_string(),
+                        },
+                        crate::scheduler::ModelPreference::HybridSmart,
+                    )),
+                None => (
+                    crate::pcb::TaskType::Code,
+                    AgentRole::Supervisor {
+                        name: "Agent".to_string(),
+                        scope: "generic".to_string(),
+                    },
+                    crate::scheduler::ModelPreference::HybridSmart,
+                ),
+            }
+        };
+        let mut tools = tools;
+        let mut tried_models: std::collections::HashSet<String> = std::collections::HashSet::new();
+        tried_models.insert(decision.model_id.clone());
+        let build_agent_tools = |prov: &str| -> Option<Vec<serde_json::Value>> {
+            let defs = ToolRegistry::tools_for(&agent_role_meta, &ProviderKind::from_string(prov));
+            if defs.is_empty() {
+                None
+            } else {
+                Some(defs)
             }
         };
 
@@ -1686,6 +3440,9 @@ impl CognitiveHAL {
                         .await;
                         let mut recovered = None;
                         for fb in &decision.fallback_chain {
+                            if !tried_models.insert(fb.model_id.clone()) {
+                                continue;
+                            }
                             let fb_driver = CloudProxyDriver::new_with_callback(
                                 Arc::clone(&self.http_client),
                                 fb.api_url.clone(),
@@ -1694,13 +3451,15 @@ impl CognitiveHAL {
                                 fb.key_id.clone(),
                                 make_rate_limited_cb(fb.key_id.clone()),
                             );
+                            let fb_tools = build_agent_tools(&fb.provider);
                             match fb_driver
-                                .generate_stream(local_messages.clone(), None, tools.clone())
+                                .generate_stream(local_messages.clone(), None, fb_tools.clone())
                                 .await
                             {
                                 Ok(s) => {
                                     active_model_id = fb.model_id.clone();
                                     active_provider = fb.provider.clone();
+                                    tools = fb_tools;
                                     driver = fb_driver;
                                     recovered = Some(s);
                                     break;
@@ -1713,6 +3472,68 @@ impl CognitiveHAL {
                                         Some(&e),
                                     )
                                     .await;
+                                }
+                            }
+                        }
+                        if recovered.is_none() {
+                            if let Some(r) = self.router_ref.read().await.clone() {
+                                let mut dyn_pcb = crate::pcb::PCB::new(
+                                    format!("agent_fb_{}", agent_id),
+                                    5,
+                                    String::new(),
+                                );
+                                dyn_pcb.task_type = agent_task_type;
+                                dyn_pcb.model_pref = agent_model_pref;
+                                dyn_pcb.agent_id = Some(agent_id);
+                                dyn_pcb.tenant_id = agent_tenant_id.clone();
+                                for _hop in 0..3u32 {
+                                    let dyn_dec = match r
+                                        .read()
+                                        .await
+                                        .decide_excluding(&dyn_pcb, &tried_models)
+                                        .await
+                                    {
+                                        Ok(d) => d,
+                                        Err(_) => break,
+                                    };
+                                    if !tried_models.insert(dyn_dec.model_id.clone()) {
+                                        break;
+                                    }
+                                    let dyn_driver = CloudProxyDriver::new_with_callback(
+                                        Arc::clone(&self.http_client),
+                                        dyn_dec.api_url.clone(),
+                                        dyn_dec.api_key.clone(),
+                                        dyn_dec.model_id.clone(),
+                                        dyn_dec.key_id.clone(),
+                                        make_rate_limited_cb(dyn_dec.key_id.clone()),
+                                    );
+                                    let dyn_tools = build_agent_tools(&dyn_dec.provider);
+                                    match dyn_driver
+                                        .generate_stream(
+                                            local_messages.clone(),
+                                            None,
+                                            dyn_tools.clone(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(s) => {
+                                            active_model_id = dyn_dec.model_id.clone();
+                                            active_provider = dyn_dec.provider.clone();
+                                            tools = dyn_tools;
+                                            driver = dyn_driver;
+                                            recovered = Some(s);
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            self.note_model_failure(
+                                                &dyn_dec.model_id,
+                                                &dyn_dec.provider,
+                                                agent_task_type,
+                                                Some(&e),
+                                            )
+                                            .await;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1763,10 +3584,18 @@ impl CognitiveHAL {
                             }
                         }
                         Err(e) => {
+                            let sys_err = SystemError::HardwareFailure(format!("{}", e));
+                            self.note_model_failure(
+                                &active_model_id,
+                                &active_provider,
+                                agent_task_type,
+                                Some(&sys_err),
+                            )
+                            .await;
                             if autocorrect_retries == 0 {
                                 let _ = text_tx.send(Err(e.clone()));
                             }
-                            return Err(SystemError::HardwareFailure(format!("{}", e)));
+                            return Err(sys_err);
                         }
                     }
                 }
@@ -2051,10 +3880,21 @@ impl CognitiveHAL {
     async fn execute_tool_call_internal(
         &self,
         tc: &ToolCallRecord,
-        _pid: &str,
+        pid: &str,
         pcb: &PCB,
     ) -> String {
-        let args: serde_json::Value =
+        self.execute_tool_call_with_progress(tc, pid, pcb, None)
+            .await
+    }
+
+    async fn execute_tool_call_with_progress(
+        &self,
+        tc: &ToolCallRecord,
+        _pid: &str,
+        pcb: &PCB,
+        progress_tx: Option<&tokio::sync::mpsc::UnboundedSender<Result<String, ExecutionError>>>,
+    ) -> String {
+        let mut args: serde_json::Value =
             serde_json::from_str(&tc.function.arguments).unwrap_or_default();
 
         match tc.function.name.as_str() {
@@ -2065,8 +3905,16 @@ impl CognitiveHAL {
                     Some(orchestrator) => {
                         let name = args["name"].as_str().map(String::from);
                         let scope = args["scope"].as_str().unwrap_or("").to_string();
-                        let task_type_str = args["task_type"].as_str().unwrap_or("planning");
-                        let task_type = Some(crate::syscalls::parse_task_type(task_type_str));
+                        let task_type_str = args["task_type"].as_str();
+                        let task_type = task_type_str
+                            .map(crate::syscalls::parse_task_type)
+                            .or_else(|| {
+                                if !scope.trim().is_empty() {
+                                    Some(crate::pcb::infer_task_type(&scope))
+                                } else {
+                                    Some(crate::pcb::TaskType::Planning)
+                                }
+                            });
 
                         if let Some(caller_id) = pcb.agent_id {
                             let role_str = args["role"].as_str().unwrap_or("").to_string();
@@ -2105,14 +3953,18 @@ impl CognitiveHAL {
                             match orchestrator
                                 .create_project(
                                     project_name.clone(),
-                                    scope,
+                                    scope.clone(),
                                     task_type,
                                     pcb.tenant_id.clone(),
                                 )
                                 .await
                             {
                                 Ok(agent_id) => {
-                                    let task = pcb.memory_pointers.l1_instruction.clone();
+                                    let task = if !scope.trim().is_empty() {
+                                        scope.clone()
+                                    } else {
+                                        pcb.memory_pointers.l1_instruction.clone()
+                                    };
                                     if !task.is_empty() {
                                         if let Err(e) =
                                             orchestrator.dispatch(agent_id, task, vec![]).await
@@ -2130,6 +3982,13 @@ impl CognitiveHAL {
                                             );
                                         }
                                     }
+                                    // CORE-EMIT: Actualizar inmediatamente el árbol en la UI para que aparezca en el Dashboard
+                                    let tenant = pcb.tenant_id.as_deref().unwrap_or("default");
+                                    let nodes = orchestrator.tree_snapshot_for_tenant(tenant).await;
+                                    orchestrator.emit_event(
+                                        crate::agents::event::AgentEvent::TreeSnapshot { nodes },
+                                    );
+
                                     format!(
                                         "{{\"status\":\"spawned\",\"project\":\"{}\",\"agent_id\":\"{}\"}}",
                                         project_name,
@@ -2985,7 +4844,1309 @@ impl CognitiveHAL {
                 }
             }
 
+            // CORE-375: Herramientas personales instantáneas del Chat Agent
+            "log_expense_or_entry" => {
+                let tenant_id = match &pcb.tenant_id {
+                    Some(t) => t.clone(),
+                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
+                };
+                let session_key = pcb.session_key.as_deref().unwrap_or("");
+
+                let raw_category = args["category"].as_str().unwrap_or("general");
+                let description = args["description"].as_str().unwrap_or("");
+                let amount = args["amount"].as_f64().unwrap_or(0.0);
+
+                let norm_category =
+                    crate::enclave::normalize_expense_category(raw_category, description);
+
+                match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                    Ok(db) => {
+                        if let Err(e) = db.add_expense(amount, description, Some(&norm_category)) {
+                            return format!(
+                                "{{\"error\":\"add_expense_failed\",\"detail\":\"{}\"}}",
+                                e
+                            );
+                        }
+                        match db.query_expenses_summary(Some(&norm_category)) {
+                            Ok(summary) => summary.to_string(),
+                            Err(e) => {
+                                format!("{{\"error\":\"summary_failed\",\"detail\":\"{}\"}}", e)
+                            }
+                        }
+                    }
+                    Err(e) => format!("{{\"error\":\"enclave_open_failed\",\"detail\":\"{}\"}}", e),
+                }
+            }
+
+            "query_ledger" => {
+                let tenant_id = match &pcb.tenant_id {
+                    Some(t) => t.clone(),
+                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
+                };
+                let session_key = pcb.session_key.as_deref().unwrap_or("");
+
+                let category_opt = args["category"].as_str();
+
+                match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                    Ok(db) => match db.query_expenses_summary(category_opt) {
+                        Ok(summary) => summary.to_string(),
+                        Err(e) => format!("{{\"error\":\"summary_failed\",\"detail\":\"{}\"}}", e),
+                    },
+                    Err(e) => format!("{{\"error\":\"enclave_open_failed\",\"detail\":\"{}\"}}", e),
+                }
+            }
+
+            "remember_fact" => {
+                let tenant_id = match &pcb.tenant_id {
+                    Some(t) => t.clone(),
+                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
+                };
+                let session_key = pcb.session_key.as_deref().unwrap_or("");
+
+                let action = args["action"]
+                    .as_str()
+                    .unwrap_or("upsert")
+                    .trim()
+                    .to_lowercase();
+                let id_opt = args.get("id").and_then(|v| {
+                    v.as_i64().or_else(|| {
+                        v.as_str()
+                            .map(|s| s.trim().trim_start_matches('#').trim())
+                            .and_then(|s| s.parse::<i64>().ok())
+                    })
+                });
+                let category = args["category"].as_str().unwrap_or("general");
+                let fact = args["fact"].as_str().unwrap_or("").trim();
+
+                match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                    Ok(db) => match action.as_str() {
+                        "delete" => {
+                            let Some(fid) = id_opt else {
+                                return "{\"error\":\"missing_id\",\"detail\":\"Indicá el id de la nota a eliminar.\"}".to_string();
+                            };
+                            match db.delete_personal_fact(fid) {
+                                Ok(true) => serde_json::json!({
+                                    "status": "deleted",
+                                    "id": fid
+                                })
+                                .to_string(),
+                                Ok(false) => serde_json::json!({
+                                    "status": "not_found",
+                                    "id": fid
+                                })
+                                .to_string(),
+                                Err(e) => format!(
+                                    "{{\"error\":\"remember_fact_delete_failed\",\"detail\":\"{}\"}}",
+                                    e
+                                ),
+                            }
+                        }
+                        _ => {
+                            if fact.is_empty() {
+                                return "{\"error\":\"empty_fact\",\"detail\":\"El hecho a guardar no puede estar vacío.\"}".to_string();
+                            }
+                            match db.upsert_personal_fact(id_opt, category, fact, "chat") {
+                                Ok(crate::enclave::PersonalFactUpsertOutcome::Inserted { id }) => {
+                                    serde_json::json!({
+                                        "status": "remembered",
+                                        "id": id,
+                                        "fact": fact,
+                                        "category": category
+                                    })
+                                    .to_string()
+                                }
+                                Ok(crate::enclave::PersonalFactUpsertOutcome::Updated {
+                                    id,
+                                    previous_fact,
+                                }) => serde_json::json!({
+                                    "status": "updated",
+                                    "id": id,
+                                    "fact": fact,
+                                    "previous_fact": previous_fact,
+                                    "category": category
+                                })
+                                .to_string(),
+                                Ok(crate::enclave::PersonalFactUpsertOutcome::AlreadyKnown {
+                                    id,
+                                }) => serde_json::json!({
+                                    "status": "already_known",
+                                    "id": id,
+                                    "fact": fact,
+                                    "category": category
+                                })
+                                .to_string(),
+                                Err(e) => format!(
+                                    "{{\"error\":\"remember_fact_failed\",\"detail\":\"{}\"}}",
+                                    e
+                                ),
+                            }
+                        }
+                    },
+                    Err(e) => format!("{{\"error\":\"enclave_open_failed\",\"detail\":\"{}\"}}", e),
+                }
+            }
+
+            "manage_reminder" => {
+                let tenant_id = match &pcb.tenant_id {
+                    Some(t) => t.clone(),
+                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
+                };
+                let session_key = pcb.session_key.as_deref().unwrap_or("");
+
+                let action = args["action"].as_str().unwrap_or("list").trim();
+                let id_arg = args.get("id").and_then(|v| {
+                    v.as_i64()
+                        .map(|n| n.to_string())
+                        .or_else(|| v.as_str().map(|s| s.trim().to_string()))
+                        .filter(|s| !s.is_empty())
+                });
+                let text = args["text"].as_str().unwrap_or("").trim();
+                let time_hint = args["time_hint"].as_str().unwrap_or("").trim();
+                let raw_rec = args["recurrence"].as_str().unwrap_or("").trim();
+
+                let mut norm_rec = crate::enclave::normalize_recurrence(raw_rec);
+                let th_lc = time_hint.to_lowercase();
+                if norm_rec.is_empty()
+                    && (th_lc.contains("todos los")
+                        || th_lc.contains("cada ")
+                        || th_lc.contains("diari")
+                        || th_lc.contains("semanal")
+                        || th_lc.contains("mensual"))
+                {
+                    norm_rec = crate::enclave::normalize_recurrence(time_hint);
+                }
+
+                let now_local = chrono::Local::now();
+                let remind_at =
+                    crate::enclave::normalize_remind_at(time_hint, &norm_rec, now_local);
+
+                match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                    Ok(db) => match action {
+                        "add" => {
+                            if text.is_empty() {
+                                return "{\"error\":\"missing_text\",\"detail\":\"Falta la descripción del recordatorio.\"}".to_string();
+                            }
+                            match db.add_reminder_with_recurrence(&remind_at, text, Some(&norm_rec))
+                            {
+                                Ok(new_id) => serde_json::json!({
+                                    "status": "added",
+                                    "id": new_id,
+                                    "description": text,
+                                    "remind_at": remind_at,
+                                    "recurrence": norm_rec
+                                })
+                                .to_string(),
+                                Err(e) => format!(
+                                    "{{\"error\":\"add_reminder_failed\",\"detail\":\"{}\"}}",
+                                    e
+                                ),
+                            }
+                        }
+                        "update" => {
+                            let target = id_arg.as_deref().unwrap_or(text);
+                            if target.is_empty() {
+                                return "{\"error\":\"missing_target\",\"detail\":\"Indicá 'id' o 'text' para actualizar el recordatorio.\"}".to_string();
+                            }
+                            let new_remind_at =
+                                (!time_hint.is_empty()).then_some(remind_at.as_str());
+                            let new_desc = (id_arg.is_some() && !text.is_empty()).then_some(text);
+                            let new_rec = args
+                                .get("recurrence")
+                                .is_some()
+                                .then_some(norm_rec.as_str())
+                                .or_else(|| (!norm_rec.is_empty()).then_some(norm_rec.as_str()));
+                            match db.update_reminder(target, new_remind_at, new_desc, new_rec) {
+                                Ok(count) => {
+                                    let reminders = db.get_reminders(30).unwrap_or_default();
+                                    serde_json::json!({
+                                        "status": "updated",
+                                        "updated_count": count,
+                                        "target": target,
+                                        "reminders": reminders
+                                    })
+                                    .to_string()
+                                }
+                                Err(e) => format!(
+                                    "{{\"error\":\"update_reminder_failed\",\"detail\":\"{}\"}}",
+                                    e
+                                ),
+                            }
+                        }
+                        "delete" | "remove" => {
+                            let target = id_arg.as_deref().unwrap_or(text);
+                            if target.is_empty() {
+                                return "{\"error\":\"missing_target\",\"detail\":\"Indicá 'id' o 'text' del recordatorio a eliminar.\"}".to_string();
+                            }
+                            match db.delete_reminder(target) {
+                                Ok(count) => serde_json::json!({
+                                    "status": "deleted",
+                                    "deleted_count": count,
+                                    "target": target
+                                })
+                                .to_string(),
+                                Err(e) => format!(
+                                    "{{\"error\":\"delete_reminder_failed\",\"detail\":\"{}\"}}",
+                                    e
+                                ),
+                            }
+                        }
+                        "complete" => {
+                            let target = id_arg.as_deref().unwrap_or(text);
+                            if target.is_empty() {
+                                return "{\"error\":\"missing_target\",\"detail\":\"Indicá 'id' o 'text' del recordatorio a completar.\"}".to_string();
+                            }
+                            match db.complete_reminder(target) {
+                                Ok(count) => serde_json::json!({
+                                    "status": "completed",
+                                    "matched_count": count,
+                                    "target": target
+                                })
+                                .to_string(),
+                                Err(e) => format!(
+                                    "{{\"error\":\"complete_reminder_failed\",\"detail\":\"{}\"}}",
+                                    e
+                                ),
+                            }
+                        }
+                        _ => match db.get_reminders(30) {
+                            Ok(reminders) => serde_json::json!({
+                                "status": "ok",
+                                "reminders": reminders
+                            })
+                            .to_string(),
+                            Err(e) => format!(
+                                "{{\"error\":\"list_reminders_failed\",\"detail\":\"{}\"}}",
+                                e
+                            ),
+                        },
+                    },
+                    Err(e) => format!("{{\"error\":\"enclave_open_failed\",\"detail\":\"{}\"}}", e),
+                }
+            }
+
+            // CORE-385: Puente directo hacia Google Antigravity (SDK + IDE Outbox)
+            "send_to_antigravity" => {
+                let instruction = args["instruction"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if instruction.is_empty() {
+                    return "{\"error\":\"instruction is required\"}".to_string();
+                }
+                let project_name = args
+                    .get("project_name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or("Antigravity")
+                    .to_string();
+
+                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
+                match orchestrator_opt {
+                    None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
+                    Some(orchestrator) => {
+                        // 1. Encolar siempre en el outbox para el hook del IDE Antigravity
+                        orchestrator
+                            .agy_runner
+                            .push_ide_outbox(instruction.clone())
+                            .await;
+
+                        // 2. Si el SDK google-antigravity está habilitado, despachar también al supervisor
+                        if orchestrator.agy_runner.is_enabled() {
+                            if let Ok(agent_id) = orchestrator
+                                .create_project(
+                                    project_name.clone(),
+                                    instruction.clone(),
+                                    Some(crate::pcb::TaskType::Code),
+                                    pcb.tenant_id.clone(),
+                                )
+                                .await
+                            {
+                                let _ = orchestrator
+                                    .dispatch(agent_id, instruction.clone(), vec![])
+                                    .await;
+                                let tenant = pcb.tenant_id.as_deref().unwrap_or("default");
+                                let nodes = orchestrator.tree_snapshot_for_tenant(tenant).await;
+                                orchestrator.emit_event(
+                                    crate::agents::event::AgentEvent::TreeSnapshot { nodes },
+                                );
+                                return serde_json::json!({
+                                    "status": "dispatched_to_antigravity_sdk_and_ide_outbox",
+                                    "project": project_name,
+                                    "agent_id": agent_id.to_string(),
+                                })
+                                .to_string();
+                            }
+                        }
+
+                        serde_json::json!({
+                            "status": "queued_for_antigravity_ide",
+                            "project": project_name,
+                            "message": "Instrucción encolada para Google Antigravity."
+                        })
+                        .to_string()
+                    }
+                }
+            }
+
+            // Gestión conversacional de proveedores de IA, claves API y modelos desde el chat
+            "manage_ai_provider" => {
+                let action = args["action"]
+                    .as_str()
+                    .unwrap_or("list")
+                    .trim()
+                    .to_lowercase();
+                let raw_provider = args["provider"].as_str().unwrap_or("").trim();
+                let mut raw_key = args["api_key"].as_str().unwrap_or("").trim().to_string();
+                let raw_model = args["model"].as_str().unwrap_or("").trim();
+                let raw_url = args["api_url"].as_str().unwrap_or("").trim();
+                let set_primary = args["set_primary"].as_bool().unwrap_or(false);
+
+                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                let router_opt = self.router_ref.read().await.clone();
+                let Some(router_rw) = router_opt else {
+                    return "{\"error\":\"router_not_available\"}".to_string();
+                };
+
+                if raw_key.is_empty() {
+                    if let Some(extracted) =
+                        Self::extract_api_key_from_text(&pcb.memory_pointers.l1_instruction)
+                    {
+                        raw_key = extracted;
+                    }
+                }
+
+                let provider = Self::infer_provider_from_key_or_text(
+                    raw_provider,
+                    &raw_key,
+                    &pcb.memory_pointers.l1_instruction,
+                );
+
+                match action.as_str() {
+                    "list" => {
+                        let router = router_rw.read().await;
+                        let global_keys = router.list_global_keys().await;
+                        let tenant_keys = router.list_tenant_keys(tenant_id).await;
+                        let catalog_models = router.list_models_for_catalog().await;
+                        let providers_summary = summarize_configured_providers(
+                            tenant_keys.into_iter().chain(global_keys.into_iter()),
+                            &catalog_models,
+                        );
+
+                        let agy_enabled = match self.agent_orchestrator.read().await.clone() {
+                            Some(orch) => orch.agy_runner.is_enabled(),
+                            None => false,
+                        };
+
+                        serde_json::json!({
+                            "status": "ok",
+                            "configured_providers": providers_summary,
+                            "total_catalog_models": catalog_models.len(),
+                            "antigravity_sdk_enabled": agy_enabled,
+                            "hint": "Para ver la lista completa o modelos gratuitos de un proveedor (ej. openrouter), llamá a manage_ai_provider con action='catalog'."
+                        })
+                        .to_string()
+                    }
+
+                    "catalog" => {
+                        let free_only = args["free_only"].as_bool().unwrap_or(false);
+                        let limit = args["limit"].as_u64().unwrap_or(30).clamp(1, 100) as usize;
+                        let filter_provider = if raw_provider.eq_ignore_ascii_case("openroute")
+                            || provider.eq_ignore_ascii_case("openroute")
+                        {
+                            "openrouter"
+                        } else if !raw_provider.is_empty() {
+                            raw_provider
+                        } else {
+                            provider.as_str()
+                        };
+
+                        let router = router_rw.read().await;
+                        let mut matches: Vec<_> = router
+                            .list_models_for_catalog()
+                            .await
+                            .into_iter()
+                            .filter(|m| {
+                                if !filter_provider.is_empty() {
+                                    if filter_provider.eq_ignore_ascii_case("openrouter") {
+                                        if !(m.provider == "openrouter"
+                                            || (!m.is_local && m.model_id.contains('/')))
+                                        {
+                                            return false;
+                                        }
+                                    } else if !m.provider.eq_ignore_ascii_case(filter_provider) {
+                                        return false;
+                                    }
+                                }
+                                if free_only {
+                                    let is_free = m.free_tier_eligible
+                                        || m.model_id.ends_with(":free")
+                                        || (m.cost_input_per_mtok == 0.0
+                                            && m.cost_output_per_mtok == 0.0
+                                            && m.model_id != "openrouter/auto");
+                                    if !is_free {
+                                        return false;
+                                    }
+                                }
+                                true
+                            })
+                            .collect();
+
+                        matches.sort_by(|a, b| {
+                            let a_free = a.free_tier_eligible || a.model_id.ends_with(":free");
+                            let b_free = b.free_tier_eligible || b.model_id.ends_with(":free");
+                            b_free
+                                .cmp(&a_free)
+                                .then_with(|| {
+                                    a.cost_input_per_mtok.total_cmp(&b.cost_input_per_mtok)
+                                })
+                                .then_with(|| a.model_id.cmp(&b.model_id))
+                        });
+
+                        let total_matching = matches.len();
+                        let models: Vec<serde_json::Value> = matches
+                            .into_iter()
+                            .take(limit)
+                            .map(|m| {
+                                let is_free = m.free_tier_eligible
+                                    || m.model_id.ends_with(":free")
+                                    || (m.cost_input_per_mtok == 0.0
+                                        && m.cost_output_per_mtok == 0.0
+                                        && m.model_id != "openrouter/auto");
+                                serde_json::json!({
+                                    "model_id": m.model_id,
+                                    "display_name": m.display_name,
+                                    "provider": m.provider,
+                                    "free": is_free,
+                                    "cost_input_per_mtok": m.cost_input_per_mtok,
+                                    "cost_output_per_mtok": m.cost_output_per_mtok,
+                                    "context_window": m.context_window,
+                                    "supports_tools": m.supports_tools,
+                                })
+                            })
+                            .collect();
+
+                        serde_json::json!({
+                            "status": "ok",
+                            "provider_filter": if filter_provider.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(filter_provider.to_string()) },
+                            "free_only": free_only,
+                            "total_matching": total_matching,
+                            "returned": models.len(),
+                            "models": models,
+                        })
+                        .to_string()
+                    }
+
+                    "add" => {
+                        let is_free_prompt = pcb
+                            .memory_pointers
+                            .l1_instruction
+                            .to_lowercase()
+                            .contains("gratis")
+                            || pcb
+                                .memory_pointers
+                                .l1_instruction
+                                .to_lowercase()
+                                .contains("free")
+                            || pcb
+                                .memory_pointers
+                                .l1_instruction
+                                .to_lowercase()
+                                .contains("gratuito")
+                            || pcb
+                                .memory_pointers
+                                .l1_instruction
+                                .to_lowercase()
+                                .contains("cuenta gratuita");
+
+                        let all_detected = Self::extract_all_api_keys_from_text(
+                            &pcb.memory_pointers.l1_instruction,
+                        );
+                        if all_detected.len() > 1 {
+                            let mut added_list = Vec::new();
+                            let router = router_rw.read().await;
+                            for (p, k) in all_detected {
+                                if p.is_empty() {
+                                    continue;
+                                }
+                                if p == "elevenlabs" {
+                                    let masked = Self::mask_single_key(&k);
+                                    let session_key =
+                                        pcb.session_key.as_deref().unwrap_or("default");
+                                    if let Ok(db) =
+                                        crate::enclave::TenantDB::open(tenant_id, session_key)
+                                    {
+                                        let _ = db.set_kv("elevenlabs_api_key", &k);
+                                    }
+                                    added_list.push(serde_json::json!({
+                                        "provider": "elevenlabs",
+                                        "service": "Siren Voice (TTS)",
+                                        "masked_key": masked,
+                                    }));
+                                    continue;
+                                }
+
+                                let (def_m, def_u) = Self::default_model_and_url_for_provider(&p);
+                                let discovered =
+                                    match crate::router::discovery::fetch_provider_models(
+                                        &p,
+                                        Some(def_u),
+                                        &k,
+                                    )
+                                    .await
+                                    {
+                                        Ok(list) if !list.is_empty() => {
+                                            list.into_iter().map(|d| d.model_id).collect()
+                                        }
+                                        _ => vec![def_m.to_string()],
+                                    };
+                                let masked = Self::mask_single_key(&k);
+                                let entry = crate::router::key_pool::ApiKeyEntry {
+                                    key_id: uuid::Uuid::new_v4().to_string(),
+                                    provider: p.clone(),
+                                    api_key: k.clone(),
+                                    api_url: Some(def_u.to_string()),
+                                    label: Some(format!("Chat ({})", p)),
+                                    is_active: true,
+                                    rate_limited_until: None,
+                                    active_models: Some(discovered.clone()),
+                                    is_free_tier: is_free_prompt,
+                                };
+                                let _ = router.add_tenant_key(tenant_id, entry.clone()).await;
+                                let _ = router.add_global_key(entry.clone()).await;
+                                let _ = crate::router::syncer::register_provider_models(
+                                    &p,
+                                    &discovered,
+                                    &router.catalog_ref(),
+                                )
+                                .await;
+                                added_list.push(serde_json::json!({
+                                    "provider": p,
+                                    "models": discovered,
+                                    "masked_key": masked,
+                                }));
+                            }
+                            router.invalidate_all_sticky().await;
+                            return serde_json::json!({
+                                "status": "batch_added",
+                                "count": added_list.len(),
+                                "providers": added_list,
+                                "message": format!("Se guardaron {} proveedores con éxito en el enclave cifrado.", added_list.len()),
+                            }).to_string();
+                        }
+
+                        if provider == "elevenlabs" {
+                            let masked = Self::mask_single_key(&raw_key);
+                            let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                            if let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) {
+                                let _ = db.set_kv("elevenlabs_api_key", &raw_key);
+                            }
+                            return serde_json::json!({
+                                "status": "added",
+                                "provider": "elevenlabs",
+                                "service": "Siren Voice (TTS)",
+                                "masked_key": masked,
+                                "message": "Clave de ElevenLabs configurada en el motor de voz Siren."
+                            }).to_string();
+                        }
+
+                        if provider.is_empty() {
+                            return serde_json::json!({
+                                "error": "provider_unknown",
+                                "message": "No pude identificar el proveedor. Indicá por ejemplo: Groq, Gemini, OpenRouter, OpenAI, Anthropic, DeepSeek u Ollama."
+                            })
+                            .to_string();
+                        }
+
+                        if provider != "ollama" && raw_key.is_empty() {
+                            return serde_json::json!({
+                                "error": "missing_api_key",
+                                "provider": provider,
+                                "message": format!("Falta la clave API para {}. Pasame la API key para guardarla en el enclave.", provider)
+                            })
+                            .to_string();
+                        }
+
+                        let (default_model, default_url) =
+                            Self::default_model_and_url_for_provider(&provider);
+                        let effective_model = if !raw_model.is_empty() {
+                            raw_model.to_string()
+                        } else {
+                            default_model.to_string()
+                        };
+                        let effective_url = if !raw_url.is_empty() {
+                            raw_url.to_string()
+                        } else {
+                            default_url.to_string()
+                        };
+
+                        let masked = Self::mask_single_key(&raw_key);
+                        let discovered = if !raw_model.is_empty() {
+                            vec![raw_model.to_string()]
+                        } else {
+                            match crate::router::discovery::fetch_provider_models(
+                                &provider,
+                                Some(&effective_url),
+                                &raw_key,
+                            )
+                            .await
+                            {
+                                Ok(list) if !list.is_empty() => {
+                                    list.into_iter().map(|d| d.model_id).collect()
+                                }
+                                _ => vec![effective_model.clone()],
+                            }
+                        };
+
+                        let entry = crate::router::key_pool::ApiKeyEntry {
+                            key_id: uuid::Uuid::new_v4().to_string(),
+                            provider: provider.clone(),
+                            api_key: raw_key.clone(),
+                            api_url: Some(effective_url.clone()),
+                            label: Some(format!("Chat ({})", provider)),
+                            is_active: true,
+                            rate_limited_until: None,
+                            active_models: Some(discovered.clone()),
+                            is_free_tier: is_free_prompt,
+                        };
+
+                        {
+                            let router = router_rw.read().await;
+                            let _ = router.add_tenant_key(tenant_id, entry.clone()).await;
+                            let _ = router.add_global_key(entry.clone()).await;
+                            let _ = crate::router::syncer::register_provider_models(
+                                &provider,
+                                &discovered,
+                                &router.catalog_ref(),
+                            )
+                            .await;
+                            router.invalidate_all_sticky().await;
+                        }
+
+                        if set_primary {
+                            self.update_cloud_credentials(
+                                effective_url,
+                                effective_model.clone(),
+                                raw_key,
+                            )
+                            .await;
+                        }
+
+                        serde_json::json!({
+                            "status": "added",
+                            "provider": provider,
+                            "model": effective_model,
+                            "masked_key": masked,
+                            "set_primary": set_primary,
+                            "message": "Proveedor y clave guardados de forma cifrada en el enclave. Nunca repitas la clave completa en el chat."
+                        })
+                        .to_string()
+                    }
+
+                    "add_model" => {
+                        if provider.is_empty() || raw_model.is_empty() {
+                            return serde_json::json!({
+                                "error": "missing_params",
+                                "message": "Indicá tanto el proveedor (ej: gemini, groq, openrouter, ollama) como el nombre del modelo a sumar."
+                            })
+                            .to_string();
+                        }
+
+                        let router = router_rw.read().await;
+                        let existing = router
+                            .get_raw_key_for_provider(&provider, Some(tenant_id))
+                            .await;
+
+                        let Some(mut entry) = existing else {
+                            return serde_json::json!({
+                                "error": "provider_not_configured",
+                                "provider": provider,
+                                "message": format!("Todavía no tenés una clave configurada para {}. Pasame primero su API key.", provider)
+                            })
+                            .to_string();
+                        };
+
+                        let mut models = entry.active_models.take().unwrap_or_default();
+                        if !models.iter().any(|m| m == raw_model) {
+                            models.push(raw_model.to_string());
+                        }
+                        entry.active_models = Some(models.clone());
+
+                        let _ = router.add_tenant_key(tenant_id, entry.clone()).await;
+                        let _ = router.add_global_key(entry).await;
+                        let _ = crate::router::syncer::register_provider_models(
+                            &provider,
+                            &models,
+                            &router.catalog_ref(),
+                        )
+                        .await;
+                        router.invalidate_all_sticky().await;
+
+                        serde_json::json!({
+                            "status": "model_added",
+                            "provider": provider,
+                            "added_model": raw_model,
+                            "active_models": models,
+                        })
+                        .to_string()
+                    }
+
+                    "remove" => {
+                        if provider.is_empty() {
+                            return "{\"error\":\"provider is required to remove\"}".to_string();
+                        }
+                        let router = router_rw.read().await;
+                        let mut removed = 0usize;
+                        for k in router.list_tenant_keys(tenant_id).await {
+                            if k.provider == provider
+                                && router.delete_key(&k.key_id, Some(tenant_id)).await.is_ok()
+                            {
+                                removed += 1;
+                            }
+                        }
+                        for k in router.list_global_keys().await {
+                            if k.provider == provider
+                                && router.delete_key(&k.key_id, None).await.is_ok()
+                            {
+                                removed += 1;
+                            }
+                        }
+                        router.invalidate_all_sticky().await;
+                        serde_json::json!({
+                            "status": "removed",
+                            "provider": provider,
+                            "removed_keys_count": removed
+                        })
+                        .to_string()
+                    }
+
+                    _ => "{\"error\":\"invalid_action\"}".to_string(),
+                }
+            }
+
+            // Inspección y habilitación/deshabilitación de módulos del microkernel y plugins cargados
+            "manage_modules" => {
+                let action = args["action"]
+                    .as_str()
+                    .unwrap_or("list")
+                    .trim()
+                    .to_lowercase();
+                let module_id = args["module_id"].as_str().unwrap_or("").trim();
+                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                let session_key = pcb.session_key.as_deref().unwrap_or("default");
+
+                let router_opt = self.router_ref.read().await.clone();
+                let Some(router_rw) = router_opt else {
+                    return "{\"error\":\"router_not_available\"}".to_string();
+                };
+
+                let router = router_rw.read().await;
+                let modules_map = router.modules.read().await;
+                let db_opt = crate::enclave::TenantDB::open(tenant_id, session_key).ok();
+
+                match action.as_str() {
+                    "list" => {
+                        let mut manifests: Vec<_> = modules_map.values().collect();
+                        manifests.sort_by(|a, b| a.module_id.cmp(&b.module_id));
+
+                        let microkernel_modules: Vec<serde_json::Value> = manifests
+                            .into_iter()
+                            .map(|m| {
+                                let enabled = db_opt
+                                    .as_ref()
+                                    .and_then(|db| {
+                                        db.get_kv(&format!("module_active:{}", m.module_id)).ok()
+                                    })
+                                    .flatten()
+                                    .map(|v| v == "true")
+                                    .unwrap_or(false);
+                                let tools: Vec<serde_json::Value> = m
+                                    .exposed_tools
+                                    .iter()
+                                    .map(|t| {
+                                        serde_json::json!({
+                                            "name": t.name,
+                                            "description": t.description
+                                        })
+                                    })
+                                    .collect();
+                                serde_json::json!({
+                                    "module_id": m.module_id,
+                                    "display_name": m.display_name,
+                                    "version": m.version,
+                                    "enabled": enabled,
+                                    "tools": tools,
+                                })
+                            })
+                            .collect();
+
+                        let loaded_plugins: Vec<serde_json::Value> = self
+                            .plugin_manager
+                            .read()
+                            .await
+                            .list_plugin_summaries()
+                            .into_iter()
+                            .map(|(name, description, kind)| {
+                                serde_json::json!({
+                                    "name": name,
+                                    "description": description,
+                                    "kind": kind,
+                                    "active": true,
+                                })
+                            })
+                            .collect();
+
+                        serde_json::json!({
+                            "status": "ok",
+                            "microkernel_modules": microkernel_modules,
+                            "loaded_plugins": loaded_plugins,
+                            "builtin_capabilities": ["maker (JS sandbox)"],
+                        })
+                        .to_string()
+                    }
+                    "enable" | "disable" => {
+                        if module_id.is_empty() {
+                            return "{\"error\":\"module_id_required\"}".to_string();
+                        }
+                        if !modules_map.contains_key(module_id) {
+                            let available: Vec<&str> =
+                                modules_map.keys().map(String::as_str).collect();
+                            return serde_json::json!({
+                                "error": "module_not_found",
+                                "module_id": module_id,
+                                "available_modules": available,
+                            })
+                            .to_string();
+                        }
+                        let Some(ref db) = db_opt else {
+                            return "{\"error\":\"tenant_db_unavailable\"}".to_string();
+                        };
+                        let enabled = action == "enable";
+                        if let Err(e) = db.set_kv(
+                            &format!("module_active:{}", module_id),
+                            if enabled { "true" } else { "false" },
+                        ) {
+                            return serde_json::json!({
+                                "error": "db_write_failed",
+                                "detail": e.to_string()
+                            })
+                            .to_string();
+                        }
+                        serde_json::json!({
+                            "status": if enabled { "enabled" } else { "disabled" },
+                            "module_id": module_id,
+                            "enabled": enabled,
+                        })
+                        .to_string()
+                    }
+                    _ => "{\"error\":\"invalid_action\"}".to_string(),
+                }
+            }
+
+            "manage_google_calendar" => {
+                let tenant_id = match &pcb.tenant_id {
+                    Some(t) => t.clone(),
+                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
+                };
+                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let action = args["action"]
+                    .as_str()
+                    .unwrap_or("list")
+                    .trim()
+                    .to_lowercase();
+
+                if action == "status" {
+                    return match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                        Ok(db) => {
+                            let connected = db.is_oauth_connected("google").unwrap_or(false);
+                            let email = db.get_oauth_email("google").ok().flatten();
+                            let scope = db.get_oauth_scope("google").ok().flatten();
+                            let creds = crate::oauth::resolve_client_credentials(&db, "google");
+                            serde_json::json!({
+                                "status": "ok",
+                                "connected": connected,
+                                "email": email,
+                                "scope": scope,
+                                "client_configured": creds.client_id.is_some(),
+                            })
+                            .to_string()
+                        }
+                        Err(e) => serde_json::json!({
+                            "error": "enclave_open_failed",
+                            "detail": e.to_string()
+                        })
+                        .to_string(),
+                    };
+                }
+
+                let connected = crate::enclave::TenantDB::open(&tenant_id, session_key)
+                    .map(|db| db.is_oauth_connected("google").unwrap_or(false))
+                    .unwrap_or(false);
+                if !connected {
+                    return serde_json::json!({
+                        "error": "google_not_connected",
+                        "detail": "La cuenta de Google no está vinculada. El usuario debe conectarla en Settings → Cuentas Conectadas."
+                    })
+                    .to_string();
+                }
+
+                let res = match action.as_str() {
+                    "list" => {
+                        let days = args["days"].as_u64().unwrap_or(7).clamp(1, 60) as u8;
+                        let max_results =
+                            args["max_results"].as_u64().unwrap_or(20).clamp(1, 50) as u8;
+                        let query = args["query"].as_str();
+                        crate::oauth::google_calendar::list_events(
+                            &self.http_client,
+                            &tenant_id,
+                            session_key,
+                            days,
+                            max_results,
+                            query,
+                        )
+                        .await
+                    }
+                    "create" => {
+                        let summary = args["summary"].as_str().unwrap_or("").to_string();
+                        let start = args["start"].as_str().unwrap_or("").to_string();
+                        let end = args["end"].as_str().map(String::from);
+                        let description = args["description"].as_str().map(String::from);
+                        let location = args["location"].as_str().map(String::from);
+                        let all_day = args["all_day"].as_bool();
+                        let attendees = args["attendees"].as_array().map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        });
+                        crate::oauth::google_calendar::create_event(
+                            &self.http_client,
+                            &tenant_id,
+                            session_key,
+                            crate::oauth::google_calendar::CalendarEventInput {
+                                summary,
+                                start,
+                                end,
+                                description,
+                                location,
+                                attendees,
+                                all_day,
+                            },
+                        )
+                        .await
+                    }
+                    "update" => {
+                        let event_id = args["event_id"].as_str().unwrap_or("");
+                        crate::oauth::google_calendar::update_event(
+                            &self.http_client,
+                            &tenant_id,
+                            session_key,
+                            event_id,
+                            args["summary"].as_str(),
+                            args["start"].as_str(),
+                            args["end"].as_str(),
+                            args["description"].as_str(),
+                            args["location"].as_str(),
+                        )
+                        .await
+                    }
+                    "delete" => {
+                        let event_id = args["event_id"].as_str().unwrap_or("");
+                        crate::oauth::google_calendar::delete_event(
+                            &self.http_client,
+                            &tenant_id,
+                            session_key,
+                            event_id,
+                        )
+                        .await
+                    }
+                    _ => Err(anyhow::anyhow!(
+                        "Acción de calendario desconocida: {}",
+                        action
+                    )),
+                };
+
+                match res {
+                    Ok(val) => val.to_string(),
+                    Err(e) => serde_json::json!({
+                        "error": "google_calendar_failed",
+                        "detail": e.to_string()
+                    })
+                    .to_string(),
+                }
+            }
+
+            "manage_whatsapp" => {
+                let tenant_id = match &pcb.tenant_id {
+                    Some(t) => t.clone(),
+                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
+                };
+                let session_key = pcb.session_key.as_deref().unwrap_or("");
+                let action = args["action"]
+                    .as_str()
+                    .unwrap_or("status")
+                    .trim()
+                    .to_lowercase();
+
+                if action == "set_confirmation" {
+                    let enabled = args["require_confirmation"].as_bool().unwrap_or(true);
+                    return match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                        Ok(db) => {
+                            if let Err(e) = crate::whatsapp::set_require_confirmation(&db, enabled)
+                            {
+                                serde_json::json!({
+                                    "error": "whatsapp_settings_failed",
+                                    "detail": e.to_string()
+                                })
+                                .to_string()
+                            } else {
+                                serde_json::json!({
+                                    "status": "updated",
+                                    "require_confirmation": enabled,
+                                    "message": if enabled {
+                                        "Confirmación previa ACTIVADA: voy a pedirte OK antes de enviar cada mensaje."
+                                    } else {
+                                        "Confirmación previa DESACTIVADA: enviaré los mensajes directamente (siempre bajo el limitador anti-spam) hasta que me digas que vuelva a confirmar."
+                                    }
+                                })
+                                .to_string()
+                            }
+                        }
+                        Err(e) => serde_json::json!({
+                            "error": "enclave_open_failed",
+                            "detail": e.to_string()
+                        })
+                        .to_string(),
+                    };
+                }
+
+                if action == "list_pending" {
+                    return match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                        Ok(db) => {
+                            let pending = crate::whatsapp::list_pending_messages(&db);
+                            serde_json::json!({
+                                "status": "ok",
+                                "count": pending.len(),
+                                "pending": pending,
+                            })
+                            .to_string()
+                        }
+                        Err(e) => serde_json::json!({
+                            "error": "enclave_open_failed",
+                            "detail": e.to_string()
+                        })
+                        .to_string(),
+                    };
+                }
+
+                if action == "cancel_pending" {
+                    let target = args["pending_id"].as_str();
+                    return match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                        Ok(db) => match crate::whatsapp::cancel_pending_messages(&db, target) {
+                            Ok(removed) => serde_json::json!({
+                                "status": "cancelled",
+                                "removed_count": removed,
+                                "remaining": crate::whatsapp::list_pending_messages(&db),
+                            })
+                            .to_string(),
+                            Err(e) => serde_json::json!({
+                                "error": "cancel_failed",
+                                "detail": e.to_string()
+                            })
+                            .to_string(),
+                        },
+                        Err(e) => serde_json::json!({
+                            "error": "enclave_open_failed",
+                            "detail": e.to_string()
+                        })
+                        .to_string(),
+                    };
+                }
+
+                if action == "save_contact" {
+                    let alias = args["alias"]
+                        .as_str()
+                        .or_else(|| args["name"].as_str())
+                        .or_else(|| args["search"].as_str())
+                        .unwrap_or("");
+                    let target = args["to"]
+                        .as_str()
+                        .or_else(|| args["phone"].as_str())
+                        .or_else(|| args["chat"].as_str())
+                        .unwrap_or("");
+                    let note = args["note"].as_str().or_else(|| args["message"].as_str());
+                    return match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                        Ok(db) => match crate::whatsapp::save_contact_alias(
+                            &db, alias, target, note,
+                        ) {
+                            Ok(entry) => serde_json::json!({
+                                "status": "saved",
+                                "contact": entry,
+                                "total_aliases": crate::whatsapp::list_contact_aliases(&db).len(),
+                            })
+                            .to_string(),
+                            Err(e) => serde_json::json!({
+                                "error": "save_contact_failed",
+                                "detail": e.to_string(),
+                            })
+                            .to_string(),
+                        },
+                        Err(e) => serde_json::json!({
+                            "error": "enclave_open_failed",
+                            "detail": e.to_string(),
+                        })
+                        .to_string(),
+                    };
+                }
+
+                if action == "list_contacts" {
+                    let search = args["search"].as_str();
+                    let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+                    let wa_opt = self.whatsapp.read().await.clone();
+                    if let Some(wa) = wa_opt {
+                        return match wa
+                            .list_contacts(&tenant_id, session_key, search, limit)
+                            .await
+                        {
+                            Ok(val) => val.to_string(),
+                            Err(e) => serde_json::json!({
+                                "error": "whatsapp_failed",
+                                "detail": e.to_string(),
+                            })
+                            .to_string(),
+                        };
+                    }
+                    return match crate::enclave::TenantDB::open(&tenant_id, session_key) {
+                        Ok(db) => serde_json::json!({
+                            "saved_aliases": crate::whatsapp::list_contact_aliases(&db),
+                            "bridge_connected": false,
+                            "bridge_contacts": [],
+                        })
+                        .to_string(),
+                        Err(e) => serde_json::json!({
+                            "error": "enclave_open_failed",
+                            "detail": e.to_string(),
+                        })
+                        .to_string(),
+                    };
+                }
+
+                let wa_opt = self.whatsapp.read().await.clone();
+                let Some(wa) = wa_opt else {
+                    return "{\"error\":\"whatsapp_manager_unavailable\",\"detail\":\"El gestor de WhatsApp no está inicializado en el kernel.\"}".to_string();
+                };
+
+                let res = match action.as_str() {
+                    "status" => wa.get_status(&tenant_id, session_key, true).await,
+                    "list_chats" => {
+                        let search = args["search"].as_str();
+                        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+                        wa.list_chats(&tenant_id, search, limit).await
+                    }
+                    "read_messages" => {
+                        let chat = args["chat"]
+                            .as_str()
+                            .or_else(|| args["to"].as_str())
+                            .unwrap_or("");
+                        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+                        wa.read_messages_with_aliases(&tenant_id, session_key, chat, limit)
+                            .await
+                    }
+                    "send_message" => {
+                        let to = args["to"].as_str().unwrap_or("");
+                        let msg = args["message"].as_str().unwrap_or("");
+                        wa.send_or_queue_message(&tenant_id, session_key, to, msg)
+                            .await
+                    }
+                    "confirm_send" => {
+                        let pid = args["pending_id"].as_str();
+                        wa.confirm_pending_and_send(&tenant_id, session_key, pid)
+                            .await
+                    }
+                    _ => Err(anyhow::anyhow!(
+                        "Acción de WhatsApp desconocida: {}",
+                        action
+                    )),
+                };
+
+                match res {
+                    Ok(val) => val.to_string(),
+                    Err(e) => serde_json::json!({
+                        "error": "whatsapp_failed",
+                        "detail": e.to_string()
+                    })
+                    .to_string(),
+                }
+            }
+
             other => {
+                // Módulos de dominio del microkernel (Aegis Creator Studio, Video Studio, Dev Studio, Business & POS, etc.)
+                if let Some(router_rw) = self.router_ref.read().await.clone() {
+                    let (manifest_opt, key_pool_arc) = {
+                        let router_guard = router_rw.read().await;
+                        (
+                            router_guard.find_module_for_tool(other).await,
+                            router_guard.key_pool_arc(),
+                        )
+                    };
+                    if let Some(manifest) = manifest_opt {
+                        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                        let session_key = pcb.session_key.as_deref().unwrap_or("default");
+                        if let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) {
+                            let active_key = format!("module_active:{}", manifest.module_id);
+                            if db.get_kv(&active_key).unwrap_or(None).as_deref() != Some("true") {
+                                let _ = db.set_kv(&active_key, "true");
+                            }
+                        }
+                        let mut video_ctx = crate::video_studio::VideoExecContext {
+                            key_pool: Some(key_pool_arc),
+                            router: Some(router_rw.clone()),
+                            ..Default::default()
+                        };
+                        if let Some(ptx) = progress_tx {
+                            let tx_clone = ptx.clone();
+                            let cb: crate::video_studio::types::ProgressCallback =
+                                Arc::new(move |evt| {
+                                    if let Ok(payload) = serde_json::to_string(&evt) {
+                                        let _ =
+                                            tx_clone.send(Ok(format!("__PROGRESS__{}", payload)));
+                                    }
+                                });
+                            video_ctx.progress_cb = Some(cb);
+                        }
+                        if pcb.agent_id.is_none()
+                            && other == "video_create_project"
+                            && args.get("auto_render").is_none()
+                            && !args
+                                .get("draft_only")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                        {
+                            if let Some(obj) = args.as_object_mut() {
+                                obj.insert("auto_render".to_string(), serde_json::json!(true));
+                            }
+                        }
+                        let args_str = args.to_string();
+                        return match crate::router::modules::execute_module_tool_with_context(
+                            &manifest,
+                            other,
+                            &args_str,
+                            tenant_id,
+                            session_key,
+                            Some(&video_ctx),
+                        )
+                        .await
+                        {
+                            Ok(res) => res,
+                            Err(e) => serde_json::json!({
+                                "error": "module_tool_failed",
+                                "module_id": manifest.module_id,
+                                "detail": e,
+                            })
+                            .to_string(),
+                        };
+                    }
+                }
+
                 // CORE-377: Check if the tool is registered in the MCP Registry
                 if self.mcp_registry.has_tool(other).await {
                     // CORE-377 Criterion 4: Aislamiento de permisos contra políticas de tenant / Citadel
@@ -3032,7 +6193,10 @@ impl CognitiveHAL {
                                 error = %e,
                                 "CORE-377: MCP tool execution failed"
                             );
-                            format!("{{\"error\":\"mcp_execution_failed\",\"detail\":\"{}\"}}", e)
+                            format!(
+                                "{{\"error\":\"mcp_execution_failed\",\"detail\":\"{}\"}}",
+                                e
+                            )
                         }
                     }
                 } else {
@@ -3223,41 +6387,87 @@ impl CognitiveHAL {
         pcb: &PCB,
         persona: Option<&str>,
     ) -> (Vec<ChatMessage>, Vec<String>) {
+        self.build_messages_internal(pcb, persona, false).await
+    }
+
+    /// Compact chat-session variant used by `execute_chat_react`: omits redundant
+    /// `[SYS_CALL_PLUGIN]` instructions for tools already exposed natively (`ledger`,
+    /// `chronos`), and strips heavy sections on casual greetings.
+    pub async fn build_messages_for_chat_with_warnings(
+        &self,
+        pcb: &PCB,
+        persona: Option<&str>,
+    ) -> (Vec<ChatMessage>, Vec<String>) {
+        self.build_messages_internal(pcb, persona, true).await
+    }
+
+    async fn build_messages_internal(
+        &self,
+        pcb: &PCB,
+        persona: Option<&str>,
+        compact_chat: bool,
+    ) -> (Vec<ChatMessage>, Vec<String>) {
         let mut warnings: Vec<String> = Vec::new();
+        let casual_turn = compact_chat && is_casual_chat_turn(pcb);
 
-        // 1. Ensamblar contexto via VCM (L1 + L2 + L3)
-        let assembled_context = self
-            .vcm
-            .assemble_context(
-                pcb,
-                &self.swap_manager,
-                self.embedding_driver.as_deref(),
-                4096,
-            )
-            .await
-            .unwrap_or_else(|e| {
-                warn!(
-                    "VCM assembly failed: {}. Falling back to raw instruction.",
-                    e
-                );
-                warnings.push(format!(
-                    "Context assembly failed; responding with reduced memory. Detail: {}",
-                    e
-                ));
-                pcb.memory_pointers.l1_instruction.clone()
-            });
+        // Skip heavy VCM assembly (git/governance/embeddings) for direct Chat turns
+        // with no explicit L2/swap pointers so prompts stay compact and fast.
+        let skip_vcm = pcb.task_type == crate::pcb::TaskType::Chat
+            && pcb.agent_id.is_none()
+            && pcb.memory_pointers.l2_context_refs.is_empty()
+            && pcb.memory_pointers.swap_refs.is_empty();
 
-        let tool_prompt = self
-            .plugin_manager
-            .read()
-            .await
-            .get_available_tools_prompt();
-        let mcp_tool_prompt = self.mcp_registry.generate_system_prompt().await;
+        // 1. Ensamblar contexto via VCM (L1 + L2 + L3) cuando aplique
+        let assembled_context = if skip_vcm {
+            pcb.memory_pointers.l1_instruction.clone()
+        } else {
+            self.vcm
+                .assemble_context(
+                    pcb,
+                    &self.swap_manager,
+                    self.embedding_driver.as_deref(),
+                    4096,
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    warn!(
+                        "VCM assembly failed: {}. Falling back to raw instruction.",
+                        e
+                    );
+                    warnings.push(format!(
+                        "Context assembly failed; responding with reduced memory. Detail: {}",
+                        e
+                    ));
+                    pcb.memory_pointers.l1_instruction.clone()
+                })
+        };
+
+        let tool_prompt = if casual_turn {
+            String::new()
+        } else if compact_chat && pcb.agent_id.is_none() {
+            // ledger & chronos are already exposed as native ChatAgent function tools
+            self.plugin_manager
+                .read()
+                .await
+                .get_available_tools_prompt_excluding(&["ledger", "chronos"])
+        } else {
+            self.plugin_manager
+                .read()
+                .await
+                .get_available_tools_prompt()
+        };
+        let mcp_tool_prompt = if casual_turn {
+            String::new()
+        } else {
+            self.mcp_registry.generate_system_prompt().await
+        };
 
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
         let session_key = pcb.session_key.as_deref().unwrap_or("default");
 
-        let modules_tool_prompt = if let Some(ref router_lock) = *self.router.read().await {
+        let modules_tool_prompt = if casual_turn {
+            String::new()
+        } else if let Some(ref router_lock) = *self.router.read().await {
             let router = router_lock.read().await;
             router
                 .generate_modules_prompt(
@@ -3276,11 +6486,12 @@ impl CognitiveHAL {
         };
 
         // CORE-148: Music instructions are only injected if the music_search plugin is active.
-        let has_music_plugin = self
-            .plugin_manager
-            .read()
-            .await
-            .is_plugin_active("music_search");
+        let has_music_plugin = !casual_turn
+            && self
+                .plugin_manager
+                .read()
+                .await
+                .is_plugin_active("music_search");
 
         let music_section = if has_music_plugin {
             "\n\nMÚSICA — INSTRUCCIONES:\
@@ -3315,14 +6526,29 @@ impl CognitiveHAL {
             "build_messages: role instructions loaded"
         );
 
-        let has_maker_plugin = self.plugin_manager.read().await.is_plugin_active("maker");
-        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+        let has_maker_plugin =
+            !casual_turn && self.plugin_manager.read().await.is_plugin_active("maker");
 
         let maker_section = if has_maker_plugin && pcb.agent_id.is_none() {
             let dynamic_scripts = Self::get_dynamic_scripts_section(tenant_id).await;
-            format!("{}{}", MAKER_INSTRUCTIONS, dynamic_scripts)
+            if !compact_chat {
+                format!("{}{}", MAKER_INSTRUCTIONS, dynamic_scripts)
+            } else {
+                let prompt_lower = pcb.memory_pointers.l1_instruction.to_lowercase();
+                let wants_maker = !dynamic_scripts.trim().is_empty()
+                    || prompt_lower.contains("script")
+                    || prompt_lower.contains("javascript")
+                    || prompt_lower.contains("maker")
+                    || prompt_lower.contains("automatiz")
+                    || prompt_lower.contains("boa");
+                if wants_maker {
+                    format!("{}{}", MAKER_INSTRUCTIONS, dynamic_scripts)
+                } else {
+                    String::new()
+                }
+            }
         } else {
-            "".to_string()
+            String::new()
         };
 
         let system_content = if tool_prompt.trim().is_empty()
@@ -3351,9 +6577,47 @@ impl CognitiveHAL {
             )
         };
 
+        // CORE-375: Bloque de memoria a largo plazo y resumen financiero del tenant
+        let personal_memory_section = if !casual_turn && pcb.agent_id.is_none() {
+            if let (Some(tid), Some(skey)) = (&pcb.tenant_id, &pcb.session_key) {
+                if let Ok(db) = crate::enclave::TenantDB::open(tid, skey) {
+                    db.build_personal_memory_prompt_block().unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        let mut full_system_content = system_content;
+        if pcb.agent_id.is_none() {
+            use chrono::Datelike;
+            let now_local = chrono::Local::now();
+            let weekday_es = match now_local.weekday() {
+                chrono::Weekday::Mon => "Lunes",
+                chrono::Weekday::Tue => "Martes",
+                chrono::Weekday::Wed => "Miércoles",
+                chrono::Weekday::Thu => "Jueves",
+                chrono::Weekday::Fri => "Viernes",
+                chrono::Weekday::Sat => "Sábado",
+                chrono::Weekday::Sun => "Domingo",
+            };
+            full_system_content.push_str(&format!(
+                "\n\n[CONTEXTO TEMPORAL ACTUAL]\n- Fecha y hora local del sistema: {} {}\n",
+                weekday_es,
+                now_local.format("%Y-%m-%d %H:%M (%:z)")
+            ));
+        }
+        if !personal_memory_section.is_empty() {
+            full_system_content.push_str(&personal_memory_section);
+        }
+
         let mut messages = vec![ChatMessage {
             role: ChatRole::System,
-            content: Some(system_content),
+            content: Some(full_system_content),
             ..Default::default()
         }];
 
@@ -3550,6 +6814,67 @@ mod tests {
             "El mensaje de usuario debe contener la instrucción"
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_build_messages_for_chat_compact_on_greeting() -> anyhow::Result<()> {
+        let pm = Arc::new(RwLock::new(PluginManager::new()?));
+        let hal = CognitiveHAL::new(pm)?;
+        let pcb = PCB::new("test".into(), 5, "hola!".into());
+        assert!(is_casual_chat_turn(&pcb));
+
+        let (messages, _warnings) = hal.build_messages_for_chat_with_warnings(&pcb, None).await;
+        let system_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::System)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+        let user_msg = messages
+            .iter()
+            .find(|m| m.role == ChatRole::User)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+
+        assert!(!system_msg.contains("HERRAMIENTAS"));
+        assert!(!system_msg.contains("SYS_CALL_MAKER"));
+        assert!(!system_msg.contains("SYS_CALL_PLUGIN"));
+        assert!(!user_msg.contains("Aegis Neural Kernel VCM"));
+
+        let pcb_query = PCB::new("test".into(), 5, "que modelos tenes disponibles?".into());
+        assert!(!is_casual_chat_turn(&pcb_query));
+        let (query_msgs, _) = hal
+            .build_messages_for_chat_with_warnings(&pcb_query, None)
+            .await;
+        let query_sys = query_msgs
+            .iter()
+            .find(|m| m.role == ChatRole::System)
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+        assert!(!query_sys.contains("SYS_CALL_PLUGIN(\"ledger\""));
+        assert!(!query_sys.contains("SYS_CALL_MAKER"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_model_scoped_failure_isolated() {
+        assert!(is_model_scoped_failure(&SystemError::HardwareFailure(
+            "API Error 402 Payment Required: You requested up to 131072 tokens, but can only afford 2182".into()
+        )));
+        assert!(is_model_scoped_failure(&SystemError::HardwareFailure(
+            "API Error 404 Not Found: models/gemini-2.5-flash-lite is no longer available to new users".into()
+        )));
+        assert!(!is_model_scoped_failure(&SystemError::HardwareFailure(
+            "API Error 503 Service Unavailable".into()
+        )));
+        assert!(!is_model_scoped_failure(&SystemError::HardwareFailure(
+            "Cloud API Error 401 Unauthorized".into()
+        )));
     }
 
     #[test]
@@ -3750,9 +7075,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_dynamic_maker_prompt_injection() -> anyhow::Result<()> {
-        let temp_dir = std::env::temp_dir();
-        let test_dir = temp_dir.join(format!("aegis_maker_test_{}", uuid::Uuid::new_v4()));
-        let workspace_dir = test_dir.join("users").join("test_tenant").join("workspace");
+        let env = crate::enclave::ScopedTestDataDir::new()?;
+        let workspace_dir = env
+            .path()
+            .join("users")
+            .join("test_tenant")
+            .join("workspace");
         std::fs::create_dir_all(&workspace_dir)?;
 
         // Define dynamic script inside workspace
@@ -3765,15 +7093,8 @@ function multiply(a, b) {
 "#;
         std::fs::write(&script_path, script_content)?;
 
-        // Set env variable
-        std::env::set_var("AEGIS_DATA_DIR", &test_dir);
-
         // Call the helper directly
         let section = CognitiveHAL::get_dynamic_scripts_section("test_tenant").await;
-
-        // Clean up environment
-        std::env::remove_var("AEGIS_DATA_DIR");
-        let _ = std::fs::remove_dir_all(&test_dir);
 
         assert!(section.contains("DYNAMIC SCRIPTS"));
         assert!(section.contains("my_custom_tool.js"));
@@ -3827,5 +7148,273 @@ function multiply(a, b) {
 
         std::env::remove_var("AEGIS_COMMAND_TIMEOUT");
         Ok(())
+    }
+
+    #[test]
+    fn test_chat_agent_guard_helpers() {
+        // 1. Assistant claims delegation
+        let sol_hallucination = "¡Entendido, mi cielo! Perfecto, ya le estoy pidiendo al equipazo de \"Aegis\" que se ponga a programar eso para ti.";
+        assert!(CognitiveHAL::assistant_claims_delegation(sol_hallucination));
+
+        let empujoncito = "¡Dale, mi vida! Ya les di un buen empujoncito al equipo de Aegis para que se apuren con ese script de Python para el disco C:!";
+        assert!(CognitiveHAL::assistant_claims_delegation(empujoncito));
+
+        let normal_chat = "Hola! ¿En qué te puedo ayudar hoy?";
+        assert!(!CognitiveHAL::assistant_claims_delegation(normal_chat));
+
+        // 2. Status queries
+        assert!(CognitiveHAL::is_status_query("que paso?"));
+        assert!(CognitiveHAL::is_status_query(
+            "¿Cómo va el estado del proyecto?"
+        ));
+        assert!(CognitiveHAL::is_status_query("cómo va?"));
+        assert!(CognitiveHAL::is_status_query("ya esta?"));
+        assert!(CognitiveHAL::is_status_query("ya esta listo?"));
+        assert!(!CognitiveHAL::is_status_query("ya esta conectado"));
+        assert!(!CognitiveHAL::is_status_query("whatsapp ya esta conectado"));
+        assert!(!CognitiveHAL::is_status_query("Crea un script en Python"));
+
+        // 2a. Video production routing vs technical delegation guard
+        let vid_prompt_1 = "Creame un proyecto nuevo vertical 9:16 con preset gemini_studio, voz Charon y 4 escenas promocionando Aegis: 2) Activá solo tus módulos de código, video o negocio";
+        assert!(CognitiveHAL::is_video_production_request(vid_prompt_1));
+        assert!(!CognitiveHAL::is_technical_request(vid_prompt_1));
+        let vid_prompt_2 = "Creame un proyecto nuevo vertical 9:16 con preset free_builtin, voz en-US-AndrewMultilingualNeural y 4 escenas";
+        assert!(CognitiveHAL::is_video_production_request(vid_prompt_2));
+        assert!(!CognitiveHAL::is_video_production_request(
+            "que paso con el video?"
+        ));
+        let advisory_prompt = "que necesitas para que el video salga mejor? otras apis?";
+        assert!(CognitiveHAL::is_video_advisory_or_followup_query(
+            advisory_prompt
+        ));
+        assert!(!CognitiveHAL::is_technical_request(advisory_prompt));
+        assert!(!CognitiveHAL::has_technical_context(advisory_prompt, &[]));
+        assert!(!CognitiveHAL::is_technical_request(
+            "por que salio con menos escenas el video?"
+        ));
+        let vid_history = vec![ChatMessage {
+            role: ChatRole::User,
+            content: Some(vid_prompt_2.to_string()),
+            ..Default::default()
+        }];
+        assert!(CognitiveHAL::has_video_context(
+            "y donde esta?",
+            &vid_history
+        ));
+        assert!(CognitiveHAL::has_video_context(
+            "lo vas a hacer o vas a seguir durmiendo?",
+            &vid_history
+        ));
+        assert_eq!(
+            CognitiveHAL::resolve_video_request_prompt(
+                "y donde esta?",
+                &vid_history,
+                "Aquí tienes tu video, voy a llamar a la herramienta video_produce_auto"
+            )
+            .as_deref(),
+            Some(vid_prompt_2)
+        );
+        assert!(CognitiveHAL::assistant_claims_video_execution(
+            "Aquí va la llamada a la herramienta. ¡Cruzá los dedos!"
+        ));
+        assert!(CognitiveHAL::is_technical_request(
+            "Escribí un script en Python para ordenar archivos"
+        ));
+
+        // 2b. Stream sanitizer & paragraph break helper
+        let mut san = StreamTextSanitizer::default();
+        let mut combined = String::new();
+        for piece in [
+            "<thi",
+            "nk>razonamiento ",
+            "oculto</thi",
+            "nk>Hola <|call",
+            "|>Aegis ",
+            "(x < 5)!",
+        ] {
+            combined.push_str(&san.push(piece));
+        }
+        combined.push_str(&san.flush());
+        assert_eq!(combined, "Hola Aegis (x < 5)!");
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut assistant_text = String::new();
+        let mut has_streamed = false;
+        let mut ends_nl = false;
+        let mut needs_break = false;
+        emit_stream_text_chunk(
+            &tx,
+            "🤔".into(),
+            true,
+            &mut assistant_text,
+            &mut has_streamed,
+            &mut ends_nl,
+            &mut needs_break,
+        );
+        needs_break = has_streamed && !ends_nl;
+        emit_stream_text_chunk(
+            &tx,
+            "¡Buenas noticias!".into(),
+            true,
+            &mut assistant_text,
+            &mut has_streamed,
+            &mut ends_nl,
+            &mut needs_break,
+        );
+        drop(tx);
+        let mut streamed_out = String::new();
+        while let Ok(Ok(tok)) = rx.try_recv() {
+            streamed_out.push_str(&tok);
+        }
+        assert_eq!(streamed_out, "🤔\n\n¡Buenas noticias!");
+
+        // 3. Technical requests
+        assert!(CognitiveHAL::is_technical_request(
+            "Crea un script en Python que verifique el espacio en disco"
+        ));
+        assert!(CognitiveHAL::is_technical_request(
+            "implementá un endpoint de login"
+        ));
+        assert!(!CognitiveHAL::is_technical_request("hola cómo estás"));
+
+        // 4. Contextual follow-up
+        let history = vec![
+            ChatMessage {
+                role: ChatRole::User,
+                content: Some(
+                    "Crea un script en Python que verifique el espacio en disco".to_string(),
+                ),
+                ..Default::default()
+            },
+            ChatMessage {
+                role: ChatRole::Assistant,
+                content: Some("¿En qué disco querés enfocarlo?".to_string()),
+                ..Default::default()
+            },
+        ];
+        assert!(CognitiveHAL::has_technical_context("si, disco c", &history));
+        assert!(!CognitiveHAL::has_technical_context("hola", &[]));
+
+        let scope = CognitiveHAL::derive_task_scope("si, disco c", &history);
+        assert!(scope.contains("Crea un script en Python"));
+        assert!(scope.contains("si, disco c"));
+
+        let name = CognitiveHAL::derive_task_project_name(&scope);
+        assert_eq!(name, "Script Espacio Disco");
+    }
+
+    #[test]
+    fn test_summarize_configured_providers_free_tier_and_dedup() {
+        use crate::router::catalog::{ModelEntry, TaskScores, ToolUseSupport};
+        use crate::router::key_pool::ApiKeyEntry;
+
+        let make_model = |id: &str, provider: &str, cost: f64, free_ok: bool| ModelEntry {
+            model_id: id.to_string(),
+            provider: provider.to_string(),
+            display_name: id.to_string(),
+            context_window: 128_000,
+            cost_input_per_mtok: cost,
+            cost_output_per_mtok: cost,
+            supports_tools: true,
+            supports_json_mode: false,
+            tool_use_support: ToolUseSupport::Unknown,
+            task_scores: TaskScores::default(),
+            is_local: false,
+            avg_latency_ms: None,
+            free_tier_rpm: None,
+            free_tier_rpd: None,
+            free_tier_eligible: free_ok,
+        };
+
+        let catalog = vec![
+            make_model("openrouter/free", "openrouter", 0.0, true),
+            make_model("openrouter/auto", "openrouter", 0.0, false),
+            make_model("anthropic/claude-sonnet-4-6", "openrouter", 3.0, false),
+            make_model("openai/gpt-4o", "openrouter", 2.5, false),
+            make_model(
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "openrouter",
+                0.0,
+                true,
+            ),
+            make_model("openai/gpt-oss-20b", "groq", 0.0, true),
+        ];
+
+        let keys = vec![
+            ApiKeyEntry {
+                key_id: "or-env".to_string(),
+                provider: "openrouter".to_string(),
+                api_key: "sk-or-test-1".to_string(),
+                api_url: None,
+                label: Some("Env (openrouter)".to_string()),
+                is_active: true,
+                rate_limited_until: None,
+                active_models: None,
+                is_free_tier: true,
+            },
+            ApiKeyEntry {
+                key_id: "groq-1".to_string(),
+                provider: "groq".to_string(),
+                api_key: "gsk-1".to_string(),
+                api_url: None,
+                label: Some("Chat (groq)".to_string()),
+                is_active: true,
+                rate_limited_until: None,
+                active_models: Some(vec![
+                    "openai/gpt-oss-20b".to_string(),
+                    "allam-2-7b".to_string(),
+                ]),
+                is_free_tier: true,
+            },
+            ApiKeyEntry {
+                key_id: "groq-2".to_string(),
+                provider: "groq".to_string(),
+                api_key: "gsk-2".to_string(),
+                api_url: None,
+                label: Some("Chat (groq)".to_string()),
+                is_active: true,
+                rate_limited_until: None,
+                active_models: Some(vec![
+                    "allam-2-7b".to_string(),
+                    "openai/gpt-oss-20b".to_string(),
+                ]),
+                is_free_tier: true,
+            },
+        ];
+
+        let summary = summarize_configured_providers(keys, &catalog);
+        assert_eq!(summary.len(), 2, "Duplicate groq keys must collapse");
+
+        let or_entry = summary
+            .iter()
+            .find(|v| v["provider"] == "openrouter")
+            .expect("openrouter entry missing");
+        let or_models: Vec<&str> = or_entry["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m.as_str())
+            .collect();
+        assert!(or_models.contains(&"openrouter/free"));
+        assert!(!or_models.contains(&"openrouter/auto"));
+        assert!(!or_models.contains(&"anthropic/claude-sonnet-4-6"));
+        assert!(!or_models.contains(&"openai/gpt-4o"));
+
+        let groq_entry = summary
+            .iter()
+            .find(|v| v["provider"] == "groq")
+            .expect("groq entry missing");
+        assert_eq!(groq_entry["key_count"], 2);
+    }
+
+    #[test]
+    fn test_mask_api_keys_in_text_preserves_multiline_markdown() {
+        let input = "Resumen:\n\n| Proveedor | Clave |\n|---|---|\n| groq | `gsk_abcdefghijklmnopqrstuvwxyz1234` |\n| hex | 0123456789abcdef0123456789abcdef |\n\n> Nota final\n  - Item indentado";
+        let masked = CognitiveHAL::mask_api_keys_in_text(input);
+
+        assert!(!masked.contains("gsk_abcdefghijklmnopqrstuvwxyz1234"));
+        assert!(!masked.contains("0123456789abcdef0123456789abcdef"));
+        assert!(masked.contains("\n\n| Proveedor | Clave |\n|---|---|\n| groq | "));
+        assert!(masked.contains("\n\n> Nota final\n  - Item indentado"));
     }
 }

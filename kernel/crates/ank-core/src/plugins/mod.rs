@@ -739,23 +739,28 @@ impl PluginManager {
 
     /// Genera la "Tarjeta de Habilidades" (Tool Discovery) para inyectar en el System Prompt.
     pub fn get_available_tools_prompt(&self) -> String {
-        if self.plugins.is_empty() && self.domain_plugins.is_empty() {
-            return String::new();
-        }
+        self.get_available_tools_prompt_excluding(&[])
+    }
 
-        let mut prompt = String::from("HERRAMIENTAS (PLUGINS) DISPONIBLES:\n");
+    /// Variante que omite plugins ya expuestos mediante Tool Use nativo (por ejemplo `ledger`/`chronos`).
+    pub fn get_available_tools_prompt_excluding(&self, excluded: &[&str]) -> String {
+        let mut lines = Vec::new();
 
-        // Plugins Nativos (Dominios)
         for plugin in self.domain_plugins.values() {
-            prompt.push_str(&format!(
+            if excluded.iter().any(|&ex| ex == plugin.name) {
+                continue;
+            }
+            lines.push(format!(
                 "- {}: {} -> Uso: [SYS_CALL_PLUGIN(\"{}\", {})]\n",
                 plugin.name, plugin.description, plugin.name, plugin.parameter_example
             ));
         }
 
-        // Plugins WASM
         for plugin in self.plugins.values() {
-            prompt.push_str(&format!(
+            if excluded.iter().any(|&ex| ex == plugin.metadata.name) {
+                continue;
+            }
+            lines.push(format!(
                 "- {}: {} -> Uso: [SYS_CALL_PLUGIN(\"{}\", {})]\n",
                 plugin.metadata.name,
                 plugin.metadata.description,
@@ -763,7 +768,36 @@ impl PluginManager {
                 plugin.metadata.parameter_example
             ));
         }
+
+        if lines.is_empty() {
+            return String::new();
+        }
+        let mut prompt = String::from("HERRAMIENTAS (PLUGINS) DISPONIBLES:\n");
+        for line in lines {
+            prompt.push_str(&line);
+        }
         prompt
+    }
+
+    /// Lista los plugins nativos (dominio) y WASM cargados en el kernel.
+    pub fn list_plugin_summaries(&self) -> Vec<(String, String, &'static str)> {
+        let mut out = Vec::new();
+        for plugin in self.domain_plugins.values() {
+            out.push((
+                plugin.name.clone(),
+                plugin.description.clone(),
+                "native_domain",
+            ));
+        }
+        for plugin in self.plugins.values() {
+            out.push((
+                plugin.metadata.name.clone(),
+                plugin.metadata.description.clone(),
+                "wasm",
+            ));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// Ejecutor de Plugins de Dominio (Native Bridge to SQLCipher)

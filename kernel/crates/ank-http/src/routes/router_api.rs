@@ -26,6 +26,18 @@ pub use modules_handlers::{
 
 use discovery_handlers::{auto_discover_models, is_keyless_provider};
 
+fn notify_provider_keys_updated(state: &AppState, tenant_id: &str, scope: &str) {
+    let _ = state
+        .workspace_events
+        .send(ank_core::pr_manager::WorkspaceWsEvent {
+            tenant_id: tenant_id.to_string(),
+            payload: serde_json::json!({
+                "event": "provider_keys_updated",
+                "data": { "scope": scope }
+            }),
+        });
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/keys/global", post(add_global_key))
@@ -248,6 +260,7 @@ async fn add_global_key(
 
     router.invalidate_all_sticky().await;
     sync_key_models_into_catalog(&router, &entry).await;
+    notify_provider_keys_updated(&state, "*", "global_key_added");
 
     Ok(Json(SyncResponse {
         success: true,
@@ -389,6 +402,7 @@ async fn add_tenant_key(
 
     router.invalidate_sticky(&auth.tenant_id).await;
     sync_key_models_into_catalog(&router, &entry).await;
+    notify_provider_keys_updated(&state, &auth.tenant_id, "tenant_key_added");
 
     Ok(Json(SyncResponse {
         success: true,
@@ -596,6 +610,7 @@ async fn update_global_key(
 
     router.invalidate_all_sticky().await;
     sync_key_models_into_catalog(&router, &entry).await;
+    notify_provider_keys_updated(&state, "*", "global_key_updated");
 
     Ok(Json(SyncResponse {
         success: true,
@@ -660,6 +675,7 @@ async fn update_tenant_key(
 
     router.invalidate_sticky(&auth.tenant_id).await;
     sync_key_models_into_catalog(&router, &entry).await;
+    notify_provider_keys_updated(&state, &auth.tenant_id, "tenant_key_updated");
 
     Ok(Json(SyncResponse {
         success: true,
@@ -826,6 +842,12 @@ async fn import_keys(
             warn!("Import: catalog sync failed after key import: {}", e);
         }
     }
+
+    notify_provider_keys_updated(
+        &state,
+        tenant_scope.as_deref().unwrap_or("*"),
+        "keys_imported",
+    );
 
     Ok(Json(ImportResponse {
         success: true,

@@ -12,8 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const RETRYABLE_STATUS_CODES: &[u16] = &[429, 502, 503, 504];
-const MAX_RETRIES: u32 = 2;
-const BASE_DELAY_MS: u64 = 1000;
+const MAX_RETRIES: u32 = 1;
+const BASE_DELAY_MS: u64 = 500;
+const REQUEST_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Clone)]
 pub struct CloudProxyDriver {
@@ -260,7 +261,7 @@ impl CloudProxyDriver {
                 .client
                 .post(&self.api_url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
                 .json(&request_body);
 
             match request.send().await {
@@ -318,7 +319,9 @@ impl CloudProxyDriver {
                     return Ok(response);
                 }
                 Err(e) => {
-                    if attempt < MAX_RETRIES {
+                    // Fail fast on HTTP timeouts so the fallback router switches model/provider
+                    // immediately instead of stalling 2x timeout on the same unresponsive endpoint.
+                    if !e.is_timeout() && attempt < MAX_RETRIES {
                         tracing::warn!(
                             attempt = attempt + 1,
                             error = %e,
@@ -334,6 +337,7 @@ impl CloudProxyDriver {
                         "Reqwest error after {} retries: {}",
                         attempt, e
                     )));
+                    break;
                 }
             }
         }
@@ -349,9 +353,62 @@ struct ChatCompletionRequest {
     messages: Vec<ChatMessage>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<serde_json::Value>>,
+}
+
+fn recommended_max_tokens(messages: &[ChatMessage], has_tools: bool) -> u32 {
+    let total_chars: usize = messages
+        .iter()
+        .filter_map(|m| m.content.as_deref())
+        .map(str::len)
+        .sum();
+    if !has_tools && total_chars <= 2_000 {
+        1024
+    } else if total_chars <= 12_000 {
+        1280
+    } else {
+        1536
+    }
+}
+
+/// Parses OpenRouter HTTP 402 bodies like
+/// `"You requested up to 4096 tokens, but can only afford 1059"` to clamp
+/// `max_tokens` automatically when remaining credit still covers output tokens.
+fn parse_openrouter_affordable_tokens(body: &str) -> Option<u32> {
+    if body.contains("Prompt tokens limit exceeded") {
+        return None;
+    }
+    let idx = body.find("can only afford ")?;
+    let tail = &body[idx + "can only afford ".len()..];
+    let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let afforded = digits.parse::<u32>().ok()?;
+    if afforded >= 320 {
+        Some((afforded * 85 / 100).max(256))
+    } else {
+        None
+    }
+}
+
+/// Only OpenRouter (402 credit-reservation checks) and Anthropic require an explicit
+/// `max_tokens` ceiling. Sending a small `max_tokens` to Gemini's OpenAI-compatible
+/// endpoint starves visible `delta.content` when thinking models consume the budget.
+fn recommended_max_tokens_for_provider(
+    api_url: &str,
+    messages: &[ChatMessage],
+    has_tools: bool,
+) -> Option<u32> {
+    let url_lc = api_url.to_lowercase();
+    if url_lc.contains("openrouter.ai") || url_lc.contains("anthropic.com") {
+        Some(recommended_max_tokens(messages, has_tools))
+    } else {
+        None
+    }
 }
 
 #[derive(Serialize)]
@@ -395,6 +452,15 @@ struct FunctionCallDelta {
     arguments: Option<String>,
 }
 
+/// Extracts one complete `\n`-terminated SSE line from a raw byte buffer,
+/// keeping trailing incomplete multi-byte UTF-8 sequences intact until the
+/// next TCP chunk finishes them.
+pub(crate) fn decode_next_sse_line_from_buf(buffer: &mut Vec<u8>) -> Option<String> {
+    let idx = buffer.iter().position(|&b| b == b'\n')?;
+    let raw_line: Vec<u8> = buffer.drain(..=idx).collect();
+    Some(String::from_utf8_lossy(&raw_line).trim().to_string())
+}
+
 #[async_trait]
 impl InferenceDriver for CloudProxyDriver {
     async fn generate_stream(
@@ -424,11 +490,22 @@ impl InferenceDriver for CloudProxyDriver {
             messages
         };
 
+        let max_tokens = recommended_max_tokens_for_provider(
+            &self.api_url,
+            &processed_messages,
+            tools.is_some(),
+        );
         let mut request_body = ChatCompletionRequest {
             model: self.model_id.clone(),
             messages: processed_messages,
             stream: true,
+            max_tokens,
             response_format: None,
+            tool_choice: if tools.is_some() {
+                Some(serde_json::json!("auto"))
+            } else {
+                None
+            },
             tools,
         };
 
@@ -453,7 +530,28 @@ impl InferenceDriver for CloudProxyDriver {
             );
         }
 
-        let response = self.send_with_retry(body_json).await?;
+        let mut response = self.send_with_retry(body_json.clone()).await?;
+
+        if response.status() == reqwest::StatusCode::PAYMENT_REQUIRED
+            && self.api_url.to_ascii_lowercase().contains("openrouter.ai")
+        {
+            let body_402 = response.text().await.unwrap_or_default();
+            if let Some(clamped) = parse_openrouter_affordable_tokens(&body_402) {
+                tracing::info!(
+                    model = %self.model_id,
+                    clamped_max_tokens = clamped,
+                    "OpenRouter 402 credit cap: clamping max_tokens and retrying request"
+                );
+                body_json["max_tokens"] = serde_json::json!(clamped);
+                response = self.send_with_retry(body_json).await?;
+            } else {
+                tracing::error!(status = "402 Payment Required", body = %body_402, "Cloud API returned error status");
+                return Err(SystemError::HardwareFailure(format!(
+                    "Cloud API Error 402 Payment Required: {}",
+                    body_402
+                )));
+            }
+        }
 
         if !response.status().is_success() {
             let status = response.status();
@@ -470,7 +568,7 @@ impl InferenceDriver for CloudProxyDriver {
         let tool_calls_acc: std::collections::HashMap<u32, (String, String, String)> =
             std::collections::HashMap::new();
         let pending_tokens = std::collections::VecDeque::<String>::new();
-        let state = (stream, String::new(), tool_calls_acc, pending_tokens);
+        let state = (stream, Vec::<u8>::new(), tool_calls_acc, pending_tokens);
 
         let parsed_stream = futures_util::stream::unfold(
             state,
@@ -482,10 +580,7 @@ impl InferenceDriver for CloudProxyDriver {
                     }
 
                     // Yield any complete lines we already have in buffer
-                    while let Some(idx) = buffer.find('\n') {
-                        let line = buffer[..idx].trim().to_string();
-                        buffer = buffer[idx + 1..].to_string();
-
+                    while let Some(line) = decode_next_sse_line_from_buf(&mut buffer) {
                         if let Some(data) = line.strip_prefix("data: ") {
                             if data == "[DONE]" {
                                 // Stream ended — emit any accumulated tool calls
@@ -559,6 +654,19 @@ impl InferenceDriver for CloudProxyDriver {
                                         }
                                     }
                                 }
+                            } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(data)
+                            {
+                                if let Some(err) = val.get("error") {
+                                    let msg =
+                                        err.get("message").and_then(|m| m.as_str()).unwrap_or(data);
+                                    return Some((
+                                        Err(ExecutionError::Interrupted(format!(
+                                            "Stream API Error: {}",
+                                            msg
+                                        ))),
+                                        (stream, buffer, tool_calls_acc, pending_tokens),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -566,14 +674,7 @@ impl InferenceDriver for CloudProxyDriver {
                     // Need more data from the network
                     match stream.next().await {
                         Some(Ok(chunk)) => {
-                            if let Ok(text) = String::from_utf8(chunk.to_vec()) {
-                                buffer.push_str(&text);
-                            } else {
-                                return Some((
-                                    Err(ExecutionError::Interrupted("Invalid UTF-8 chunk".into())),
-                                    (stream, buffer, tool_calls_acc, pending_tokens),
-                                ));
-                            }
+                            buffer.extend_from_slice(&chunk);
                         }
                         Some(Err(e)) => {
                             return Some((
@@ -623,6 +724,23 @@ impl InferenceDriver for CloudProxyDriver {
     async fn load_model(&mut self, model_id: &str) -> Result<(), SystemError> {
         self.model_id = model_id.to_string();
         Ok(())
+    }
+}
+
+impl CloudProxyDriver {
+    pub fn current_key_id(&self) -> Option<&str> {
+        self.key_id.as_deref()
+    }
+
+    pub fn swap_api_key(
+        &mut self,
+        api_key: String,
+        key_id: Option<String>,
+        on_rate_limited: Option<Arc<dyn Fn(chrono::DateTime<chrono::Utc>) + Send + Sync>>,
+    ) {
+        self.api_key = api_key;
+        self.key_id = key_id;
+        self.on_rate_limited = on_rate_limited;
     }
 }
 
@@ -784,5 +902,72 @@ mod tests {
         assert!(!is_local_network(
             "https://generativelanguage.googleapis.com"
         ));
+    }
+
+    #[test]
+    fn recommended_max_tokens_caps_openrouter_only() {
+        use crate::chal::ChatRole;
+        let msgs = vec![ChatMessage {
+            role: ChatRole::User,
+            content: Some("hola".into()),
+            ..Default::default()
+        }];
+        assert_eq!(
+            recommended_max_tokens_for_provider(
+                "https://openrouter.ai/api/v1/chat/completions",
+                &msgs,
+                false
+            ),
+            Some(1024)
+        );
+        assert_eq!(
+            recommended_max_tokens_for_provider(
+                "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                &msgs,
+                true
+            ),
+            None
+        );
+        assert_eq!(
+            recommended_max_tokens_for_provider(
+                "https://api.groq.com/openai/v1/chat/completions",
+                &msgs,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            parse_openrouter_affordable_tokens(
+                "You requested up to 4096 tokens, but can only afford 1059. To increase..."
+            ),
+            Some(900)
+        );
+        assert_eq!(
+            parse_openrouter_affordable_tokens(
+                "Prompt tokens limit exceeded: 8554 > 5374. You requested up to 4096 tokens, but can only afford 1059."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn decode_sse_lines_preserves_split_multibyte_utf8_chunks() {
+        let mut buf: Vec<u8> = Vec::new();
+        let line1 = "data: {\"choices\":[{\"delta\":{\"content\":\"¡Hola, mi señora! 🤔💛\"}}]}\n";
+        let bytes = line1.as_bytes();
+        // Split right in the middle of multi-byte UTF-8 sequence (ñ / 🤔 / 💛)
+        let split_at = bytes
+            .iter()
+            .position(|&b| b >= 0xF0)
+            .expect("emoji byte present")
+            + 2;
+
+        buf.extend_from_slice(&bytes[..split_at]);
+        assert!(decode_next_sse_line_from_buf(&mut buf).is_none());
+
+        buf.extend_from_slice(&bytes[split_at..]);
+        let decoded = decode_next_sse_line_from_buf(&mut buf).expect("complete SSE line");
+        assert!(decoded.contains("¡Hola, mi señora! 🤔💛"));
+        assert!(buf.is_empty());
     }
 }

@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod agents;
+pub mod antigravity_bridge;
 pub mod auth;
 pub mod chat_history;
 pub mod engine;
@@ -10,6 +11,7 @@ pub mod music_api;
 pub mod oauth_api;
 pub mod openapi;
 pub mod persona_api;
+pub mod personal;
 pub mod providers;
 pub mod prs;
 pub mod router_api;
@@ -18,6 +20,8 @@ pub mod status;
 pub mod stt_download;
 pub mod system_config_api;
 pub mod train;
+pub mod video_api;
+pub mod whatsapp_api;
 pub mod workspace;
 
 use crate::static_files;
@@ -45,6 +49,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/admin/system-config", system_config_api::router())
         .nest("/api/engine", engine::router())
         .nest("/api/oauth", oauth_api::router())
+        .nest("/api/whatsapp", whatsapp_api::router())
         .nest("/api/router", router_api::router())
         .nest("/api/chat", chat_history::router())
         .nest("/api/workspace", workspace::router())
@@ -58,10 +63,14 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/siren/stt", stt_download::router())
         .nest("/api/persona", persona_api::router())
         .nest("/api/agents", agents::router())
+        .nest("/api/antigravity", antigravity_bridge::router())
         .nest("/api/music", music_api::router())
         .nest("/api/train", train::router())
+        .nest("/api/video", video_api::router())
         .nest("/api/mcp", mcp_api::router())
         .nest("/api/memory", memory_api::router())
+        .nest("/api/personal", personal::router())
+        .route("/api/chronos/events", get(personal::get_chronos_events))
         // WebSocket Routes
         .nest("/ws/chat", ws::chat::router())
         .nest("/ws/siren", ws::siren::router())

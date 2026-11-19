@@ -107,7 +107,7 @@ fn is_disallowed_ip(ip: IpAddr, allow_local_admin: bool) -> bool {
 ///   including loopback/LAN Ollama/vLLM, while blocking cloud metadata IPs and URL credentials.
 /// - Regular Tenant (`allow_local_admin = false`): strictly requires `https://`
 ///   and rejects loopback, RFC1918 private LAN, `.local`/`.internal`, and metadata targets.
-fn validate_engine_api_url(
+pub(crate) fn validate_engine_api_url(
     raw_url: &str,
     allow_local_admin: bool,
 ) -> Result<String, AegisHttpError> {
@@ -445,6 +445,16 @@ pub async fn configure(
         .await
         .map_err(AegisHttpError::Internal)?;
     router.invalidate_sticky(&auth.tenant_id).await;
+
+    let _ = state
+        .workspace_events
+        .send(ank_core::pr_manager::WorkspaceWsEvent {
+            tenant_id: auth.tenant_id.clone(),
+            payload: json!({
+                "event": "provider_keys_updated",
+                "data": { "scope": "engine" }
+            }),
+        });
 
     Ok(Json(ConfigureResponse {
         success: true,

@@ -26,6 +26,8 @@ pub mod telemetry;
 pub mod trainer;
 pub mod tunnel;
 pub mod vcm;
+pub mod video_studio;
+pub mod whatsapp;
 pub mod workspace;
 
 // Re-exportar para fácil acceso

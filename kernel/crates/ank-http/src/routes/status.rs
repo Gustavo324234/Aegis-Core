@@ -379,7 +379,10 @@ fn is_cloudflared_installed() -> bool {
     })
 }
 
-fn is_direct_local_cli_probe(peer_addr: Option<SocketAddr>, headers: &HeaderMap) -> bool {
+pub(crate) fn is_direct_local_cli_probe(
+    peer_addr: Option<SocketAddr>,
+    headers: &HeaderMap,
+) -> bool {
     let Some(addr) = peer_addr else {
         return false;
     };

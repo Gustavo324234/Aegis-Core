@@ -2,7 +2,7 @@ use crate::{citadel::hash_passphrase, state::AppState};
 use ank_core::{
     agents::orchestrator::AgentOrchestrator,
     chal::{ChatMessage, ChatRole},
-    pcb::{infer_task_type, PCB},
+    pcb::{TaskType, PCB},
     scheduler::SchedulerEvent,
 };
 use axum::{
@@ -221,9 +221,19 @@ async fn handle_chat(
     }
 
     // CORE-260: Cache de historial de mensajes de la sesión WebSocket (máx. 20).
+    // Al conectar/reconectar precarga los últimos turnos reales desde chat_history.log
+    // (omitiendo recordatorios automáticos) para no perder el hilo si hubo F5 o sleep.
+    let initial_history = crate::routes::chat_history::load_recent_session_messages(
+        &state.config.data_dir,
+        &tenant_id,
+        12,
+    )
+    .await;
     let session_history: std::sync::Arc<
         tokio::sync::Mutex<std::collections::VecDeque<ChatMessage>>,
-    > = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new()));
+    > = std::sync::Arc::new(tokio::sync::Mutex::new(
+        initial_history.into_iter().collect(),
+    ));
 
     // CORE-327: una conversación = una conexión WebSocket. Cada PCB que
     // origine este socket lleva este id para que el sticky cache del CMR
@@ -272,12 +282,17 @@ async fn handle_chat(
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // Disparador de recordatorios vencidos (cada 30s mientras la sesión está conectada)
+    let mut reminder_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    reminder_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     // 4. Loop
+    let mut last_failed_prompt: Option<String> = None;
     loop {
         // Forward pending workspace events for this tenant before waiting
         loop {
             match workspace_rx.try_recv() {
-                Ok(event) if event.tenant_id == tenant_id => {
+                Ok(event) if event.tenant_id == tenant_id || event.tenant_id == "*" => {
                     let _ = socket.send(Message::Text(event.payload.to_string())).await;
                 }
                 Ok(_) => {}
@@ -291,6 +306,18 @@ async fn handle_chat(
                     Some(Ok(m)) => m,
                     _ => break,
                 }
+            }
+            ws_ev = workspace_rx.recv() => {
+                match ws_ev {
+                    Ok(event) if event.tenant_id == tenant_id || event.tenant_id == "*" => {
+                        let _ = socket.send(Message::Text(event.payload.to_string())).await;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("[ChatWS] tenant={} workspace_rx lagged by {} events", tenant_id, n);
+                    }
+                    _ => {}
+                }
+                continue;
             }
             event_result = agent_event_rx.recv() => {
                 // CORE-274: envelope estándar { "event": "agent_event", "data": {...} }
@@ -322,6 +349,32 @@ async fn handle_chat(
             _ = ping_interval.tick() => {
                 if socket.send(Message::Ping(vec![])).await.is_err() {
                     break;
+                }
+                continue;
+            }
+            _ = reminder_interval.tick() => {
+                if !hash.is_empty() {
+                    let t_id = tenant_id.clone();
+                    let s_key = hash.clone();
+                    if let Ok(Ok(fired)) = tokio::task::spawn_blocking(move || {
+                        ank_core::enclave::TenantDB::open(&t_id, &s_key)
+                            .and_then(|db| db.fire_due_reminders(chrono::Local::now()))
+                    })
+                    .await
+                    {
+                        for rem in fired {
+                            let desc = rem.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                            let frame = json!({ "event": "reminder_due", "data": rem });
+                            let _ = socket.send(Message::Text(frame.to_string())).await;
+                            let next = rem.get("next_remind_at").and_then(|v| v.as_str());
+                            let hist_line = if let Some(n) = next {
+                                format!("⏰ Recordatorio: {} (próximo: {})", desc, n)
+                            } else {
+                                format!("⏰ Recordatorio: {}", desc)
+                            };
+                            let _ = append_to_chat_history(&tenant_id, "ASSISTANT", &hist_line).await;
+                        }
+                    }
                 }
                 continue;
             }
@@ -533,14 +586,19 @@ async fn handle_chat(
                         Some(model_id)
                     } else {
                         let _ = socket
-                            .send(Message::Text(error_event(
-                                "model_override_unknown",
-                                &format!(
-                                    "El modelo '{}' no está en el catálogo. Sigo con la selección automática.",
-                                    model_id
-                                ),
-                                Some(&format!("unknown model_id: {}", model_id)),
-                            )))
+                            .send(Message::Text(
+                                json!({
+                                    "event": "warning",
+                                    "data": {
+                                        "category": "model_override_unknown",
+                                        "message": format!(
+                                            "El modelo '{}' no está en el catálogo; sigo con la selección automática.",
+                                            model_id
+                                        ),
+                                    }
+                                })
+                                .to_string(),
+                            ))
                             .await;
                         None
                     }
@@ -548,8 +606,79 @@ async fn handle_chat(
                 _ => None,
             };
 
-            let user_message_text = prompt.clone();
-            let mut pcb = PCB::new(tenant_id.clone(), 5, prompt.clone());
+            let user_message_text = ank_core::chal::CognitiveHAL::mask_api_keys_in_text(&prompt);
+
+            let is_free_prompt = prompt.to_lowercase().contains("gratis")
+                || prompt.to_lowercase().contains("free")
+                || prompt.to_lowercase().contains("gratuito")
+                || prompt.to_lowercase().contains("cuenta gratuita");
+
+            let detected_keys =
+                ank_core::chal::CognitiveHAL::extract_all_api_keys_from_text(&prompt);
+            let had_detected_keys = !detected_keys.is_empty();
+            for (inferred_prov, detected_key) in detected_keys {
+                if inferred_prov == "elevenlabs" {
+                    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
+                        let _ = db.set_kv("elevenlabs_api_key", &detected_key);
+                    }
+                    continue;
+                }
+
+                if !inferred_prov.is_empty() {
+                    let (def_model, def_url) =
+                        ank_core::chal::CognitiveHAL::default_model_and_url_for_provider(
+                            &inferred_prov,
+                        );
+                    let discovered_models =
+                        match ank_core::router::discovery::fetch_provider_models(
+                            &inferred_prov,
+                            Some(def_url),
+                            &detected_key,
+                        )
+                        .await
+                        {
+                            Ok(list) if !list.is_empty() => {
+                                list.into_iter().map(|d| d.model_id).collect()
+                            }
+                            _ => vec![def_model.to_string()],
+                        };
+
+                    let entry = ank_core::router::key_pool::ApiKeyEntry {
+                        key_id: uuid::Uuid::new_v4().to_string(),
+                        provider: inferred_prov.clone(),
+                        api_key: detected_key,
+                        api_url: Some(def_url.to_string()),
+                        label: Some(format!("Chat ({})", inferred_prov)),
+                        is_active: true,
+                        rate_limited_until: None,
+                        active_models: Some(discovered_models.clone()),
+                        is_free_tier: is_free_prompt,
+                    };
+                    let router = state.router.read().await;
+                    let _ = router.add_tenant_key(&tenant_id, entry.clone()).await;
+                    let _ = router.add_global_key(entry).await;
+                    let _ = ank_core::router::syncer::register_provider_models(
+                        &inferred_prov,
+                        &discovered_models,
+                        &router.catalog_ref(),
+                    )
+                    .await;
+                    router.invalidate_all_sticky().await;
+                }
+            }
+            let effective_prompt = if had_detected_keys {
+                if let Some(prev_prompt) = last_failed_prompt.take() {
+                    format!(
+                        "{}\n\n[CONSULTA PENDIENTE DEL USUARIO A RESPONDER AHORA]:\n{}",
+                        prompt, prev_prompt
+                    )
+                } else {
+                    prompt.clone()
+                }
+            } else {
+                prompt.clone()
+            };
+            let mut pcb = PCB::new(tenant_id.clone(), 5, effective_prompt);
             pcb.model_pref = pref;
             pcb.tenant_id = Some(tenant_id.clone());
             pcb.session_key = Some(hash.clone());
@@ -561,24 +690,22 @@ async fn handle_chat(
             // CORE-FIX: Inferir TaskType del prompt para que el CMR puntúe por el tipo
             // de tarea real (Code/Planning/Analysis/Creative) y no siempre por Chat.
             // Sin esto, un pedido de coding eligía gemini-flash-lite en lugar de claude-sonnet.
-            pcb.task_type = infer_task_type(&prompt);
+            // CORE-ARCH: El WebSocket de Chat es el Chat Agent (Nivel 0) y SIEMPRE
+            // corre con TaskType::Chat. Esto garantiza que el CMR elija un modelo
+            // conversacional liviano, de respuesta instantánea (Gemini Flash, Groq Qwen 3.8 / GPT-OSS 20B).
+            // Las tareas complejas (Code/Planning/Analysis) NO se resuelven en el chat:
+            // el ChatAgent las delega a un ProjectSupervisor mediante `spawn_agent`.
+            pcb.task_type = TaskType::Chat;
 
-            // CORE-260: Inyectar historial de la sesión en el PCB
+            // CORE-260: Inyectar historial de la sesión en el PCB (acotado a los últimos 12 mensajes)
             {
                 let history = session_history.lock().await;
-                pcb.message_history = history.iter().cloned().collect();
+                let skip = history.len().saturating_sub(12);
+                pcb.message_history = history.iter().skip(skip).cloned().collect();
             }
 
-            // CORE-FIX: Enable conversation history and semantic memory
-            pcb.memory_pointers
-                .l2_context_refs
-                .push("file://chat_history.log".to_string());
-            pcb.memory_pointers
-                .swap_refs
-                .push("semantic_memory".to_string());
-
-            // Save user prompt to history
-            let _ = append_to_chat_history(&tenant_id, "USER", &prompt).await;
+            // El guardado en historial se difiere hasta después del stream para evitar
+            // duplicar mensajes fallidos o persistir turnos sin respuesta del modelo.
 
             let pid = pcb.pid.clone();
 
@@ -611,6 +738,7 @@ async fn handle_chat(
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {
                     state.event_broker.write().await.remove(&pid);
+                    last_failed_prompt = Some(prompt.clone());
                     let _ = socket
                         .send(Message::Text(error_event(
                             "scheduler_unavailable",
@@ -622,6 +750,7 @@ async fn handle_chat(
                 }
                 Err(_) => {
                     state.event_broker.write().await.remove(&pid);
+                    last_failed_prompt = Some(prompt.clone());
                     let _ = socket
                         .send(Message::Text(error_event(
                             "scheduler_timeout",
@@ -677,13 +806,13 @@ async fn handle_chat(
                 }
             }
 
-            // Save assistant response to history
-            if !full_response.is_empty() {
+            // Save user + assistant turn to history only if the model produced output
+            if !full_response.trim().is_empty() {
+                last_failed_prompt = None;
+                let _ = append_to_chat_history(&tenant_id, "USER", &user_message_text).await;
                 let _ = append_to_chat_history(&tenant_id, "ASSISTANT", &full_response).await;
-            }
 
-            // CORE-260: Actualizar SessionHistoryCache con el par user+assistant
-            if !full_response.is_empty() {
+                // CORE-260: Actualizar SessionHistoryCache con el par user+assistant
                 let mut history = session_history.lock().await;
                 history.push_back(ChatMessage {
                     role: ChatRole::User,
@@ -698,6 +827,8 @@ async fn handle_chat(
                 while history.len() > 20 {
                     history.pop_front();
                 }
+            } else {
+                last_failed_prompt = Some(prompt.clone());
             }
         }
     }
@@ -816,6 +947,26 @@ async fn stream_with_receiver(
                     }
                     continue;
                 }
+                if let Some(json_str) = text.strip_prefix("__PROGRESS__") {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let _ = socket
+                            .send(Message::Text(
+                                json!({ "event": "tool_progress", "data": meta }).to_string(),
+                            ))
+                            .await;
+                    }
+                    continue;
+                }
+                if let Some(json_str) = text.strip_prefix("__MODEL_ERROR__") {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let _ = socket
+                            .send(Message::Text(
+                                json!({ "event": "error", "data": meta }).to_string(),
+                            ))
+                            .await;
+                    }
+                    continue;
+                }
                 if let Some(caps) = MUSIC_PLAY_RE.captures(text) {
                     let provider = caps[1].to_string();
                     let track_id = caps[2].to_string();
@@ -873,10 +1024,12 @@ async fn stream_with_receiver(
             }
 
             let data = match payload {
-                ank_proto::v1::task_event::Payload::Thought(t) => json!({ "thought": t }),
+                ank_proto::v1::task_event::Payload::Thought(t) => {
+                    json!({ "pid": proto_event.pid, "thought": t })
+                }
                 ank_proto::v1::task_event::Payload::Output(o) => {
                     full_output.push_str(o);
-                    json!({ "output": o })
+                    json!({ "pid": proto_event.pid, "output": o })
                 }
                 ank_proto::v1::task_event::Payload::StatusUpdate(s) => {
                     let state_str = match s.state {
@@ -888,10 +1041,14 @@ async fn stream_with_receiver(
                         5 => "STATE_FAILED",
                         _ => "UNKNOWN",
                     };
-                    json!({ "status_update": { "state": state_str } })
+                    json!({ "pid": proto_event.pid, "status_update": { "state": state_str } })
                 }
-                ank_proto::v1::task_event::Payload::Error(e) => json!({ "error": e }),
-                ank_proto::v1::task_event::Payload::Syscall(s) => json!({ "syscall": s.name }),
+                ank_proto::v1::task_event::Payload::Error(e) => {
+                    json!({ "pid": proto_event.pid, "error": e })
+                }
+                ank_proto::v1::task_event::Payload::Syscall(s) => {
+                    json!({ "pid": proto_event.pid, "syscall": s.name })
+                }
             };
 
             let _ = socket
@@ -932,7 +1089,7 @@ async fn append_to_chat_history(tenant_id: &str, role: &str, text: &str) -> anyh
         "\n[{}] {}: {}\n",
         chrono::Utc::now().to_rfc3339(),
         role,
-        text
+        ank_core::chal::CognitiveHAL::mask_api_keys_in_text(text)
     );
     file.write_all(entry.as_bytes()).await?;
     Ok(())

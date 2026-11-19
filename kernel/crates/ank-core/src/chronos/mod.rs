@@ -77,18 +77,19 @@ impl ChronosDaemon {
     }
 
     /// Construye un PCB de baja prioridad para la tarea de consolidación.
-    /// Esta tarea instruye a la ALU a resumir y extraer entidades de los logs crudos.
-    pub fn build_consolidation_pcb(&self, raw_text: &str) -> PCB {
+    /// Esta tarea instruye a la ALU a resumir y extraer entidades y hechos personales.
+    pub fn build_consolidation_pcb(&self, tenant_id: &str, raw_text: &str) -> PCB {
         let l1_prompt = format!(
-            "CONTEXT CONSOLIDATION MISSION:\n\
-            Resume los siguientes eventos recientes en un párrafo denso y extrae entidades clave.\n\
-            Responde estrictamente en formato JSON: {{\"summary\": \"...\", \"tags\": [...]}}\n\n\
-            EVENTS:\n{}",
+            "Analizá los siguientes fragmentos recientes de conversación con el usuario y extraé hechos personales implícitos o explícitos que valga la pena recordar a largo plazo (gustos, horarios, familia, salud, proyectos, preferencias).\n\
+            Respondé estrictamente en formato JSON: {{\"summary\": \"...\", \"tags\": [\"...\"], \"facts\": [{{\"category\": \"preferencias|rutina|salud|trabajo|general\", \"fact\": \"...\"}}]}}\n\n\
+            CONVERSATION / EVENTS:\n{}",
             raw_text
         );
 
         // Prioridad 1: Misión de background, se pausa si llega tráfico del usuario.
-        PCB::new("ChronosConsolidator".to_string(), 1, l1_prompt)
+        let mut pcb = PCB::new("ChronosConsolidator".to_string(), 1, l1_prompt);
+        pcb.tenant_id = Some(tenant_id.to_string());
+        pcb
     }
 
     /// Punto de entrada para la ejecución del demonio (Loop lógico).
@@ -111,10 +112,8 @@ impl ChronosDaemon {
                 *last = Utc::now();
             }
 
-            // Simulación de texto de prueba para asimilación
-            let test_raw_text =
-                "ACTIVITY LOG: User modified main.rs. Syscall weather executed. PC was restarted.";
-            let pcb = self.build_consolidation_pcb(test_raw_text);
+            let (tenant_id, raw_text) = Self::load_latest_tenant_chat_log();
+            let pcb = self.build_consolidation_pcb(&tenant_id, &raw_text);
 
             self.event_tx
                 .send(SchedulerEvent::ScheduleTask(Box::new(pcb)))
@@ -122,6 +121,47 @@ impl ChronosDaemon {
                 .map_err(|e| anyhow::anyhow!("Failed to send consolidation task: {}", e))?;
         }
         Ok(())
+    }
+
+    /// Lee el historial real más reciente (`users/<tenant>/workspace/chat_history.log`)
+    /// para alimentar la consolidación nocturna de Chronos (`CORE-376`).
+    fn load_latest_tenant_chat_log() -> (String, String) {
+        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+        let users_dir = std::path::Path::new(&base_dir).join("users");
+        let mut newest: Option<(std::time::SystemTime, String, std::path::PathBuf)> = None;
+
+        if let Ok(entries) = std::fs::read_dir(&users_dir) {
+            for entry in entries.flatten() {
+                let tenant = entry.file_name().to_string_lossy().to_string();
+                if tenant.starts_with("test_") {
+                    continue;
+                }
+                let candidate = entry.path().join("workspace").join("chat_history.log");
+                if let Ok(meta) = std::fs::metadata(&candidate) {
+                    if meta.len() > 0 {
+                        let mtime = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        if newest.as_ref().map(|(t, _, _)| mtime > *t).unwrap_or(true) {
+                            newest = Some((mtime, tenant, candidate));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((_, tenant, path)) = newest {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let lines: Vec<&str> = content.lines().rev().take(40).collect();
+                let recent = lines.into_iter().rev().collect::<Vec<&str>>().join("\n");
+                if !recent.trim().is_empty() {
+                    return (tenant, recent);
+                }
+            }
+        }
+
+        (
+            "default".to_string(),
+            "ACTIVITY LOG: No recent user conversation turns pending consolidation.".to_string(),
+        )
     }
 }
 
@@ -188,9 +228,28 @@ mod tests {
         if let SchedulerEvent::ScheduleTask(pcb) = event {
             assert_eq!(pcb.process_name, "ChronosConsolidator");
             assert_eq!(pcb.priority, 1);
+            assert_eq!(pcb.tenant_id.as_deref(), Some("default"));
         } else {
             anyhow::bail!("Received wrong event type");
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_core_376_build_consolidation_pcb_with_tenant() {
+        let scheduler = Arc::new(RwLock::new(CognitiveScheduler::new(Arc::new(
+            persistence::MockPersistor,
+        ))));
+        let swap = Arc::new(LanceSwapManager::new("./tmp/test_swap_pcb"));
+        let (tx, _rx) = mpsc::channel(32);
+        let chronos = ChronosDaemon::new(scheduler, swap, tx, 1, 1);
+
+        let pcb = chronos.build_consolidation_pcb("alex", "Usuario dijo que le gusta el café.");
+        assert_eq!(pcb.tenant_id.as_deref(), Some("alex"));
+        assert!(pcb.memory_pointers.l1_instruction.contains("facts"));
+        assert!(pcb
+            .memory_pointers
+            .l1_instruction
+            .contains("Usuario dijo que le gusta el café."));
     }
 }

@@ -389,8 +389,8 @@ mod tests {
     #[test]
     fn test_build_ws_handshake_preserves_wss_and_hides_token() -> Result<(), String> {
         let (uri, host) =
-            build_ws_handshake_target("wss://connect.aegis-os.com/ws/connect", "tavo")?;
-        assert_eq!(uri, "wss://connect.aegis-os.com/ws/connect?tenant=tavo");
+            build_ws_handshake_target("wss://connect.aegis-os.com/ws/connect", "alice")?;
+        assert_eq!(uri, "wss://connect.aegis-os.com/ws/connect?tenant=alice");
         assert_eq!(host, "connect.aegis-os.com");
         assert!(!uri.contains("token="));
 

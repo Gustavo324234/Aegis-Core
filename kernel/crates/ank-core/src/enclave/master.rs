@@ -304,6 +304,41 @@ impl MasterEnclave {
         Ok((next_port, temp_passphrase))
     }
 
+    /// CORE-377: Crea un tenant personal con contraseña definitiva (password_must_change = 0)
+    pub async fn create_personal_tenant(
+        &self,
+        tenant_id: &str,
+        passphrase_sha256: &str,
+    ) -> Result<u32> {
+        use anyhow::Context;
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare("SELECT MAX(network_port) FROM tenants")?;
+        let max_port: Option<u32> = stmt.query_row([], |row| row.get(0)).unwrap_or(Some(50051));
+
+        let next_port = if let Some(p) = max_port {
+            if p >= 50052 {
+                p + 1
+            } else {
+                50052
+            }
+        } else {
+            50052
+        };
+
+        let hash = Self::hash_password(passphrase_sha256).context("Failed to hash passphrase")?;
+
+        conn.execute(
+            "INSERT INTO tenants (tenant_id, username, network_port, password_must_change, password_hash) VALUES (?1, ?1, ?2, 0, ?3)",
+            rusqlite::params![tenant_id, next_port, hash],
+        ).with_context(|| format!("Failed to create personal tenant {}", tenant_id))?;
+
+        info!(
+            "Created personal tenant {} assigned to port {} with must_change_password=0",
+            tenant_id, next_port
+        );
+        Ok(next_port)
+    }
+
     pub async fn reset_tenant_password(
         &self,
         tenant_id: &str,

@@ -1,0 +1,141 @@
+{
+  "module_id": "aegis.domain.creator",
+  "display_name": "Aegis Creator Studio",
+  "version": "1.0.0",
+  "ipc_transport": {
+    "protocol": "native",
+    "endpoint": "local://enclave"
+  },
+  "database": {
+    "driver": "sqlite",
+    "encryption": true
+  },
+  "exposed_tools": [
+    {
+      "name": "creator_manage_idea",
+      "description": "Gestiona el banco de ideas virales y hooks para redes sociales (agregar, actualizar etapa/hook, eliminar o listar ideas).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["add", "update", "delete", "list"],
+            "description": "Acción a realizar en el banco de ideas."
+          },
+          "id": { "type": "string", "description": "ID de la idea para update/delete." },
+          "title": { "type": "string", "description": "Título o concepto principal del video/post." },
+          "platform": {
+            "type": "string",
+            "enum": ["tiktok_reels", "youtube", "shorts", "x_twitter", "linkedin", "instagram"],
+            "description": "Plataforma destino."
+          },
+          "hook": { "type": "string", "description": "Gancho inicial de los primeros 3 segundos o titular." },
+          "pillar": { "type": "string", "description": "Pilar de contenido (ej: Tutorial, Behind the Scenes, Caso Real, Noticia IA)." },
+          "notes": { "type": "string", "description": "Notas rápidas o puntos clave." },
+          "status": {
+            "type": "string",
+            "enum": ["idea", "scripting", "filming", "editing", "scheduled", "published"],
+            "description": "Etapa del flujo de producción."
+          },
+          "priority": { "type": "string", "enum": ["high", "medium", "low"] }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "creator_manage_script",
+      "description": "Guarda, edita, elimina o lista guiones estructurados listos para Teleprompter (hook 0-3s, desarrollo hablado, notas de B-Roll, CTA, copy y hashtags).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["save", "update", "delete", "list"],
+            "description": "'save' crea o actualiza un guion; 'update' modifica campos; 'delete' elimina; 'list' consulta."
+          },
+          "id": { "type": "string" },
+          "idea_id": { "type": "string", "description": "ID opcional de la idea asociada." },
+          "title": { "type": "string", "description": "Título del guion." },
+          "platform": {
+            "type": "string",
+            "enum": ["tiktok_reels", "youtube", "shorts", "x_twitter", "linkedin", "instagram"]
+          },
+          "hook_0_3s": { "type": "string", "description": "Frase de apertura de impacto (primeros 3 segundos)." },
+          "body_script": { "type": "string", "description": "Texto completo del guion hablado para leer en cámara/teleprompter." },
+          "b_roll_notes": { "type": "string", "description": "Indicaciones de planos, B-Roll, overlays o edición." },
+          "cta": { "type": "string", "description": "Llamado a la acción final." },
+          "caption": { "type": "string", "description": "Copy/descripción para acompañar la publicación." },
+          "hashtags": { "type": "string", "description": "Hashtags recomendados." },
+          "estimated_duration_secs": { "type": "integer", "description": "Duración estimada en segundos." },
+          "status": {
+            "type": "string",
+            "enum": ["draft", "ready_to_film", "filmed", "published"]
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "creator_schedule_post",
+      "description": "Programa, actualiza o lista publicaciones en el Calendario Editorial por fecha/hora y plataforma.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["schedule", "update", "delete", "list"]
+          },
+          "id": { "type": "string" },
+          "title": { "type": "string", "description": "Título de la pieza programada." },
+          "platform": {
+            "type": "string",
+            "enum": ["tiktok_reels", "youtube", "shorts", "x_twitter", "linkedin", "instagram"]
+          },
+          "publish_at": { "type": "string", "description": "Fecha/hora objetivo (YYYY-MM-DD HH:MM o YYYY-MM-DD)." },
+          "script_id": { "type": "string" },
+          "caption": { "type": "string" },
+          "hashtags": { "type": "string" },
+          "status": { "type": "string", "enum": ["scheduled", "published"] }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "creator_get_overview",
+      "description": "Obtiene todo el estado de Aegis Creator Studio: banco de ideas, guiones guardados y calendario editorial.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ],
+  "ui_views": [
+    {
+      "view_id": "new_idea_form",
+      "type": "form",
+      "title": "Nueva Idea / Hook Viral",
+      "description": "Captura rápida para el banco de contenido",
+      "icon": "Plus",
+      "tool_name": "creator_manage_idea",
+      "fields": [
+        { "name": "title", "label": "Concepto / Título", "type": "text", "placeholder": "Ej. 3 trucos con mi asistente local IA", "required": true },
+        { "name": "platform", "label": "Plataforma (tiktok_reels, youtube, shorts, x_twitter, instagram)", "type": "text", "placeholder": "tiktok_reels", "required": false },
+        { "name": "hook", "label": "Hook (0-3s)", "type": "text", "placeholder": "¿Seguís pagando suscripciones por un asistente en la nube?", "required": false },
+        { "name": "pillar", "label": "Pilar / Categoría", "type": "text", "placeholder": "Demo / Tutorial", "required": false }
+      ]
+    },
+    {
+      "view_id": "schedule_post_form",
+      "type": "form",
+      "title": "Programar Publicación",
+      "description": "Agenda una pieza en tu Calendario Editorial",
+      "icon": "TrendingUp",
+      "tool_name": "creator_schedule_post",
+      "fields": [
+        { "name": "title", "label": "Título de la pieza", "type": "text", "placeholder": "Reel demo Aegis", "required": true },
+        { "name": "platform", "label": "Plataforma", "type": "text", "placeholder": "tiktok_reels", "required": false },
+        { "name": "publish_at", "label": "Fecha y hora (YYYY-MM-DD HH:MM)", "type": "text", "placeholder": "2026-11-18 19:00", "required": true }
+      ]
+    }
+  ]
+}

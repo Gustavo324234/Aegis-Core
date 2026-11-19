@@ -35,4 +35,8 @@ pub struct AppState {
     pub agent_event_tx: Arc<broadcast::Sender<AgentEvent>>,
     /// Motor de Entrenamiento Nativo de Aegis OS.
     pub training_manager: Arc<ank_core::trainer::TrainingManager>,
+    /// Single-use CSRF/PKCE state store for browser-based OAuth callbacks.
+    pub pending_oauth_flows: crate::routes::oauth_api::PendingOAuthStore,
+    /// Gestor de WhatsApp Web (Baileys sidecar + rate limiter + confirmación).
+    pub whatsapp: Arc<ank_core::whatsapp::WhatsAppManager>,
 }

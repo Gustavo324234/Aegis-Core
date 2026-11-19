@@ -195,7 +195,8 @@ impl McpToolRegistry {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| default_cwd.to_path_buf());
 
-            let t = crate::stdio::StdioTransport::new(cmd, args, envs, cwd).map_err(|e| McpError::Transport(e.to_string()))?;
+            let t = crate::stdio::StdioTransport::new(cmd, args, envs, cwd)
+                .map_err(|e| McpError::Transport(e.to_string()))?;
             McpClientSession::new(t)
         } else if let Some(sse_str) = cfg
             .get("sseUrl")
@@ -217,7 +218,8 @@ impl McpToolRegistry {
                 sse_url,
                 post_url,
                 std::time::Duration::from_secs(15),
-            ).map_err(|e| McpError::Transport(e.to_string()))?;
+            )
+            .map_err(|e| McpError::Transport(e.to_string()))?;
             McpClientSession::new(t)
         } else {
             return Err(McpError::DiscoveryFailed(format!(
@@ -314,7 +316,10 @@ impl McpToolRegistry {
                 continue;
             }
 
-            match self.connect_and_register_server(server_name, cfg, &default_cwd).await {
+            match self
+                .connect_and_register_server(server_name, cfg, &default_cwd)
+                .await
+            {
                 Ok(count) => {
                     info!(
                         "ANK-MCP: Servidor '{}' conectado ({} herramientas registradas)",

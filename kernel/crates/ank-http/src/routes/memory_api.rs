@@ -1,9 +1,5 @@
 use crate::{citadel::CitadelCredentials, error::AegisHttpError, state::AppState};
-use axum::{
-    extract::State,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
 pub fn router() -> Router<AppState> {
@@ -51,7 +47,9 @@ async fn search_memory(
     creds: Option<CitadelCredentials>,
     Json(payload): Json<SearchMemoryRequest>,
 ) -> Result<Json<SearchMemoryResponse>, AegisHttpError> {
-    let tenant_id = creds.map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    let tenant_id = creds
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
     let limit = payload.limit.unwrap_or(5).min(20);
 
     let fragments = state
@@ -83,7 +81,9 @@ async fn index_memory(
     creds: Option<CitadelCredentials>,
     Json(payload): Json<IndexMemoryRequest>,
 ) -> Result<Json<IndexMemoryResponse>, AegisHttpError> {
-    let tenant_id = creds.map(|c| c.tenant_id).unwrap_or_else(|| "default".to_string());
+    let tenant_id = creds
+        .map(|c| c.tenant_id)
+        .unwrap_or_else(|| "default".to_string());
 
     let id = state
         .hal

@@ -94,7 +94,6 @@ impl EmbeddingDriver for CloudEmbeddingDriver {
     }
 }
 
-
 /// CORE-378: Driver local determinista de embeddings semánticos para inferencia offline / edge.
 /// Produce vectores densos unitarios normalizados de 384 dimensiones (estándar all-MiniLM-L6-v2)
 /// mediante hashing n-gram multinivel con pesos IDF y proyección ortogonal pseudo-aleatoria.
@@ -153,7 +152,11 @@ impl LocalEmbeddingDriver {
                         sub_h = sub_h.wrapping_mul(0x01000193);
                     }
                     let sub_idx = (sub_h as usize) % self.dimension;
-                    let sub_sign = if (sub_h >> 16) & 1 == 0 { 0.5f32 } else { -0.5f32 };
+                    let sub_sign = if (sub_h >> 16) & 1 == 0 {
+                        0.5f32
+                    } else {
+                        -0.5f32
+                    };
                     vector[sub_idx] += sub_sign * weight;
                 }
             }

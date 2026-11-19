@@ -537,10 +537,9 @@ impl PCB {
     /// CORE-376: Reanuda el proceso tras recibir los resultados de las herramientas.
     pub fn resume_with_tool_results(&mut self, results: &[ToolResult]) {
         for res in results {
-            self.registers.temp_vars.insert(
-                format!("tool_result_{}", res.call_id),
-                res.content.clone(),
-            );
+            self.registers
+                .temp_vars
+                .insert(format!("tool_result_{}", res.call_id), res.content.clone());
         }
         self.pending_tool_calls.clear();
         self.state = ProcessState::Ready;

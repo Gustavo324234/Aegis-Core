@@ -126,6 +126,21 @@ pub(crate) fn can_route_via_openrouter(provider: &str, model_id: &str) -> bool {
     model_id.contains('/')
 }
 
+fn sanitize_entry(mut entry: ApiKeyEntry) -> ApiKeyEntry {
+    entry.provider = crate::router::normalize_provider_id(&entry.provider);
+    if let Some(url) = entry.api_url.take() {
+        entry.api_url = Some(crate::router::normalize_chat_api_url(&entry.provider, url));
+    }
+    if let Some(models) = entry.active_models.as_mut() {
+        for m in models.iter_mut() {
+            if m == "gemini-1.5-flash" || m == "gemini-1.5-pro" {
+                *m = "gemini-2.5-flash".to_string();
+            }
+        }
+    }
+    entry
+}
+
 impl KeyPool {
     pub fn new(persistence: Arc<dyn StatePersistor>) -> Self {
         Self {
@@ -149,13 +164,8 @@ impl KeyPool {
             if let Some(rest) = pcb.pid.strip_prefix("keypool:global:") {
                 let _ = rest; // key_id embedded in pid
                 match serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction) {
-                    Ok(mut entry) => {
-                        // CORE-212: keys persisted before the HTTP layer started
-                        // normalising provider ids may carry aliases ("google");
-                        // the router looks up the canonical id ("gemini"), so
-                        // normalise on load or those keys are never matched.
-                        entry.provider = crate::router::normalize_provider_id(&entry.provider);
-                        global.push(entry);
+                    Ok(entry) => {
+                        global.push(sanitize_entry(entry));
                     }
                     Err(e) => {
                         tracing::error!(
@@ -170,10 +180,8 @@ impl KeyPool {
                 if parts.len() == 2 {
                     let tid = parts[0].to_string();
                     match serde_json::from_str::<ApiKeyEntry>(&pcb.memory_pointers.l1_instruction) {
-                        Ok(mut entry) => {
-                            // CORE-212: normalise legacy provider aliases (see above).
-                            entry.provider = crate::router::normalize_provider_id(&entry.provider);
-                            tenants.entry(tid).or_default().push(entry);
+                        Ok(entry) => {
+                            tenants.entry(tid).or_default().push(sanitize_entry(entry));
                         }
                         Err(e) => {
                             tracing::error!(
@@ -381,13 +389,16 @@ impl KeyPool {
     }
 
     pub async fn add_global_key(&self, entry: ApiKeyEntry) -> anyhow::Result<()> {
+        let entry = sanitize_entry(entry);
         let json = serde_json::to_string(&entry).context("Failed to serialize ApiKeyEntry")?;
         // Store as a synthetic PCB
         let pcb = self.make_pcb(&format!("keypool:global:{}", entry.key_id), &json);
         self.persistence.save_pcb(&pcb).await?;
         let mut global = self.global_keys.write().await;
-        // Replace if exists, otherwise push
-        if let Some(existing) = global.iter_mut().find(|k| k.key_id == entry.key_id) {
+        // Replace if exists (by key_id or identical provider+api_key to de-duplicate), otherwise push
+        if let Some(existing) = global.iter_mut().find(|k| {
+            k.key_id == entry.key_id || (k.provider == entry.provider && k.api_key == entry.api_key)
+        }) {
             *existing = entry;
         } else {
             global.push(entry);
@@ -396,6 +407,7 @@ impl KeyPool {
     }
 
     pub async fn add_tenant_key(&self, tenant_id: &str, entry: ApiKeyEntry) -> anyhow::Result<()> {
+        let entry = sanitize_entry(entry);
         let json = serde_json::to_string(&entry).context("Failed to serialize ApiKeyEntry")?;
         let pcb = self.make_pcb(
             &format!("keypool:tenant:{}:{}", tenant_id, entry.key_id),
@@ -404,12 +416,45 @@ impl KeyPool {
         self.persistence.save_pcb(&pcb).await?;
         let mut tenants = self.tenant_keys.write().await;
         let keys = tenants.entry(tenant_id.to_string()).or_default();
-        if let Some(existing) = keys.iter_mut().find(|k| k.key_id == entry.key_id) {
+        if let Some(existing) = keys.iter_mut().find(|k| {
+            k.key_id == entry.key_id || (k.provider == entry.provider && k.api_key == entry.api_key)
+        }) {
             *existing = entry;
         } else {
             keys.push(entry);
         }
         Ok(())
+    }
+
+    /// Update active_models for an existing key (both in memory and persistent storage)
+    pub async fn update_key_active_models(&self, key_id: &str, models: Vec<String>) {
+        let mut entry_to_save: Option<(String, ApiKeyEntry)> = None;
+        {
+            let mut global = self.global_keys.write().await;
+            if let Some(k) = global.iter_mut().find(|k| k.key_id == key_id) {
+                k.active_models = Some(models.clone());
+                entry_to_save = Some((format!("keypool:global:{}", key_id), k.clone()));
+            }
+        }
+        {
+            let mut tenants = self.tenant_keys.write().await;
+            for (tenant_id, keys) in tenants.iter_mut() {
+                if let Some(k) = keys.iter_mut().find(|k| k.key_id == key_id) {
+                    k.active_models = Some(models.clone());
+                    entry_to_save = Some((
+                        format!("keypool:tenant:{}:{}", tenant_id, key_id),
+                        k.clone(),
+                    ));
+                    break;
+                }
+            }
+        }
+        if let Some((pcb_id, entry)) = entry_to_save {
+            if let Ok(json) = serde_json::to_string(&entry) {
+                let pcb = self.make_pcb(&pcb_id, &json);
+                let _ = self.persistence.save_pcb(&pcb).await;
+            }
+        }
     }
 
     pub async fn list_global_keys(&self) -> Vec<ApiKeyEntry> {
@@ -763,19 +808,29 @@ impl KeyPool {
 
     /// Check if there's an OpenRouter key available (used by CatalogSyncer)
     pub async fn has_openrouter_key(&self) -> bool {
+        self.get_openrouter_key().await.is_some()
+    }
+
+    /// Retrieve an available OpenRouter API key if present in global or tenant pools
+    pub async fn get_openrouter_key(&self) -> Option<String> {
         let global = self.global_keys.read().await;
-        if global
+        if let Some(k) = global
             .iter()
-            .any(|k| k.provider == "openrouter" && k.is_available())
+            .find(|k| k.provider == "openrouter" && k.is_available())
         {
-            return true;
+            return Some(k.api_key.clone());
         }
         drop(global);
         let tenants = self.tenant_keys.read().await;
-        tenants.values().any(|keys| {
-            keys.iter()
-                .any(|k| k.provider == "openrouter" && k.is_available())
-        })
+        for keys in tenants.values() {
+            if let Some(k) = keys
+                .iter()
+                .find(|k| k.provider == "openrouter" && k.is_available())
+            {
+                return Some(k.api_key.clone());
+            }
+        }
+        None
     }
 
     pub(crate) async fn list_tenant_keys_unredacted(&self, tenant_id: &str) -> Vec<ApiKeyEntry> {
@@ -1118,7 +1173,10 @@ mod tests {
         // 4. Matches qwen/qwen3.8-27b verbatim
         assert!(pool.has_key_for_model("groq", "qwen/qwen3.8-27b").await);
         // 5. Matches nested groq/qwen/qwen3.8-27b
-        assert!(pool.has_key_for_model("groq", "groq/qwen/qwen3.8-27b").await);
+        assert!(
+            pool.has_key_for_model("groq", "groq/qwen/qwen3.8-27b")
+                .await
+        );
 
         Ok(())
     }
