@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.86](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.85...ank-core-v0.1.86) (2026-10-30)
+
+
+### Features
+
+* **router:** add latest 2026 models to bundled catalog (CORE-375) ([#375](https://github.com/Gustavo324234/Aegis-Core/issues/375)) ([eb81280](https://github.com/Gustavo324234/Aegis-Core/commit/eb812801640514ed923573768556445acbbda8e7))
+
 ## [0.1.85](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.84...ank-core-v0.1.85) (2026-10-28)
 
 
