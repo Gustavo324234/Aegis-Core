@@ -24,7 +24,7 @@
 | EPIC 58 | Personal Assistant Experience, Zero-Friction UX & Community Onboarding | ✅ Completa | 100% |
 | EPIC 59 | Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio | ✅ Completa | 100% |
 | EPIC 60 | Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience | ✅ Completa | 100% |
-| EPIC 61 | Sandbox Promotion, Security Hardening & SRE Maturation | 🚧 En Progreso | 31% (4/13) |
+| EPIC 61 | Sandbox Promotion, Security Hardening & SRE Maturation | 🚧 En Progreso | 38% (5/13) |
 
 ## EPIC 49 — Cognitive Loop
 
@@ -313,7 +313,7 @@
 | CORE-395 | fix | CI Verde — Reparar `cargo clippy`, `cargo fmt` y ESLint en `shell/ui` | ✅ Done | Crítica | Kernel Engineer + Shell Engineer |
 | CORE-396 | chore | Higiene Git y Gobernanza — Limpieza de Worktrees Huérfanos, Reconciliación de IDs `CORE-375..379` y Rama Limpia hacia `main` | ✅ Done | Alta | DevOps Engineer |
 | CORE-397 | feat | Paridad Sandbox → Producción en Instaladores, Updates y `ide_hook.py` | ✅ Done | Crítica | DevOps Engineer |
-| CORE-398 | fix | Hardening HTTP/WS — CORS, `is_direct_local_cli_probe`, `quick_personal_setup` y Auth Pre-Upgrade en WebSockets | 📥 Todo | Crítica | Kernel Engineer |
+| CORE-398 | fix | Hardening HTTP/WS — CORS, `is_direct_local_cli_probe`, `quick_personal_setup` y Auth Pre-Upgrade en WebSockets | ✅ Done | Crítica | Kernel Engineer |
 | CORE-399 | fix | Integridad `TenantDB` y Symlink Jail (`safe_resolve` en `ReadFile`, `ScribeManager` y `fs.rs`) | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-400 | fix | Aislamiento Multi-Tenant y SSRF (`agents.rs`, `chal/mod.rs`, `antigravity_bridge`, `vcm/mod.rs`, `video_api`, `engine.rs`, `admin.rs`) | 📥 Todo | Crítica | Kernel Engineer |
 | CORE-401 | fix | Supply Chain y Secretos (`runtime_deps.rs`, `whatsapp_bridge`, permisos `0600`, `deny.toml`) | 📥 Todo | Alta | Kernel Engineer + DevOps Engineer |

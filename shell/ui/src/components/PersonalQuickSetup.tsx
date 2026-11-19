@@ -18,6 +18,7 @@ const PROVIDERS = [
 
 export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupToken }) => {
     const { setAuth, setEngineConfigured, fetchSystemState } = useAegisStore();
+    const [token, setToken] = useState(setupToken ?? '');
     const [username, setUsername] = useState('');
     const [passphrase, setPassphrase] = useState('');
     const [provider, setProvider] = useState('gemini');
@@ -31,6 +32,12 @@ export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupTok
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
+
+        const cleanToken = token.trim();
+        if (!cleanToken) {
+            setError('Ingresá tu Setup Token (consola de inicio o "aegis setup-url").');
+            return;
+        }
 
         const cleanUsername = username.trim().toLowerCase();
         if (!cleanUsername) {
@@ -56,14 +63,11 @@ export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupTok
                 passphrase: passphrase,
                 provider: provider,
                 model_name: activeProvider.defaultModel,
+                setup_token: cleanToken,
             };
 
             if (activeProvider.requiresKey) {
                 payload.api_key = apiKey.trim();
-            }
-
-            if (setupToken) {
-                payload.setup_token = setupToken;
             }
 
             const res = await fetch('/api/auth/quick-personal-setup', {
@@ -80,8 +84,9 @@ export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupTok
                 await fetchSystemState();
             } else {
                 const data = await res.json().catch(() => ({}));
-                const detail = (data as { detail?: string; message?: string }).detail || 
-                               (data as { message?: string }).message || 
+                const detail = (data as { detail?: string; error?: string; message?: string }).detail ||
+                               (data as { error?: string }).error ||
+                               (data as { message?: string }).message ||
                                'Error durante la configuración inicial.';
                 setError(detail);
             }
@@ -149,6 +154,26 @@ export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupTok
                     )}
 
                     <form onSubmit={handleSubmit} className="space-y-4">
+                        {/* Setup Token */}
+                        <div className="space-y-1.5">
+                            <label className="text-[11px] font-mono uppercase tracking-wider text-white/60 flex items-center gap-1.5">
+                                <Shield className="w-3.5 h-3.5 text-aegis-cyan" />
+                                <span>Setup Token</span>
+                            </label>
+                            <input
+                                type="text"
+                                value={token}
+                                onChange={(e) => setToken(e.target.value)}
+                                placeholder="SETUP-XXXX-XXXX"
+                                required
+                                autoFocus={!setupToken}
+                                className="w-full px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/20 text-sm focus:outline-none focus:border-aegis-cyan transition-colors font-mono"
+                            />
+                            <p className="text-[10px] font-mono text-white/40">
+                                Obtené tu token en la consola de inicio o ejecutando <code className="text-white/60">aegis setup-url</code>.
+                            </p>
+                        </div>
+
                         {/* Username */}
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-mono uppercase tracking-wider text-white/60 flex items-center gap-1.5">
@@ -161,7 +186,7 @@ export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupTok
                                 onChange={(e) => setUsername(e.target.value)}
                                 placeholder="ej. alex"
                                 required
-                                autoFocus
+                                autoFocus={Boolean(setupToken)}
                                 className="w-full px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/20 text-sm focus:outline-none focus:border-aegis-cyan transition-colors"
                             />
                         </div>

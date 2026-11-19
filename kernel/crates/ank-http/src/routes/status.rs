@@ -379,6 +379,32 @@ fn is_cloudflared_installed() -> bool {
     })
 }
 
+pub(crate) fn has_proxy_headers(headers: &HeaderMap) -> bool {
+    const PROXY_HEADERS: [&str; 10] = [
+        "cf-connecting-ip",
+        "cf-ray",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-real-ip",
+        "forwarded",
+        "via",
+        "true-client-ip",
+        "fly-client-ip",
+    ];
+    PROXY_HEADERS.iter().any(|h| headers.contains_key(*h))
+}
+
+pub(crate) fn has_browser_origin_headers(headers: &HeaderMap) -> bool {
+    const BROWSER_HEADERS: [&str; 4] = [
+        "origin",
+        "sec-fetch-site",
+        "sec-fetch-mode",
+        "sec-fetch-dest",
+    ];
+    BROWSER_HEADERS.iter().any(|h| headers.contains_key(*h))
+}
+
 pub(crate) fn is_direct_local_cli_probe(
     peer_addr: Option<SocketAddr>,
     headers: &HeaderMap,
@@ -390,15 +416,9 @@ pub(crate) fn is_direct_local_cli_probe(
         return false;
     }
 
-    // Reject requests forwarded through cloudflared, reverse proxies, or aegis-connect-relay
-    const PROXY_HEADERS: [&str; 5] = [
-        "cf-connecting-ip",
-        "cf-ray",
-        "x-forwarded-for",
-        "x-real-ip",
-        "forwarded",
-    ];
-    if PROXY_HEADERS.iter().any(|h| headers.contains_key(*h)) {
+    // Reject requests forwarded through cloudflared, reverse proxies, aegis-connect-relay,
+    // or originating from browser contexts (`Origin` / Fetch Metadata headers).
+    if has_proxy_headers(headers) || has_browser_origin_headers(headers) {
         return false;
     }
 
@@ -409,9 +429,10 @@ pub(crate) fn is_direct_local_cli_probe(
         .trim()
         .strip_prefix('[')
         .and_then(|s| s.split(']').next())
-        .unwrap_or_else(|| host.trim().split(':').next().unwrap_or(""));
+        .unwrap_or_else(|| host.trim().split(':').next().unwrap_or(""))
+        .to_ascii_lowercase();
 
-    matches!(host_only, "localhost" | "127.0.0.1" | "::1")
+    matches!(host_only.as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
 pub async fn get_connection_info(
@@ -593,5 +614,31 @@ mod tests {
         let mut lan_headers = HeaderMap::new();
         lan_headers.insert("host", HeaderValue::from_static("192.168.1.10:8000"));
         assert!(!is_direct_local_cli_probe(lan_peer, &lan_headers));
+
+        // Additional proxy headers
+        for hdr in ["x-forwarded-host", "via"] {
+            let mut h = HeaderMap::new();
+            h.insert("host", HeaderValue::from_static("localhost:8000"));
+            h.insert(hdr, HeaderValue::from_static("proxy.internal"));
+            assert!(!is_direct_local_cli_probe(peer, &h));
+        }
+
+        // Browser origin / Fetch Metadata headers must be rejected even from loopback
+        for (hdr, val) in [
+            ("origin", "https://evil.example"),
+            ("origin", "http://localhost:8000"),
+            ("sec-fetch-site", "cross-site"),
+            ("sec-fetch-site", "same-origin"),
+            ("sec-fetch-mode", "no-cors"),
+            ("sec-fetch-dest", "empty"),
+        ] {
+            let mut browser_headers = HeaderMap::new();
+            browser_headers.insert("host", HeaderValue::from_static("localhost:8000"));
+            browser_headers.insert(hdr, HeaderValue::from_static(val));
+            assert!(
+                !is_direct_local_cli_probe(peer, &browser_headers),
+                "Expected browser header {hdr}={val} to be rejected"
+            );
+        }
     }
 }

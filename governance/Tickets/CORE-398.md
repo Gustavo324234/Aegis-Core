@@ -1,7 +1,7 @@
 # CORE-398: Hardening HTTP/WS — CORS, `is_direct_local_cli_probe`, `quick_personal_setup` y Auth Pre-Upgrade en WebSockets
 
 - **Tipo:** fix
-- **Estado:** 📥 Todo
+- **Estado:** ✅ Done
 - **Prioridad:** Crítica
 - **Épica:** EPIC 61
 - **Asignado a:** Kernel Engineer
@@ -18,6 +18,6 @@ Cerrar los vectores de exfiltración cross-origin, bypass de `setup_token` y upg
 
 ## Acceptance Criteria
 
-- [ ] Peticiones cross-origin desde navegadores no acceden a endpoints locales ni drenan `/api/antigravity/ide/outbox/pop` o `/api/system/connection-info`.
-- [ ] `quick_personal_setup` exige `setup_token` y no confía ciegamente en `ip.is_loopback()` cuando existen cabeceras proxy.
-- [ ] `ws/chat.rs` y `ws/siren.rs` rechazan credenciales inválidas con HTTP 401/403 antes de responder `101 Switching Protocols`.
+- [x] Peticiones cross-origin desde navegadores no acceden a endpoints locales ni drenan `/api/antigravity/ide/outbox/pop` o `/api/system/connection-info`.
+- [x] `quick_personal_setup` exige `setup_token` y no confía ciegamente en `ip.is_loopback()` cuando existen cabeceras proxy.
+- [x] `ws/chat.rs` y `ws/siren.rs` rechazan credenciales inválidas con HTTP 401/403 antes de responder `101 Switching Protocols`.

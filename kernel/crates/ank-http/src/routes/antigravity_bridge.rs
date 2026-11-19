@@ -315,5 +315,13 @@ mod tests {
         let mut proxied_headers = local_headers.clone();
         proxied_headers.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.1"));
         assert!(!is_direct_local_cli_probe(local_peer, &proxied_headers));
+
+        let mut browser_headers = local_headers.clone();
+        browser_headers.insert("origin", HeaderValue::from_static("https://evil.example"));
+        assert!(!is_direct_local_cli_probe(local_peer, &browser_headers));
+
+        let mut fetch_meta_headers = local_headers;
+        fetch_meta_headers.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert!(!is_direct_local_cli_probe(local_peer, &fetch_meta_headers));
     }
 }

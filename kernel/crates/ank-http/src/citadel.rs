@@ -154,10 +154,10 @@ pub fn extract_ws_session_key_and_protocol(
     (fallback_key, None)
 }
 
-/// CORE-368: Validates a plaintext session key for `tenant_id` against the Citadel Enclave
-/// before upgrading a WebSocket connection. Returns `Ok(is_master)` when valid.
-pub async fn verify_ws_tenant(
-    state: &crate::state::AppState,
+/// CORE-368: Validates a plaintext session key for `tenant_id` directly against a `MasterEnclave`.
+/// Returns `Ok(is_master)` when valid, or `CitadelError::PasswordMustChange` when rotation is required.
+pub async fn verify_ws_enclave(
+    enclave: &ank_core::enclave::MasterEnclave,
     tenant_id: &str,
     raw_session_key: &str,
 ) -> Result<bool, CitadelError> {
@@ -169,9 +169,7 @@ pub async fn verify_ws_tenant(
     }
 
     let key_hash = hash_passphrase(raw_session_key);
-    let citadel = state.citadel.lock().await;
-    if citadel
-        .enclave
+    if enclave
         .authenticate_master(tenant_id, &key_hash)
         .await
         .unwrap_or(false)
@@ -179,11 +177,7 @@ pub async fn verify_ws_tenant(
         return Ok(true);
     }
 
-    match citadel
-        .enclave
-        .authenticate_tenant(tenant_id, &key_hash)
-        .await
-    {
+    match enclave.authenticate_tenant(tenant_id, &key_hash).await {
         Ok(true) => Ok(false),
         Ok(false) => Err(CitadelError::Unauthorized),
         Err(e) => {
@@ -194,6 +188,57 @@ pub async fn verify_ws_tenant(
             }
         }
     }
+}
+
+/// CORE-368: Validates a plaintext session key for `tenant_id` against the Citadel Enclave
+/// before upgrading a WebSocket connection. Returns `Ok(is_master)` when valid.
+pub async fn verify_ws_tenant(
+    state: &crate::state::AppState,
+    tenant_id: &str,
+    raw_session_key: &str,
+) -> Result<bool, CitadelError> {
+    let citadel = state.citadel.lock().await;
+    verify_ws_enclave(&citadel.enclave, tenant_id, raw_session_key).await
+}
+
+/// CORE-398: Authenticates a WebSocket upgrade request against `MasterEnclave` BEFORE calling `on_upgrade`.
+pub async fn authenticate_ws_upgrade_with_enclave(
+    enclave: &ank_core::enclave::MasterEnclave,
+    tenant_id: &str,
+    headers: &axum::http::HeaderMap,
+    ws_label: &str,
+) -> Result<(String, Option<String>), axum::response::Response> {
+    let (Some(session_key), protocol_header) = extract_ws_session_key_and_protocol(headers) else {
+        tracing::warn!(
+            tenant = %tenant_id,
+            channel = %ws_label,
+            "Rejected unauthenticated WebSocket upgrade (missing key)"
+        );
+        return Err(CitadelError::MissingKey.into_response());
+    };
+
+    if let Err(err) = verify_ws_enclave(enclave, tenant_id, &session_key).await {
+        tracing::warn!(
+            tenant = %tenant_id,
+            channel = %ws_label,
+            error = %err,
+            "Rejected unauthorized WebSocket upgrade"
+        );
+        return Err(err.into_response());
+    }
+
+    Ok((session_key, protocol_header))
+}
+
+/// CORE-398: Authenticates a WebSocket upgrade request against `AppState` BEFORE calling `on_upgrade`.
+pub async fn authenticate_ws_upgrade(
+    state: &crate::state::AppState,
+    tenant_id: &str,
+    headers: &axum::http::HeaderMap,
+    ws_label: &str,
+) -> Result<(String, Option<String>), axum::response::Response> {
+    let citadel = state.citadel.lock().await;
+    authenticate_ws_upgrade_with_enclave(&citadel.enclave, tenant_id, headers, ws_label).await
 }
 
 fn header_str(parts: &Parts, name: &str) -> Result<String, CitadelError> {
@@ -252,5 +297,128 @@ mod tests {
         let (key2, proto2) = extract_ws_session_key_and_protocol(&header_only);
         assert_eq!(key2.as_deref(), Some("cli_key_456"));
         assert!(proto2.is_none());
+    }
+
+    #[test]
+    fn extract_ws_preserves_embedded_prefix() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "sec-websocket-protocol",
+            axum::http::HeaderValue::from_static("session-key.abc.session-key.xyz"),
+        );
+        let (key, proto) = extract_ws_session_key_and_protocol(&headers);
+        assert_eq!(key.as_deref(), Some("abc.session-key.xyz"));
+        assert_eq!(proto.as_deref(), Some("session-key.abc.session-key.xyz"));
+    }
+
+    async fn raw_ws_upgrade_response(
+        addr: std::net::SocketAddr,
+        path: &str,
+        proto_header: Option<&str>,
+    ) -> anyhow::Result<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await?;
+        let mut req = format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        );
+        if let Some(proto) = proto_header {
+            req.push_str(&format!("Sec-WebSocket-Protocol: {proto}\r\n"));
+        }
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).await?;
+        let mut buf = vec![0u8; 2048];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut buf))
+            .await??;
+        Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
+    }
+
+    #[tokio::test]
+    async fn authenticate_ws_upgrade_rejects_missing_invalid_and_password_must_change_before_upgrade(
+    ) -> anyhow::Result<()> {
+        use ank_core::enclave::MasterEnclave;
+        use axum::{
+            extract::{ws::WebSocketUpgrade, Path, State},
+            http::HeaderMap,
+            routing::get,
+            Router,
+        };
+        use std::sync::Arc;
+
+        let enclave = Arc::new(MasterEnclave::new_in_memory().await?);
+        let valid_secret = "abc.session-key.xyz";
+        enclave
+            .create_personal_tenant("alice", &hash_passphrase(valid_secret))
+            .await?;
+        let (_port, temp_pass) = enclave.create_tenant("bob").await?;
+
+        async fn test_ws_handler(
+            ws: WebSocketUpgrade,
+            Path(tenant_id): Path<String>,
+            State(enclave): State<Arc<MasterEnclave>>,
+            headers: HeaderMap,
+        ) -> axum::response::Response {
+            let (_key, proto) = match authenticate_ws_upgrade_with_enclave(
+                &enclave, &tenant_id, &headers, "TestWS",
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(resp) => return resp,
+            };
+            let ws = if let Some(p) = proto {
+                ws.protocols([p])
+            } else {
+                ws
+            };
+            ws.on_upgrade(|socket| async move {
+                let _ = socket.close().await;
+            })
+        }
+
+        let app = Router::new()
+            .route("/ws/:tenant_id", get(test_ws_handler))
+            .with_state(enclave);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+
+        let missing = raw_ws_upgrade_response(addr, "/ws/alice", None).await?;
+        assert!(
+            missing.starts_with("HTTP/1.1 401 "),
+            "Expected 401 before upgrade, got: {missing}"
+        );
+
+        let invalid = raw_ws_upgrade_response(addr, "/ws/alice", Some("session-key.wrong")).await?;
+        assert!(
+            invalid.starts_with("HTTP/1.1 401 "),
+            "Expected 401 on wrong key, got: {invalid}"
+        );
+
+        let must_change_proto = format!("session-key.{temp_pass}");
+        let must_change =
+            raw_ws_upgrade_response(addr, "/ws/bob", Some(&must_change_proto)).await?;
+        assert!(
+            must_change.starts_with("HTTP/1.1 403 "),
+            "Expected 403 PASSWORD_MUST_CHANGE before upgrade, got: {must_change}"
+        );
+
+        let ok_proto = format!("session-key.{valid_secret}");
+        let upgraded = raw_ws_upgrade_response(addr, "/ws/alice", Some(&ok_proto)).await?;
+        assert!(
+            upgraded.starts_with("HTTP/1.1 101 "),
+            "Expected 101 Switching Protocols on valid embedded prefix key, got: {upgraded}"
+        );
+        assert!(
+            upgraded
+                .to_ascii_lowercase()
+                .contains("sec-websocket-protocol: session-key.abc.session-key.xyz"),
+            "Expected echoed subprotocol in response headers: {upgraded}"
+        );
+
+        server.abort();
+        Ok(())
     }
 }

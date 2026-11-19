@@ -2,14 +2,11 @@ use crate::{
     citadel::{hash_passphrase, CitadelError},
     error::AegisHttpError,
     rate_limiter::{AuthRateLimiter, RateLimitOutcome},
+    routes::status::OptionalPeerAddr,
     state::AppState,
 };
 use ank_core::enclave::MasterEnclave;
-use axum::{
-    extract::{ConnectInfo, State},
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use utoipa::ToSchema;
@@ -114,10 +111,49 @@ pub struct QuickPersonalSetupResponse {
     pub tenant_id: String,
 }
 
-fn client_ip(maybe_addr: Option<ConnectInfo<SocketAddr>>) -> IpAddr {
-    maybe_addr
-        .map(|ConnectInfo(addr)| addr.ip())
-        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+fn client_ip(peer_addr: Option<SocketAddr>, headers: &HeaderMap) -> IpAddr {
+    let Some(addr) = peer_addr else {
+        return IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+    };
+    let peer_ip = addr.ip();
+    if !peer_ip.is_loopback() {
+        return peer_ip;
+    }
+
+    if let Some(cf_ip) = headers
+        .get("cf-connecting-ip")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<IpAddr>().ok())
+    {
+        return cf_ip;
+    }
+
+    if let Some(real_ip) = headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<IpAddr>().ok())
+    {
+        return real_ip;
+    }
+
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        let mut last_valid: Option<IpAddr> = None;
+        for part in xff.rsplit(',') {
+            if let Ok(parsed) = part.trim().parse::<IpAddr>() {
+                if !parsed.is_loopback() {
+                    return parsed;
+                }
+                if last_valid.is_none() {
+                    last_valid = Some(parsed);
+                }
+            }
+        }
+        if let Some(valid) = last_valid {
+            return valid;
+        }
+    }
+
+    peer_ip
 }
 
 fn validate_new_passphrase(raw: &str) -> Result<(), AegisHttpError> {
@@ -206,10 +242,11 @@ async fn bootstrap_master_with_token(
 )]
 pub async fn login(
     State(state): State<AppState>,
-    maybe_addr: Option<ConnectInfo<SocketAddr>>,
+    OptionalPeerAddr(peer_addr): OptionalPeerAddr,
+    headers: HeaderMap,
     Json(body): Json<AuthRequest>,
 ) -> Result<Json<LoginResponse>, AegisHttpError> {
-    let ip = client_ip(maybe_addr);
+    let ip = client_ip(peer_addr, &headers);
 
     match state
         .auth_rate_limiter
@@ -289,10 +326,11 @@ pub async fn login(
 )]
 pub async fn setup(
     State(state): State<AppState>,
-    maybe_addr: Option<ConnectInfo<SocketAddr>>,
+    OptionalPeerAddr(peer_addr): OptionalPeerAddr,
+    headers: HeaderMap,
     Json(body): Json<AdminSetupRequest>,
 ) -> Result<Json<SetupResponse>, AegisHttpError> {
-    let ip = client_ip(maybe_addr);
+    let ip = client_ip(peer_addr, &headers);
     let citadel = state.citadel.lock().await;
     bootstrap_master_with_token(
         &citadel.enclave,
@@ -325,10 +363,11 @@ pub async fn setup(
 )]
 pub async fn setup_token(
     State(state): State<AppState>,
-    maybe_addr: Option<ConnectInfo<SocketAddr>>,
+    OptionalPeerAddr(peer_addr): OptionalPeerAddr,
+    headers: HeaderMap,
     Json(body): Json<SetupTokenRequest>,
 ) -> Result<Json<SetupTokenResponse>, AegisHttpError> {
-    let ip = client_ip(maybe_addr);
+    let ip = client_ip(peer_addr, &headers);
     let citadel = state.citadel.lock().await;
     bootstrap_master_with_token(
         &citadel.enclave,
@@ -360,10 +399,11 @@ pub async fn setup_token(
 )]
 pub async fn change_password(
     State(state): State<AppState>,
-    maybe_addr: Option<ConnectInfo<SocketAddr>>,
+    OptionalPeerAddr(peer_addr): OptionalPeerAddr,
+    headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<ChangePasswordResponse>, AegisHttpError> {
-    let ip = client_ip(maybe_addr);
+    let ip = client_ip(peer_addr, &headers);
 
     match state
         .auth_rate_limiter
@@ -436,6 +476,83 @@ pub async fn change_password(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn execute_quick_personal_bootstrap(
+    enclave: &MasterEnclave,
+    rate_limiter: &AuthRateLimiter,
+    peer_addr: Option<SocketAddr>,
+    headers: &HeaderMap,
+    raw_username: &str,
+    raw_passphrase: &str,
+    setup_token: Option<&str>,
+) -> Result<(String, IpAddr), AegisHttpError> {
+    let ip = client_ip(peer_addr, headers);
+
+    match rate_limiter.check_and_record_failed(ip, BOOTSTRAP_RATE_BUCKET) {
+        RateLimitOutcome::Blocked { retry_after_secs } => {
+            return Err(AegisHttpError::RateLimitExceeded(retry_after_secs));
+        }
+        RateLimitOutcome::Allowed { .. } => {}
+    }
+
+    let username = raw_username.trim().to_lowercase();
+    if username.is_empty() {
+        return Err(AegisHttpError::BadRequest(
+            "Username cannot be empty".to_string(),
+        ));
+    }
+
+    if raw_passphrase.chars().count() < 8 {
+        return Err(AegisHttpError::BadRequest(
+            "Passphrase must be at least 8 characters long".to_string(),
+        ));
+    }
+
+    // CORE-398: Siempre exigir setup_token válido (incluso en loopback y con proxy).
+    let tok = setup_token
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
+
+    if enclave
+        .admin_exists()
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?
+    {
+        return Err(AegisHttpError::Forbidden(
+            "Master Admin is already initialized".to_string(),
+        ));
+    }
+
+    let valid = enclave
+        .validate_setup_token_only(tok)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    if !valid {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
+    }
+
+    let hash = hash_passphrase(raw_passphrase);
+
+    enclave
+        .initialize_master("admin", &hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    enclave
+        .create_personal_tenant(&username, &hash)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    enclave
+        .consume_setup_token(tok)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+
+    rate_limiter.reset(ip, BOOTSTRAP_RATE_BUCKET);
+    Ok((username, ip))
+}
+
 #[utoipa::path(
     post,
     path = "/api/auth/quick-personal-setup",
@@ -451,89 +568,23 @@ pub async fn change_password(
 )]
 pub async fn quick_personal_setup(
     State(state): State<AppState>,
-    maybe_addr: Option<ConnectInfo<SocketAddr>>,
+    OptionalPeerAddr(peer_addr): OptionalPeerAddr,
+    headers: HeaderMap,
     Json(body): Json<QuickPersonalSetupRequest>,
 ) -> Result<Json<QuickPersonalSetupResponse>, AegisHttpError> {
-    let ip = client_ip(maybe_addr);
-
-    match state
-        .auth_rate_limiter
-        .check_and_record_failed(ip, BOOTSTRAP_RATE_BUCKET)
-    {
-        RateLimitOutcome::Blocked { retry_after_secs } => {
-            return Err(AegisHttpError::RateLimitExceeded(retry_after_secs));
-        }
-        RateLimitOutcome::Allowed { .. } => {}
-    }
-
-    let username = body.username.trim().to_lowercase();
-    if username.is_empty() {
-        return Err(AegisHttpError::BadRequest(
-            "Username cannot be empty".to_string(),
-        ));
-    }
-
-    if body.passphrase.len() < 8 {
-        return Err(AegisHttpError::BadRequest(
-            "Passphrase must be at least 8 characters long".to_string(),
-        ));
-    }
-
-    let citadel = state.citadel.lock().await;
-
-    if citadel
-        .enclave
-        .admin_exists()
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?
-    {
-        return Err(AegisHttpError::Forbidden(
-            "Master Admin is already initialized".to_string(),
-        ));
-    }
-
-    let is_loopback = ip.is_loopback();
-    let token_opt = body
-        .setup_token
-        .as_deref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty());
-
-    if !is_loopback && token_opt.is_none() {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-    }
-
-    if let Some(tok) = token_opt {
-        let valid = citadel
-            .enclave
-            .validate_setup_token_only(tok)
-            .await
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-        if !valid {
-            return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-        }
-        citadel
-            .enclave
-            .consume_setup_token(tok)
-            .await
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    }
-
-    let hash = hash_passphrase(&body.passphrase);
-
-    citadel
-        .enclave
-        .initialize_master("admin", &hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    citadel
-        .enclave
-        .create_personal_tenant(&username, &hash)
-        .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    drop(citadel);
+    let (username, _ip) = {
+        let citadel = state.citadel.lock().await;
+        execute_quick_personal_bootstrap(
+            &citadel.enclave,
+            &state.auth_rate_limiter,
+            peer_addr,
+            &headers,
+            &body.username,
+            &body.passphrase,
+            body.setup_token.as_deref(),
+        )
+        .await?
+    };
 
     let canonical_provider = ank_core::router::normalize_provider_id(&body.provider);
     let has_key = body
@@ -623,8 +674,6 @@ pub async fn quick_personal_setup(
         let _ = router.add_global_key(entry).await;
         router.invalidate_all_sticky().await;
     }
-
-    state.auth_rate_limiter.reset(ip, BOOTSTRAP_RATE_BUCKET);
 
     Ok(Json(QuickPersonalSetupResponse {
         status: "READY".to_string(),
@@ -748,6 +797,143 @@ mod tests {
         // Tenant is authenticated and does NOT require password change
         assert!(enclave.authenticate_tenant("alex", &hash).await?);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_client_ip_resolves_proxied_and_blocks_spoofing() -> anyhow::Result<()> {
+        use axum::http::HeaderValue;
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(
+            client_ip(None, &empty_headers),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+
+        let loopback_peer = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 40000));
+        let public_peer = Some(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 10)),
+            40000,
+        ));
+
+        let mut cf_headers = HeaderMap::new();
+        cf_headers.insert("cf-connecting-ip", HeaderValue::from_static("203.0.113.55"));
+        assert_eq!(
+            client_ip(loopback_peer, &cf_headers),
+            "203.0.113.55".parse::<IpAddr>()?
+        );
+
+        let mut xff_headers = HeaderMap::new();
+        xff_headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("10.0.0.1, 203.0.113.77"),
+        );
+        assert_eq!(
+            client_ip(loopback_peer, &xff_headers),
+            "203.0.113.77".parse::<IpAddr>()?
+        );
+
+        // Non-loopback peers cannot spoof client IP via proxy headers
+        assert_eq!(
+            client_ip(public_peer, &xff_headers),
+            "198.51.100.10".parse::<IpAddr>()?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_quick_personal_setup_requires_setup_token_even_on_loopback() -> anyhow::Result<()>
+    {
+        use axum::http::HeaderValue;
+
+        let enclave = MasterEnclave::new_in_memory().await?;
+        enclave.store_setup_token("SETUP-QUICK-VALID", 15).await?;
+        let limiter = AuthRateLimiter::new(crate::rate_limiter::RateLimitConfig::default());
+        let loopback = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 50000));
+        let empty = HeaderMap::new();
+
+        // Direct loopback without setup_token must fail with 401
+        let no_tok = execute_quick_personal_bootstrap(
+            &enclave,
+            &limiter,
+            loopback,
+            &empty,
+            "alex",
+            "strongpass123",
+            None,
+        )
+        .await;
+        assert!(matches!(
+            no_tok,
+            Err(AegisHttpError::Citadel(CitadelError::Unauthorized))
+        ));
+        assert!(!enclave.admin_exists().await?);
+
+        // Loopback with proxy headers without setup_token must also fail with 401
+        // and account rate-limit against the forwarded IP, not 127.0.0.1.
+        let mut proxy_hdrs = HeaderMap::new();
+        proxy_hdrs.insert("x-forwarded-for", HeaderValue::from_static("198.51.100.88"));
+        for _ in 0..5 {
+            let err = execute_quick_personal_bootstrap(
+                &enclave,
+                &limiter,
+                loopback,
+                &proxy_hdrs,
+                "alex",
+                "strongpass123",
+                Some(""),
+            )
+            .await;
+            assert!(matches!(
+                err,
+                Err(AegisHttpError::Citadel(CitadelError::Unauthorized))
+            ));
+        }
+        let proxied_blocked = execute_quick_personal_bootstrap(
+            &enclave,
+            &limiter,
+            loopback,
+            &proxy_hdrs,
+            "alex",
+            "strongpass123",
+            Some("SETUP-QUICK-VALID"),
+        )
+        .await;
+        assert!(matches!(
+            proxied_blocked,
+            Err(AegisHttpError::RateLimitExceeded(_))
+        ));
+
+        // Direct loopback with valid setup_token succeeds (different rate bucket) and consumes token
+        let (created_user, used_ip) = execute_quick_personal_bootstrap(
+            &enclave,
+            &limiter,
+            loopback,
+            &empty,
+            "Alex",
+            "strongpass123",
+            Some("SETUP-QUICK-VALID"),
+        )
+        .await?;
+        assert_eq!(created_user, "alex");
+        assert_eq!(used_ip, IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert!(enclave.admin_exists().await?);
+        let hash = hash_passphrase("strongpass123");
+        assert!(enclave.authenticate_master("admin", &hash).await?);
+        assert!(enclave.authenticate_tenant("alex", &hash).await?);
+
+        // Reusing consumed token fails with 403 Admin already initialized
+        let replay = execute_quick_personal_bootstrap(
+            &enclave,
+            &limiter,
+            loopback,
+            &empty,
+            "bob",
+            "strongpass123",
+            Some("SETUP-QUICK-VALID"),
+        )
+        .await;
+        assert!(matches!(replay, Err(AegisHttpError::Forbidden(_))));
         Ok(())
     }
 }
