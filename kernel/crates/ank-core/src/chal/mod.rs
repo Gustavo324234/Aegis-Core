@@ -5168,10 +5168,11 @@ impl CognitiveHAL {
                 match orchestrator_opt {
                     None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
                     Some(orchestrator) => {
-                        // 1. Encolar siempre en el outbox para el hook del IDE Antigravity
+                        // 1. Encolar siempre en el outbox particionado por tenant para el hook del IDE Antigravity
+                        let outbox_tenant = pcb.tenant_id.as_deref().unwrap_or("default");
                         orchestrator
                             .agy_runner
-                            .push_ide_outbox(instruction.clone())
+                            .push_ide_outbox(outbox_tenant, instruction.clone())
                             .await;
 
                         // 2. Si el SDK google-antigravity está habilitado, despachar también al supervisor
@@ -5630,14 +5631,19 @@ impl CognitiveHAL {
                                 removed += 1;
                             }
                         }
-                        for k in router.list_global_keys().await {
-                            if k.provider == provider
-                                && router.delete_key(&k.key_id, None).await.is_ok()
-                            {
-                                removed += 1;
+                        // CORE-400: Solo root puede eliminar claves globales desde chat.
+                        if tenant_id == "root" {
+                            for k in router.list_global_keys().await {
+                                if k.provider == provider
+                                    && router.delete_key(&k.key_id, None).await.is_ok()
+                                {
+                                    removed += 1;
+                                }
                             }
+                            router.invalidate_all_sticky().await;
+                        } else {
+                            router.invalidate_sticky(tenant_id).await;
                         }
-                        router.invalidate_all_sticky().await;
                         serde_json::json!({
                             "status": "removed",
                             "provider": provider,

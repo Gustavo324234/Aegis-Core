@@ -161,13 +161,24 @@ async fn get_agent(
 /// POST /api/agents/spawn — permite spawnear manualmente un agente para debugging.
 async fn spawn_agent(
     State(state): State<AppState>,
-    _auth: CitadelAuthenticated,
+    auth: CitadelAuthenticated,
     Json(body): Json<SpawnAgentRequest>,
 ) -> Result<Json<SpawnAgentResponse>, axum::http::StatusCode> {
     let parent_id = body
         .parent_id
         .parse::<uuid::Uuid>()
         .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+
+    // CORE-400: Verificar que el nodo padre pertenece al tenant autenticado (o es Master Admin).
+    if !auth.is_master {
+        let snapshot = state
+            .agent_orchestrator
+            .tree_snapshot_for_tenant(&auth.tenant_id)
+            .await;
+        if !snapshot.iter().any(|n| n.agent_id == parent_id) {
+            return Err(axum::http::StatusCode::FORBIDDEN);
+        }
+    }
 
     let name = body.name.unwrap_or_default();
 

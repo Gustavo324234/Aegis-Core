@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,8 +31,9 @@ pub struct AntigravityRunner {
     workspace_root: PathBuf,
     enabled: AtomicBool,
     worker: Mutex<Option<WorkerProcess>>,
-    /// Cola de mensajes enviados desde el asistente personal hacia la ventana de Antigravity IDE (CORE-385).
-    ide_outbox: Mutex<Vec<String>>,
+    /// Cola de mensajes enviados desde el asistente personal hacia la ventana de Antigravity IDE (CORE-385),
+    /// particionada por `tenant_id` (CORE-400).
+    ide_outbox: Mutex<HashMap<String, Vec<String>>>,
 }
 
 impl AntigravityRunner {
@@ -44,7 +46,7 @@ impl AntigravityRunner {
             workspace_root: workspace_root.to_path_buf(),
             enabled: AtomicBool::new(default_enabled),
             worker: Mutex::new(None),
-            ide_outbox: Mutex::new(Vec::new()),
+            ide_outbox: Mutex::new(HashMap::new()),
         }
     }
 
@@ -56,22 +58,32 @@ impl AntigravityRunner {
         self.enabled.store(val, Ordering::Relaxed);
     }
 
-    pub async fn push_ide_outbox(&self, msg: String) {
-        let mut q = self.ide_outbox.lock().await;
-        q.push(msg);
+    pub async fn push_ide_outbox(&self, tenant_id: &str, msg: String) {
+        let mut map = self.ide_outbox.lock().await;
+        map.entry(tenant_id.to_string()).or_default().push(msg);
     }
 
-    pub async fn pop_ide_outbox(&self) -> Option<String> {
-        let mut q = self.ide_outbox.lock().await;
+    pub async fn pop_ide_outbox(&self, tenant_id: &str) -> Option<String> {
+        let mut map = self.ide_outbox.lock().await;
+        let q = map.get_mut(tenant_id)?;
         if q.is_empty() {
             None
         } else {
-            Some(q.remove(0))
+            let item = q.remove(0);
+            if q.is_empty() {
+                map.remove(tenant_id);
+            }
+            Some(item)
         }
     }
 
-    pub async fn pending_ide_outbox_count(&self) -> usize {
-        self.ide_outbox.lock().await.len()
+    pub async fn pending_ide_outbox_count(&self, tenant_id: &str) -> usize {
+        self.ide_outbox
+            .lock()
+            .await
+            .get(tenant_id)
+            .map(|q| q.len())
+            .unwrap_or(0)
     }
 
     fn resolve_worker_script_with(
@@ -541,5 +553,27 @@ mod tests {
         );
         assert_eq!(resolved, script);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ide_outbox_is_partitioned_by_tenant() {
+        let runner = AntigravityRunner::new(Path::new("."));
+        runner
+            .push_ide_outbox("alice", "msg_alice".to_string())
+            .await;
+        runner.push_ide_outbox("bob", "msg_bob".to_string()).await;
+
+        assert_eq!(runner.pending_ide_outbox_count("alice").await, 1);
+        assert_eq!(runner.pending_ide_outbox_count("bob").await, 1);
+        assert_eq!(
+            runner.pop_ide_outbox("alice").await.as_deref(),
+            Some("msg_alice")
+        );
+        assert!(runner.pop_ide_outbox("alice").await.is_none());
+        assert_eq!(runner.pending_ide_outbox_count("bob").await, 1);
+        assert_eq!(
+            runner.pop_ide_outbox("bob").await.as_deref(),
+            Some("msg_bob")
+        );
     }
 }

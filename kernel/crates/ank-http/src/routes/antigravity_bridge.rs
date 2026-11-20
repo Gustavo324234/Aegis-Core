@@ -7,7 +7,7 @@ use crate::{
 };
 use ank_core::agents::event::AgentEvent;
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -39,13 +39,13 @@ pub struct AntigravityStatusResponse {
 
 async fn get_antigravity_status(
     State(state): State<AppState>,
-    _auth: CitadelAuthenticated,
+    auth: CitadelAuthenticated,
 ) -> impl IntoResponse {
     let sdk = state.agent_orchestrator.agy_runner.check_status().await;
     let pending_outbox_count = state
         .agent_orchestrator
         .agy_runner
-        .pending_ide_outbox_count()
+        .pending_ide_outbox_count(&auth.tenant_id)
         .await;
 
     Json(AntigravityStatusResponse {
@@ -69,6 +69,14 @@ async fn update_antigravity_config(
     auth: CitadelAuthenticated,
     Json(body): Json<AntigravityConfigRequest>,
 ) -> impl IntoResponse {
+    if !auth.is_master {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Only Master Admin can update global Antigravity SDK config" })),
+        )
+            .into_response();
+    }
+
     state
         .agent_orchestrator
         .agy_runner
@@ -89,6 +97,7 @@ async fn update_antigravity_config(
         "status": "ok",
         "use_antigravity_sdk": state.agent_orchestrator.agy_runner.is_enabled()
     }))
+    .into_response()
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -102,11 +111,16 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-async fn is_authorized_hook_or_local(
+enum HookCaller {
+    Citadel(String),
+    LocalHook,
+}
+
+async fn authorize_hook_or_local(
     state: &AppState,
     headers: &HeaderMap,
     peer_addr: Option<SocketAddr>,
-) -> bool {
+) -> Option<HookCaller> {
     if let Ok(expected) = std::env::var("AEGIS_HOOK_TOKEN") {
         let expected_trimmed = expected.trim();
         if !expected_trimmed.is_empty() {
@@ -115,7 +129,7 @@ async fn is_authorized_hook_or_local(
                 .and_then(|v| v.to_str().ok())
             {
                 if constant_time_eq(provided.trim().as_bytes(), expected_trimmed.as_bytes()) {
-                    return true;
+                    return Some(HookCaller::LocalHook);
                 }
             }
         }
@@ -127,11 +141,20 @@ async fn is_authorized_hook_or_local(
     let citadel_key = headers.get("x-citadel-key").and_then(|v| v.to_str().ok());
     if let (Some(t), Some(k)) = (citadel_tenant, citadel_key) {
         if crate::citadel::verify_ws_tenant(state, t, k).await.is_ok() {
-            return true;
+            return Some(HookCaller::Citadel(t.to_string()));
         }
     }
 
-    is_direct_local_cli_probe(peer_addr, headers)
+    if is_direct_local_cli_probe(peer_addr, headers) {
+        Some(HookCaller::LocalHook)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OutboxPopQuery {
+    tenant_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,7 +170,10 @@ async fn ide_notify(
     OptionalPeerAddr(peer_addr): OptionalPeerAddr,
     Json(body): Json<IdeNotifyRequest>,
 ) -> impl IntoResponse {
-    if !is_authorized_hook_or_local(&state, &headers, peer_addr).await {
+    if authorize_hook_or_local(&state, &headers, peer_addr)
+        .await
+        .is_none()
+    {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "Unauthorized" })),
@@ -213,7 +239,7 @@ async fn push_ide_outbox(
     state
         .agent_orchestrator
         .agy_runner
-        .push_ide_outbox(instruction.clone())
+        .push_ide_outbox(&auth.tenant_id, instruction.clone())
         .await;
 
     let should_dispatch = body
@@ -255,7 +281,7 @@ async fn push_ide_outbox(
     let pending_count = state
         .agent_orchestrator
         .agy_runner
-        .pending_ide_outbox_count()
+        .pending_ide_outbox_count(&auth.tenant_id)
         .await;
 
     Json(json!({
@@ -270,16 +296,37 @@ async fn pop_ide_outbox(
     State(state): State<AppState>,
     headers: HeaderMap,
     OptionalPeerAddr(peer_addr): OptionalPeerAddr,
+    Query(query): Query<OutboxPopQuery>,
 ) -> impl IntoResponse {
-    if !is_authorized_hook_or_local(&state, &headers, peer_addr).await {
+    let Some(caller) = authorize_hook_or_local(&state, &headers, peer_addr).await else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "Unauthorized" })),
         )
             .into_response();
-    }
+    };
 
-    match state.agent_orchestrator.agy_runner.pop_ide_outbox().await {
+    let target_tenant = match caller {
+        HookCaller::Citadel(tid) => tid,
+        HookCaller::LocalHook => query
+            .tenant_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                std::env::var("AEGIS_IDE_TENANT")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_else(|| "default".to_string()),
+    };
+
+    match state
+        .agent_orchestrator
+        .agy_runner
+        .pop_ide_outbox(&target_tenant)
+        .await
+    {
         Some(instruction) => Json(json!({
             "has_message": true,
             "instruction": instruction

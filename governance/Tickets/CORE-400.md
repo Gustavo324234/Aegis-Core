@@ -1,7 +1,7 @@
 # CORE-400: Aislamiento Multi-Tenant y SSRF (`agents.rs`, `chal/mod.rs`, `antigravity_bridge`, `vcm/mod.rs`, `video_api`, `engine.rs`, `admin.rs`)
 
 - **Tipo:** fix
-- **Estado:** 📥 Todo
+- **Estado:** ✅ Done
 - **Prioridad:** Crítica
 - **Épica:** EPIC 61
 - **Asignado a:** Kernel Engineer
@@ -21,6 +21,6 @@ Corregir todas las brechas de aislamiento multi-tenant y SSRF identificadas en l
 
 ## Acceptance Criteria
 
-- [ ] Ningún endpoint o tool permite a un tenant leer o modificar estado, claves, procesos, archivos o colas de otro tenant o del host.
-- [ ] `validate_engine_api_url` bloquea DNS rebinding / hostnames que resuelven a IPs privadas o metadata.
-- [ ] Tests de aislamiento cubren cada ruta modificada.
+- [x] Ningún endpoint o tool permite a un tenant leer o modificar estado, claves, procesos, archivos o colas de otro tenant o del host.
+- [x] `validate_engine_api_url` bloquea DNS rebinding / hostnames que resuelven a IPs privadas o metadata.
+- [x] Tests de aislamiento cubren cada ruta modificada.

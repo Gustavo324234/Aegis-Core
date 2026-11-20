@@ -75,8 +75,8 @@ impl VirtualContextManager {
         let tenant_workspace = format!("{}/users/{}/workspace", base_dir, tenant_id);
 
         let computed = tokio::task::spawn_blocking(move || {
-            let repo = git2::Repository::discover(&tenant_workspace)
-                .or_else(|_| git2::Repository::discover("."));
+            // CORE-400: Confinar estrictamente al workspace del tenant (sin fallback a `.` del host).
+            let repo = git2::Repository::open(&tenant_workspace);
 
             let Ok(repo) = repo else {
                 return "[Git Branch]: unknown\n[Git Status]:\nnot a git repository\n[Last Commit]: no commits found".to_string();
@@ -234,12 +234,15 @@ impl VirtualContextManager {
             || !pcb.memory_pointers.l2_context_refs.is_empty();
         if include_project_state {
             let git_state = self.fetch_git_state(tenant_id).await;
-            let gov_state = self.fetch_governance_state().await;
             let mut candidate = String::new();
             candidate.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
             candidate.push_str(&git_state);
-            candidate.push_str("\n\n");
-            candidate.push_str(&gov_state);
+            // CORE-400: Solo el entorno root/master recibe el estado de gobernanza del host.
+            if tenant_id == "root" {
+                let gov_state = self.fetch_governance_state().await;
+                candidate.push_str("\n\n");
+                candidate.push_str(&gov_state);
+            }
             candidate.push('\n');
             let project_tokens = estimate_tokens(&candidate);
             if current_tokens + project_tokens <= actual_token_limit {

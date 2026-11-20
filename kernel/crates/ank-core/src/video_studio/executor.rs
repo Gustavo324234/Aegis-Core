@@ -1201,7 +1201,7 @@ pub async fn execute_video_tool(
                 save_state(&db, &state)?;
                 return Ok(json!({ "ok": true, "project": updated }).to_string());
             }
-            let allow_local = tenant_id == "root" || cfg!(debug_assertions);
+            let allow_local = tenant_id == "root";
             let cfg = update_module_config(&db, &args, allow_local)?;
             Ok(json!({
                 "ok": true,

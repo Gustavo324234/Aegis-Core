@@ -117,6 +117,12 @@ async fn install_dependencies(
     auth: CitadelAuthenticated,
     body: Option<Json<InstallDepsBody>>,
 ) -> Result<Json<Value>, AegisHttpError> {
+    if !auth.is_master {
+        return Err(AegisHttpError::Forbidden(
+            "Only Master Admin can install global runtime dependencies".to_string(),
+        ));
+    }
+
     let force = body.map(|b| b.force).unwrap_or(false);
     let ctx = make_video_ctx(&state, &auth.tenant_id).await;
     let data_dir = state.config.data_dir.clone();
