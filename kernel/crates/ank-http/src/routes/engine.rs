@@ -509,7 +509,7 @@ pub async fn set_hw_profile(
         ));
     }
 
-    std::env::set_var("HW_PROFILE", &body.profile);
+    *state.hw_profile.write().await = body.profile.clone();
 
     Ok(Json(json!({
         "success": true,

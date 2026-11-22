@@ -19,7 +19,7 @@ use ank_core::video_studio::types::{
 };
 use axum::{
     body::Body,
-    extract::{Multipart, Path, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::Response,
     routing::{delete, get, post},
@@ -29,8 +29,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::io::ReaderStream;
 
 const MAX_SCENE_UPLOAD_BYTES: usize = 85 * 1024 * 1024;
+const SCENE_UPLOAD_BODY_LIMIT: usize = MAX_SCENE_UPLOAD_BYTES + 2 * 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -50,7 +52,7 @@ pub fn router() -> Router<AppState> {
         .route("/projects/:project_id/scenes", post(manage_scene))
         .route(
             "/projects/:project_id/scenes/:scene_id/media",
-            post(upload_scene_media),
+            post(upload_scene_media).layer(DefaultBodyLimit::max(SCENE_UPLOAD_BODY_LIMIT)),
         )
         .route(
             "/projects/:project_id/generate-assets",
@@ -338,7 +340,9 @@ async fn create_project(
         let skey = auth.session_key_hash.clone();
         let state_clone = state.clone();
         tokio::spawn(async move {
-            let _ = render_project_by_id(&tid, &skey, &safe_pid, true, &ctx).await;
+            if let Err(err) = render_project_by_id(&tid, &skey, &safe_pid, true, &ctx).await {
+                emit_background_error(&state_clone, &tid, &safe_pid, "render_mp4", &err);
+            }
             emit_modules_updated(&state_clone, &tid, "video_render_mp4");
         });
     }
@@ -634,6 +638,37 @@ struct GenerateAssetsBody {
     scene_id: Option<String>,
 }
 
+fn emit_background_error(
+    state: &AppState,
+    tenant_id: &str,
+    project_id: &str,
+    stage: &str,
+    err: &str,
+) {
+    tracing::error!(
+        tenant_id = %tenant_id,
+        project_id = %project_id,
+        stage = %stage,
+        "Video Studio background task failed: {}",
+        err
+    );
+    let _ = state.workspace_events.send(WorkspaceWsEvent {
+        tenant_id: tenant_id.to_string(),
+        payload: json!({
+            "event": "video_studio_progress",
+            "data": VideoProgressEvent {
+                project_id: project_id.to_string(),
+                stage: stage.to_string(),
+                progress: 1.0,
+                message: format!("Error en {}: {}", stage, err),
+                scene_id: None,
+                done: true,
+                error: Some(err.to_string()),
+            }
+        }),
+    });
+}
+
 async fn start_generate_assets(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
@@ -648,8 +683,11 @@ async fn start_generate_assets(
     let state_clone = state.clone();
 
     tokio::spawn(async move {
-        let _ =
-            generate_assets_for_project(&tid, &skey, &safe_pid, scene_id.as_deref(), &ctx).await;
+        if let Err(err) =
+            generate_assets_for_project(&tid, &skey, &safe_pid, scene_id.as_deref(), &ctx).await
+        {
+            emit_background_error(&state_clone, &tid, &safe_pid, "generate_assets", &err);
+        }
         emit_modules_updated(&state_clone, &tid, "video_generate_assets");
     });
 
@@ -684,7 +722,9 @@ async fn start_render_mp4(
     let state_clone = state.clone();
 
     tokio::spawn(async move {
-        let _ = render_project_by_id(&tid, &skey, &safe_pid, auto_gen, &ctx).await;
+        if let Err(err) = render_project_by_id(&tid, &skey, &safe_pid, auto_gen, &ctx).await {
+            emit_background_error(&state_clone, &tid, &safe_pid, "render_mp4", &err);
+        }
         emit_modules_updated(&state_clone, &tid, "video_render_mp4");
     });
 
@@ -760,18 +800,15 @@ async fn serve_project_media(
             if total_len > 0 && start < total_len {
                 let end = end_opt.unwrap_or(total_len - 1).min(total_len - 1);
                 if start <= end {
-                    let chunk_len = (end - start + 1).min(24 * 1024 * 1024) as usize;
+                    let chunk_len = end - start + 1;
                     let mut f = tokio::fs::File::open(&canon_file)
                         .await
                         .map_err(|e| AegisHttpError::Internal(anyhow::Error::from(e)))?;
                     f.seek(std::io::SeekFrom::Start(start))
                         .await
                         .map_err(|e| AegisHttpError::Internal(anyhow::Error::from(e)))?;
-                    let mut buf = vec![0u8; chunk_len];
-                    f.read_exact(&mut buf)
-                        .await
-                        .map_err(|e| AegisHttpError::Internal(anyhow::Error::from(e)))?;
-                    let actual_end = start + (chunk_len as u64) - 1;
+                    let stream = ReaderStream::new(f.take(chunk_len));
+                    let actual_end = start + chunk_len - 1;
                     return Response::builder()
                         .status(StatusCode::PARTIAL_CONTENT)
                         .header(header::CONTENT_TYPE, content_type)
@@ -781,22 +818,23 @@ async fn serve_project_media(
                             format!("bytes {}-{}/{}", start, actual_end, total_len),
                         )
                         .header(header::CONTENT_LENGTH, chunk_len.to_string())
-                        .body(Body::from(buf))
+                        .body(Body::from_stream(stream))
                         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)));
                 }
             }
         }
     }
 
-    let bytes = tokio::fs::read(&canon_file)
+    let file = tokio::fs::File::open(&canon_file)
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::Error::from(e)))?;
+    let stream = ReaderStream::new(file);
 
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_LENGTH, bytes.len().to_string())
-        .body(Body::from(bytes))
+        .header(header::CONTENT_LENGTH, total_len.to_string())
+        .body(Body::from_stream(stream))
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))
 }

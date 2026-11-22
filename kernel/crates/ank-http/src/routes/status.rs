@@ -147,11 +147,12 @@ pub async fn service_restart(
     require_service_master_auth(&state, &headers).await?;
 
     tracing::warn!(
-        "CORE-256: service restart requested by master admin — exiting for process manager restart"
+        "CORE-256: service restart requested by master admin — triggering graceful shutdown"
     );
-    tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        std::process::exit(0);
+    let shutdown_tx = state.shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let _ = shutdown_tx.send(true);
     });
 
     Ok(StatusCode::ACCEPTED)
@@ -176,10 +177,13 @@ pub async fn service_stop(
 ) -> Result<StatusCode, AegisHttpError> {
     require_service_master_auth(&state, &headers).await?;
 
-    tracing::warn!("CORE-256: service stop requested by master admin — exiting");
-    tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        std::process::exit(0);
+    tracing::warn!(
+        "CORE-256: service stop requested by master admin — triggering graceful shutdown"
+    );
+    let shutdown_tx = state.shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let _ = shutdown_tx.send(true);
     });
 
     Ok(StatusCode::ACCEPTED)
@@ -209,7 +213,7 @@ pub async fn get_system_status(
             _ => AegisHttpError::Citadel(CitadelError::Unauthorized),
         })?;
 
-    let hw_profile = std::env::var("HW_PROFILE").unwrap_or_else(|_| "1".to_string());
+    let hw_profile = state.hw_profile.read().await.clone();
     let hw_profile_name = match hw_profile.as_str() {
         "1" => "cloud",
         "2" => "local",
@@ -461,6 +465,50 @@ pub struct LogsResponse {
     pub logs: String,
 }
 
+const MAX_LOG_LINES: usize = 2_000;
+const MAX_LOG_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+fn read_tail_lines(
+    path: &std::path::Path,
+    max_lines: usize,
+    max_bytes: u64,
+) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    if max_lines == 0 || max_bytes == 0 {
+        return Ok(String::new());
+    }
+
+    let mut file = std::fs::File::open(path)?;
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(String::new());
+    }
+
+    let bytes_to_read = file_len.min(max_bytes);
+    let start_offset = file_len.saturating_sub(bytes_to_read);
+    file.seek(SeekFrom::Start(start_offset))?;
+
+    let cap = usize::try_from(bytes_to_read).unwrap_or(usize::MAX);
+    let mut buf = Vec::with_capacity(cap);
+    file.take(bytes_to_read).read_to_end(&mut buf)?;
+
+    let slice = if start_offset > 0 {
+        if let Some(first_nl) = buf.iter().position(|&b| b == b'\n') {
+            &buf[first_nl + 1..]
+        } else {
+            &buf[..]
+        }
+    } else {
+        &buf[..]
+    };
+
+    let text = String::from_utf8_lossy(slice);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    Ok(lines[start..].join("\n"))
+}
+
 #[utoipa::path(
     get,
     path = "/api/system/service/logs",
@@ -483,41 +531,32 @@ pub async fn get_service_logs(
 ) -> Result<Json<LogsResponse>, AegisHttpError> {
     require_service_master_auth(&state, &headers).await?;
 
-    let lines_to_read = query.lines.unwrap_or(100);
+    let lines_to_read = query.lines.unwrap_or(100).clamp(1, MAX_LOG_LINES);
     let logs_dir = state.config.data_dir.join("logs");
 
-    if !logs_dir.exists() {
-        return Ok(Json(LogsResponse {
-            logs: "[System Logs] Logs directory does not exist yet.".to_string(),
-        }));
-    }
-
-    let mut entries = std::fs::read_dir(&logs_dir)
-        .map_err(|e| AegisHttpError::Kernel(format!("Failed to read logs directory: {}", e)))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("ank.log"))
-        .collect::<Vec<_>>();
-
-    entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
-
-    let latest = match entries.last() {
-        Some(e) => e,
-        None => {
-            return Ok(Json(LogsResponse {
-                logs: "[System Logs] No active log files found.".to_string(),
-            }));
+    let logs_content = tokio::task::spawn_blocking(move || -> Result<String, AegisHttpError> {
+        if !logs_dir.exists() {
+            return Ok("[System Logs] Logs directory does not exist yet.".to_string());
         }
-    };
 
-    let file = std::fs::File::open(latest.path())
-        .map_err(|e| AegisHttpError::Kernel(format!("Failed to open log file: {}", e)))?;
-    let reader = std::io::BufReader::new(file);
-    use std::io::BufRead;
-    let all_lines = reader.lines().map_while(Result::ok).collect::<Vec<_>>();
+        let mut entries = std::fs::read_dir(&logs_dir)
+            .map_err(|e| AegisHttpError::Kernel(format!("Failed to read logs directory: {}", e)))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("ank.log"))
+            .collect::<Vec<_>>();
 
-    let start = all_lines.len().saturating_sub(lines_to_read);
-    let selected_lines = &all_lines[start..];
-    let logs_content = selected_lines.join("\n");
+        entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+
+        let latest = match entries.last() {
+            Some(e) => e,
+            None => return Ok("[System Logs] No active log files found.".to_string()),
+        };
+
+        read_tail_lines(&latest.path(), lines_to_read, MAX_LOG_TAIL_BYTES)
+            .map_err(|e| AegisHttpError::Kernel(format!("Failed to read log file: {}", e)))
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Log reader join error: {}", e)))??;
 
     Ok(Json(LogsResponse { logs: logs_content }))
 }
@@ -585,5 +624,40 @@ mod tests {
                 "Expected browser header {hdr}={val} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn read_tail_lines_caps_bytes_and_lines() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("aegis_tail_test_{}.log", std::process::id()));
+
+        let content: String = (1..=50).map(|i| format!("linea número {}\n", i)).collect();
+        let write_res = std::fs::write(&path, content.as_bytes());
+        assert!(write_res.is_ok());
+
+        // 1. Cap by max_lines within full file
+        let tail5 = read_tail_lines(&path, 5, 64 * 1024);
+        assert!(tail5.is_ok());
+        let tail5 = tail5.unwrap_or_default();
+        assert_eq!(
+            tail5,
+            "linea número 46\nlinea número 47\nlinea número 48\nlinea número 49\nlinea número 50"
+        );
+
+        // 2. Cap by max_bytes smaller than file size -> drops partial first line cleanly
+        let tail_bytes = read_tail_lines(&path, 100, 60);
+        assert!(tail_bytes.is_ok());
+        let tail_bytes = tail_bytes.unwrap_or_default();
+        assert!(tail_bytes.ends_with("linea número 50"));
+        assert!(!tail_bytes.contains("linea número 1\n"));
+        for line in tail_bytes.lines() {
+            assert!(
+                line.starts_with("linea número "),
+                "Partial truncated line leaked: {:?}",
+                line
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
     }
 }

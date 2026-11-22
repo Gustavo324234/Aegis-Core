@@ -41,4 +41,8 @@ pub struct AppState {
     pub whatsapp: Arc<ank_core::whatsapp::WhatsAppManager>,
     /// CORE-402: Store de tokens efímeros de sesión Citadel con TTL y revocación.
     pub session_store: crate::citadel::CitadelSessionStore,
+    /// CORE-403: Señal de apagado ordenado compartida con HTTP, gRPC y workers.
+    pub shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// CORE-403: Perfil de hardware en memoria (evita mutar `std::env` tras iniciar Tokio).
+    pub hw_profile: Arc<RwLock<String>>,
 }

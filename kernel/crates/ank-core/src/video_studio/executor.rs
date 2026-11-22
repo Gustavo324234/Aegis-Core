@@ -19,8 +19,19 @@ use crate::enclave::TenantDB;
 use crate::router::{CognitiveRouter, KeyPool};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, LazyLock};
+use tokio::sync::{RwLock, Semaphore};
+
+const DEFAULT_MAX_CONCURRENT_RENDERS: usize = 2;
+
+static FFMPEG_RENDER_SEMAPHORE: LazyLock<Arc<Semaphore>> = LazyLock::new(|| {
+    let permits = std::env::var("AEGIS_MAX_CONCURRENT_RENDERS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|n| n.clamp(1, 8))
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_RENDERS);
+    Arc::new(Semaphore::new(permits))
+});
 
 #[derive(Clone)]
 pub struct VideoExecContext {
@@ -798,6 +809,25 @@ pub async fn render_project_by_id(
             .find(|p| p.id == safe_pid)
             .ok_or_else(|| format!("Proyecto '{}' no encontrado.", safe_pid))?
     };
+
+    if FFMPEG_RENDER_SEMAPHORE.available_permits() == 0 {
+        if let Some(ref cb) = ctx.progress_cb {
+            cb(VideoProgressEvent {
+                project_id: project.id.clone(),
+                stage: "render_mp4".to_string(),
+                progress: 0.05,
+                message: "En cola esperando turno de render FFmpeg...".to_string(),
+                scene_id: None,
+                done: false,
+                error: None,
+            });
+        }
+    }
+    let _render_permit = FFMPEG_RENDER_SEMAPHORE
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| "Semáforo de render FFmpeg cerrado".to_string())?;
 
     let media_dir = project_media_dir(&ctx.data_dir, tenant_id, &project.id)?;
     if let Err(err) = render_project_mp4(

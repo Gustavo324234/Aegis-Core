@@ -24,7 +24,7 @@ Consolidar y promover al código general todas las capacidades validadas en el e
 
 ### Bloque 3 — Rendimiento, Concurrencia y Frontend
 9. **`CORE-402`** (`perf`, ✅ Done): Tokens de Sesión Citadel, Argon2id en `spawn_blocking` y Pool LRU de `TenantDB` (ADR-034).
-10. **`CORE-403`** (`fix`, 📥 Todo): Estabilidad y Límites SRE (`video_api` streaming/`DefaultBodyLimit`/semáforo FFmpeg, logs acotados, graceful shutdown, `env::set_var` y `AntigravityRunner`).
+10. **`CORE-403`** (`fix`, ✅ Done): Estabilidad y Límites SRE (`video_api` streaming/`DefaultBodyLimit`/semáforo FFmpeg, logs acotados, graceful shutdown, `env::set_var` y `AntigravityRunner`).
 11. **`CORE-404`** (`perf`, 📥 Todo): Optimización Frontend (`shell/ui`: selectores `useAegisStore`, `React.lazy()`, optimización de SVGs y `apiClient.ts`).
 
 ### Bloque 4 — Modularización, Testing y OpenAPI

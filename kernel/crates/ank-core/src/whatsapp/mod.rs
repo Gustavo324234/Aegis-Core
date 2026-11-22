@@ -711,6 +711,18 @@ impl WhatsAppManager {
         ))
     }
 
+    /// CORE-403: Detiene limpiamente el subproceso del bridge Node.js durante el apagado.
+    pub async fn shutdown(&self) {
+        let child_opt = {
+            let mut guard = self.child.lock().await;
+            guard.take()
+        };
+        if let Some(mut child) = child_opt {
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await;
+        }
+    }
+
     /// Starts the local bridge automatically on boot if any tenant has already paired a QR session.
     pub async fn auto_start_if_paired(&self) {
         let wa_dir = self.data_dir.join("whatsapp");

@@ -29,6 +29,7 @@ impl AegisHttpServer {
 
     pub async fn serve(self) -> Result<()> {
         let port = self.state.config.port;
+        let mut shutdown_rx = self.state.shutdown_tx.subscribe();
         let app = routes::build_router(self.state);
         let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
 
@@ -38,6 +39,16 @@ impl AegisHttpServer {
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
+        .with_graceful_shutdown(async move {
+            if !*shutdown_rx.borrow() {
+                while shutdown_rx.changed().await.is_ok() {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+            }
+            tracing::info!("Aegis HTTP server initiating graceful shutdown");
+        })
         .await?;
 
         Ok(())

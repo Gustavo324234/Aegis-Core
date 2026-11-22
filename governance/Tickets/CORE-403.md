@@ -1,7 +1,7 @@
 # CORE-403: Estabilidad y Límites SRE (`video_api`, logs acotados, graceful shutdown, `env::set_var` y `AntigravityRunner`)
 
 - **Tipo:** fix
-- **Estado:** 📥 Todo
+- **Estado:** ✅ Done
 - **Prioridad:** Alta
 - **Épica:** EPIC 61
 - **Asignado a:** Kernel Engineer
@@ -18,6 +18,16 @@ Resolver riesgos de OOM, bloqueos, shutdown abrupto y UB en runtime:
 
 ## Acceptance Criteria
 
-- [ ] Uploads hasta 85 MB y streaming de MP4/logs operan sin picos de memoria OOM.
-- [ ] No existen llamadas a `std::env::set_var` en contexto multihilo ni `std::process::exit(0)` sin drenaje.
-- [ ] `AntigravityRunner` soporta sesiones concurrentes en distintos workspaces con captura de errores `stderr`.
+- [x] Uploads hasta 85 MB y streaming de MP4/logs operan sin picos de memoria OOM.
+- [x] No existen llamadas a `std::env::set_var` en contexto multihilo ni `std::process::exit(0)` sin drenaje.
+- [x] `AntigravityRunner` soporta sesiones concurrentes en distintos workspaces con captura de errores `stderr`.
+
+## Verification
+
+- `python -m py_compile tools/antigravity_bridge/agy_worker.py`: OK (`os.chdir` eliminado).
+- `cargo fmt --all -- --check`: OK.
+- `cargo clippy --workspace -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -A clippy::double-must-use -A clippy::result-large-err`: OK (0 warnings).
+- `cargo test -p ank-core --lib antigravity_runner`: 5 passed, 0 failed (incluye `test_antigravity_runner_concurrent_multi_workspace_and_shutdown`).
+- `cargo test -p ank-core --lib plugins`: 5 passed, 0 failed.
+- `cargo test -p ank-core --lib enclave`: 21 passed, 0 failed.
+- `cargo test -p ank-http`: 45 passed, 0 failed (incluye `routes::status::tests::read_tail_lines_caps_bytes_and_lines`).

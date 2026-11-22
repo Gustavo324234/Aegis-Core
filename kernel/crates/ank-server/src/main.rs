@@ -67,8 +67,42 @@ fn resolve_data_dir() -> std::path::PathBuf {
 }
 
 pub(crate) async fn run_server() -> Result<()> {
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    run_server_with_shutdown(shutdown_tx).await
+}
+
+pub(crate) async fn run_server_with_shutdown(
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+) -> Result<()> {
     // CORE-147: Initialize rustls crypto provider (required for rustls 0.23+)
     let _ = rustls::crypto::ring::default_provider().install_default();
+
+    {
+        let sig_tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = async {
+                        if let Some(ref mut s) = sigterm {
+                            let _ = s.recv().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+            info!("Shutdown signal received — initiating graceful shutdown");
+            let _ = sig_tx.send(true);
+        });
+    }
 
     // 1. Inicializar tracing
     let data_dir = resolve_data_dir();
@@ -108,7 +142,12 @@ pub(crate) async fn run_server() -> Result<()> {
     let pub_key_path = keys_dir.join("plugin_signer.pub");
     let priv_key_path = keys_dir.join("plugin_signer.key");
 
-    if std::env::var("AEGIS_PLUGIN_ROOT_KEY").is_err() {
+    let mut plugin_root_key = std::env::var("AEGIS_PLUGIN_ROOT_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if plugin_root_key.is_none() {
         if pub_key_path.exists() {
             if let Ok(pub_hex) = std::fs::read_to_string(&pub_key_path) {
                 let clean_hex = pub_hex.trim();
@@ -117,7 +156,7 @@ pub(crate) async fn run_server() -> Result<()> {
                         "Citadel: Loading existing local plugin root key from {}",
                         pub_key_path.display()
                     );
-                    std::env::set_var("AEGIS_PLUGIN_ROOT_KEY", clean_hex);
+                    plugin_root_key = Some(clean_hex.to_string());
                 }
             }
         } else {
@@ -169,7 +208,7 @@ pub(crate) async fn run_server() -> Result<()> {
                     }
                 }
 
-                std::env::set_var("AEGIS_PLUGIN_ROOT_KEY", &pub_hex);
+                plugin_root_key = Some(pub_hex.clone());
                 info!(
                     "Citadel: Local root of trust initialized with key: {}",
                     pub_hex
@@ -236,7 +275,7 @@ pub(crate) async fn run_server() -> Result<()> {
     // 8. Plugin Manager (initial load + hot-reload watcher)
     let plugins_dir = data_dir.join("plugins");
     std::fs::create_dir_all(&plugins_dir).ok();
-    let mut initial_pm = PluginManager::new()?;
+    let mut initial_pm = PluginManager::new_with_root_key(plugin_root_key.as_deref())?;
     if let Some(s) = plugins_dir.to_str() {
         if let Err(e) = initial_pm.load_all_from_dir(s).await {
             warn!("Plugins initial directory scan warning: {}", e);
@@ -770,6 +809,10 @@ pub(crate) async fn run_server() -> Result<()> {
         });
     }
 
+    let citadel_shutdown = Arc::clone(&citadel);
+    let orchestrator_shutdown = Arc::clone(&agent_orchestrator);
+    let whatsapp_shutdown = Arc::clone(&whatsapp);
+
     let state = AppState {
         scheduler_tx: scheduler_tx.clone(),
         event_broker: Arc::clone(&event_broker),
@@ -791,6 +834,10 @@ pub(crate) async fn run_server() -> Result<()> {
         pending_oauth_flows: ank_http::routes::oauth_api::new_pending_oauth_store(),
         whatsapp,
         session_store: ank_http::citadel::CitadelSessionStore::default(),
+        shutdown_tx: shutdown_tx.clone(),
+        hw_profile: Arc::new(RwLock::new(
+            std::env::var("HW_PROFILE").unwrap_or_else(|_| "1".to_string()),
+        )),
     };
 
     // 12. Tonic Server
@@ -819,8 +866,22 @@ pub(crate) async fn run_server() -> Result<()> {
         );
     }
 
-    tokio::spawn(async move {
-        if let Err(e) = tonic_builder.add_service(tonic_svc).serve(grpc_addr).await {
+    let mut grpc_shutdown_rx = shutdown_tx.subscribe();
+    let grpc_handle = tokio::spawn(async move {
+        let shutdown_fut = async move {
+            if !*grpc_shutdown_rx.borrow() {
+                while grpc_shutdown_rx.changed().await.is_ok() {
+                    if *grpc_shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+            }
+        };
+        if let Err(e) = tonic_builder
+            .add_service(tonic_svc)
+            .serve_with_shutdown(grpc_addr, shutdown_fut)
+            .await
+        {
             error!("gRPC server failed: {}", e);
         }
     });
@@ -839,6 +900,7 @@ pub(crate) async fn run_server() -> Result<()> {
     // CORE-146: Cloudflare Tunnel Manager
     {
         let tunnel_url_state = Arc::clone(&state.tunnel_url);
+        let mut cf_shutdown_rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
             // CORE-257: verificar que cloudflared está instalado antes de entrar al loop.
             // Si no está, logear una sola vez y salir sin reintentar.
@@ -854,13 +916,21 @@ pub(crate) async fn run_server() -> Result<()> {
             }
 
             loop {
+                if *cf_shutdown_rx.borrow() {
+                    break;
+                }
                 info!("Tunnel Manager: Starting cloudflared...");
-                match run_tunnel_and_monitor(http_port, Arc::clone(&tunnel_url_state)).await {
-                    Ok(_) => {
-                        warn!("Tunnel Manager: cloudflared exited normally.");
+                tokio::select! {
+                    res = run_tunnel_and_monitor(http_port, Arc::clone(&tunnel_url_state)) => {
+                        match res {
+                            Ok(_) => warn!("Tunnel Manager: cloudflared exited normally."),
+                            Err(e) => warn!("Tunnel Manager: cloudflared error: {}", e),
+                        }
                     }
-                    Err(e) => {
-                        warn!("Tunnel Manager: cloudflared error: {}", e);
+                    _ = cf_shutdown_rx.changed() => {
+                        if *cf_shutdown_rx.borrow() {
+                            break;
+                        }
                     }
                 }
 
@@ -869,8 +939,19 @@ pub(crate) async fn run_server() -> Result<()> {
                     *lock = None;
                 }
 
+                if *cf_shutdown_rx.borrow() {
+                    break;
+                }
+
                 info!("Tunnel Manager: Restarting in 10 seconds...");
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
+                    _ = cf_shutdown_rx.changed() => {
+                        if *cf_shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
             }
         });
     }
@@ -879,6 +960,7 @@ pub(crate) async fn run_server() -> Result<()> {
     {
         let tunnel_url_state = Arc::clone(&state.tunnel_url);
         let data_dir_clone = data_dir.clone();
+        let mut connect_shutdown_rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
             use serde::{Deserialize, Serialize};
 
@@ -916,6 +998,13 @@ pub(crate) async fn run_server() -> Result<()> {
             let mut active_task: Option<(tokio::task::JoinHandle<()>, ConnectConfig)> = None;
 
             loop {
+                if *connect_shutdown_rx.borrow() {
+                    if let Some((handle, _)) = active_task.take() {
+                        handle.abort();
+                    }
+                    break;
+                }
+
                 // Read configuration
                 let current_config: Option<ConnectConfig> = if config_path.exists() {
                     if let Ok(content) = std::fs::read_to_string(&config_path) {
@@ -983,13 +1072,36 @@ pub(crate) async fn run_server() -> Result<()> {
                     }
                 }
 
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                    _ = connect_shutdown_rx.changed() => {
+                        if *connect_shutdown_rx.borrow() {
+                            if let Some((handle, _)) = active_task.take() {
+                                handle.abort();
+                            }
+                            break;
+                        }
+                    }
+                }
             }
         });
     }
 
     let http_server = AegisHttpServer::new(state);
-    http_server.serve().await?;
+    let serve_res = http_server.serve().await;
+
+    // Graceful shutdown draining sequence (CORE-403)
+    let _ = shutdown_tx.send(true);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), grpc_handle).await;
+    orchestrator_shutdown.agy_runner.shutdown().await;
+    whatsapp_shutdown.shutdown().await;
+    ank_core::enclave::TenantDB::evict_all();
+    if let Err(e) = citadel_shutdown.lock().await.enclave.checkpoint().await {
+        warn!("MasterEnclave WAL checkpoint on shutdown failed: {}", e);
+    }
+    info!("Aegis Core graceful shutdown complete.");
+
+    serve_res?;
 
     Ok(())
 }
@@ -1080,9 +1192,12 @@ mod windows_service_impl {
     }
 
     fn run_service() -> Result<()> {
-        let event_handler = |control_event| match control_event {
+        let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let scm_shutdown_tx = shutdown_tx.clone();
+        let event_handler = move |control_event| match control_event {
             ServiceControl::Stop | ServiceControl::Shutdown => {
-                std::process::exit(0);
+                let _ = scm_shutdown_tx.send(true);
+                ServiceControlHandlerResult::NoError
             }
             _ => ServiceControlHandlerResult::NotImplemented,
         };
@@ -1100,7 +1215,7 @@ mod windows_service_impl {
         })?;
 
         let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
+        let res = rt.block_on(async {
             status_handle.set_service_status(ServiceStatus {
                 service_type: ServiceType::OWN_PROCESS,
                 current_state: ServiceState::Running,
@@ -1111,8 +1226,20 @@ mod windows_service_impl {
                 process_id: None,
             })?;
 
-            super::run_server().await
-        })
+            super::run_server_with_shutdown(shutdown_tx).await
+        });
+
+        let _ = status_handle.set_service_status(ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: ServiceState::Stopped,
+            controls_accepted: ServiceControlAccept::empty(),
+            exit_code: ServiceExitCode::Win32(if res.is_ok() { 0 } else { 1 }),
+            checkpoint: 0,
+            wait_hint: Duration::from_secs(0),
+            process_id: None,
+        });
+
+        res
     }
 }
 
@@ -1137,8 +1264,10 @@ async fn run_tunnel_and_monitor(
 
     let mut child = Command::new(bin)
         .args(["tunnel", "--url", &format!("http://localhost:{}", port)])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| anyhow::anyhow!("Failed to spawn {}: {}. Is it installed?", bin, e))?;
 

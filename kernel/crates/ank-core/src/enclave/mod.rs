@@ -278,6 +278,14 @@ impl TenantDB {
         pool.evict_tenant(tenant_id, &db_path);
     }
 
+    /// CORE-403: Cierra ordenadamente todas las conexiones en el pool LRU durante el apagado.
+    pub fn evict_all() {
+        let mut pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+        pool.idle.clear();
+        pool.initialized_schemas.clear();
+        pool.generations.clear();
+    }
+
     #[cfg(test)]
     pub(crate) fn evict_prefix_for_test(prefix: &str) {
         let mut pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());

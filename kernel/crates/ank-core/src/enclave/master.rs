@@ -240,7 +240,7 @@ impl MasterEnclave {
         Ok(())
     }
 
-    async fn checkpoint(&self) -> Result<()> {
+    pub async fn checkpoint(&self) -> Result<()> {
         let conn = self.connection.lock().await;
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
             .map_err(|e| anyhow::anyhow!("WAL checkpoint failed: {}", e))?;

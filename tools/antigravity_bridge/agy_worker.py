@@ -9,6 +9,7 @@ Lee comandos JSON-Lines desde `stdin` y emite eventos de streaming (`thought`, `
 import asyncio
 import importlib.metadata
 import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -59,9 +60,10 @@ def check_sdk_status() -> Dict[str, Any]:
 class MockResponse:
     """Respuesta simulada compatible con la interfaz async de `google.antigravity`."""
 
-    def __init__(self, prompt: str, history_len: int):
+    def __init__(self, prompt: str, history_len: int, workspace: Optional[str] = None):
         self._prompt = prompt
         self._history_len = history_len
+        self._workspace = workspace
         self.thoughts = self._iter_thoughts()
         self.tool_calls = self._iter_tools()
 
@@ -79,20 +81,22 @@ class MockResponse:
         return self._iter_tokens()
 
     async def _iter_tokens(self):
+        ws_tag = f" [ws={self._workspace}]" if self._workspace else ""
         reply = (
-            f"[Antigravity SDK] Procesé tu solicitud (turno #{self._history_len}): "
+            f"[Antigravity SDK]{ws_tag} Procesé tu solicitud (turno #{self._history_len}): "
             f"\"{self._prompt}\". Tarea completada con éxito."
         )
         for word in reply.split(" "):
             yield word + " "
-            await asyncio.sleep(0.005)
+            await asyncio.sleep(0.01)
 
 
 class MockAgentSession:
     """Sesión simulada para pruebas determinísticas cuando `AEGIS_AGY_MOCK=1`."""
 
-    def __init__(self, system_instructions: str = ""):
+    def __init__(self, system_instructions: str = "", workspace: Optional[str] = None):
         self.system_instructions = system_instructions
+        self.workspace = workspace
         self.turns = 0
 
     async def __aenter__(self):
@@ -103,7 +107,7 @@ class MockAgentSession:
 
     async def chat(self, prompt: str) -> MockResponse:
         self.turns += 1
-        return MockResponse(prompt, self.turns)
+        return MockResponse(prompt, self.turns, workspace=self.workspace)
 
 
 class SessionManager:
@@ -123,23 +127,42 @@ class SessionManager:
         if session_id in self.sessions:
             return self.sessions[session_id]
 
-        if workspace and os.path.isdir(workspace):
-            try:
-                os.chdir(workspace)
-            except OSError:
-                pass
+        resolved_workspace = (
+            os.path.abspath(workspace) if workspace and os.path.isdir(workspace) else None
+        )
 
         if os.environ.get("AEGIS_AGY_MOCK") == "1":
-            agent = MockAgentSession(system_instructions=system_instructions)
+            agent = MockAgentSession(
+                system_instructions=system_instructions,
+                workspace=resolved_workspace,
+            )
             await agent.__aenter__()
             self.sessions[session_id] = agent
             return agent
 
         from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
 
+        effective_instructions = system_instructions
         kwargs: Dict[str, Any] = {}
-        if system_instructions:
-            kwargs["system_instructions"] = system_instructions
+        if resolved_workspace:
+            try:
+                sig_params = inspect.signature(LocalAgentConfig).parameters
+            except Exception:
+                sig_params = {}
+            placed = False
+            for param_name in ("workspace", "working_dir", "cwd"):
+                if param_name in sig_params:
+                    kwargs[param_name] = resolved_workspace
+                    placed = True
+                    break
+            if not placed:
+                prefix = f"[Workspace: {resolved_workspace}]"
+                effective_instructions = (
+                    f"{prefix}\n{effective_instructions}" if effective_instructions else prefix
+                )
+
+        if effective_instructions:
+            kwargs["system_instructions"] = effective_instructions
         if allow_write:
             kwargs["capabilities"] = CapabilitiesConfig()
 

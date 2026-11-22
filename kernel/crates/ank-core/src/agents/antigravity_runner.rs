@@ -1,13 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, Command};
+use tokio::sync::{mpsc, Mutex};
 use tracing::{info, warn};
+
+const MAX_STDERR_LINES: usize = 40;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AntigravitySdkStatus {
@@ -18,19 +23,24 @@ pub struct AntigravitySdkStatus {
     pub error: Option<String>,
 }
 
-struct WorkerProcess {
-    child: Child,
-    stdin: ChildStdin,
-    stdout_lines: Lines<BufReader<ChildStdout>>,
+type PendingRequests = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>>;
+
+#[derive(Clone)]
+struct WorkerHandle {
+    child: Arc<Mutex<Child>>,
+    stdin: Arc<Mutex<ChildStdin>>,
+    pending: PendingRequests,
+    recent_stderr: Arc<Mutex<VecDeque<String>>>,
+    alive: Arc<AtomicBool>,
 }
 
-/// CORE-384: Runner que conecta `AgentOrchestrator` con `tools/antigravity_bridge/agy_worker.py`
-/// para delegar subagentes/supervisores al SDK oficial `google-antigravity`, aprovechando
-/// los créditos de la cuenta de Antigravity del usuario y manteniendo sesiones vivas por `session_id`.
+/// CORE-384 / CORE-403: Runner que conecta `AgentOrchestrator` con
+/// `tools/antigravity_bridge/agy_worker.py` mediante I/O multiplexado por `id`,
+/// permitiendo sesiones concurrentes en distintos workspaces y captura de `stderr`.
 pub struct AntigravityRunner {
     workspace_root: PathBuf,
     enabled: AtomicBool,
-    worker: Mutex<Option<WorkerProcess>>,
+    worker: Mutex<Option<WorkerHandle>>,
     /// Cola de mensajes enviados desde el asistente personal hacia la ventana de Antigravity IDE (CORE-385),
     /// particionada por `tenant_id` (CORE-400).
     ide_outbox: Mutex<HashMap<String, Vec<String>>>,
@@ -227,60 +237,217 @@ impl AntigravityRunner {
         }
     }
 
-    async fn ensure_worker<'a>(
-        &self,
-        guard: &'a mut Option<WorkerProcess>,
-    ) -> anyhow::Result<&'a mut WorkerProcess> {
-        let needs_spawn = match guard.as_mut() {
-            Some(wp) => wp.child.try_wait().ok().flatten().is_some(),
-            None => true,
-        };
-
-        if needs_spawn {
-            let py = self.resolve_python_bin();
-            let script = self.resolve_worker_script();
-            if !script.exists() {
-                anyhow::bail!("No se encontró el worker de Antigravity en {:?}", script);
-            }
-
-            info!(
-                python = ?py,
-                script = ?script,
-                "[AntigravityRunner] Iniciando daemon agy_worker.py"
-            );
-
-            let mut cmd = Command::new(&py);
-            cmd.arg(&script)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .env("PYTHONIOENCODING", "utf-8");
-
-            let mut child = cmd.spawn()?;
-            let stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("Failed to open stdin for agy_worker"))?;
-            let stdout = child
-                .stdout
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("Failed to open stdout for agy_worker"))?;
-
-            *guard = Some(WorkerProcess {
-                child,
-                stdin,
-                stdout_lines: BufReader::new(stdout).lines(),
-            });
+    async fn spawn_worker_handle(&self) -> anyhow::Result<WorkerHandle> {
+        let py = self.resolve_python_bin();
+        let script = self.resolve_worker_script();
+        if !script.exists() {
+            anyhow::bail!("No se encontró el worker de Antigravity en {:?}", script);
         }
 
-        guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("WorkerProcess unavailable"))
+        info!(
+            python = ?py,
+            script = ?script,
+            "[AntigravityRunner] Iniciando daemon agy_worker.py (stdin/stdout multiplexado)"
+        );
+
+        let mut cmd = Command::new(&py);
+        cmd.arg(&script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env("PYTHONIOENCODING", "utf-8")
+            .kill_on_drop(true);
+
+        let mut child = cmd.spawn()?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to open stdin for agy_worker"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to open stdout for agy_worker"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to open stderr for agy_worker"))?;
+
+        let pending: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
+        let recent_stderr = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_STDERR_LINES)));
+        let alive = Arc::new(AtomicBool::new(true));
+
+        let stderr_buf = Arc::clone(&recent_stderr);
+        tokio::spawn(async move {
+            let mut err_lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = err_lines.next_line().await {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    warn!(target: "antigravity_worker_stderr", "[agy_worker stderr] {}", trimmed);
+                }
+                let mut q = stderr_buf.lock().await;
+                if q.len() >= MAX_STDERR_LINES {
+                    q.pop_front();
+                }
+                q.push_back(line);
+            }
+        });
+
+        let pending_reader = Arc::clone(&pending);
+        let alive_reader = Arc::clone(&alive);
+        let stderr_reader = Arc::clone(&recent_stderr);
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(raw_line)) = lines.next_line().await {
+                let Ok(ev) = serde_json::from_str::<Value>(&raw_line) else {
+                    continue;
+                };
+                let Some(ev_id) = ev.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+                    continue;
+                };
+                let tx_opt = {
+                    let map = pending_reader.lock().await;
+                    map.get(&ev_id).cloned()
+                };
+                if let Some(tx) = tx_opt {
+                    if tx.send(ev).is_err() {
+                        pending_reader.lock().await.remove(&ev_id);
+                    }
+                }
+            }
+
+            alive_reader.store(false, Ordering::SeqCst);
+            let pending_count = {
+                let mut map = pending_reader.lock().await;
+                let n = map.len();
+                map.drain();
+                n
+            };
+            let tail = {
+                let q = stderr_reader.lock().await;
+                q.iter()
+                    .rev()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            };
+            if pending_count > 0 || !tail.is_empty() {
+                warn!(
+                    pending_aborted = pending_count,
+                    stderr_tail = %tail,
+                    "[AntigravityRunner] stdout de agy_worker cerrado inesperadamente"
+                );
+            }
+        });
+
+        Ok(WorkerHandle {
+            child: Arc::new(Mutex::new(child)),
+            stdin: Arc::new(Mutex::new(stdin)),
+            pending,
+            recent_stderr,
+            alive,
+        })
+    }
+
+    async fn get_or_spawn_worker(&self) -> anyhow::Result<WorkerHandle> {
+        let mut guard = self.worker.lock().await;
+        if let Some(existing) = guard.as_ref() {
+            let is_alive = existing.alive.load(Ordering::SeqCst);
+            let exited = existing
+                .child
+                .lock()
+                .await
+                .try_wait()
+                .ok()
+                .flatten()
+                .is_some();
+            if is_alive && !exited {
+                return Ok(existing.clone());
+            }
+            existing.alive.store(false, Ordering::SeqCst);
+            existing.pending.lock().await.drain();
+            *guard = None;
+        }
+
+        let handle = self.spawn_worker_handle().await?;
+        *guard = Some(handle.clone());
+        Ok(handle)
+    }
+
+    async fn invalidate_worker(&self, dead_handle: &WorkerHandle) {
+        dead_handle.alive.store(false, Ordering::SeqCst);
+        dead_handle.pending.lock().await.drain();
+        {
+            let mut child = dead_handle.child.lock().await;
+            let _ = child.kill().await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(1), child.wait()).await;
+        }
+        let mut guard = self.worker.lock().await;
+        if let Some(current) = guard.as_ref() {
+            if Arc::ptr_eq(&current.pending, &dead_handle.pending) {
+                *guard = None;
+            }
+        }
+    }
+
+    async fn stderr_summary(handle: &WorkerHandle) -> String {
+        let q = handle.recent_stderr.lock().await;
+        q.iter()
+            .filter(|l| !l.trim().is_empty())
+            .rev()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    async fn send_request(
+        &self,
+        handle: &WorkerHandle,
+        req_id: &str,
+        payload: Value,
+    ) -> anyhow::Result<mpsc::UnboundedReceiver<Value>> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        handle.pending.lock().await.insert(req_id.to_string(), tx);
+
+        let line = payload.to_string() + "\n";
+        let write_res = {
+            let mut stdin = handle.stdin.lock().await;
+            match stdin.write_all(line.as_bytes()).await {
+                Ok(()) => stdin.flush().await,
+                Err(e) => Err(e),
+            }
+        };
+
+        if let Err(e) = write_res {
+            handle.pending.lock().await.remove(req_id);
+            self.invalidate_worker(handle).await;
+            anyhow::bail!("Fallo al escribir a agy_worker: {}", e);
+        }
+
+        Ok(rx)
+    }
+
+    /// Apaga limpiamente el subproceso `agy_worker.py` (CORE-403).
+    pub async fn shutdown(&self) {
+        let handle = self.worker.lock().await.take();
+        if let Some(h) = handle {
+            h.alive.store(false, Ordering::SeqCst);
+            h.pending.lock().await.drain();
+            let mut child = h.child.lock().await;
+            let _ = child.kill().await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+        }
     }
 
     pub async fn check_status(&self) -> AntigravitySdkStatus {
-        let mut guard = self.worker.lock().await;
-        let wp = match self.ensure_worker(&mut guard).await {
+        let handle = match self.get_or_spawn_worker().await {
             Ok(w) => w,
             Err(e) => {
                 return AntigravitySdkStatus {
@@ -294,90 +461,110 @@ impl AntigravityRunner {
         };
 
         let req_id = format!("st-{}", uuid::Uuid::new_v4());
-        let cmd_line = json!({
-            "id": req_id,
-            "cmd": "status"
-        })
-        .to_string()
-            + "\n";
+        let mut rx = match self
+            .send_request(
+                &handle,
+                &req_id,
+                json!({
+                    "id": req_id,
+                    "cmd": "status"
+                }),
+            )
+            .await
+        {
+            Ok(rx) => rx,
+            Err(e) => {
+                return AntigravitySdkStatus {
+                    sdk_installed: false,
+                    version: None,
+                    mode: "error".to_string(),
+                    active_sessions: Vec::new(),
+                    error: Some(e.to_string()),
+                };
+            }
+        };
 
-        if let Err(e) = wp.stdin.write_all(cmd_line.as_bytes()).await {
-            *guard = None;
-            return AntigravitySdkStatus {
-                sdk_installed: false,
-                version: None,
-                mode: "error".to_string(),
-                active_sessions: Vec::new(),
-                error: Some(e.to_string()),
-            };
-        }
-        let _ = wp.stdin.flush().await;
-
-        let read_res = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            wp.stdout_lines.next_line(),
-        )
-        .await;
+        let read_res = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await;
+        handle.pending.lock().await.remove(&req_id);
 
         match read_res {
-            Ok(Ok(Some(line))) => {
-                if let Ok(val) = serde_json::from_str::<Value>(&line) {
-                    let sdk_installed = val
-                        .get("sdk_installed")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let version = val
-                        .get("version")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let mode = val
-                        .get("mode")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    let active_sessions = val
-                        .get("active_sessions")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    AntigravitySdkStatus {
-                        sdk_installed,
-                        version,
-                        mode,
-                        active_sessions,
-                        error: None,
-                    }
-                } else {
-                    AntigravitySdkStatus {
-                        sdk_installed: false,
-                        version: None,
-                        mode: "parse_error".to_string(),
-                        active_sessions: Vec::new(),
-                        error: Some("Respuesta inválida del worker".to_string()),
-                    }
+            Ok(Some(val)) => {
+                let sdk_installed = val
+                    .get("sdk_installed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let version = val
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let mode = val
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let active_sessions = val
+                    .get("active_sessions")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                AntigravitySdkStatus {
+                    sdk_installed,
+                    version,
+                    mode,
+                    active_sessions,
+                    error: None,
                 }
             }
             _ => {
-                *guard = None;
+                let err_tail = Self::stderr_summary(&handle).await;
+                self.invalidate_worker(&handle).await;
+                let msg = if err_tail.is_empty() {
+                    "Timeout consultando agy_worker.py".to_string()
+                } else {
+                    format!("Timeout consultando agy_worker.py (stderr: {})", err_tail)
+                };
                 AntigravitySdkStatus {
                     sdk_installed: false,
                     version: None,
                     mode: "timeout".to_string(),
                     active_sessions: Vec::new(),
-                    error: Some("Timeout consultando agy_worker.py".to_string()),
+                    error: Some(msg),
                 }
             }
         }
     }
 
     /// Envía un turno de conversación (`chat`) a la sesión `session_id` de Antigravity SDK
-    /// y reporta pensamientos (`thought`) y ejecuciones de herramientas (`tool_call`) en tiempo real.
+    /// usando `self.workspace_root` y multiplexado por `id`.
     pub async fn dispatch_turn<F>(
         &self,
+        session_id: &str,
+        system_instructions: &str,
+        prompt: &str,
+        on_activity: F,
+    ) -> anyhow::Result<String>
+    where
+        F: FnMut(String),
+    {
+        self.dispatch_turn_in_workspace(
+            &self.workspace_root,
+            session_id,
+            system_instructions,
+            prompt,
+            on_activity,
+        )
+        .await
+    }
+
+    /// Envía un turno de conversación (`chat`) asociado a `workspace` sin retener un lock global
+    /// durante el streaming, permitiendo sesiones concurrentes en múltiples workspaces (CORE-403).
+    pub async fn dispatch_turn_in_workspace<F>(
+        &self,
+        workspace: &Path,
         session_id: &str,
         system_instructions: &str,
         prompt: &str,
@@ -386,43 +573,41 @@ impl AntigravityRunner {
     where
         F: FnMut(String),
     {
-        let mut guard = self.worker.lock().await;
-        let wp = self.ensure_worker(&mut guard).await?;
-
+        let handle = self.get_or_spawn_worker().await?;
         let req_id = format!("chat-{}", uuid::Uuid::new_v4());
         let payload = json!({
             "id": req_id,
             "cmd": "chat",
             "session_id": session_id,
-            "workspace": self.workspace_root.to_string_lossy(),
+            "workspace": workspace.to_string_lossy(),
             "system_instructions": system_instructions,
             "prompt": prompt,
             "allow_write": true,
         });
 
-        let line = payload.to_string() + "\n";
-        if let Err(e) = wp.stdin.write_all(line.as_bytes()).await {
-            *guard = None;
-            anyhow::bail!("Fallo al escribir a agy_worker: {}", e);
-        }
-        wp.stdin.flush().await?;
-
+        let mut rx = self.send_request(&handle, &req_id, payload).await?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
         let mut accumulated_tokens = String::new();
 
-        while let Ok(Some(raw_line)) = tokio::time::timeout(
-            std::time::Duration::from_secs(300),
-            wp.stdout_lines.next_line(),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Timeout esperando respuesta de Antigravity SDK"))?
-        {
-            let Ok(ev) = serde_json::from_str::<Value>(&raw_line) else {
-                continue;
+        loop {
+            let next_ev = tokio::time::timeout_at(deadline, rx.recv()).await;
+            let ev = match next_ev {
+                Ok(Some(ev)) => ev,
+                Ok(None) => {
+                    handle.pending.lock().await.remove(&req_id);
+                    let tail = Self::stderr_summary(&handle).await;
+                    self.invalidate_worker(&handle).await;
+                    if tail.is_empty() {
+                        anyhow::bail!("El proceso agy_worker se cerró inesperadamente.");
+                    } else {
+                        anyhow::bail!("El proceso agy_worker se cerró inesperadamente: {}", tail);
+                    }
+                }
+                Err(_) => {
+                    handle.pending.lock().await.remove(&req_id);
+                    anyhow::bail!("Timeout esperando respuesta de Antigravity SDK");
+                }
             };
-            let ev_id = ev.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            if ev_id != req_id {
-                continue;
-            }
 
             let ev_type = ev.get("event").and_then(|v| v.as_str()).unwrap_or("");
             match ev_type {
@@ -442,6 +627,7 @@ impl AntigravityRunner {
                     }
                 }
                 "completed" => {
+                    handle.pending.lock().await.remove(&req_id);
                     let full = ev
                         .get("full_text")
                         .and_then(|v| v.as_str())
@@ -450,6 +636,7 @@ impl AntigravityRunner {
                     return Ok(full);
                 }
                 "error" => {
+                    handle.pending.lock().await.remove(&req_id);
                     let code = ev.get("code").and_then(|v| v.as_str()).unwrap_or("ERROR");
                     let msg = ev
                         .get("message")
@@ -461,9 +648,6 @@ impl AntigravityRunner {
                 _ => {}
             }
         }
-
-        *guard = None;
-        anyhow::bail!("El proceso agy_worker se cerró inesperadamente.")
     }
 }
 
@@ -509,6 +693,48 @@ mod tests {
             .await?;
 
         assert!(reply2.contains("turno #2"));
+        runner.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_antigravity_runner_concurrent_multi_workspace_and_shutdown() -> anyhow::Result<()>
+    {
+        std::env::set_var("AEGIS_AGY_MOCK", "1");
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .unwrap_or(&manifest_dir);
+
+        let tmp = tempfile::tempdir()?;
+        let ws_a = tmp.path().join("workspace-alpha");
+        let ws_b = tmp.path().join("workspace-beta");
+        std::fs::create_dir_all(&ws_a)?;
+        std::fs::create_dir_all(&ws_b)?;
+
+        let runner = AntigravityRunner::new(repo_root);
+        let (res_a, res_b) = tokio::join!(
+            runner.dispatch_turn_in_workspace(&ws_a, "sess-alpha", "Inst", "Hola alpha", |_| {}),
+            runner.dispatch_turn_in_workspace(&ws_b, "sess-beta", "Inst", "Hola beta", |_| {}),
+        );
+
+        let reply_a = res_a?;
+        let reply_b = res_b?;
+        assert!(
+            reply_a.contains("workspace-alpha"),
+            "Expected workspace-alpha tag in reply_a: {}",
+            reply_a
+        );
+        assert!(
+            reply_b.contains("workspace-beta"),
+            "Expected workspace-beta tag in reply_b: {}",
+            reply_b
+        );
+
+        runner.shutdown().await;
+        assert!(runner.worker.lock().await.is_none());
         Ok(())
     }
 

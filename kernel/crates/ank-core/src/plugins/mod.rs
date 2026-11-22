@@ -159,6 +159,13 @@ impl PluginManager {
     /// modo inseguro si el operador lo activa a propósito con
     /// `AEGIS_ALLOW_INSECURE_PLUGINS=1` (útil para dev/CI).
     pub fn new() -> Result<Self, PluginError> {
+        let env_key = std::env::var("AEGIS_PLUGIN_ROOT_KEY").ok();
+        Self::new_with_root_key(env_key.as_deref())
+    }
+
+    /// CORE-403: Inicializa el gestor recibiendo explícitamente la clave raíz hexadecimal
+    /// para evitar mutar variables de entorno en tiempo de ejecución multihilo.
+    pub fn new_with_root_key(root_key_hex: Option<&str>) -> Result<Self, PluginError> {
         let allow_insecure = std::env::var("AEGIS_ALLOW_INSECURE_PLUGINS")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -169,9 +176,9 @@ impl PluginManager {
         // sandbox bypass.
         let permissive_default = cfg!(debug_assertions);
 
-        let signer = match std::env::var("AEGIS_PLUGIN_ROOT_KEY") {
-            Ok(hex_str) => {
-                let bytes = hex::decode(hex_str.trim()).map_err(|e| {
+        let signer = match root_key_hex.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(hex_str) => {
+                let bytes = hex::decode(hex_str).map_err(|e| {
                     PluginError::IOError(format!("AEGIS_PLUGIN_ROOT_KEY is not valid hex: {}", e))
                 })?;
                 if bytes.len() < 32 {
@@ -189,7 +196,7 @@ impl PluginManager {
                 }
                 .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?
             }
-            Err(_) if allow_insecure || permissive_default => {
+            None if allow_insecure || permissive_default => {
                 tracing::warn!(
                     "AEGIS_PLUGIN_ROOT_KEY not set — using permissive dev/test signer. \
                      Plugin signatures are NOT verified unless .wasm.sig is present. \
@@ -198,7 +205,7 @@ impl PluginManager {
                 PluginSigner::new_permissive(&[0u8; 32])
                     .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?
             }
-            Err(_) => {
+            None => {
                 return Err(PluginError::IOError(
                     "AEGIS_PLUGIN_ROOT_KEY is required in release builds. Set the \
                      env var to a hex-encoded ed25519 public key (≥32 bytes), or \
