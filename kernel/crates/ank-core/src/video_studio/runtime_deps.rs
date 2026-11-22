@@ -3,6 +3,7 @@ use super::types::{
     ProviderReadiness, RuntimeDependencyStatus, VideoCapabilityAdvisor, VideoProgressEvent,
 };
 use futures_util::StreamExt;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -12,21 +13,150 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
 
 const MAX_FFMPEG_ARCHIVE_BYTES: u64 = 320 * 1024 * 1024;
+/// Versiones explícitamente pineadas para evitar drift de cadena de suministro en `pip install`.
+const EDGE_TTS_PIP_SPEC: &str = "edge-tts==7.3.1";
+const PILLOW_PIP_SPEC: &str = "pillow==12.2.0";
 
 #[cfg(target_os = "windows")]
 const FFMPEG_STATIC_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+#[cfg(target_os = "windows")]
+const FFMPEG_SHA256_URL: &str =
+    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256";
+#[cfg(target_os = "windows")]
+const FFMPEG_CHECKSUM_FILENAME: &str = "ffmpeg-release-essentials.zip";
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const FFMPEG_STATIC_URL: &str =
-    "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz";
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const FFMPEG_SHA256_URL: &str =
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256";
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const FFMPEG_CHECKSUM_FILENAME: &str = "ffmpeg-master-latest-linux64-gpl.tar.xz";
+
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const FFMPEG_STATIC_URL: &str =
-    "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz";
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz";
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const FFMPEG_SHA256_URL: &str =
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256";
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const FFMPEG_CHECKSUM_FILENAME: &str = "ffmpeg-master-latest-linuxarm64-gpl.tar.xz";
+
 #[cfg(not(any(
     target_os = "windows",
     all(target_os = "linux", target_arch = "x86_64"),
     all(target_os = "linux", target_arch = "aarch64")
 )))]
 const FFMPEG_STATIC_URL: &str = "";
+#[cfg(not(any(
+    target_os = "windows",
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "aarch64")
+)))]
+const FFMPEG_SHA256_URL: &str = "";
+#[cfg(not(any(
+    target_os = "windows",
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "aarch64")
+)))]
+const FFMPEG_CHECKSUM_FILENAME: &str = "";
+
+fn is_valid_sha256_hex(candidate: &str) -> bool {
+    candidate.len() == 64 && candidate.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Parsea un archivo de checksum SHA-256 (hash directo de 64 hex chars o salida estilo `sha256sum`)
+/// y devuelve el digest hexadecimal normalizado en minúsculas.
+pub(crate) fn parse_sha256_checksum(
+    raw: &str,
+    expected_filename: Option<&str>,
+) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Archivo de checksum SHA-256 vacío".to_string());
+    }
+
+    if is_valid_sha256_hex(trimmed) {
+        return Ok(trimmed.to_ascii_lowercase());
+    }
+
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(hash) = parts.next() else {
+            continue;
+        };
+        if !is_valid_sha256_hex(hash) {
+            continue;
+        }
+        if let Some(target_name) = expected_filename.filter(|n| !n.is_empty()) {
+            let Some(rest_name) = parts.next() else {
+                continue;
+            };
+            let cleaned_name = rest_name.trim_start_matches('*');
+            let base = cleaned_name
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(cleaned_name);
+            if base == target_name {
+                return Ok(hash.to_ascii_lowercase());
+            }
+        } else {
+            return Ok(hash.to_ascii_lowercase());
+        }
+    }
+
+    Err(match expected_filename.filter(|n| !n.is_empty()) {
+        Some(name) => format!(
+            "No se encontró un SHA-256 válido para '{}' en el manifiesto",
+            name
+        ),
+        None => "No se encontró un digest SHA-256 hexadecimal válido".to_string(),
+    })
+}
+
+/// Calcula el SHA-256 en streaming de `path` y verifica que coincida con `expected_hex`.
+pub(crate) fn verify_file_sha256(path: &Path, expected_hex: &str) -> Result<String, String> {
+    use std::io::Read;
+
+    let normalized_expected = parse_sha256_checksum(expected_hex, None)?;
+    let mut file = std::fs::File::open(path).map_err(|e| {
+        format!(
+            "Error abriendo '{}' para verificar SHA-256: {}",
+            path.display(),
+            e
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65_536];
+    loop {
+        let read = file.read(&mut buf).map_err(|e| {
+            format!(
+                "Error leyendo '{}' para verificar SHA-256: {}",
+                path.display(),
+                e
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+    }
+    let actual = hex::encode(hasher.finalize());
+    if actual != normalized_expected {
+        return Err(format!(
+            "Fallo de integridad SHA-256 en '{}': esperado {}, obtenido {}",
+            path.display(),
+            normalized_expected,
+            actual
+        ));
+    }
+    Ok(actual)
+}
 
 static INSTALL_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
 static ACTIVE_INSTALL_STATUS: OnceLock<Arc<tokio::sync::RwLock<Option<VideoProgressEvent>>>> =
@@ -1089,8 +1219,8 @@ pub async fn ensure_runtime_installed(
                 "install",
                 "--disable-pip-version-check",
                 "--no-input",
-                "edge-tts",
-                "pillow",
+                EDGE_TTS_PIP_SPEC,
+                PILLOW_PIP_SPEC,
             ])
             .output()
             .await
@@ -1202,6 +1332,76 @@ pub async fn ensure_runtime_installed(
 
         emit_install_progress(
             &progress_cb,
+            0.85,
+            "Verificando integridad SHA-256 de FFmpeg...",
+            false,
+            None,
+        )
+        .await;
+
+        let expected_sha256_res: Result<String, String> = match std::env::var("AEGIS_FFMPEG_SHA256")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
+            Some(override_hash) => parse_sha256_checksum(&override_hash, None),
+            None => {
+                if FFMPEG_SHA256_URL.is_empty() {
+                    Err("No hay URL de checksum SHA-256 configurada para FFmpeg".to_string())
+                } else {
+                    match client.get(FFMPEG_SHA256_URL).send().await {
+                        Ok(sum_resp) if sum_resp.status().is_success() => {
+                            match sum_resp.text().await {
+                                Ok(sum_text) => {
+                                    let expected_name = if FFMPEG_CHECKSUM_FILENAME.is_empty() {
+                                        None
+                                    } else {
+                                        Some(FFMPEG_CHECKSUM_FILENAME)
+                                    };
+                                    parse_sha256_checksum(&sum_text, expected_name)
+                                }
+                                Err(e) => {
+                                    Err(format!("Error leyendo checksum SHA-256 de FFmpeg: {}", e))
+                                }
+                            }
+                        }
+                        Ok(sum_resp) => Err(format!(
+                            "Error HTTP obteniendo checksum SHA-256 de FFmpeg ({})",
+                            sum_resp.status()
+                        )),
+                        Err(e) => Err(format!(
+                            "Error obteniendo checksum SHA-256 de FFmpeg: {}",
+                            e
+                        )),
+                    }
+                }
+            }
+        };
+
+        let expected_sha256 = match expected_sha256_res {
+            Ok(h) => h,
+            Err(err_msg) => {
+                let _ = tokio::fs::remove_file(&archive_path).await;
+                emit_install_progress(&progress_cb, 0.0, &err_msg, true, Some(err_msg.clone()))
+                    .await;
+                return Err(err_msg);
+            }
+        };
+
+        let verify_path = archive_path.clone();
+        let verify_res =
+            tokio::task::spawn_blocking(move || verify_file_sha256(&verify_path, &expected_sha256))
+                .await
+                .map_err(|e| format!("Error interno verificando SHA-256 de FFmpeg: {}", e))?;
+
+        if let Err(err_msg) = verify_res {
+            let _ = tokio::fs::remove_file(&archive_path).await;
+            emit_install_progress(&progress_cb, 0.0, &err_msg, true, Some(err_msg.clone())).await;
+            return Err(err_msg);
+        }
+
+        emit_install_progress(
+            &progress_cb,
             0.88,
             "Extrayendo binarios ffmpeg y ffprobe...",
             false,
@@ -1263,4 +1463,61 @@ pub async fn ensure_runtime_installed(
     }
 
     Ok(final_status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_sha256_checksum, verify_file_sha256, EDGE_TTS_PIP_SPEC, FFMPEG_CHECKSUM_FILENAME,
+        FFMPEG_SHA256_URL, FFMPEG_STATIC_URL, PILLOW_PIP_SPEC,
+    };
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn test_pinned_python_dependencies_and_checksum_config() {
+        assert!(EDGE_TTS_PIP_SPEC.contains("=="));
+        assert!(PILLOW_PIP_SPEC.contains("=="));
+        if !FFMPEG_STATIC_URL.is_empty() {
+            assert!(!FFMPEG_SHA256_URL.is_empty());
+            assert!(!FFMPEG_CHECKSUM_FILENAME.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_parse_sha256_checksum_formats() {
+        let bare = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n";
+        assert_eq!(
+            parse_sha256_checksum(bare, Some("ffmpeg-release-essentials.zip")),
+            Ok("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())
+        );
+
+        let manifest = "\
+1111111111111111111111111111111111111111111111111111111111111111  other-build.tar.xz
+2222222222222222222222222222222222222222222222222222222222222222  ./ffmpeg-master-latest-linux64-gpl.tar.xz
+";
+        assert_eq!(
+            parse_sha256_checksum(manifest, Some("ffmpeg-master-latest-linux64-gpl.tar.xz")),
+            Ok("2222222222222222222222222222222222222222222222222222222222222222".to_string())
+        );
+
+        assert!(parse_sha256_checksum(manifest, Some("missing.tar.xz")).is_err());
+        assert!(parse_sha256_checksum("not-a-valid-hash", None).is_err());
+    }
+
+    #[test]
+    fn test_verify_file_sha256_accepts_match_and_rejects_tampering() -> Result<(), String> {
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let file_path = dir.path().join("ffmpeg.bin");
+        let payload = b"aegis-ffmpeg-verified-binary";
+        std::fs::write(&file_path, payload).map_err(|e| e.to_string())?;
+
+        let expected = hex::encode(Sha256::digest(payload));
+        let verified = verify_file_sha256(&file_path, &expected.to_ascii_uppercase())?;
+        assert_eq!(verified, expected);
+
+        let wrong = "0".repeat(64);
+        assert!(verify_file_sha256(&file_path, &wrong).is_err());
+        assert!(verify_file_sha256(&file_path, "short").is_err());
+        Ok(())
+    }
 }

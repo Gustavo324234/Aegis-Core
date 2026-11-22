@@ -108,7 +108,7 @@ async fn set_config(
                 relay_url,
             };
             if let Ok(content) = serde_json::to_string_pretty(&cfg) {
-                let _ = std::fs::write(&config_path, content);
+                let _ = ank_core::enclave::write_secret_file(&config_path, content.as_bytes());
             }
         });
     }

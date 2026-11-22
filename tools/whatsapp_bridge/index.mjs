@@ -57,13 +57,26 @@ function sanitizeTenant(raw) {
 }
 
 function constantTimeBearerCheck(authHeader) {
-  if (!SECRET) return true;
+  if (!SECRET) return false;
   if (!authHeader || !authHeader.startsWith('Bearer ')) return false;
   const provided = authHeader.slice('Bearer '.length).trim();
   const a = Buffer.from(provided, 'utf8');
   const b = Buffer.from(SECRET, 'utf8');
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
+}
+
+async function ensurePrivateDir(dirPath) {
+  await fs.mkdir(dirPath, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') {
+    await fs.chmod(dirPath, 0o700).catch(() => {});
+  }
+}
+
+async function tightenSecretFilePerms(filePath) {
+  if (process.platform !== 'win32') {
+    await fs.chmod(filePath, 0o600).catch(() => {});
+  }
 }
 
 function normalizePhone(jidOrPhone) {
@@ -189,7 +202,10 @@ class TenantWhatsAppSession {
   async ensureLoaded() {
     if (this.storeLoaded) return;
     this.storeLoaded = true;
-    await fs.mkdir(this.authDir, { recursive: true });
+    await ensurePrivateDir(this.baseDir);
+    await ensurePrivateDir(this.authDir);
+    await tightenSecretFilePerms(this.storePath);
+    await tightenSecretFilePerms(path.join(this.authDir, 'creds.json'));
     try {
       const raw = await fs.readFile(this.storePath, 'utf8');
       const parsed = JSON.parse(raw);
@@ -224,7 +240,7 @@ class TenantWhatsAppSession {
   }
 
   async persistStore() {
-    await fs.mkdir(this.baseDir, { recursive: true });
+    await ensurePrivateDir(this.baseDir);
     const sortedChats = [...this.chats.values()]
       .sort((a, b) => (b.lastMessageTs || 0) - (a.lastMessageTs || 0))
       .slice(0, MAX_CHATS);
@@ -248,8 +264,9 @@ class TenantWhatsAppSession {
       messages: messagesObj,
     };
     const tmpPath = `${this.storePath}.tmp`;
-    await fs.writeFile(tmpPath, JSON.stringify(payload), 'utf8');
+    await fs.writeFile(tmpPath, JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 });
     await fs.rename(tmpPath, this.storePath);
+    await tightenSecretFilePerms(this.storePath);
   }
 
   async hasSavedCreds() {
@@ -447,7 +464,10 @@ class TenantWhatsAppSession {
           });
           this.sock = sock;
 
-          sock.ev.on('creds.update', saveCreds);
+          sock.ev.on('creds.update', async () => {
+            await saveCreds();
+            await tightenSecretFilePerms(path.join(this.authDir, 'creds.json'));
+          });
 
           sock.ev.on('contacts.upsert', (list) => {
             for (const c of list || []) this.upsertContact(c);
@@ -511,10 +531,6 @@ class TenantWhatsAppSession {
             this.scheduleSave();
           });
 
-          sock.ev.on('contacts.update', (updates) => {
-            for (const c of updates || []) this.upsertContact(c);
-            this.scheduleSave();
-          });
           sock.ev.on('messages.upsert', ({ messages }) => {
             for (const m of messages || []) this.recordMessage(m);
           });
@@ -586,7 +602,7 @@ class TenantWhatsAppSession {
                 this.lastError = 'Sesión cerrada desde WhatsApp en tu teléfono.';
                 this.sock = null;
                 await fs.rm(this.authDir, { recursive: true, force: true }).catch(() => {});
-                await fs.mkdir(this.authDir, { recursive: true }).catch(() => {});
+                await ensurePrivateDir(this.authDir).catch(() => {});
                 return;
               }
 
@@ -657,7 +673,7 @@ class TenantWhatsAppSession {
       this.userName = null;
       this.phone = null;
       await fs.rm(this.authDir, { recursive: true, force: true }).catch(() => {});
-      await fs.mkdir(this.authDir, { recursive: true }).catch(() => {});
+      await ensurePrivateDir(this.authDir).catch(() => {});
     }
 
     await this.persistStore().catch(() => {});
@@ -1112,7 +1128,7 @@ const server = http.createServer(async (req, res) => {
 
 async function autoWarmSavedTenants() {
   try {
-    await fs.mkdir(BASE_DATA_DIR, { recursive: true });
+    await ensurePrivateDir(BASE_DATA_DIR);
     const entries = await fs.readdir(BASE_DATA_DIR, { withFileTypes: true });
     for (const ent of entries) {
       if (!ent.isDirectory()) continue;
@@ -1128,6 +1144,11 @@ async function autoWarmSavedTenants() {
 }
 
 server.listen(PORT, HOST, () => {
+  if (!SECRET) {
+    console.error(
+      '[SECURITY] WA_BRIDGE_SECRET is not configured; all authenticated WhatsApp bridge endpoints will fail closed with 401.'
+    );
+  }
   console.log(`Aegis WhatsApp Bridge listening on http://${HOST}:${PORT}`);
   loadWhatsAppDeps().catch(() => {});
   autoWarmSavedTenants();

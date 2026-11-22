@@ -7,6 +7,38 @@ use tracing::info;
 pub mod master;
 pub use master::MasterEnclave;
 
+/// CORE-401: Escribe secretos o llaves privadas en disco con permisos restrictivos
+/// (`0600` en Unix) para evitar lectura por otros usuarios locales.
+pub fn write_secret_file(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content)
+    }
+}
+
 /// --- TENANT DB (SECURE ENCLAVE) ---
 /// Gestiona una base de datos SQLite encriptada con SQLCipher por cada tenant.
 pub struct TenantDB {
@@ -2437,6 +2469,26 @@ mod tests {
 
         let dir = format!("./users/{}", tenant_id);
         let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_secret_file_writes_content_and_unix_mode() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let secret_path = dir.path().join("nested").join("secret.key");
+        let payload = b"super-secret-material";
+
+        write_secret_file(&secret_path, payload)?;
+        let read_back = std::fs::read(&secret_path)?;
+        assert_eq!(read_back, payload);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&secret_path)?.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
         Ok(())
     }
 }

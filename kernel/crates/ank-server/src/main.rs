@@ -135,7 +135,7 @@ pub(crate) async fn run_server() -> Result<()> {
             let priv_hex = hex::encode(signing_key.to_bytes());
             let pub_hex = hex::encode(verifying_key.to_bytes());
 
-            if std::fs::write(&priv_key_path, &priv_hex).is_ok()
+            if ank_core::enclave::write_secret_file(&priv_key_path, priv_hex.as_bytes()).is_ok()
                 && std::fs::write(&pub_key_path, &pub_hex).is_ok()
             {
                 // Encontrar cuál env file cargamos

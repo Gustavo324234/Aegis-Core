@@ -20,7 +20,7 @@ Consolidar y promover al código general todas las capacidades validadas en el e
 5. **`CORE-398`** (`fix`, ✅ Done): Hardening HTTP/WS — CORS, `is_direct_local_cli_probe`, `quick_personal_setup` y Auth Pre-Upgrade en WebSockets.
 6. **`CORE-399`** (`fix`, ✅ Done): Integridad `TenantDB` y Symlink Jail (`safe_resolve` en `ReadFile`, `ScribeManager` y `fs.rs`).
 7. **`CORE-400`** (`fix`, ✅ Done): Aislamiento Multi-Tenant y SSRF (`agents.rs`, `chal/mod.rs`, `antigravity_bridge`, `vcm/mod.rs`, `video_api`, `engine.rs`, `admin.rs`).
-8. **`CORE-401`** (`fix`, 📥 Todo): Supply Chain y Secretos (`runtime_deps.rs`, `whatsapp_bridge`, permisos `0600`, `deny.toml`).
+8. **`CORE-401`** (`fix`, ✅ Done): Supply Chain y Secretos (`runtime_deps.rs`, `whatsapp_bridge`, permisos `0600`, `deny.toml`).
 
 ### Bloque 3 — Rendimiento, Concurrencia y Frontend
 9. **`CORE-402`** (`perf`, 📥 Todo): Tokens de Sesión Citadel, Argon2id en `spawn_blocking` y Pool LRU de `TenantDB` (ADR-034).

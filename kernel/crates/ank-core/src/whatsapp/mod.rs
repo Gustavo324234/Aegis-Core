@@ -584,7 +584,7 @@ impl WhatsAppManager {
             uuid::Uuid::new_v4().simple(),
             uuid::Uuid::new_v4().simple()
         );
-        let _ = std::fs::write(&secret_file, &fresh);
+        let _ = crate::enclave::write_secret_file(&secret_file, fresh.as_bytes());
         fresh
     }
 

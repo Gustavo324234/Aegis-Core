@@ -1,53 +1,58 @@
 [advisories]
 ignore = [
+    # --- Unmaintained transitive crates (no semver-safe upstream upgrade) ---
+    # fxhash: pulled transitively by fxprof-processed-profile -> wasmtime 36.
     "RUSTSEC-2025-0057",
-    # paste is unmaintained (pulled by boa_engine). No safe upgrade available.
+    # paste: pulled by boa_engine 0.20 (JS sandbox).
     "RUSTSEC-2024-0436",
-    # proc-macro-error is unmaintained (pulled by utoipa). No safe upgrade available.
+    # proc-macro-error: compile-time macro pulled by utoipa 4.
     "RUSTSEC-2024-0370",
-    # CORE-304/webrtc: ring 0.16.20 unmaintained. No safe upgrade available.
-    "RUSTSEC-2025-0010",
-    # ring 0.16.20: overflow panic vulnerability.
-    "RUSTSEC-2025-0009",
-    # webrtc: rustls-webpki vulnerability ignored name constraints.
-    "RUSTSEC-2026-0098",
-    # webrtc: rustls-webpki vulnerability wildcard constraints.
-    "RUSTSEC-2026-0099",
-    # webrtc: rustls-webpki vulnerability CRL parsing panic.
-    "RUSTSEC-2026-0104",
-    # opus: audiopus_sys unmaintained. No safe upgrade available.
-    "RUSTSEC-2026-0150",
-    # webrtc-dtls: bincode unmaintained. No safe upgrade available.
-    "RUSTSEC-2025-0141",
+    # unsafe-libyaml: pulled by serde_yaml 0.9 across ank-core/ank-mcp.
     "RUSTSEC-2024-0449",
-    "RUSTSEC-2026-0258",
-    "RUSTSEC-2026-0269",
+    # chrono: no non-breaking replacement without workspace + arrow 58 migration.
+    "RUSTSEC-2026-0543",
+
+    # --- Database (SQLCipher ABI pinned to rusqlite 0.33.0) ---
+    # libsqlite3-sys < 0.39.0: requires breaking rusqlite major upgrade with SQLCipher revalidation.
+    "RUSTSEC-2026-0459",
+
+    # --- WebRTC / Siren stack (webrtc 0.10.1 & opus 0.3.0 require breaking upgrade) ---
+    # ring 0.16.20: unmaintained + AES overflow panic under overflow-checks.
+    "RUSTSEC-2025-0010",
+    "RUSTSEC-2025-0009",
+    # rustls-webpki (legacy 0.101 via webrtc): URI/wildcard constraints, CRL panic & distrusted intermediates.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0382",
+    # rustls 0.21.12 (pulled by webrtc 0.10.1 / webrtc-dtls 0.9.0).
     "RUSTSEC-2026-0285",
-    "RUSTSEC-2026-0314",
-    "RUSTSEC-2026-0316",
-    "RUSTSEC-2026-0321",
-    "RUSTSEC-2026-0322",
-    "RUSTSEC-2026-0323",
     "RUSTSEC-2026-0346",
     "RUSTSEC-2026-0348",
     "RUSTSEC-2026-0349",
-    "RUSTSEC-2026-0352",
-    "RUSTSEC-2026-0363",
+    # webpki-roots (legacy roots pinned by webrtc rustls 0.21 stack).
+    "RUSTSEC-2026-0381",
+    # bincode: unmaintained (pulled by webrtc-dtls 0.9.0).
+    "RUSTSEC-2025-0141",
+    # crypto-bigint 0.5.5: timing variability (pulled by elliptic-curve -> webrtc-dtls 0.9.0).
+    "RUSTSEC-2026-0387",
+    # pin-utils: unmaintained (pulled by nix 0.26.4 -> webrtc-util 0.8.1).
+    "RUSTSEC-2026-0441",
+    # audiopus_sys: unmaintained (pulled by opus 0.3.0).
+    "RUSTSEC-2026-0150",
+
+    # --- Dev/Test-only transitive dependency ---
+    # h2 0.3.27: pulled solely by dev-dependency warp 0.3.7 in ank-mcp tests (runtime h2 is >= 0.4.20).
+    "RUSTSEC-2026-0258",
+
+    # --- Build-time-only transitive dependency ---
+    # zip 1.1.4: build-script only of utoipa-swagger-ui 7.1.0 (unpacks bundled Swagger UI static assets at build time).
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
-    "RUSTSEC-2026-0379",
-    "RUSTSEC-2026-0380",
-    "RUSTSEC-2026-0381",
-    "RUSTSEC-2026-0382",
-    "RUSTSEC-2026-0386",
-    "RUSTSEC-2026-0387",
-    "RUSTSEC-2026-0391",
-    "RUSTSEC-2026-0398",
-    "RUSTSEC-2026-0403",
-    "RUSTSEC-2026-0410",
-    # libz-sys build script leaks environment variables in build directory
-    "RUSTSEC-2026-0418",
+    "RUSTSEC-2026-0429",
+    "RUSTSEC-2026-0545",
+    "RUSTSEC-2026-0548",
 ]
 
 [bans]
