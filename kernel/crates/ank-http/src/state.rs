@@ -39,4 +39,6 @@ pub struct AppState {
     pub pending_oauth_flows: crate::routes::oauth_api::PendingOAuthStore,
     /// Gestor de WhatsApp Web (Baileys sidecar + rate limiter + confirmación).
     pub whatsapp: Arc<ank_core::whatsapp::WhatsAppManager>,
+    /// CORE-402: Store de tokens efímeros de sesión Citadel con TTL y revocación.
+    pub session_store: crate::citadel::CitadelSessionStore,
 }

@@ -168,10 +168,16 @@ async fn save_video_config(
         }
     }
 
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
-    let cfg =
-        update_module_config(&db, &body, auth.is_master).map_err(AegisHttpError::BadRequest)?;
+    let tid = auth.tenant_id.clone();
+    let skey = auth.session_key_hash.clone();
+    let is_master = auth.is_master;
+    let cfg = tokio::task::spawn_blocking(move || -> Result<_, AegisHttpError> {
+        let db = TenantDB::open(&tid, &skey)
+            .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
+        update_module_config(&db, &body, is_master).map_err(AegisHttpError::BadRequest)
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Video config task failed: {}", e)))??;
     emit_modules_updated(&state, &auth.tenant_id, "video_configure_engines");
 
     Ok(Json(json!({
@@ -184,10 +190,14 @@ async fn list_projects(
     State(_state): State<AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+    let (state_data, creator_scripts) =
+        TenantDB::with_async(auth.tenant_id, auth.session_key_hash, |db| {
+            let state_data = load_state(db).map_err(|e| anyhow::anyhow!(e))?;
+            let creator_scripts = list_creator_scripts(db);
+            Ok((state_data, creator_scripts))
+        })
+        .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
-    let state_data = load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-    let creator_scripts = list_creator_scripts(&db);
 
     Ok(Json(json!({
         "ok": true,
@@ -244,30 +254,55 @@ async fn create_project(
         }
     }
 
-    let mut project = {
-        let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+    let tid_build = auth.tenant_id.clone();
+    let skey_build = auth.session_key_hash.clone();
+    let CreateProjectBody {
+        title,
+        prompt,
+        creator_script_id,
+        platform,
+        aspect_ratio,
+        preset,
+        voice_engine,
+        voice_id,
+        visual_engine,
+        hook_video_engine,
+        subtitle_engine,
+        subtitle_style,
+        bgm_style,
+        use_ai_storyboard,
+        auto_render,
+        scenes,
+    } = body;
+
+    let mut project = tokio::task::spawn_blocking(move || -> Result<_, AegisHttpError> {
+        let db = TenantDB::open(&tid_build, &skey_build)
             .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
         build_new_project(
             &db,
-            body.title,
-            body.prompt,
-            body.creator_script_id,
-            body.platform,
-            body.aspect_ratio,
-            body.preset,
-            body.voice_engine,
-            body.voice_id,
-            body.visual_engine,
-            body.hook_video_engine,
-            body.subtitle_engine,
-            body.subtitle_style,
-            body.bgm_style,
-            body.scenes,
+            title,
+            prompt,
+            creator_script_id,
+            platform,
+            aspect_ratio,
+            preset,
+            voice_engine,
+            voice_id,
+            visual_engine,
+            hook_video_engine,
+            subtitle_engine,
+            subtitle_style,
+            bgm_style,
+            scenes,
         )
-        .map_err(AegisHttpError::BadRequest)?
-    };
+        .map_err(AegisHttpError::BadRequest)
+    })
+    .await
+    .map_err(|e| {
+        AegisHttpError::Internal(anyhow::anyhow!("Create project task failed: {}", e))
+    })??;
 
-    if body.use_ai_storyboard {
+    if use_ai_storyboard {
         let source = if project.prompt.trim().is_empty() {
             project.title.clone()
         } else {
@@ -283,14 +318,21 @@ async fn create_project(
         .await;
     }
 
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
-    let mut vstate = load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-    vstate.projects.insert(0, project.clone());
-    save_state(&db, &vstate).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+    let proj_to_save = project.clone();
+    TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        move |db| {
+            let mut vstate = load_state(db).map_err(|e| anyhow::anyhow!(e))?;
+            vstate.projects.insert(0, proj_to_save);
+            save_state(db, &vstate).map_err(|e| anyhow::anyhow!(e))
+        },
+    )
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
     emit_modules_updated(&state, &auth.tenant_id, "video_create_project");
 
-    if body.auto_render {
+    if auto_render {
         let safe_pid = project.id.clone();
         let tid = auth.tenant_id.clone();
         let skey = auth.session_key_hash.clone();
@@ -302,7 +344,7 @@ async fn create_project(
     }
 
     Ok(Json(
-        json!({ "ok": true, "project": project, "auto_render_started": body.auto_render }),
+        json!({ "ok": true, "project": project, "auto_render_started": auto_render }),
     ))
 }
 
@@ -312,11 +354,14 @@ async fn delete_project(
     Path(project_id): Path<String>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let safe_pid = validate_safe_segment(&project_id).map_err(AegisHttpError::BadRequest)?;
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
-    let mut vstate = load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-    vstate.projects.retain(|p| p.id != safe_pid);
-    save_state(&db, &vstate).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+    let pid_for_db = safe_pid.clone();
+    TenantDB::with_async(auth.tenant_id.clone(), auth.session_key_hash, move |db| {
+        let mut vstate = load_state(db).map_err(|e| anyhow::anyhow!(e))?;
+        vstate.projects.retain(|p| p.id != pid_for_db);
+        save_state(db, &vstate).map_err(|e| anyhow::anyhow!(e))
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
 
     if let Ok(dir) = project_media_dir(&state.config.data_dir, &auth.tenant_id, &safe_pid) {
         if dir.exists() {
@@ -366,34 +411,44 @@ async fn regenerate_storyboard(
     body: Option<Json<StoryboardBody>>,
 ) -> Result<Json<Value>, AegisHttpError> {
     let safe_pid = validate_safe_segment(&project_id).map_err(AegisHttpError::BadRequest)?;
-    let (title, source_text, aspect_ratio) = {
-        let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-            .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
-        let vstate = load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-        let proj = vstate
-            .projects
-            .iter()
-            .find(|p| p.id == safe_pid)
-            .ok_or_else(|| {
-                AegisHttpError::BadRequest(format!("Proyecto '{}' no encontrado", safe_pid))
-            })?;
-        let prompt_override = body
-            .and_then(|b| b.prompt.clone())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let src = prompt_override.unwrap_or_else(|| {
-            if !proj.prompt.trim().is_empty() {
-                proj.prompt.clone()
-            } else {
-                proj.scenes
-                    .iter()
-                    .map(|s| s.narration_text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            }
-        });
-        (proj.title.clone(), src, proj.aspect_ratio.clone())
-    };
+    let prompt_override = body
+        .and_then(|b| b.prompt.clone())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let tid_read = auth.tenant_id.clone();
+    let skey_read = auth.session_key_hash.clone();
+    let pid_read = safe_pid.clone();
+    let (title, source_text, aspect_ratio) =
+        tokio::task::spawn_blocking(move || -> Result<_, AegisHttpError> {
+            let db = TenantDB::open(&tid_read, &skey_read)
+                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
+            let vstate =
+                load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+            let proj = vstate
+                .projects
+                .iter()
+                .find(|p| p.id == pid_read)
+                .ok_or_else(|| {
+                    AegisHttpError::BadRequest(format!("Proyecto '{}' no encontrado", pid_read))
+                })?;
+            let src = prompt_override.unwrap_or_else(|| {
+                if !proj.prompt.trim().is_empty() {
+                    proj.prompt.clone()
+                } else {
+                    proj.scenes
+                        .iter()
+                        .map(|s| s.narration_text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }
+            });
+            Ok((proj.title.clone(), src, proj.aspect_ratio.clone()))
+        })
+        .await
+        .map_err(|e| {
+            AegisHttpError::Internal(anyhow::anyhow!("Storyboard read task failed: {}", e))
+        })??;
 
     let scenes = generate_storyboard_with_llm(
         Some(&state.router),
@@ -404,22 +459,34 @@ async fn regenerate_storyboard(
     )
     .await;
 
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
-    let mut vstate = load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-    let pos = vstate
-        .projects
-        .iter()
-        .position(|p| p.id == safe_pid)
-        .ok_or_else(|| AegisHttpError::BadRequest("Proyecto no encontrado".into()))?;
-    vstate.projects[pos].scenes = scenes;
-    if !source_text.trim().is_empty() {
-        vstate.projects[pos].prompt = source_text;
-    }
-    vstate.projects[pos].status = "draft".to_string();
-    vstate.projects[pos].updated_at = now_iso();
-    let updated: VideoProject = vstate.projects[pos].clone();
-    save_state(&db, &vstate).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+    let tid_write = auth.tenant_id.clone();
+    let skey_write = auth.session_key_hash.clone();
+    let pid_write = safe_pid.clone();
+    let updated: VideoProject =
+        tokio::task::spawn_blocking(move || -> Result<VideoProject, AegisHttpError> {
+            let db = TenantDB::open(&tid_write, &skey_write)
+                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
+            let mut vstate =
+                load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+            let pos = vstate
+                .projects
+                .iter()
+                .position(|p| p.id == pid_write)
+                .ok_or_else(|| AegisHttpError::BadRequest("Proyecto no encontrado".into()))?;
+            vstate.projects[pos].scenes = scenes;
+            if !source_text.trim().is_empty() {
+                vstate.projects[pos].prompt = source_text;
+            }
+            vstate.projects[pos].status = "draft".to_string();
+            vstate.projects[pos].updated_at = now_iso();
+            let updated: VideoProject = vstate.projects[pos].clone();
+            save_state(&db, &vstate).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+            Ok(updated)
+        })
+        .await
+        .map_err(|e| {
+            AegisHttpError::Internal(anyhow::anyhow!("Storyboard write task failed: {}", e))
+        })??;
     emit_modules_updated(&state, &auth.tenant_id, "video_storyboard");
 
     Ok(Json(json!({ "ok": true, "project": updated })))
@@ -512,34 +579,46 @@ async fn upload_scene_media(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::Error::from(e)))?;
 
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
-    let mut vstate = load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
-    let p_idx = vstate
-        .projects
-        .iter()
-        .position(|p| p.id == safe_pid)
-        .ok_or_else(|| AegisHttpError::BadRequest("Proyecto no encontrado".into()))?;
-    let s_idx = vstate.projects[p_idx]
-        .scenes
-        .iter()
-        .position(|s| s.id == safe_sid)
-        .ok_or_else(|| AegisHttpError::BadRequest("Escena no encontrada".into()))?;
+    let tid_up = auth.tenant_id.clone();
+    let skey_up = auth.session_key_hash.clone();
+    let pid_up = safe_pid.clone();
+    let sid_up = safe_sid.clone();
+    let fname_up = fname.clone();
+    let kind_up = kind.to_string();
+    let updated = tokio::task::spawn_blocking(move || -> Result<VideoProject, AegisHttpError> {
+        let db = TenantDB::open(&tid_up, &skey_up)
+            .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("TenantDB error: {}", e)))?;
+        let mut vstate =
+            load_state(&db).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+        let p_idx = vstate
+            .projects
+            .iter()
+            .position(|p| p.id == pid_up)
+            .ok_or_else(|| AegisHttpError::BadRequest("Proyecto no encontrado".into()))?;
+        let s_idx = vstate.projects[p_idx]
+            .scenes
+            .iter()
+            .position(|s| s.id == sid_up)
+            .ok_or_else(|| AegisHttpError::BadRequest("Escena no encontrada".into()))?;
 
-    let scene = &mut vstate.projects[p_idx].scenes[s_idx];
-    if kind == "audio" {
-        scene.audio_file = Some(fname.clone());
-        scene.voice_override = Some("custom_upload".to_string());
-    } else {
-        scene.visual_file = Some(fname.clone());
-        scene.visual_kind = Some(kind.to_string());
-        scene.visual_override = Some("custom_upload".to_string());
-        scene.status = "ready".to_string();
-        scene.error = None;
-    }
-    vstate.projects[p_idx].updated_at = now_iso();
-    let updated = vstate.projects[p_idx].clone();
-    save_state(&db, &vstate).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+        let scene = &mut vstate.projects[p_idx].scenes[s_idx];
+        if kind_up == "audio" {
+            scene.audio_file = Some(fname_up);
+            scene.voice_override = Some("custom_upload".to_string());
+        } else {
+            scene.visual_file = Some(fname_up);
+            scene.visual_kind = Some(kind_up);
+            scene.visual_override = Some("custom_upload".to_string());
+            scene.status = "ready".to_string();
+            scene.error = None;
+        }
+        vstate.projects[p_idx].updated_at = now_iso();
+        let updated = vstate.projects[p_idx].clone();
+        save_state(&db, &vstate).map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+        Ok(updated)
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Upload media task failed: {}", e)))??;
     emit_modules_updated(&state, &auth.tenant_id, "video_upload_media");
 
     Ok(Json(json!({

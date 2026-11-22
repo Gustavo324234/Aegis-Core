@@ -237,41 +237,11 @@ fn infer_tenant_provider(raw_provider: &str, api_url: &str) -> String {
 }
 
 async fn resolve_optional_caller(state: &AppState, headers: &HeaderMap) -> CallerScope {
-    let Some(tenant_id) = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
-        return CallerScope::Unauthenticated;
-    };
-    let Some(raw_key) = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-    else {
-        return CallerScope::Unauthenticated;
-    };
-
-    let hash = hash_passphrase(raw_key);
-    let citadel = state.citadel.lock().await;
-    if citadel
-        .enclave
-        .authenticate_master(tenant_id, &hash)
-        .await
-        .unwrap_or(false)
-    {
-        return CallerScope::Master;
+    match crate::citadel::authenticate_headers(state, headers).await {
+        Ok(auth) if auth.is_master => CallerScope::Master,
+        Ok(auth) => CallerScope::Tenant(auth.tenant_id),
+        Err(_) => CallerScope::Unauthenticated,
     }
-    if citadel
-        .enclave
-        .authenticate_tenant(tenant_id, &hash)
-        .await
-        .unwrap_or(false)
-    {
-        return CallerScope::Tenant(tenant_id.to_string());
-    }
-    CallerScope::Unauthenticated
 }
 
 async fn read_global_engine_state(state: &AppState) -> EngineStatusResponse {
@@ -507,14 +477,27 @@ pub async fn set_hw_profile(
     State(state): State<AppState>,
     Json(body): Json<HwProfileRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let admin_hash = crate::citadel::hash_passphrase(&body.session_key);
-    let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(&body.admin_tenant_id, &admin_hash)
-        .await
-        .map_err(AegisHttpError::Internal)?;
+    let is_auth = if body
+        .session_key
+        .trim()
+        .starts_with(crate::citadel::CITADEL_TOKEN_PREFIX)
+    {
+        state
+            .session_store
+            .resolve(&body.session_key, Some(&body.admin_tenant_id))
+            .map(|a| a.is_master)
+            .unwrap_or(false)
+    } else {
+        let admin_hash = hash_passphrase(&body.session_key);
+        let enclave = {
+            let citadel = state.citadel.lock().await;
+            citadel.enclave.clone()
+        };
+        enclave
+            .authenticate_master(&body.admin_tenant_id, &admin_hash)
+            .await
+            .map_err(AegisHttpError::Internal)?
+    };
 
     if !is_auth {
         return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));

@@ -77,9 +77,10 @@ export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupTok
             });
 
             if (res.ok) {
+                const data = (await res.json().catch(() => ({}))) as { session_token?: string };
                 setSuccess(true);
                 // Iniciar sesión y marcar motor configurado
-                setAuth(cleanUsername, passphrase);
+                setAuth(cleanUsername, data.session_token || passphrase);
                 setEngineConfigured(true);
                 await fetchSystemState();
             } else {

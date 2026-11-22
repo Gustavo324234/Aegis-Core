@@ -1,7 +1,7 @@
 # CORE-402: Tokens de Sesión Citadel, Argon2id en `spawn_blocking` y Pool LRU de `TenantDB` (ADR-034)
 
 - **Tipo:** perf
-- **Estado:** 📥 Todo
+- **Estado:** ✅ Done
 - **Prioridad:** Alta
 - **Épica:** EPIC 61
 - **Asignado a:** Kernel Engineer
@@ -17,6 +17,14 @@ Eliminar los cuellos de botella de autenticación y apertura de SQLCipher detect
 
 ## Acceptance Criteria
 
-- [ ] Los requests autenticados no ejecutan Argon2id ni `TenantDB::open` síncrono en el runtime async de Tokio.
-- [ ] Latencia por request autenticado reducida y sin bloqueo del executor Tokio bajo concurrencia.
-- [ ] Pruebas de carga/concurrencia y revocación de sesión pasando.
+- [x] Los requests autenticados no ejecutan Argon2id ni `TenantDB::open` síncrono en el runtime async de Tokio.
+- [x] Latencia por request autenticado reducida y sin bloqueo del executor Tokio bajo concurrencia.
+- [x] Pruebas de carga/concurrencia y revocación de sesión pasando.
+
+## Implementation & Verification
+
+- **Argon2id no bloqueante (`enclave/master.rs`):** `hash_password_async` y `verify_password_async` sobre `tokio::task::spawn_blocking`; el mutex de SQLite solo se retiene durante el `SELECT`/`INSERT`/`UPDATE` y nunca durante el hashing/verificación; uso de `DUMMY_ARGON2_HASH` para mitigar oráculos de timing en usuarios inexistentes; `evict_tenant` previo a purgar archivos en `delete_tenant`.
+- **Pool LRU SQLCipher (`enclave/mod.rs`):** `TENANT_DB_POOL` en memoria por `(db_path, sha256(key))` (capacidad por defecto `64` / `AEGIS_TENANT_DB_POOL_SIZE`, TTL idle 15 min), `initialized_schemas` por ruta, generaciones + `TenantDB::evict_tenant` en rotaciones/cuarentenas/borrado, y helper `TenantDB::with_async`.
+- **Tokens efímeros Citadel (`ank-http/src/citadel.rs`, `state.rs`, `auth.rs`, `admin.rs`, `routes/*.rs`, `ws/*.rs`, UI):** `CitadelSessionStore` (`cst_*`, TTL 12h / `AEGIS_SESSION_TTL_SECS`) emitido en `/api/auth/login` y `/api/auth/quick-personal-setup`, revocable vía `/api/auth/logout`, `/api/auth/change_password`, `/api/admin/reset_password` y borrado de tenant; validación O(1) en `CitadelAuthenticated`, helpers compartidos `authenticate_headers` / `authenticate_master_headers` y WebSockets; clonado temprano de `MasterEnclave` liberando `state.citadel` antes de cualquier `.await`.
+- **Handlers HTTP/WS sin bloqueo (`ank-http`):** migrados todos los `TenantDB::open` en rutas async y `ws/chat.rs` a `TenantDB::with_async` o `spawn_blocking`; UI (`useAegisStore.ts`, `PersonalQuickSetup.tsx`) adopta el token efímero y llama a `/api/auth/logout`.
+- **Verificación:** `cargo fmt --all -- --check`, `cargo clippy --workspace` (CI flags), `cargo test -p ank-core --lib enclave` (`21 passed`), `cargo test -p ank-http` (`44 passed`), `npm run lint` (`0` warnings) y `npm run build` (`exit 0`).

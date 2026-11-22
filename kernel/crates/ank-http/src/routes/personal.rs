@@ -32,11 +32,13 @@ pub async fn get_chronos_events(
     auth: CitadelAuthenticated,
     Query(query): Query<ChronosEventsQuery>,
 ) -> Result<impl IntoResponse, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
     let limit = query.limit.unwrap_or(10).clamp(1, 50);
-    let reminders = db.get_reminders(limit).unwrap_or_default();
+    let reminders = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        Ok(db.get_reminders(limit).unwrap_or_default())
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
+
     let now_naive = chrono::Local::now().naive_local();
 
     let events: Vec<serde_json::Value> = reminders
@@ -86,18 +88,21 @@ async fn get_personal_summary(
     State(_state): State<AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<impl IntoResponse, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let facts = db.get_personal_facts(50).unwrap_or_default();
-    let ledger = db.query_expenses_summary(None).unwrap_or_else(|_| {
-        json!({
-            "total": 0.0,
-            "totals_by_category": {},
-            "recent_entries": []
+    let (facts, ledger, reminders) =
+        TenantDB::with_async(auth.tenant_id, auth.session_key_hash, |db| {
+            let facts = db.get_personal_facts(50).unwrap_or_default();
+            let ledger = db.query_expenses_summary(None).unwrap_or_else(|_| {
+                json!({
+                    "total": 0.0,
+                    "totals_by_category": {},
+                    "recent_entries": []
+                })
+            });
+            let reminders = db.get_reminders(20).unwrap_or_default();
+            Ok((facts, ledger, reminders))
         })
-    });
-    let reminders = db.get_reminders(20).unwrap_or_default();
+        .await
+        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
 
     Ok(Json(json!({
         "facts": facts,
@@ -111,12 +116,11 @@ async fn delete_fact(
     auth: CitadelAuthenticated,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let deleted = db
-        .delete_personal_fact(id)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to delete fact: {}", e)))?;
+    let deleted = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        db.delete_personal_fact(id)
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to delete fact: {}", e)))?;
 
     if deleted {
         Ok(Json(json!({ "success": true })))
@@ -137,19 +141,20 @@ async fn update_fact(
     Path(id): Path<i64>,
     Json(body): Json<UpdateFactRequest>,
 ) -> Result<impl IntoResponse, AegisHttpError> {
-    let trimmed = body.fact.trim();
+    let trimmed = body.fact.trim().to_string();
     if trimmed.is_empty() {
         return Err(AegisHttpError::BadRequest(
             "El contenido de la nota no puede estar vacío".to_string(),
         ));
     }
 
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let updated = db
-        .update_personal_fact(id, body.category.as_deref(), trimmed, "user_ui")
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to update fact: {}", e)))?;
+    let trimmed_clone = trimmed.clone();
+    let category = body.category;
+    let updated = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        db.update_personal_fact(id, category.as_deref(), &trimmed_clone, "user_ui")
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to update fact: {}", e)))?;
 
     if updated {
         Ok(Json(json!({ "success": true, "id": id, "fact": trimmed })))
@@ -163,12 +168,11 @@ async fn delete_reminder(
     auth: CitadelAuthenticated,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let count = db.delete_reminder(&id.to_string()).map_err(|e| {
-        AegisHttpError::Internal(anyhow::anyhow!("Failed to delete reminder: {}", e))
-    })?;
+    let count = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        db.delete_reminder(&id.to_string())
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to delete reminder: {}", e)))?;
 
     if count > 0 {
         Ok(Json(json!({ "success": true, "deleted_count": count })))
@@ -182,12 +186,11 @@ async fn complete_reminder(
     auth: CitadelAuthenticated,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let count = db.complete_reminder(&id.to_string()).map_err(|e| {
-        AegisHttpError::Internal(anyhow::anyhow!("Failed to complete reminder: {}", e))
-    })?;
+    let count = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        db.complete_reminder(&id.to_string())
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to complete reminder: {}", e)))?;
 
     if count > 0 {
         Ok(Json(json!({ "success": true, "matched_count": count })))
@@ -202,9 +205,6 @@ async fn consolidate_chronos(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<impl IntoResponse, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
     let workspace_log_path = state
         .config
         .data_dir
@@ -237,7 +237,14 @@ async fn consolidate_chronos(
     let lines: Vec<&str> = content.lines().rev().take(40).collect();
     let recent_text = lines.into_iter().rev().collect::<Vec<&str>>().join("\n");
 
-    let existing_facts = db.get_personal_facts(50).unwrap_or_default();
+    let existing_facts = TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        |db| Ok(db.get_personal_facts(50).unwrap_or_default()),
+    )
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
+
     let existing_block = if existing_facts.is_empty() {
         "(Ninguno todavía)".to_string()
     } else {
@@ -290,48 +297,80 @@ async fn consolidate_chronos(
                     serde_json::from_str::<serde_json::Value>(&full_resp[start..=end])
                 {
                     if let Some(facts_arr) = parsed.get("facts").and_then(|v| v.as_array()) {
-                        for item in facts_arr {
-                            let target_id = item.get("id").and_then(|v| {
-                                v.as_i64().or_else(|| {
-                                    v.as_str()
-                                        .map(|s| s.trim().trim_start_matches('#').trim())
-                                        .and_then(|s| s.parse::<i64>().ok())
-                                })
-                            });
-                            let cat = item
-                                .get("category")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("general");
-                            let fact = item.get("fact").and_then(|v| v.as_str()).unwrap_or("");
-                            if !fact.trim().is_empty() {
-                                match db.upsert_personal_fact(target_id, cat, fact, "chronos") {
-                                    Ok(
-                                        ank_core::enclave::PersonalFactUpsertOutcome::Inserted {
-                                            id,
-                                        },
-                                    ) => {
-                                        new_facts.push(json!({
-                                            "id": id,
-                                            "category": cat,
-                                            "fact": fact,
-                                            "action": "inserted",
-                                            "source": "chronos"
-                                        }));
-                                    }
-                                    Ok(ank_core::enclave::PersonalFactUpsertOutcome::Updated {
-                                        id,
-                                        ..
-                                    }) => {
-                                        new_facts.push(json!({
-                                            "id": id,
-                                            "category": cat,
-                                            "fact": fact,
-                                            "action": "updated",
-                                            "source": "chronos"
-                                        }));
-                                    }
-                                    _ => {}
+                        let items: Vec<(Option<i64>, String, String)> = facts_arr
+                            .iter()
+                            .filter_map(|item| {
+                                let target_id = item.get("id").and_then(|v| {
+                                    v.as_i64().or_else(|| {
+                                        v.as_str()
+                                            .map(|s| s.trim().trim_start_matches('#').trim())
+                                            .and_then(|s| s.parse::<i64>().ok())
+                                    })
+                                });
+                                let cat = item
+                                    .get("category")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("general")
+                                    .to_string();
+                                let fact = item
+                                    .get("fact")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                if fact.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some((target_id, cat, fact))
                                 }
+                            })
+                            .collect();
+
+                        if !items.is_empty() {
+                            if let Ok(saved) = TenantDB::with_async(
+                                auth.tenant_id,
+                                auth.session_key_hash,
+                                move |db| {
+                                    let mut inserted_or_updated = Vec::new();
+                                    for (target_id, cat, fact) in items {
+                                        match db.upsert_personal_fact(
+                                            target_id, &cat, &fact, "chronos",
+                                        ) {
+                                            Ok(
+                                                ank_core::enclave::PersonalFactUpsertOutcome::Inserted {
+                                                    id,
+                                                },
+                                            ) => {
+                                                inserted_or_updated.push(json!({
+                                                    "id": id,
+                                                    "category": cat,
+                                                    "fact": fact,
+                                                    "action": "inserted",
+                                                    "source": "chronos"
+                                                }));
+                                            }
+                                            Ok(
+                                                ank_core::enclave::PersonalFactUpsertOutcome::Updated {
+                                                    id,
+                                                    ..
+                                                },
+                                            ) => {
+                                                inserted_or_updated.push(json!({
+                                                    "id": id,
+                                                    "category": cat,
+                                                    "fact": fact,
+                                                    "action": "updated",
+                                                    "source": "chronos"
+                                                }));
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    Ok(inserted_or_updated)
+                                },
+                            )
+                            .await
+                            {
+                                new_facts = saved;
                             }
                         }
                     }

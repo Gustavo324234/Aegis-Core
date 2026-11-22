@@ -36,31 +36,35 @@ pub async fn list_modules(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<Json<ModulesListResponse>, AegisHttpError> {
-    let router = state.router.read().await;
-    let modules_registry = router.modules.read().await;
+    let manifests = {
+        let router = state.router.read().await;
+        let modules_registry = router.modules.read().await;
+        modules_registry.values().cloned().collect::<Vec<_>>()
+    };
 
-    // Open TenantDB to query module status
-    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+    let mut response_modules =
+        ank_core::enclave::TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+            let mut out = Vec::with_capacity(manifests.len());
+            for manifest in manifests {
+                let active = db
+                    .get_kv(&format!("module_active:{}", manifest.module_id))
+                    .unwrap_or(None)
+                    .map(|v| v == "true")
+                    .unwrap_or(false);
+
+                out.push(ModuleUiResponse {
+                    module_id: manifest.module_id,
+                    display_name: manifest.display_name,
+                    version: manifest.version,
+                    active,
+                    exposed_tools: manifest.exposed_tools,
+                    ui_views: manifest.ui_views,
+                });
+            }
+            Ok(out)
+        })
+        .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
-    let mut response_modules = Vec::new();
-
-    for manifest in modules_registry.values() {
-        let active = db
-            .get_kv(&format!("module_active:{}", manifest.module_id))
-            .unwrap_or(None)
-            .map(|v| v == "true")
-            .unwrap_or(false);
-
-        response_modules.push(ModuleUiResponse {
-            module_id: manifest.module_id.clone(),
-            display_name: manifest.display_name.clone(),
-            version: manifest.version.clone(),
-            active,
-            exposed_tools: manifest.exposed_tools.clone(),
-            ui_views: manifest.ui_views.clone(),
-        });
-    }
 
     response_modules.sort_by_key(|m| {
         let rank = match m.module_id.as_str() {
@@ -84,10 +88,6 @@ pub async fn enable_module(
     Path(module_id): Path<String>,
     Json(body): Json<EnableModuleBody>,
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
-    // Open TenantDB to toggle status
-    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
-
     {
         let router = state.router.read().await;
         let modules_registry = router.modules.read().await;
@@ -99,10 +99,19 @@ pub async fn enable_module(
         }
     }
 
-    db.set_kv(
-        &format!("module_active:{}", module_id),
-        if body.enabled { "true" } else { "false" },
+    let mid_for_db = module_id.clone();
+    let enabled = body.enabled;
+    ank_core::enclave::TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash,
+        move |db| {
+            db.set_kv(
+                &format!("module_active:{}", mid_for_db),
+                if enabled { "true" } else { "false" },
+            )
+        },
     )
+    .await
     .map_err(|e| {
         AegisHttpError::Internal(anyhow::anyhow!("Failed to set active status in DB: {}", e))
     })?;
@@ -136,16 +145,20 @@ pub async fn execute_module_tool(
     Json(body): Json<ExecuteToolBody>,
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
     // Verify that the module is active for this tenant
-    let is_active = {
-        let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-            .map_err(|e| {
-                AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e))
-            })?;
-        db.get_kv(&format!("module_active:{}", module_id))
-            .unwrap_or(None)
-            .map(|v| v == "true")
-            .unwrap_or(false)
-    };
+    let mid_for_db = module_id.clone();
+    let is_active = ank_core::enclave::TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        move |db| {
+            Ok(db
+                .get_kv(&format!("module_active:{}", mid_for_db))
+                .unwrap_or(None)
+                .map(|v| v == "true")
+                .unwrap_or(false))
+        },
+    )
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Failed to open TenantDB: {}", e)))?;
 
     if !is_active {
         return Err(AegisHttpError::BadRequest(format!(

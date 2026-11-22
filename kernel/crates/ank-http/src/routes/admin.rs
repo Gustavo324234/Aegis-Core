@@ -85,38 +85,15 @@ pub struct TenantDeleteAction {
     pub target_tenant_id: String,
 }
 
-/// Extrae y valida credenciales Master Admin desde headers Citadel.
-/// Retorna el tenant_id autenticado o error.
+/// Extrae y valida credenciales Master Admin desde headers Citadel (`cst_*` o key legacy).
+/// Retorna el tenant_id autenticado o error sin retener el lock de `citadel`.
 async fn require_master_auth(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<String, AegisHttpError> {
-    let tenant_id = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingTenant))?;
-
-    let raw_key = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingKey))?;
-
-    let hash = hash_passphrase(&raw_key);
-    let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(&tenant_id, &hash)
+    crate::citadel::authenticate_master_headers(state, headers)
         .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-    }
-
-    Ok(tenant_id)
+        .map_err(AegisHttpError::Citadel)
 }
 
 fn validate_tenant_username(raw: &str) -> Result<String, AegisHttpError> {
@@ -146,6 +123,8 @@ fn validate_tenant_username(raw: &str) -> Result<String, AegisHttpError> {
 }
 
 async fn cleanup_deleted_tenant_resources(state: &AppState, target_id: &str) {
+    state.session_store.revoke_tenant(target_id);
+    ank_core::enclave::TenantDB::evict_tenant(target_id);
     {
         let router = state.router.read().await;
         if let Err(e) = router.purge_tenant_keys(target_id).await {
@@ -202,9 +181,11 @@ pub async fn create_tenant(
     require_master_auth(&state, &headers).await?;
     let username = validate_tenant_username(&body.username)?;
 
-    let citadel = state.citadel.lock().await;
-    let (port, temp_pass) = citadel
-        .enclave
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
+    let (port, temp_pass) = enclave
         .create_tenant(&username)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
@@ -235,9 +216,11 @@ pub async fn list_tenants(
 ) -> Result<Json<TenantsListResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
 
-    let citadel = state.citadel.lock().await;
-    let tenants = citadel
-        .enclave
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
+    let tenants = enclave
         .list_tenants()
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
@@ -285,14 +268,14 @@ pub async fn delete_tenant_path(
         ));
     }
 
-    {
+    let enclave = {
         let citadel = state.citadel.lock().await;
-        citadel
-            .enclave
-            .delete_tenant(&target_id)
-            .await
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-    }
+        citadel.enclave.clone()
+    };
+    enclave
+        .delete_tenant(&target_id)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
     cleanup_deleted_tenant_resources(&state, &target_id).await;
 
@@ -322,26 +305,36 @@ pub async fn delete_tenant_body(
         ));
     }
 
-    let admin_hash = hash_passphrase(&body.admin_session_key);
-    {
+    let enclave = {
         let citadel = state.citadel.lock().await;
-
-        let is_auth = citadel
-            .enclave
+        citadel.enclave.clone()
+    };
+    let is_auth = if body
+        .admin_session_key
+        .trim()
+        .starts_with(crate::citadel::CITADEL_TOKEN_PREFIX)
+    {
+        state
+            .session_store
+            .resolve(&body.admin_session_key, Some(&body.admin_tenant_id))
+            .map(|a| a.is_master)
+            .unwrap_or(false)
+    } else {
+        let admin_hash = hash_passphrase(&body.admin_session_key);
+        enclave
             .authenticate_master(&body.admin_tenant_id, &admin_hash)
             .await
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?
+    };
 
-        if !is_auth {
-            return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-        }
-
-        citadel
-            .enclave
-            .delete_tenant(&body.target_tenant_id)
-            .await
-            .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+    if !is_auth {
+        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
     }
+
+    enclave
+        .delete_tenant(&body.target_tenant_id)
+        .await
+        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
     cleanup_deleted_tenant_resources(&state, &body.target_tenant_id).await;
 
@@ -379,14 +372,17 @@ pub async fn reset_password(
     }
 
     let new_hash = hash_passphrase(&body.new_passphrase);
-    let citadel = state.citadel.lock().await;
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
 
-    citadel
-        .enclave
+    enclave
         .reset_tenant_password(&body.tenant_id, &new_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
+    state.session_store.revoke_tenant(&body.tenant_id);
     let _ = ank_core::enclave::TenantDB::quarantine_for_password_reset(&body.tenant_id);
 
     Ok(Json(PasswordResetResponse {

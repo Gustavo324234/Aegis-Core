@@ -1,4 +1,4 @@
-use crate::{citadel::hash_passphrase, state::AppState};
+use crate::state::AppState;
 use ank_core::{
     agents::orchestrator::AgentOrchestrator,
     chal::{ChatMessage, ChatRole},
@@ -61,7 +61,7 @@ pub async fn ws_chat_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let (session_key, protocol_header) =
+    let (session_key_hash, protocol_header) =
         match crate::citadel::authenticate_ws_upgrade(&state, &tenant_id, &headers, "ChatWS").await
         {
             Ok(res) => res,
@@ -74,7 +74,7 @@ pub async fn ws_chat_handler(
         ws
     };
 
-    ws.on_upgrade(move |socket| handle_chat(socket, tenant_id, session_key, state))
+    ws.on_upgrade(move |socket| handle_chat(socket, tenant_id, session_key_hash, state))
 }
 
 #[derive(Deserialize)]
@@ -110,10 +110,10 @@ fn error_event(code: &str, message: &str, detail: Option<&str>) -> String {
 async fn handle_chat(
     mut socket: WebSocket,
     tenant_id: String,
-    session_key: String,
+    session_key_hash: String,
     state: AppState,
 ) {
-    let hash = hash_passphrase(&session_key);
+    let hash = session_key_hash;
 
     // 2. Welcome Syslog
     let _ = socket
@@ -141,13 +141,18 @@ async fn handle_chat(
         if cached {
             false
         } else {
-            match ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-                Ok(db) => {
-                    let has_persona = db.get_persona().ok().flatten().is_some();
-                    let has_step = db.get_onboarding_step().ok().flatten().is_some();
+            let tid_chk = tenant_id.clone();
+            match ank_core::enclave::TenantDB::with_async(tenant_id.clone(), hash.clone(), |db| {
+                let has_persona = db.get_persona().ok().flatten().is_some();
+                let has_step = db.get_onboarding_step().ok().flatten().is_some();
+                Ok((has_persona, has_step))
+            })
+            .await
+            {
+                Ok((has_persona, has_step)) => {
                     if has_persona || has_step {
                         if let Ok(mut s) = ONBOARDING_SETTLED_TENANTS.write() {
-                            s.insert(tenant_id.clone());
+                            s.insert(tid_chk);
                         }
                     }
                     !has_persona && !has_step
@@ -159,9 +164,10 @@ async fn handle_chat(
 
     if should_onboard {
         // Iniciar onboarding — guardar step e inmediatamente saludar
-        if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-            let _ = db.set_onboarding_step("awaiting_name");
-        }
+        let _ = ank_core::enclave::TenantDB::with_async(tenant_id.clone(), hash.clone(), |db| {
+            db.set_onboarding_step("awaiting_name")
+        })
+        .await;
         let greeting = "Hola! Soy tu nuevo asistente personal 👋\n¿Cómo querés que me llame?";
         send_onboarding_message(&mut socket, greeting).await;
         let _ = append_to_chat_history(&tenant_id, "ASSISTANT", greeting).await;
@@ -401,11 +407,13 @@ async fn handle_chat(
             };
 
             // Intercept onboarding steps
-            let onboarding_step = {
-                ank_core::enclave::TenantDB::open(&tenant_id, &hash)
-                    .ok()
-                    .and_then(|db| db.get_onboarding_step().ok().flatten())
-            };
+            let onboarding_step =
+                ank_core::enclave::TenantDB::with_async(tenant_id.clone(), hash.clone(), |db| {
+                    Ok(db.get_onboarding_step().ok().flatten())
+                })
+                .await
+                .ok()
+                .flatten();
 
             match onboarding_step.as_deref() {
                 // ── STEP 1: El usuario está respondiendo con el nombre ──
@@ -433,10 +441,17 @@ async fn handle_chat(
                         continue;
                     }
 
-                    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-                        let _ = db.set_onboarding_name(&name);
-                        let _ = db.set_onboarding_step("awaiting_style");
-                    }
+                    let name_for_db = name.clone();
+                    let _ = ank_core::enclave::TenantDB::with_async(
+                        tenant_id.clone(),
+                        hash.clone(),
+                        move |db| {
+                            let _ = db.set_onboarding_name(&name_for_db);
+                            let _ = db.set_onboarding_step("awaiting_style");
+                            Ok(())
+                        },
+                    )
+                    .await;
 
                     let msg = format!(
                         "¡{}! Me encanta ese nombre 😄\n\
@@ -459,33 +474,41 @@ async fn handle_chat(
                 Some("awaiting_style") => {
                     let style_input = prompt.trim().to_string();
 
-                    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-                        let name = db
-                            .get_onboarding_name()
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| "Aegis".to_string());
+                    let saved_name = ank_core::enclave::TenantDB::with_async(
+                        tenant_id.clone(),
+                        hash.clone(),
+                        move |db| {
+                            let name = db
+                                .get_onboarding_name()
+                                .ok()
+                                .flatten()
+                                .unwrap_or_else(|| "Aegis".to_string());
 
-                        let style_desc = map_style_to_description(&style_input);
+                            let style_desc = map_style_to_description(&style_input);
 
-                        let persona = format!(
-                            "Tu nombre es {}. {}\n\
-                             Eres el asistente personal del usuario. Cuando sea apropiado \
-                             te referís a vos mismo como {}. Mantenés este estilo en \
-                             todas tus respuestas sin excepción.",
-                            name, style_desc, name
-                        );
+                            let persona = format!(
+                                "Tu nombre es {}. {}\n\
+                                 Eres el asistente personal del usuario. Cuando sea apropiado \
+                                 te referís a vos mismo como {}. Mantenés este estilo en \
+                                 todas tus respuestas sin excepción.",
+                                name, style_desc, name
+                            );
 
-                        let _ = db.set_persona(&persona);
-                        let _ = db.clear_onboarding();
+                            let _ = db.set_persona(&persona);
+                            let _ = db.clear_onboarding();
+                            Ok((name, style_input))
+                        },
+                    )
+                    .await;
 
+                    if let Ok((name, style_label_input)) = saved_name {
                         let msg = format!(
                             "Perfecto! Ya soy **{}**, tu asistente {} 🚀\n\n\
                              Podés cambiar mi personalidad cuando quieras desde \
                              Configuración.\n\n\
                              ¿En qué te puedo ayudar hoy?",
                             name,
-                            friendly_style_label(&style_input)
+                            friendly_style_label(&style_label_input)
                         );
                         let _ = append_to_chat_history(&tenant_id, "USER", &prompt).await;
                         send_onboarding_message(&mut socket, &msg).await;
@@ -565,9 +588,12 @@ async fn handle_chat(
             let had_detected_keys = !detected_keys.is_empty();
             for (inferred_prov, detected_key) in detected_keys {
                 if inferred_prov == "elevenlabs" {
-                    if let Ok(db) = ank_core::enclave::TenantDB::open(&tenant_id, &hash) {
-                        let _ = db.set_kv("elevenlabs_api_key", &detected_key);
-                    }
+                    let _ = ank_core::enclave::TenantDB::with_async(
+                        tenant_id.clone(),
+                        hash.clone(),
+                        move |db| db.set_kv("elevenlabs_api_key", &detected_key),
+                    )
+                    .await;
                     continue;
                 }
 

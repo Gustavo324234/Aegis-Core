@@ -1528,13 +1528,19 @@ export const useAegisStore = create<AegisState>()(
                     if (response.ok) {
                         chatAuthRejected = false;
                         chatReconnectAttempts = 0;
-                        try { sessionStorage.setItem(TAB_SESSION_KEY, passphrase); } catch { /* ignore */ }
-                        const data = await response.json() as { status: string; role?: string };
+                        const data = await response.json() as {
+                            status: string;
+                            role?: string;
+                            session_token?: string;
+                        };
                         if (data.status === 'password_must_change') {
+                            try { sessionStorage.setItem(TAB_SESSION_KEY, passphrase); } catch { /* ignore */ }
                             set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: false, needsPasswordReset: true, messages: [] });
                             return 'password_must_change';
                         }
-                        set({ tenantId, sessionKey: passphrase, isAuthenticated: true, isAdmin: data.role === 'admin', needsPasswordReset: false, messages: [] });
+                        const activeCredential = data.session_token || passphrase;
+                        try { sessionStorage.setItem(TAB_SESSION_KEY, activeCredential); } catch { /* ignore */ }
+                        set({ tenantId, sessionKey: activeCredential, isAuthenticated: true, isAdmin: data.role === 'admin', needsPasswordReset: false, messages: [] });
                         return 'authenticated';
                     }
                     return 'failed';
@@ -1544,6 +1550,13 @@ export const useAegisStore = create<AegisState>()(
             // CORE-369: Purge sensitive in-memory state on logout; server-side SQLCipher
             // history is reloaded automatically via loadChatHistory upon re-authentication.
             logout: () => {
+                const { socket, sirenSocket, sessionKey: activeCredential } = get();
+                if (activeCredential && activeCredential.startsWith('cst_')) {
+                    fetch('/api/auth/logout', {
+                        method: 'POST',
+                        headers: { 'x-citadel-token': activeCredential }
+                    }).catch(() => {});
+                }
                 try { sessionStorage.removeItem(TAB_SESSION_KEY); } catch { /* ignore */ }
                 chatManualDisconnect = true;
                 chatAuthRejected = false;
@@ -1553,7 +1566,6 @@ export const useAegisStore = create<AegisState>()(
                     clearTimeout(chatReconnectTimer);
                     chatReconnectTimer = null;
                 }
-                const { socket, sirenSocket } = get();
                 if (socket) {
                     socket.onclose = null;
                     socket.onerror = null;

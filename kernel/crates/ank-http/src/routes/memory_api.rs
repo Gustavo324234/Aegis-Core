@@ -1,4 +1,4 @@
-use crate::{citadel::CitadelCredentials, error::AegisHttpError, state::AppState};
+use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
 use axum::{extract::State, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
@@ -44,11 +44,11 @@ pub struct IndexMemoryResponse {
 /// POST /api/memory/search — Búsqueda semántica en la memoria neuronal L3 del tenant
 async fn search_memory(
     State(state): State<AppState>,
-    creds: Option<CitadelCredentials>,
+    auth: Option<CitadelAuthenticated>,
     Json(payload): Json<SearchMemoryRequest>,
 ) -> Result<Json<SearchMemoryResponse>, AegisHttpError> {
-    let tenant_id = creds
-        .map(|c| c.tenant_id)
+    let tenant_id = auth
+        .map(|a| a.tenant_id)
         .unwrap_or_else(|| "default".to_string());
     let limit = payload.limit.unwrap_or(5).min(20);
 
@@ -78,11 +78,11 @@ async fn search_memory(
 /// POST /api/memory/index — Indexa un nuevo fragmento en la memoria neuronal L3 del tenant
 async fn index_memory(
     State(state): State<AppState>,
-    creds: Option<CitadelCredentials>,
+    auth: Option<CitadelAuthenticated>,
     Json(payload): Json<IndexMemoryRequest>,
 ) -> Result<Json<IndexMemoryResponse>, AegisHttpError> {
-    let tenant_id = creds
-        .map(|c| c.tenant_id)
+    let tenant_id = auth
+        .map(|a| a.tenant_id)
         .unwrap_or_else(|| "default".to_string());
 
     let id = state

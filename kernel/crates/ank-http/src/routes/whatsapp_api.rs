@@ -82,21 +82,23 @@ async fn update_settings(
     auth: CitadelAuthenticated,
     Json(body): Json<SettingsBody>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(AegisHttpError::Internal)?;
+    let res = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        if let Some(enabled) = body.require_confirmation {
+            set_require_confirmation(db, enabled)?;
+        }
+        if let Some(cfg) = body.rate_config {
+            set_rate_config(db, cfg)?;
+        }
+        Ok(json!({
+            "success": true,
+            "require_confirmation": get_require_confirmation(db),
+            "rate_usage": get_rate_usage(db),
+        }))
+    })
+    .await
+    .map_err(AegisHttpError::Internal)?;
 
-    if let Some(enabled) = body.require_confirmation {
-        set_require_confirmation(&db, enabled).map_err(AegisHttpError::Internal)?;
-    }
-    if let Some(cfg) = body.rate_config {
-        set_rate_config(&db, cfg).map_err(AegisHttpError::Internal)?;
-    }
-
-    Ok(Json(json!({
-        "success": true,
-        "require_confirmation": get_require_confirmation(&db),
-        "rate_usage": get_rate_usage(&db),
-    })))
+    Ok(Json(res))
 }
 
 async fn list_chats(
@@ -130,10 +132,11 @@ async fn cancel_pending(
     auth: CitadelAuthenticated,
     Path(pending_id): Path<String>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(AegisHttpError::Internal)?;
-    let removed =
-        cancel_pending_messages(&db, Some(&pending_id)).map_err(AegisHttpError::Internal)?;
+    let removed = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        cancel_pending_messages(db, Some(&pending_id))
+    })
+    .await
+    .map_err(AegisHttpError::Internal)?;
     Ok(Json(json!({ "success": true, "removed": removed })))
 }
 

@@ -46,7 +46,7 @@ pub async fn ws_siren_handler(
 async fn handle_siren(
     mut socket: WebSocket,
     tenant_id: String,
-    session_key: String,
+    session_key_hash: String,
     state: AppState,
 ) {
     info!("Siren Stream: WebSocket established for {}", tenant_id);
@@ -137,7 +137,7 @@ async fn handle_siren(
                     let mut pcb =
                         ank_core::PCB::new("Voice Task".to_string(), 5, transcript.clone());
                     pcb.tenant_id = Some(tenant_id.clone());
-                    pcb.session_key = Some(session_key.clone());
+                    pcb.session_key = Some(session_key_hash.clone());
                     pcb.task_type = ank_core::pcb::TaskType::Chat;
                     let pid = pcb.pid.clone();
 

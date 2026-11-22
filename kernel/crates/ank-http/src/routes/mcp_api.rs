@@ -1,4 +1,4 @@
-use crate::{citadel::CitadelCredentials, error::AegisHttpError, state::AppState};
+use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
 use ank_core::enclave::TenantDB;
 use axum::{
     extract::{Path, State},
@@ -132,33 +132,34 @@ async fn unregister_tool(
 
 /// GET /api/mcp/tools/:name/policy — Obtiene la política de ejecución del tenant para la herramienta
 async fn get_tool_policy(
-    creds: CitadelCredentials,
+    auth: CitadelAuthenticated,
     Path(name): Path<String>,
 ) -> Result<Json<ToolPolicyDto>, AegisHttpError> {
-    let db = TenantDB::open(&creds.tenant_id, &creds.session_key_hash)
-        .map_err(|e| AegisHttpError::Kernel(format!("Database error: {}", e)))?;
-
-    let policy_key = format!("mcp_tool_policy:{}", name);
-    let policy = db
-        .get_kv(&policy_key)
-        .unwrap_or(None)
-        .unwrap_or_else(|| "allow".to_string());
+    let policy = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        let policy_key = format!("mcp_tool_policy:{}", name);
+        Ok(db
+            .get_kv(&policy_key)
+            .unwrap_or(None)
+            .unwrap_or_else(|| "allow".to_string()))
+    })
+    .await
+    .map_err(|e| AegisHttpError::Kernel(format!("Database error: {}", e)))?;
 
     Ok(Json(ToolPolicyDto { policy }))
 }
 
 /// POST /api/mcp/tools/:name/policy — Configura la política del tenant ("allow" o "deny")
 async fn set_tool_policy(
-    creds: CitadelCredentials,
+    auth: CitadelAuthenticated,
     Path(name): Path<String>,
     Json(payload): Json<ToolPolicyDto>,
 ) -> Result<StatusCode, AegisHttpError> {
-    let db = TenantDB::open(&creds.tenant_id, &creds.session_key_hash)
-        .map_err(|e| AegisHttpError::Kernel(format!("Database error: {}", e)))?;
-
-    let policy_key = format!("mcp_tool_policy:{}", name);
-    db.set_kv(&policy_key, &payload.policy)
-        .map_err(|e| AegisHttpError::Kernel(format!("Failed to save policy: {}", e)))?;
+    TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        let policy_key = format!("mcp_tool_policy:{}", name);
+        db.set_kv(&policy_key, &payload.policy)
+    })
+    .await
+    .map_err(|e| AegisHttpError::Kernel(format!("Failed to save policy: {}", e)))?;
 
     Ok(StatusCode::OK)
 }

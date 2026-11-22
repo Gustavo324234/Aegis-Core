@@ -131,36 +131,37 @@ pub async fn receive_tokens(
         return Err(AegisHttpError::BadRequest("Unknown provider".into()));
     }
 
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(AegisHttpError::Internal)?;
+    let tenant_log = auth.tenant_id.clone();
+    let provider_log = body.provider.clone();
+    TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        if let Some(cid) = body.client_id.as_deref().filter(|s| !s.trim().is_empty()) {
+            db.set_oauth_client_config(
+                &body.provider,
+                cid,
+                body.client_secret.as_deref(),
+                body.redirect_uri.as_deref(),
+            )?;
+        }
 
-    if let Some(cid) = body.client_id.as_deref().filter(|s| !s.trim().is_empty()) {
-        db.set_oauth_client_config(
+        db.set_oauth_token(
             &body.provider,
-            cid,
-            body.client_secret.as_deref(),
-            body.redirect_uri.as_deref(),
-        )
-        .map_err(AegisHttpError::Internal)?;
-    }
+            &body.access_token,
+            body.refresh_token.as_deref(),
+            body.expires_in,
+            &body.scope,
+        )?;
 
-    db.set_oauth_token(
-        &body.provider,
-        &body.access_token,
-        body.refresh_token.as_deref(),
-        body.expires_in,
-        &body.scope,
-    )
+        if let Some(email) = body.email.as_deref().filter(|s| !s.trim().is_empty()) {
+            db.set_oauth_email(&body.provider, email.trim())?;
+        }
+        Ok(())
+    })
+    .await
     .map_err(AegisHttpError::Internal)?;
 
-    if let Some(email) = body.email.as_deref().filter(|s| !s.trim().is_empty()) {
-        db.set_oauth_email(&body.provider, email.trim())
-            .map_err(AegisHttpError::Internal)?;
-    }
-
     tracing::info!(
-        tenant = %auth.tenant_id,
-        provider = %body.provider,
+        tenant = %tenant_log,
+        provider = %provider_log,
         "OAuth tokens stored"
     );
 
@@ -171,51 +172,42 @@ pub async fn get_status(
     State(_state): State<crate::AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<Json<OAuthStatusResponse>, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(AegisHttpError::Internal)?;
+    let status = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, |db| {
+        let google_connected = db.is_oauth_connected("google")?;
+        let google_scope = db.get_oauth_scope("google")?;
+        let google_email = db.get_oauth_email("google")?;
+        let google_creds = ank_core::oauth::resolve_client_credentials(db, "google");
 
-    let google_connected = db
-        .is_oauth_connected("google")
-        .map_err(AegisHttpError::Internal)?;
-    let google_scope = db
-        .get_oauth_scope("google")
-        .map_err(AegisHttpError::Internal)?;
-    let google_email = db
-        .get_oauth_email("google")
-        .map_err(AegisHttpError::Internal)?;
-    let google_creds = ank_core::oauth::resolve_client_credentials(&db, "google");
+        let spotify_connected = db.is_oauth_connected("spotify")?;
+        let spotify_scope = db.get_oauth_scope("spotify")?;
+        let spotify_email = db.get_oauth_email("spotify")?;
+        let spotify_creds = ank_core::oauth::resolve_client_credentials(db, "spotify");
 
-    let spotify_connected = db
-        .is_oauth_connected("spotify")
-        .map_err(AegisHttpError::Internal)?;
-    let spotify_scope = db
-        .get_oauth_scope("spotify")
-        .map_err(AegisHttpError::Internal)?;
-    let spotify_email = db
-        .get_oauth_email("spotify")
-        .map_err(AegisHttpError::Internal)?;
-    let spotify_creds = ank_core::oauth::resolve_client_credentials(&db, "spotify");
+        Ok(OAuthStatusResponse {
+            google: ProviderStatus {
+                connected: google_connected,
+                scope: google_scope,
+                email: google_email,
+                client_configured: google_creds.client_id.is_some(),
+                client_id: google_creds.client_id,
+                has_client_secret: google_creds.client_secret.is_some(),
+                redirect_uri: google_creds.redirect_uri,
+            },
+            spotify: ProviderStatus {
+                connected: spotify_connected,
+                scope: spotify_scope,
+                email: spotify_email,
+                client_configured: spotify_creds.client_id.is_some(),
+                client_id: spotify_creds.client_id,
+                has_client_secret: spotify_creds.client_secret.is_some(),
+                redirect_uri: spotify_creds.redirect_uri,
+            },
+        })
+    })
+    .await
+    .map_err(AegisHttpError::Internal)?;
 
-    Ok(Json(OAuthStatusResponse {
-        google: ProviderStatus {
-            connected: google_connected,
-            scope: google_scope,
-            email: google_email,
-            client_configured: google_creds.client_id.is_some(),
-            client_id: google_creds.client_id,
-            has_client_secret: google_creds.client_secret.is_some(),
-            redirect_uri: google_creds.redirect_uri,
-        },
-        spotify: ProviderStatus {
-            connected: spotify_connected,
-            scope: spotify_scope,
-            email: spotify_email,
-            client_configured: spotify_creds.client_id.is_some(),
-            client_id: spotify_creds.client_id,
-            has_client_secret: spotify_creds.client_secret.is_some(),
-            redirect_uri: spotify_creds.redirect_uri,
-        },
-    }))
+    Ok(Json(status))
 }
 
 pub async fn save_google_config(
@@ -223,16 +215,16 @@ pub async fn save_google_config(
     auth: CitadelAuthenticated,
     Json(body): Json<GoogleClientConfigBody>,
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(AegisHttpError::Internal)?;
-
     if body.clear {
-        db.clear_oauth_client_config("google")
-            .map_err(AegisHttpError::Internal)?;
+        TenantDB::with_async(auth.tenant_id, auth.session_key_hash, |db| {
+            db.clear_oauth_client_config("google")
+        })
+        .await
+        .map_err(AegisHttpError::Internal)?;
         return Ok(Json(json!({ "success": true, "cleared": true })));
     }
 
-    let trimmed_id = body.client_id.trim();
+    let trimmed_id = body.client_id.trim().to_string();
     if trimmed_id.is_empty() {
         return Err(AegisHttpError::BadRequest(
             "El Client ID de Google es obligatorio".into(),
@@ -248,12 +240,15 @@ pub async fn save_google_config(
         }
     }
 
-    db.set_oauth_client_config(
-        "google",
-        trimmed_id,
-        body.client_secret.as_deref(),
-        body.redirect_uri.as_deref(),
-    )
+    TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        db.set_oauth_client_config(
+            "google",
+            &trimmed_id,
+            body.client_secret.as_deref(),
+            body.redirect_uri.as_deref(),
+        )
+    })
+    .await
     .map_err(AegisHttpError::Internal)?;
 
     Ok(Json(json!({ "success": true })))
@@ -291,11 +286,13 @@ pub async fn start_google_oauth(
     headers: HeaderMap,
     Json(body): Json<GoogleStartBody>,
 ) -> Result<Json<serde_json::Value>, AegisHttpError> {
-    let creds = {
-        let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-            .map_err(AegisHttpError::Internal)?;
-        ank_core::oauth::resolve_client_credentials(&db, "google")
-    };
+    let creds = TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        |db| Ok(ank_core::oauth::resolve_client_credentials(db, "google")),
+    )
+    .await
+    .map_err(AegisHttpError::Internal)?;
 
     let client_id = creds.client_id.ok_or_else(|| {
         AegisHttpError::BadRequest(
@@ -605,15 +602,30 @@ pub async fn google_oauth_callback(
         _ => None,
     };
 
-    let save_res = TenantDB::open(&flow.tenant_id, &flow.session_key_hash).and_then(|db| {
-        let existing_rt = db.get_refresh_token("google").ok().flatten();
-        let effective_rt = refresh_token.as_deref().or(existing_rt.as_deref());
-        db.set_oauth_token("google", access_token, effective_rt, expires_in, &scope)?;
-        if let Some(ref addr) = email {
-            db.set_oauth_email("google", addr)?;
-        }
-        Ok(())
-    });
+    let access_token_owned = access_token.to_string();
+    let refresh_token_owned = refresh_token.clone();
+    let scope_owned = scope.clone();
+    let email_owned = email.clone();
+    let save_res = TenantDB::with_async(
+        flow.tenant_id.clone(),
+        flow.session_key_hash.clone(),
+        move |db| {
+            let existing_rt = db.get_refresh_token("google").ok().flatten();
+            let effective_rt = refresh_token_owned.as_deref().or(existing_rt.as_deref());
+            db.set_oauth_token(
+                "google",
+                &access_token_owned,
+                effective_rt,
+                expires_in,
+                &scope_owned,
+            )?;
+            if let Some(ref addr) = email_owned {
+                db.set_oauth_email("google", addr)?;
+            }
+            Ok(())
+        },
+    )
+    .await;
 
     if let Err(e) = save_res {
         return (
@@ -658,19 +670,21 @@ pub async fn disconnect_provider(
         return Err(AegisHttpError::BadRequest("Unknown provider".into()));
     }
 
-    let db = TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(AegisHttpError::Internal)?;
-
-    db.revoke_oauth(&provider)
-        .map_err(AegisHttpError::Internal)?;
-
-    if query.clear_client {
-        db.clear_oauth_client_config(&provider)
-            .map_err(AegisHttpError::Internal)?;
-    }
+    let tid_log = auth.tenant_id.clone();
+    let prov_db = provider.clone();
+    let clear_client = query.clear_client;
+    TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        db.revoke_oauth(&prov_db)?;
+        if clear_client {
+            db.clear_oauth_client_config(&prov_db)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(AegisHttpError::Internal)?;
 
     tracing::info!(
-        tenant = %auth.tenant_id,
+        tenant = %tid_log,
         provider = %provider,
         clear_client = query.clear_client,
         "OAuth disconnected"

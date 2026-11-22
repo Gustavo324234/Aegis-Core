@@ -133,6 +133,7 @@ pub(crate) fn build_cors_layer_with(
             ACCEPT,
             HeaderName::from_static("x-citadel-tenant"),
             HeaderName::from_static("x-citadel-key"),
+            HeaderName::from_static("x-citadel-token"),
             HeaderName::from_static("x-aegis-hook-token"),
         ])
 }

@@ -1,5 +1,5 @@
 use crate::{
-    citadel::{hash_passphrase, CitadelError},
+    citadel::{extract_session_token, hash_passphrase, CitadelError},
     error::AegisHttpError,
     rate_limiter::{AuthRateLimiter, RateLimitOutcome},
     routes::status::OptionalPeerAddr,
@@ -17,6 +17,7 @@ const BOOTSTRAP_RATE_BUCKET: &str = "__bootstrap_setup__";
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/login", post(login))
+        .route("/logout", post(logout))
         .route("/setup", post(setup))
         .route("/setup-token", post(setup_token))
         .route("/change_password", post(change_password))
@@ -68,6 +69,15 @@ pub struct LoginResponse {
     pub message: String,
     pub status: String,
     pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in_secs: Option<u64>,
+}
+
+#[derive(serde::Serialize, ToSchema)]
+pub struct LogoutResponse {
+    pub revoked: bool,
 }
 
 #[derive(serde::Serialize, ToSchema)]
@@ -109,6 +119,10 @@ pub struct QuickPersonalSetupRequest {
 pub struct QuickPersonalSetupResponse {
     pub status: String,
     pub tenant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_in_secs: Option<u64>,
 }
 
 fn client_ip(peer_addr: Option<SocketAddr>, headers: &HeaderMap) -> IpAddr {
@@ -269,34 +283,38 @@ pub async fn login(
     }
 
     let hash = hash_passphrase(&body.session_key);
-    let citadel = state.citadel.lock().await;
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
 
-    let is_master = citadel
-        .enclave
+    let is_master = enclave
         .authenticate_master(&body.tenant_id, &hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
     if is_master {
         state.auth_rate_limiter.reset(ip, &body.tenant_id);
+        let (token, ttl) = state.session_store.issue(&body.tenant_id, &hash, true);
         return Ok(Json(LoginResponse {
             message: "Citadel Handshake Successful".to_string(),
             status: "authenticated".to_string(),
             role: "admin".to_string(),
+            session_token: Some(token),
+            expires_in_secs: Some(ttl),
         }));
     }
 
-    match citadel
-        .enclave
-        .authenticate_tenant(&body.tenant_id, &hash)
-        .await
-    {
+    match enclave.authenticate_tenant(&body.tenant_id, &hash).await {
         Ok(true) => {
             state.auth_rate_limiter.reset(ip, &body.tenant_id);
+            let (token, ttl) = state.session_store.issue(&body.tenant_id, &hash, false);
             Ok(Json(LoginResponse {
                 message: "Citadel Handshake Successful".to_string(),
                 status: "authenticated".to_string(),
                 role: "tenant".to_string(),
+                session_token: Some(token),
+                expires_in_secs: Some(ttl),
             }))
         }
         Ok(false) => Err(AegisHttpError::Citadel(CitadelError::Unauthorized)),
@@ -306,10 +324,19 @@ pub async fn login(
                 message: "Password rotation required".to_string(),
                 status: "password_must_change".to_string(),
                 role: "tenant".to_string(),
+                session_token: None,
+                expires_in_secs: None,
             }))
         }
         Err(_) => Err(AegisHttpError::Citadel(CitadelError::Unauthorized)),
     }
+}
+
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Json<LogoutResponse> {
+    let revoked = extract_session_token(&headers)
+        .map(|tok| state.session_store.revoke_token(&tok))
+        .unwrap_or(false);
+    Json(LogoutResponse { revoked })
 }
 
 #[utoipa::path(
@@ -331,9 +358,12 @@ pub async fn setup(
     Json(body): Json<AdminSetupRequest>,
 ) -> Result<Json<SetupResponse>, AegisHttpError> {
     let ip = client_ip(peer_addr, &headers);
-    let citadel = state.citadel.lock().await;
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
     bootstrap_master_with_token(
-        &citadel.enclave,
+        &enclave,
         &state.auth_rate_limiter,
         ip,
         &body.username,
@@ -368,9 +398,12 @@ pub async fn setup_token(
     Json(body): Json<SetupTokenRequest>,
 ) -> Result<Json<SetupTokenResponse>, AegisHttpError> {
     let ip = client_ip(peer_addr, &headers);
-    let citadel = state.citadel.lock().await;
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
     bootstrap_master_with_token(
-        &citadel.enclave,
+        &enclave,
         &state.auth_rate_limiter,
         ip,
         &body.username,
@@ -425,20 +458,22 @@ pub async fn change_password(
     let current_hash = hash_passphrase(&body.current_password);
     let new_hash = hash_passphrase(&body.new_password);
 
-    let citadel = state.citadel.lock().await;
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
 
-    let is_master = citadel
-        .enclave
+    let is_master = enclave
         .authenticate_master(&body.tenant_id, &current_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
     if is_master {
-        citadel
-            .enclave
+        enclave
             .reset_master_password(&body.tenant_id, &new_hash)
             .await
             .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
+        state.session_store.revoke_tenant(&body.tenant_id);
         state.auth_rate_limiter.reset(ip, &body.tenant_id);
         return Ok(Json(ChangePasswordResponse {
             success: true,
@@ -448,8 +483,7 @@ pub async fn change_password(
 
     // Verificar la contraseña actual usando authenticate_tenant
     // Ignoramos PASSWORD_MUST_CHANGE — el usuario está intentando cambiarla ahora mismo
-    let current_valid = match citadel
-        .enclave
+    let current_valid = match enclave
         .authenticate_tenant(&body.tenant_id, &current_hash)
         .await
     {
@@ -462,12 +496,13 @@ pub async fn change_password(
         return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
     }
 
-    citadel
-        .enclave
+    enclave
         .reset_tenant_password(&body.tenant_id, &new_hash)
         .await
         .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
 
+    state.session_store.revoke_tenant(&body.tenant_id);
+    ank_core::enclave::TenantDB::evict_tenant(&body.tenant_id);
     state.auth_rate_limiter.reset(ip, &body.tenant_id);
 
     Ok(Json(ChangePasswordResponse {
@@ -572,19 +607,23 @@ pub async fn quick_personal_setup(
     headers: HeaderMap,
     Json(body): Json<QuickPersonalSetupRequest>,
 ) -> Result<Json<QuickPersonalSetupResponse>, AegisHttpError> {
-    let (username, _ip) = {
+    let enclave = {
         let citadel = state.citadel.lock().await;
-        execute_quick_personal_bootstrap(
-            &citadel.enclave,
-            &state.auth_rate_limiter,
-            peer_addr,
-            &headers,
-            &body.username,
-            &body.passphrase,
-            body.setup_token.as_deref(),
-        )
-        .await?
+        citadel.enclave.clone()
     };
+    let (username, _ip) = execute_quick_personal_bootstrap(
+        &enclave,
+        &state.auth_rate_limiter,
+        peer_addr,
+        &headers,
+        &body.username,
+        &body.passphrase,
+        body.setup_token.as_deref(),
+    )
+    .await?;
+
+    let hash = hash_passphrase(&body.passphrase);
+    let (session_token, expires_in_secs) = state.session_store.issue(&username, &hash, false);
 
     let canonical_provider = ank_core::router::normalize_provider_id(&body.provider);
     let has_key = body
@@ -678,6 +717,8 @@ pub async fn quick_personal_setup(
     Ok(Json(QuickPersonalSetupResponse {
         status: "READY".to_string(),
         tenant_id: username,
+        session_token: Some(session_token),
+        expires_in_secs: Some(expires_in_secs),
     }))
 }
 

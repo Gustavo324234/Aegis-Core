@@ -790,6 +790,7 @@ pub(crate) async fn run_server() -> Result<()> {
         training_manager,
         pending_oauth_flows: ank_http::routes::oauth_api::new_pending_oauth_store(),
         whatsapp,
+        session_store: ank_http::citadel::CitadelSessionStore::default(),
     };
 
     // 12. Tonic Server

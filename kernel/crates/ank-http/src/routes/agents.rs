@@ -336,9 +336,12 @@ async fn list_autonomous_projects(
     State(_state): State<AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
+    let projects =
+        ank_core::enclave::TenantDB::with_async(auth.tenant_id, auth.session_key_hash, |db| {
+            Ok(db.get_autonomous_projects().unwrap_or_default())
+        })
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let projects = db.get_autonomous_projects().unwrap_or_default();
     Ok(Json(serde_json::json!({ "autonomous_projects": projects })))
 }
 
@@ -351,10 +354,13 @@ async fn set_project_autonomous(
     auth: CitadelAuthenticated,
     Json(body): Json<SetAutonomousRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let db = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    db.set_project_autonomous(&project_id, body.enabled)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let pid_for_db = project_id.clone();
+    let enabled = body.enabled;
+    ank_core::enclave::TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        db.set_project_autonomous(&pid_for_db, enabled)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({
         "project_id": project_id,
         "autonomous": body.enabled,

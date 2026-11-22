@@ -1,8 +1,4 @@
-use crate::{
-    citadel::{hash_passphrase, CitadelError},
-    error::AegisHttpError,
-    state::AppState,
-};
+use crate::{citadel::CitadelError, error::AegisHttpError, state::AppState};
 use ank_core::SchedulerEvent;
 use axum::{
     extract::{ConnectInfo, FromRequestParts, State},
@@ -94,30 +90,10 @@ async fn require_service_master_auth(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(), AegisHttpError> {
-    let tenant_id = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingTenant))?;
-
-    let raw_key = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingKey))?;
-
-    let hash = hash_passphrase(raw_key);
-    let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(tenant_id, &hash)
+    crate::citadel::authenticate_master_headers(state, headers)
         .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-    }
-
-    Ok(())
+        .map(|_| ())
+        .map_err(AegisHttpError::Citadel)
 }
 
 #[utoipa::path(
@@ -226,47 +202,12 @@ pub async fn get_system_status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<SystemStatusResponse>, AegisHttpError> {
-    // Auth desde headers Citadel — consistente con todos los demás endpoints
-    let tenant_id = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::MissingTenant,
-        ))?;
-
-    let raw_key = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::MissingKey,
-        ))?;
-
-    let hash = hash_passphrase(raw_key);
-
-    {
-        let citadel = state.citadel.lock().await;
-
-        // El admin (master) también puede consultar el status
-        let is_master = citadel
-            .enclave
-            .authenticate_master(tenant_id, &hash)
-            .await
-            .unwrap_or(false);
-
-        if !is_master {
-            let is_tenant = citadel
-                .enclave
-                .authenticate_tenant(tenant_id, &hash)
-                .await
-                .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-
-            if !is_tenant {
-                return Err(AegisHttpError::Citadel(
-                    crate::citadel::CitadelError::Unauthorized,
-                ));
-            }
-        }
-    }
+    crate::citadel::authenticate_headers(&state, &headers)
+        .await
+        .map_err(|e| match e {
+            CitadelError::MissingTenant | CitadelError::MissingKey => AegisHttpError::Citadel(e),
+            _ => AegisHttpError::Citadel(CitadelError::Unauthorized),
+        })?;
 
     let hw_profile = std::env::var("HW_PROFILE").unwrap_or_else(|_| "1".to_string());
     let hw_profile_name = match hw_profile.as_str() {
@@ -328,8 +269,11 @@ pub async fn get_system_status(
 pub async fn get_public_system_state(
     State(state): State<AppState>,
 ) -> Json<PublicSystemStateResponse> {
-    let citadel = state.citadel.lock().await;
-    let exists = citadel.enclave.admin_exists().await.unwrap_or(false);
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
+    let exists = enclave.admin_exists().await.unwrap_or(false);
     Json(PublicSystemStateResponse {
         state: if exists {
             "STATE_OPERATIONAL".to_string()
@@ -440,15 +384,16 @@ pub async fn get_connection_info(
     headers: HeaderMap,
     OptionalPeerAddr(peer_addr): OptionalPeerAddr,
 ) -> Result<Json<ConnectionInfoResponse>, AegisHttpError> {
-    // CORE-368: Allow authenticated Citadel sessions from any origin, or direct non-proxied
-    // loopback probes used by `aegis status` on the local host.
-    let citadel_tenant = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok());
-    let citadel_key = headers.get("x-citadel-key").and_then(|v| v.to_str().ok());
+    // CORE-368 / CORE-402: Allow authenticated Citadel sessions (`cst_*` tokens or legacy keys)
+    // from any origin, or direct non-proxied loopback probes used by `aegis status` on localhost.
+    let has_citadel_creds = headers.contains_key("x-citadel-token")
+        || headers.contains_key("authorization")
+        || (headers.contains_key("x-citadel-tenant") && headers.contains_key("x-citadel-key"));
 
-    let authorized = if let (Some(t), Some(k)) = (citadel_tenant, citadel_key) {
-        crate::citadel::verify_ws_tenant(&state, t, k).await.is_ok()
+    let authorized = if has_citadel_creds {
+        crate::citadel::authenticate_headers(&state, &headers)
+            .await
+            .is_ok()
     } else {
         is_direct_local_cli_probe(peer_addr, &headers)
     };

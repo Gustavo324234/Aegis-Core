@@ -82,16 +82,15 @@ async fn update_antigravity_config(
         .agy_runner
         .set_enabled(body.use_antigravity_sdk);
 
-    if let Ok(db) = ank_core::enclave::TenantDB::open(&auth.tenant_id, &auth.session_key_hash) {
-        let _ = db.set_kv(
-            "use_antigravity_sdk",
-            if body.use_antigravity_sdk {
-                "true"
-            } else {
-                "false"
-            },
-        );
-    }
+    let enabled = body.use_antigravity_sdk;
+    let _ =
+        ank_core::enclave::TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+            db.set_kv(
+                "use_antigravity_sdk",
+                if enabled { "true" } else { "false" },
+            )
+        })
+        .await;
 
     Json(json!({
         "status": "ok",
@@ -135,13 +134,12 @@ async fn authorize_hook_or_local(
         }
     }
 
-    let citadel_tenant = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok());
-    let citadel_key = headers.get("x-citadel-key").and_then(|v| v.to_str().ok());
-    if let (Some(t), Some(k)) = (citadel_tenant, citadel_key) {
-        if crate::citadel::verify_ws_tenant(state, t, k).await.is_ok() {
-            return Some(HookCaller::Citadel(t.to_string()));
+    if headers.contains_key("x-citadel-tenant")
+        || headers.contains_key("x-citadel-key")
+        || headers.contains_key("x-citadel-token")
+    {
+        if let Ok(auth) = crate::citadel::authenticate_headers(state, headers).await {
+            return Some(HookCaller::Citadel(auth.tenant_id));
         }
     }
 

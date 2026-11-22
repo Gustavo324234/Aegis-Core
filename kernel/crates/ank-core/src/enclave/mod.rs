@@ -1,11 +1,140 @@
 use anyhow::Result;
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::mem::ManuallyDrop;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::info;
 
 pub mod master;
 pub use master::MasterEnclave;
+
+const DEFAULT_TENANT_DB_POOL_SIZE: usize = 64;
+const TENANT_DB_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
+
+type PoolCacheKey = (String, String);
+
+struct PooledEntry {
+    key: PoolCacheKey,
+    conn: Connection,
+    last_used: Instant,
+}
+
+#[derive(Default)]
+struct TenantDbPool {
+    idle: VecDeque<PooledEntry>,
+    initialized_schemas: HashSet<String>,
+    generations: HashMap<String, u64>,
+}
+
+impl TenantDbPool {
+    fn normalize_path(path: &str) -> String {
+        path.replace('\\', "/")
+    }
+
+    fn generation_of(&self, db_path: &str) -> u64 {
+        self.generations.get(db_path).copied().unwrap_or(0)
+    }
+
+    fn purge_expired(&mut self, now: Instant) {
+        self.idle
+            .retain(|entry| now.saturating_duration_since(entry.last_used) <= TENANT_DB_IDLE_TTL);
+    }
+
+    fn take(&mut self, key: &PoolCacheKey, now: Instant) -> Option<(Connection, u64)> {
+        self.purge_expired(now);
+        let idx = self.idle.iter().rposition(|entry| &entry.key == key)?;
+        let entry = self.idle.remove(idx)?;
+        let generation = self.generation_of(&key.0);
+        Some((entry.conn, generation))
+    }
+
+    fn put(&mut self, key: PoolCacheKey, conn: Connection, expected_gen: u64, capacity: usize) {
+        if capacity == 0 || self.generation_of(&key.0) != expected_gen {
+            return;
+        }
+        if !Path::new(&key.0).exists() {
+            return;
+        }
+        while self.idle.len() >= capacity {
+            self.idle.pop_front();
+        }
+        self.idle.push_back(PooledEntry {
+            key,
+            conn,
+            last_used: Instant::now(),
+        });
+    }
+
+    fn evict_path(&mut self, db_path: &str) {
+        let next_gen = self.generation_of(db_path).saturating_add(1);
+        self.generations.insert(db_path.to_string(), next_gen);
+        let norm_target = Self::normalize_path(db_path);
+        self.idle
+            .retain(|entry| Self::normalize_path(&entry.key.0) != norm_target);
+        self.initialized_schemas.remove(db_path);
+    }
+
+    fn evict_tenant(&mut self, tenant_id: &str, current_db_path: &str) {
+        self.evict_path(current_db_path);
+        let suffix = format!("/users/{}/memory.db", tenant_id);
+        let mut affected_paths: HashSet<String> = HashSet::new();
+        for entry in &self.idle {
+            if Self::normalize_path(&entry.key.0).ends_with(&suffix) {
+                affected_paths.insert(entry.key.0.clone());
+            }
+        }
+        for path in &self.initialized_schemas {
+            if Self::normalize_path(path).ends_with(&suffix) {
+                affected_paths.insert(path.clone());
+            }
+        }
+        for path in affected_paths {
+            self.evict_path(&path);
+        }
+    }
+
+    #[cfg(test)]
+    fn evict_prefix(&mut self, prefix: &str) {
+        let norm_prefix = Self::normalize_path(prefix);
+        let mut affected: HashSet<String> = HashSet::new();
+        for entry in &self.idle {
+            if Self::normalize_path(&entry.key.0).starts_with(&norm_prefix) {
+                affected.insert(entry.key.0.clone());
+            }
+        }
+        for path in &self.initialized_schemas {
+            if Self::normalize_path(path).starts_with(&norm_prefix) {
+                affected.insert(path.clone());
+            }
+        }
+        for path in affected {
+            self.evict_path(&path);
+        }
+    }
+}
+
+static TENANT_DB_POOL: LazyLock<Mutex<TenantDbPool>> =
+    LazyLock::new(|| Mutex::new(TenantDbPool::default()));
+
+fn configured_pool_capacity() -> usize {
+    std::env::var("AEGIS_TENANT_DB_POOL_SIZE")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|n| n.clamp(1, 256))
+        .unwrap_or(DEFAULT_TENANT_DB_POOL_SIZE)
+}
+
+fn tenant_db_path(tenant_id: &str) -> String {
+    let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
+    format!("{}/users/{}/memory.db", base_dir, tenant_id)
+}
+
+fn key_fingerprint(session_key: &str) -> String {
+    hex::encode(Sha256::digest(session_key.as_bytes()))
+}
 
 /// CORE-401: Escribe secretos o llaves privadas en disco con permisos restrictivos
 /// (`0600` en Unix) para evitar lectura por otros usuarios locales.
@@ -40,14 +169,30 @@ pub fn write_secret_file(path: &Path, content: &[u8]) -> std::io::Result<()> {
 }
 
 /// --- TENANT DB (SECURE ENCLAVE) ---
-/// Gestiona una base de datos SQLite encriptada con SQLCipher por cada tenant.
+/// Gestiona una base de datos SQLite encriptada con SQLCipher por cada tenant,
+/// reutilizando conexiones descifradas mediante un pool LRU en memoria (ADR-034 / CORE-402).
 pub struct TenantDB {
-    connection: Connection,
+    connection: ManuallyDrop<Connection>,
+    pool_key: Option<PoolCacheKey>,
+    generation: u64,
+}
+
+impl Drop for TenantDB {
+    fn drop(&mut self) {
+        // SAFETY: `self.connection` is only taken once in `Drop::drop` and never accessed after.
+        let conn = unsafe { ManuallyDrop::take(&mut self.connection) };
+        if let Some(key) = self.pool_key.take() {
+            let cap = configured_pool_capacity();
+            let mut pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+            pool.put(key, conn, self.generation, cap);
+        }
+    }
 }
 
 impl TenantDB {
-    /// Inicializa o abre la base de datos segura para un tenant.
-    /// Aplica la session_key mediante PRAGMA key para desencriptar en reposo.
+    /// Inicializa o reutiliza una conexión SQLCipher descifrada desde el pool LRU para un tenant.
+    /// Aplica la `session_key` mediante PRAGMA key en misses y ejecuta `init_schema()` una sola vez
+    /// por ruta inicializada.
     /// CORE-399: Rechaza `session_key` vacío o `"default"` y NUNCA cuarentena ni
     /// sobrescribe `memory.db` automáticamente ante un fallo de descifrado.
     pub fn open(tenant_id: &str, session_key: &str) -> Result<Self> {
@@ -57,8 +202,29 @@ impl TenantDB {
             anyhow::bail!("Invalid or empty session key for tenant {}", tenant_id);
         }
 
-        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let db_path = format!("{}/users/{}/memory.db", base_dir, tenant_id);
+        let db_path = tenant_db_path(tenant_id);
+        let cache_key = (db_path.clone(), key_fingerprint(session_key));
+        let disk_exists = Path::new(&db_path).exists();
+
+        let (generation, schema_already_initialized) = {
+            let mut pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+            if !disk_exists {
+                // If an external cleanup removed the DB file, clear any stale cached handles/schema state.
+                pool.evict_path(&db_path);
+                (pool.generation_of(&db_path), false)
+            } else if let Some((conn, generation)) = pool.take(&cache_key, Instant::now()) {
+                return Ok(Self {
+                    connection: ManuallyDrop::new(conn),
+                    pool_key: Some(cache_key),
+                    generation,
+                });
+            } else {
+                (
+                    pool.generation_of(&db_path),
+                    pool.initialized_schemas.contains(&db_path),
+                )
+            }
+        };
 
         // Asegurar que el directorio del tenant existe
         if let Some(parent) = Path::new(&db_path).parent() {
@@ -68,9 +234,54 @@ impl TenantDB {
 
         let conn = Self::try_open_with_key(&db_path, session_key)?;
         info!(tenant_id = %tenant_id, "Secure Enclave initialized successfully.");
-        let db = Self { connection: conn };
-        db.init_schema()?;
+
+        let mut db = Self {
+            connection: ManuallyDrop::new(conn),
+            pool_key: Some(cache_key),
+            generation,
+        };
+
+        if !schema_already_initialized {
+            if let Err(err) = db.init_schema() {
+                db.pool_key = None;
+                return Err(err);
+            }
+            let mut pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+            if pool.generation_of(&db_path) == generation {
+                pool.initialized_schemas.insert(db_path);
+            }
+        }
+
         Ok(db)
+    }
+
+    /// CORE-402: Ejecuta un closure de lectura/escritura sobre `TenantDB` dentro de
+    /// `tokio::task::spawn_blocking`, evitando bloquear workers async de Tokio.
+    pub async fn with_async<F, T>(tenant_id: String, session_key: String, f: F) -> Result<T>
+    where
+        F: FnOnce(&TenantDB) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open(&tenant_id, &session_key)?;
+            f(&db)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("TenantDB blocking task failed: {}", e))?
+    }
+
+    /// CORE-402: Expulsa del pool LRU todas las conexiones cacheadas e inicializaciones de esquema
+    /// asociadas a `tenant_id` (obligatorio al rotar clave, cuarentenar o eliminar tenant).
+    pub fn evict_tenant(tenant_id: &str) {
+        let db_path = tenant_db_path(tenant_id);
+        let mut pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+        pool.evict_tenant(tenant_id, &db_path);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evict_prefix_for_test(prefix: &str) {
+        let mut pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+        pool.evict_prefix(prefix);
     }
 
     /// Opens the DB at `path`, applies the SQLCipher key and verifies it can be
@@ -92,6 +303,8 @@ impl TenantDB {
         conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))
             .context("Decryption failed: invalid session key or corrupted database")?;
 
+        let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+
         Ok(conn)
     }
 
@@ -99,8 +312,8 @@ impl TenantDB {
     /// contraseña administrativo (renombra `memory.db`, `-wal`, `-shm` a `.locked-<ts>`),
     /// preservando el ciphertext anterior sin borrarlo.
     pub fn quarantine_for_password_reset(tenant_id: &str) -> Result<Option<String>> {
-        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let db_path = format!("{}/users/{}/memory.db", base_dir, tenant_id);
+        Self::evict_tenant(tenant_id);
+        let db_path = tenant_db_path(tenant_id);
         if !Path::new(&db_path).exists() {
             return Ok(None);
         }
@@ -1934,6 +2147,7 @@ impl ScopedTestDataDir {
 #[cfg(test)]
 impl Drop for ScopedTestDataDir {
     fn drop(&mut self) {
+        TenantDB::evict_prefix_for_test(&self.tempdir.path().to_string_lossy());
         match &self.prev {
             Some(old) => std::env::set_var("AEGIS_DATA_DIR", old),
             None => std::env::remove_var("AEGIS_DATA_DIR"),
@@ -2489,6 +2703,119 @@ mod tests {
             assert_eq!(mode, 0o600);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_tenant_db_pool_reuses_connection_and_evicts() -> Result<()> {
+        let _scoped = ScopedTestDataDir::new()?;
+        let tenant_id = "pool_reuse_user";
+        let key = "pool_secret_key_123";
+        let db_path = tenant_db_path(tenant_id);
+
+        {
+            let db = TenantDB::open(tenant_id, key)?;
+            db.set_kv("greeting", "hola_aegis")?;
+        }
+
+        {
+            let pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(pool.initialized_schemas.contains(&db_path));
+            let idle_for_tenant = pool.idle.iter().filter(|e| e.key.0 == db_path).count();
+            assert_eq!(idle_for_tenant, 1);
+        }
+
+        {
+            let db = TenantDB::open(tenant_id, key)?;
+            assert_eq!(db.get_kv("greeting")?.as_deref(), Some("hola_aegis"));
+            // While checked out, the handle is not in the idle queue.
+            let pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+            let idle_for_tenant = pool.idle.iter().filter(|e| e.key.0 == db_path).count();
+            assert_eq!(idle_for_tenant, 0);
+        }
+
+        TenantDB::evict_tenant(tenant_id);
+        {
+            let pool = TENANT_DB_POOL.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(!pool.initialized_schemas.contains(&db_path));
+            let idle_for_tenant = pool.idle.iter().filter(|e| e.key.0 == db_path).count();
+            assert_eq!(idle_for_tenant, 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_tenant_db_pool_lru_capacity_evicts_oldest() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut pool = TenantDbPool::default();
+
+        let p1 = dir.path().join("t1.db");
+        let p2 = dir.path().join("t2.db");
+        let p3 = dir.path().join("t3.db");
+        for p in [&p1, &p2, &p3] {
+            std::fs::write(p, b"")?;
+        }
+
+        let k1 = (p1.to_string_lossy().into_owned(), "k1".to_string());
+        let k2 = (p2.to_string_lossy().into_owned(), "k2".to_string());
+        let k3 = (p3.to_string_lossy().into_owned(), "k3".to_string());
+
+        pool.put(k1.clone(), Connection::open_in_memory()?, 0, 2);
+        pool.put(k2.clone(), Connection::open_in_memory()?, 0, 2);
+        // Touch k1 so k2 becomes the least-recently-used entry.
+        let (reused, gen) = pool
+            .take(&k1, Instant::now())
+            .ok_or_else(|| anyhow::anyhow!("k1 should be present"))?;
+        pool.put(k1.clone(), reused, gen, 2);
+
+        // Adding k3 with capacity=2 must evict k2 and retain k1 + k3.
+        pool.put(k3.clone(), Connection::open_in_memory()?, 0, 2);
+        assert_eq!(pool.idle.len(), 2);
+        assert!(pool.take(&k2, Instant::now()).is_none());
+        assert!(pool.take(&k1, Instant::now()).is_some());
+        assert!(pool.take(&k3, Instant::now()).is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_tenant_db_with_async_concurrent() -> Result<()> {
+        let _scoped = ScopedTestDataDir::new()?;
+        let tenant_id = "async_concurrent_user";
+        let key = "async_secret_key_999";
+
+        TenantDB::with_async(tenant_id.to_string(), key.to_string(), |db| {
+            db.set_kv("seed", "ok")
+        })
+        .await?;
+
+        let mut tasks = Vec::new();
+        for i in 0..8u32 {
+            let tid = tenant_id.to_string();
+            let k = key.to_string();
+            tasks.push(tokio::spawn(async move {
+                TenantDB::with_async(tid, k, move |db| {
+                    db.set_kv(&format!("k_{i}"), &format!("v_{i}"))?;
+                    db.get_kv("seed")
+                })
+                .await
+            }));
+        }
+
+        for t in tasks {
+            let val = t.await??;
+            assert_eq!(val.as_deref(), Some("ok"));
+        }
+
+        let count: i64 = TenantDB::with_async(tenant_id.to_string(), key.to_string(), |db| {
+            let c = db.connection().query_row(
+                "SELECT count(*) FROM kv_store WHERE key LIKE 'k_%'",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(c)
+        })
+        .await?;
+        assert_eq!(count, 8);
         Ok(())
     }
 }
