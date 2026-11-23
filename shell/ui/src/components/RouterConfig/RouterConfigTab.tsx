@@ -1,11 +1,18 @@
 import React from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../../store/useAegisStore';
 import GlobalKeyManager from './GlobalKeyManager';
 import TenantKeyManager from './TenantKeyManager';
 import ModelCatalogViewer from './ModelCatalogViewer';
 
 const RouterConfigTab: React.FC = () => {
-    const { isAdmin, tenantId, sessionKey } = useAegisStore();
+    const { isAdmin, tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({
+            isAdmin: s.isAdmin,
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+        })),
+    );
 
     if (!tenantId || !sessionKey) return null;
 

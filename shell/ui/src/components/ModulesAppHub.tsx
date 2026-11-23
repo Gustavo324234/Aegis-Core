@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     X,
@@ -32,8 +32,12 @@ import {
     Power,
     Search,
 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
-import { VideoStudioPanel } from './VideoStudioPanel';
+
+const VideoStudioPanel = lazy(() =>
+    import('./VideoStudioPanel').then((m) => ({ default: m.VideoStudioPanel })),
+);
 
 interface ExposedToolSchema {
     name: string;
@@ -264,7 +268,15 @@ export const ModulesAppHub: React.FC<ModulesAppHubProps> = ({
     initialVideoProjectId = null,
     onConsumeInitialVideoProject,
 }) => {
-    const { tenantId, sessionKey, status, sendMessage, setCurrentView } = useAegisStore();
+    const { tenantId, sessionKey, status, sendMessage, setCurrentView } = useAegisStore(
+        useShallow((s) => ({
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            status: s.status,
+            sendMessage: s.sendMessage,
+            setCurrentView: s.setCurrentView,
+        })),
+    );
 
     const [modules, setModules] = useState<ModuleSummary[]>([]);
     const [activeApp, setActiveApp] = useState<string>(initialView);
@@ -2258,24 +2270,33 @@ export const ModulesAppHub: React.FC<ModulesAppHubProps> = ({
 
                         {/* ═══════════════ 1B. AEGIS VIDEO STUDIO ═══════════════ */}
                         {activeApp === 'aegis.domain.video' && (
-                            <VideoStudioPanel
-                                tenantId={tenantId}
-                                sessionKey={sessionKey}
-                                pendingCreatorScriptId={pendingVideoScriptId}
-                                onConsumePendingScript={() => setPendingVideoScriptId(null)}
-                                targetProjectId={initialVideoProjectId}
-                                onConsumeTargetProject={onConsumeInitialVideoProject}
-                                onScheduleResult={(projectTitle, platform) => {
-                                    setPostForm((prev) => ({
-                                        ...prev,
-                                        title: projectTitle,
-                                        platform: platform || 'tiktok_reels',
-                                    }));
-                                    setActiveApp('aegis.domain.creator');
-                                    setCreatorTab('calendar');
-                                }}
-                                onAskAegis={(prompt) => askAegisWithPrompt(prompt)}
-                            />
+                            <Suspense
+                                fallback={
+                                    <div className="flex items-center justify-center py-16 text-white/40 gap-2 text-xs font-mono">
+                                        <Loader2 className="w-4 h-4 animate-spin text-aegis-cyan" />
+                                        Cargando Video Studio...
+                                    </div>
+                                }
+                            >
+                                <VideoStudioPanel
+                                    tenantId={tenantId}
+                                    sessionKey={sessionKey}
+                                    pendingCreatorScriptId={pendingVideoScriptId}
+                                    onConsumePendingScript={() => setPendingVideoScriptId(null)}
+                                    targetProjectId={initialVideoProjectId}
+                                    onConsumeTargetProject={onConsumeInitialVideoProject}
+                                    onScheduleResult={(projectTitle, platform) => {
+                                        setPostForm((prev) => ({
+                                            ...prev,
+                                            title: projectTitle,
+                                            platform: platform || 'tiktok_reels',
+                                        }));
+                                        setActiveApp('aegis.domain.creator');
+                                        setCreatorTab('calendar');
+                                    }}
+                                    onAskAegis={(prompt) => askAegisWithPrompt(prompt)}
+                                />
+                            </Suspense>
                         )}
                     </div>
                 </motion.div>

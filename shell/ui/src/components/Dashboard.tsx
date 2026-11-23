@@ -14,6 +14,7 @@ import {
     Bot,
     Code2,
 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 import type { ProjectSummary, AgentNodeSummary, AgentNodeState, RoutingInfo } from '../store/useAegisStore';
 import AgentTreeWidget from './AgentTreeWidget';
@@ -334,7 +335,19 @@ const ChronosWidget: React.FC<{ tenantId: string | null; sessionKey: string | nu
 };
 
 const Dashboard: React.FC = () => {
-    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected, systemState, activeProjects, agentTree, lastRoutingInfo } = useAegisStore();
+    const { setCurrentView, system_metrics, tenantId, sessionKey, isAgentStreamConnected, systemState, activeProjects, agentTree, lastRoutingInfo } = useAegisStore(
+        useShallow((s) => ({
+            setCurrentView: s.setCurrentView,
+            system_metrics: s.system_metrics,
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            isAgentStreamConnected: s.isAgentStreamConnected,
+            systemState: s.systemState,
+            activeProjects: s.activeProjects,
+            agentTree: s.agentTree,
+            lastRoutingInfo: s.lastRoutingInfo,
+        })),
+    );
     const { backlog, active, verified } = mapProjectsToCards(activeProjects, agentTree);
 
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);

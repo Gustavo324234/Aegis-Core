@@ -1,25 +1,34 @@
-import React, { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState, useCallback, Suspense, lazy } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, Volume2, VolumeX, ChevronDown, Check, X, AlertTriangle, Brain, Eraser, ArrowUp, History, RefreshCw, Puzzle } from 'lucide-react';
+import { Send, Settings, AlertCircle, Mic, MicOff, Paperclip, Loader2, LogOut, LayoutDashboard, Volume2, VolumeX, ChevronDown, Check, X, AlertTriangle, Brain, Eraser, ArrowUp, History, RefreshCw, Puzzle, QrCode } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore, Message } from '../store/useAegisStore';
 import { AgentBadge } from './AgentBadge';
 import { useTranslation } from '../i18n';
 import { AegisLogo } from './AegisLogo';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import TelemetryDashboard from './TelemetryDashboard';
-import SettingsPanel from './SettingsPanel';
-import MusicPlayer from './MusicPlayer';
-import { QrCode } from 'lucide-react';
-import { ConnectionQR } from './ConnectionQR';
-import { AgentActivityPanel } from './AgentActivityPanel';
-import { PersonalAssistantDrawer } from './PersonalAssistantDrawer';
-import { ModulesAppHub } from './ModulesAppHub';
-import { ChatVideoResultCard } from './VideoStudioPanel';
 import { AssistantAvatar } from './AssistantAvatar';
 import { loadVoicePrefs } from '../audio/naturalVoice';
+
+const TelemetryDashboard = lazy(() => import('./TelemetryDashboard'));
+const SettingsPanel = lazy(() => import('./SettingsPanel'));
+const MusicPlayer = lazy(() => import('./MusicPlayer'));
+const ConnectionQR = lazy(() =>
+    import('./ConnectionQR').then((m) => ({ default: m.ConnectionQR })),
+);
+const AgentActivityPanel = lazy(() =>
+    import('./AgentActivityPanel').then((m) => ({ default: m.AgentActivityPanel })),
+);
+const PersonalAssistantDrawer = lazy(() =>
+    import('./PersonalAssistantDrawer').then((m) => ({ default: m.PersonalAssistantDrawer })),
+);
+const ModulesAppHub = lazy(() => import('./ModulesAppHub'));
+const ChatVideoResultCard = lazy(() =>
+    import('./VideoStudioPanel').then((m) => ({ default: m.ChatVideoResultCard })),
+);
 
 function renderTextWithLineBreaks(node: React.ReactNode): React.ReactNode {
     if (typeof node === 'string') {
@@ -151,7 +160,7 @@ interface CatalogModel {
 }
 
 const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
-    const { lastError } = useAegisStore();
+    const lastError = useAegisStore((s) => s.lastError);
     const config: Record<string, { color: string, label: string }> = {
         idle: { color: 'bg-green-500', label: 'En línea' },
         thinking: { color: 'bg-aegis-purple animate-pulse shadow-[0_0_8px_rgba(191,0,255,0.6)]', label: 'Pensando...' },
@@ -262,13 +271,14 @@ const MessageItem: React.FC<{
                             <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>{cleanContent}</ReactMarkdown>
                         )}
                         {videoProjectIds.map((pid) => (
-                            <ChatVideoResultCard
-                                key={pid}
-                                projectId={pid}
-                                tenantId={tenantId ?? null}
-                                sessionKey={sessionKey ?? null}
-                                onOpenInStudio={onOpenVideoStudio}
-                            />
+                            <Suspense key={pid} fallback={null}>
+                                <ChatVideoResultCard
+                                    projectId={pid}
+                                    tenantId={tenantId ?? null}
+                                    sessionKey={sessionKey ?? null}
+                                    onOpenInStudio={onOpenVideoStudio}
+                                />
+                            </Suspense>
                         ))}
                     </div>
                 </div>
@@ -326,7 +336,38 @@ const ChatTerminal: React.FC = () => {
         nextHistoryBeforeIndex, hasMoreHistory, isLoadingHistory, cleanOnOpen, historyPrependedSeq,
         loadOlderHistory, clearChatView, setCleanOnOpen,
         pendingRetryPrompt, retryPendingMessage, dismissPendingRetry, liveToolProgress,
-    } = useAegisStore();
+    } = useAegisStore(
+        useShallow((s) => ({
+            messages: s.messages,
+            sendMessage: s.sendMessage,
+            status: s.status,
+            isRecording: s.isRecording,
+            startSirenStream: s.startSirenStream,
+            stopSirenStream: s.stopSirenStream,
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            addSystemMessage: s.addSystemMessage,
+            logout: s.logout,
+            fetchSirenConfig: s.fetchSirenConfig,
+            lastRoutingInfo: s.lastRoutingInfo,
+            voiceEnabled: s.voiceEnabled,
+            setVoiceEnabled: s.setVoiceEnabled,
+            agentName: s.agentName,
+            fetchAgentName: s.fetchAgentName,
+            nextHistoryBeforeIndex: s.nextHistoryBeforeIndex,
+            hasMoreHistory: s.hasMoreHistory,
+            isLoadingHistory: s.isLoadingHistory,
+            cleanOnOpen: s.cleanOnOpen,
+            historyPrependedSeq: s.historyPrependedSeq,
+            loadOlderHistory: s.loadOlderHistory,
+            clearChatView: s.clearChatView,
+            setCleanOnOpen: s.setCleanOnOpen,
+            pendingRetryPrompt: s.pendingRetryPrompt,
+            retryPendingMessage: s.retryPendingMessage,
+            dismissPendingRetry: s.dismissPendingRetry,
+            liveToolProgress: s.liveToolProgress,
+        })),
+    );
     const [avatarPrefs, setAvatarPrefs] = useState(() => loadVoicePrefs());
     const scrollRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -624,7 +665,9 @@ const ChatTerminal: React.FC = () => {
         <div className="aegis-screen bg-black text-white font-sans" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
 
             {/* Telemetría — shrink-0: toma su espacio fijo */}
-            <TelemetryDashboard />
+            <Suspense fallback={null}>
+                <TelemetryDashboard />
+            </Suspense>
 
             {/* Chat — flex-1 + min-h-0: ocupa el resto sin desbordar */}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
@@ -804,7 +847,9 @@ const ChatTerminal: React.FC = () => {
                 </main>
 
                 {/* Agent Activity — CORE-202 */}
-                <AgentActivityPanel />
+                <Suspense fallback={null}>
+                    <AgentActivityPanel />
+                </Suspense>
 
                 {/* CORE-248/299: banner de estado enriquecido — aparece tras 5s o de inmediato con progreso en vivo */}
                 {status === 'thinking' && (showProcessingBanner || liveToolProgress) && (
@@ -1034,35 +1079,51 @@ const ChatTerminal: React.FC = () => {
             {/* Settings Panel */}
             <AnimatePresence>
                 {showSettings && (
-                    <SettingsPanel
-                        tenantId={tenantId!}
-                        sessionKey={sessionKey!}
-                        onClose={() => setShowSettings(false)}
-                    />
+                    <Suspense fallback={null}>
+                        <SettingsPanel
+                            tenantId={tenantId!}
+                            sessionKey={sessionKey!}
+                            onClose={() => setShowSettings(false)}
+                        />
+                    </Suspense>
                 )}
             </AnimatePresence>
 
             {/* Personal Assistant Drawer */}
-            <PersonalAssistantDrawer
-                isOpen={showPersonalDrawer}
-                onClose={() => setShowPersonalDrawer(false)}
-            />
+            {showPersonalDrawer && (
+                <Suspense fallback={null}>
+                    <PersonalAssistantDrawer
+                        isOpen={showPersonalDrawer}
+                        onClose={() => setShowPersonalDrawer(false)}
+                    />
+                </Suspense>
+            )}
 
             {/* Microkernel Modules & Mini-Apps Hub */}
-            <ModulesAppHub
-                isOpen={showModulesHub}
-                initialView={modulesInitialView}
-                initialVideoProjectId={targetVideoProjectId}
-                onConsumeInitialVideoProject={() => setTargetVideoProjectId(null)}
-                onClose={() => {
-                    setShowModulesHub(false);
-                    setModulesInitialView('store');
-                }}
-            />
+            {showModulesHub && (
+                <Suspense fallback={null}>
+                    <ModulesAppHub
+                        isOpen={showModulesHub}
+                        initialView={modulesInitialView}
+                        initialVideoProjectId={targetVideoProjectId}
+                        onConsumeInitialVideoProject={() => setTargetVideoProjectId(null)}
+                        onClose={() => {
+                            setShowModulesHub(false);
+                            setModulesInitialView('store');
+                        }}
+                    />
+                </Suspense>
+            )}
 
-            <MusicPlayer />
+            <Suspense fallback={null}>
+                <MusicPlayer />
+            </Suspense>
             <AnimatePresence>
-                {showQR && <ConnectionQR onClose={() => setShowQR(false)} />}
+                {showQR && (
+                    <Suspense fallback={null}>
+                        <ConnectionQR onClose={() => setShowQR(false)} />
+                    </Suspense>
+                )}
             </AnimatePresence>
         </div>
     );

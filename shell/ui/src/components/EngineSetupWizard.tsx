@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Cpu, Globe, Zap, Box, Server, ShieldCheck, Eye, EyeOff, Terminal, Check, ArrowRight, Activity, AlertTriangle, Bot, Loader2 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore, TaskTypeValue } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -29,7 +30,17 @@ interface GlobalEngine {
 
 const EngineSetupWizard: React.FC = () => {
     const { t } = useTranslation();
-    const { system_metrics, configureEngine, tenantId, sessionKey, taskType, setTaskType, setEngineConfigured } = useAegisStore();
+    const { system_metrics, configureEngine, tenantId, sessionKey, taskType, setTaskType, setEngineConfigured } = useAegisStore(
+        useShallow((s) => ({
+            system_metrics: s.system_metrics,
+            configureEngine: s.configureEngine,
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            taskType: s.taskType,
+            setTaskType: s.setTaskType,
+            setEngineConfigured: s.setEngineConfigured,
+        })),
+    );
     const taskTypeList = TASK_TYPES(t);
     const [globalEngine, setGlobalEngine] = useState<GlobalEngine | null>(null);
     const [showCustom, setShowCustom] = useState(false);

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useShallow } from 'zustand/react/shallow';
 import { 
     X, 
     Wallet, 
@@ -94,7 +95,13 @@ function roleName(role: AgentRole): string {
 }
 
 export const PersonalAssistantDrawer: React.FC<PersonalAssistantDrawerProps> = ({ isOpen, onClose }) => {
-    const { tenantId, sessionKey, agentTree } = useAegisStore();
+    const { tenantId, sessionKey, agentTree } = useAegisStore(
+        useShallow((s) => ({
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            agentTree: s.agentTree,
+        })),
+    );
     const [activeTab, setActiveTab] = useState<'expenses' | 'memory' | 'background'>('expenses');
     const [loading, setLoading] = useState(false);
     const [summary, setSummary] = useState<PersonalSummaryData | null>(null);

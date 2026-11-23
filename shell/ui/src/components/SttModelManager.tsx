@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Download, CheckCircle, Cpu, HardDrive, Star, AlertTriangle, Loader2 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 
@@ -30,7 +31,9 @@ const SttModelManager: React.FC<{ activeModel: string | null; onModelActivated: 
     onModelActivated,
 }) => {
     const { t } = useTranslation();
-    const { tenantId, sessionKey } = useAegisStore();
+    const { tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
+    );
     const [models, setModels] = useState<WhisperModel[]>([]);
     const [status, setStatus] = useState<DownloadStatus>({
         downloading: false,

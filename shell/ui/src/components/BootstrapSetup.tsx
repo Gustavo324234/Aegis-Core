@@ -11,7 +11,7 @@ interface BootstrapSetupProps {
 
 const BootstrapSetup: React.FC<BootstrapSetupProps> = ({ token, onComplete }) => {
     const { t } = useTranslation();
-    const { logout } = useAegisStore();
+    const logout = useAegisStore((s) => s.logout);
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirm, setConfirm] = useState('');

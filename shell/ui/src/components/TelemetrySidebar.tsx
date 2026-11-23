@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Cpu, Database, Activity, LayoutPanelLeft, ChevronRight, ChevronLeft, Zap } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import TheOrb from './TheOrb';
@@ -13,7 +14,13 @@ function cn(...inputs: ClassValue[]) {
 
 const TelemetrySidebar: React.FC = () => {
     const { t } = useTranslation();
-    const { system_metrics, status, lastRoutingInfo } = useAegisStore();
+    const { system_metrics, status, lastRoutingInfo } = useAegisStore(
+        useShallow((s) => ({
+            system_metrics: s.system_metrics,
+            status: s.status,
+            lastRoutingInfo: s.lastRoutingInfo,
+        })),
+    );
     const [isOpen, setIsOpen] = useState(true);
 
     const vramPercentage = (system_metrics.vram_allocated_mb / system_metrics.vram_total_mb) * 100 || 0;

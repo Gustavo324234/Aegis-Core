@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Keyboard, Mic, MessageCircle, AlertTriangle, Wand2 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 
 type InputMode = 'text' | 'audio' | 'conversation' | 'wakeword';
@@ -12,7 +13,17 @@ const MODES: { mode: InputMode; icon: React.FC<React.SVGProps<SVGSVGElement>>; l
 ];
 
 export const InputModeSelector: React.FC = () => {
-    const { inputMode, setInputMode, isRecording, stopSirenStream, sttProvider, agentName, isWakewordListening } = useAegisStore();
+    const { inputMode, setInputMode, isRecording, stopSirenStream, sttProvider, agentName, isWakewordListening } = useAegisStore(
+        useShallow((s) => ({
+            inputMode: s.inputMode,
+            setInputMode: s.setInputMode,
+            isRecording: s.isRecording,
+            stopSirenStream: s.stopSirenStream,
+            sttProvider: s.sttProvider,
+            agentName: s.agentName,
+            isWakewordListening: s.isWakewordListening,
+        })),
+    );
     const [micError, setMicError] = useState<string | null>(null);
 
     const handleSelect = (mode: InputMode) => {

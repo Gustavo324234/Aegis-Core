@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { GitPullRequest, RefreshCw, Merge, Zap, ZapOff } from 'lucide-react';
 import { usePrStore, ManagedPr, PrStatus } from '../../store/prStore';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../../store/useAegisStore';
 
 const statusColors: Record<PrStatus, string> = {
@@ -93,7 +94,9 @@ const PrRow: React.FC<{ pr: ManagedPr; tenantId: string; sessionKey: string }> =
 };
 
 const PRManagerPanel: React.FC = () => {
-    const { tenantId, sessionKey } = useAegisStore();
+    const { tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
+    );
     const { prs, isLoading, fetchPrs } = usePrStore();
 
     useEffect(() => {

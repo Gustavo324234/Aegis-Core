@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
+import { useShallow } from 'zustand/react/shallow';
 import {
     Mic,
     Check,
@@ -36,7 +37,15 @@ const MIC_LANGUAGES = [
 ];
 
 const SirenConfigTab: React.FC = () => {
-    const { tenantId, sessionKey, voiceEnabled, setVoiceEnabled, fetchSirenConfig } = useAegisStore();
+    const { tenantId, sessionKey, voiceEnabled, setVoiceEnabled, fetchSirenConfig } = useAegisStore(
+        useShallow((s) => ({
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            voiceEnabled: s.voiceEnabled,
+            setVoiceEnabled: s.setVoiceEnabled,
+            fetchSirenConfig: s.fetchSirenConfig,
+        })),
+    );
 
     const initialPrefs = loadVoicePrefs();
     const [voiceURI, setVoiceURI] = useState<string>(initialPrefs.voiceURI);

@@ -13,7 +13,7 @@ function cn(...inputs: ClassValue[]) {
 
 const LoginScreen: React.FC<{ onNeedsPasswordReset?: () => void; prefillTenantId?: string | null }> = ({ onNeedsPasswordReset, prefillTenantId }) => {
     const { t } = useTranslation();
-    const { authenticate } = useAegisStore();
+    const authenticate = useAegisStore((s) => s.authenticate);
     const [tenantId, setTenantId] = useState(prefillTenantId || '');
     const [passphrase, setPassphrase] = useState('');
     const [isInitializing, setIsInitializing] = useState(false);

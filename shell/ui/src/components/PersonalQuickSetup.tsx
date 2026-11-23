@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Shield, Loader2, Sparkles, User, Lock, Key, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 
 interface PersonalQuickSetupProps {
@@ -17,7 +18,13 @@ const PROVIDERS = [
 ];
 
 export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupToken }) => {
-    const { setAuth, setEngineConfigured, fetchSystemState } = useAegisStore();
+    const { setAuth, setEngineConfigured, fetchSystemState } = useAegisStore(
+        useShallow((s) => ({
+            setAuth: s.setAuth,
+            setEngineConfigured: s.setEngineConfigured,
+            fetchSystemState: s.fetchSystemState,
+        })),
+    );
     const [token, setToken] = useState(setupToken ?? '');
     const [username, setUsername] = useState('');
     const [passphrase, setPassphrase] = useState('');

@@ -12,6 +12,7 @@ import {
     CheckCircle2,
     Settings,
 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 
 // Dynamic mapping of Lucide icons based on manifest strings
@@ -63,7 +64,9 @@ interface ExecuteResult {
 }
 
 export const DynamicModulePanel: React.FC = () => {
-    const { tenantId, sessionKey } = useAegisStore();
+    const { tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
+    );
     const [modules, setModules] = useState<ModuleData[]>([]);
     const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
     const [activeViewId, setActiveViewId] = useState<string | null>(null);

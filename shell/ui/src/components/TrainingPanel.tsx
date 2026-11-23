@@ -10,6 +10,7 @@ import {
     ChevronRight,
     AlertTriangle
 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore, TrainingConfig } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 
@@ -139,16 +140,27 @@ const LossChart: React.FC<{ points: ChartPoint[] }> = ({ points }) => {
 // ── Main TrainingPanel Component ──────────────────────────────────────────────
 export const TrainingPanel: React.FC<{ tenantId: string; sessionKey: string }> = () => {
     const { t } = useTranslation();
-    const { 
-        trainingProgress, 
-        trainingLogs, 
-        trainingSocket, 
-        startTraining, 
-        cancelTraining, 
+    const {
+        trainingProgress,
+        trainingLogs,
+        trainingSocket,
+        startTraining,
+        cancelTraining,
         connectTrainingStream,
         fetchTrainingStatus,
-        system_metrics
-    } = useAegisStore();
+        system_metrics,
+    } = useAegisStore(
+        useShallow((s) => ({
+            trainingProgress: s.trainingProgress,
+            trainingLogs: s.trainingLogs,
+            trainingSocket: s.trainingSocket,
+            startTraining: s.startTraining,
+            cancelTraining: s.cancelTraining,
+            connectTrainingStream: s.connectTrainingStream,
+            fetchTrainingStatus: s.fetchTrainingStatus,
+            system_metrics: s.system_metrics,
+        })),
+    );
 
     const vramPercent = system_metrics.vram_total_mb > 0 
         ? (system_metrics.vram_allocated_mb / system_metrics.vram_total_mb) * 100 

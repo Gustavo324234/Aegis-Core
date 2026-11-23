@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, Plus, Key, Terminal, LogOut, Check, Users, Activity, Trash2, RefreshCw, Cpu, HardDrive, Clock, Server, Mic, Sparkles, Globe, Copy, ExternalLink } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 
@@ -20,7 +21,18 @@ type TabId = 'users' | 'system' | 'providers' | 'siren' | 'persona';
 
 const UsersTab: React.FC<{ tenantId: string | null; sessionKey: string | null }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
-    const { tenants, fetchTenants, createTenant, deleteTenant, resetPassword, isFetchingTenants, lastTenantsUpdate, tenantsError } = useAegisStore();
+    const { tenants, fetchTenants, createTenant, deleteTenant, resetPassword, isFetchingTenants, lastTenantsUpdate, tenantsError } = useAegisStore(
+        useShallow((s) => ({
+            tenants: s.tenants,
+            fetchTenants: s.fetchTenants,
+            createTenant: s.createTenant,
+            deleteTenant: s.deleteTenant,
+            resetPassword: s.resetPassword,
+            isFetchingTenants: s.isFetchingTenants,
+            lastTenantsUpdate: s.lastTenantsUpdate,
+            tenantsError: s.tenantsError,
+        })),
+    );
     const [newUsername, setNewUsername] = useState('');
     const [isCreating, setIsCreating] = useState(false);
     const [createdTenant, setCreatedTenant] = useState<NewTenant | null>(null);
@@ -600,7 +612,15 @@ const TABS = (t: (key: string) => string): { id: TabId; label: string; icon: Rea
 
 const AdminDashboard: React.FC = () => {
     const { t } = useTranslation();
-    const { tenantId, sessionKey, logout, adminActiveTab, setAdminActiveTab } = useAegisStore();
+    const { tenantId, sessionKey, logout, adminActiveTab, setAdminActiveTab } = useAegisStore(
+        useShallow((s) => ({
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            logout: s.logout,
+            adminActiveTab: s.adminActiveTab,
+            setAdminActiveTab: s.setAdminActiveTab,
+        })),
+    );
     const tabsList = TABS(t);
 
     // CORE-FIX: h-screen (not min-h-screen) so overflow-y-auto actually creates

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal, Trash2, Play } from 'lucide-react';
 import { useTerminalStore, LineKind } from '../../store/terminalStore';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../../store/useAegisStore';
 
 const lineColor: Record<LineKind, string> = {
@@ -11,7 +12,9 @@ const lineColor: Record<LineKind, string> = {
 
 const TerminalPanel: React.FC = () => {
     const { lines, isRunning, clear } = useTerminalStore();
-    const { tenantId, sessionKey } = useAegisStore();
+    const { tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
+    );
     const [cmd, setCmd] = useState('');
     const [args, setArgs] = useState('');
     const bottomRef = useRef<HTMLDivElement>(null);

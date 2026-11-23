@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Settings, Save, Eye, EyeOff, RefreshCw } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../../store/useAegisStore';
 
 interface WorkspaceDto {
@@ -33,7 +34,9 @@ const Field: React.FC<{
 );
 
 const WorkspaceSettings: React.FC = () => {
-    const { tenantId, sessionKey } = useAegisStore();
+    const { tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
+    );
     const [config, setConfig] = useState<WorkspaceDto | null>(null);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);

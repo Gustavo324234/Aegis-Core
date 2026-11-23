@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronRight, ChevronDown, CheckCircle2, Circle, Loader2, AlertCircle, X } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore, AgentNodeSummary, AgentRole } from '../store/useAegisStore';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -162,7 +163,9 @@ interface AgentTreeViewProps {
 }
 
 export const AgentTreeView: React.FC<AgentTreeViewProps> = ({ projectId }) => {
-    const { agentTree, activeProjects } = useAegisStore();
+    const { agentTree, activeProjects } = useAegisStore(
+        useShallow((s) => ({ agentTree: s.agentTree, activeProjects: s.activeProjects })),
+    );
     const [selectedNode, setSelectedNode] = useState<AgentNodeSummary | null>(null);
 
     const project = activeProjects.find(p => p.project_id === projectId);

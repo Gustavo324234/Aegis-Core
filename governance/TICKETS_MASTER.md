@@ -24,7 +24,7 @@
 | EPIC 58 | Personal Assistant Experience, Zero-Friction UX & Community Onboarding | ✅ Completa | 100% |
 | EPIC 59 | Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio | ✅ Completa | 100% |
 | EPIC 60 | Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience | ✅ Completa | 100% |
-| EPIC 61 | Sandbox Promotion, Security Hardening & SRE Maturation | 🚧 En Progreso | 77% (10/13) |
+| EPIC 61 | Sandbox Promotion, Security Hardening & SRE Maturation | 🚧 En Progreso | 85% (11/13) |
 
 ## EPIC 49 — Cognitive Loop
 
@@ -319,7 +319,7 @@
 | CORE-401 | fix | Supply Chain y Secretos (`runtime_deps.rs`, `whatsapp_bridge`, permisos `0600`, `deny.toml`) | ✅ Done | Alta | Kernel Engineer + DevOps Engineer |
 | CORE-402 | perf | Tokens de Sesión Citadel, Argon2id en `spawn_blocking` y Pool LRU de `TenantDB` (ADR-034) | ✅ Done | Alta | Kernel Engineer |
 | CORE-403 | fix | Estabilidad y Límites SRE (`video_api`, logs acotados, graceful shutdown, `env::set_var` y `AntigravityRunner`) | ✅ Done | Alta | Kernel Engineer |
-| CORE-404 | perf | Optimización Frontend (`shell/ui`: selectores `useAegisStore`, `React.lazy()`, optimización de SVGs y `apiClient.ts`) | 📥 Todo | Media | Shell Engineer |
+| CORE-404 | perf | Optimización Frontend (`shell/ui`: selectores `useAegisStore`, `React.lazy()`, optimización de SVGs y `apiClient.ts`) | ✅ Done | Media | Shell Engineer |
 | CORE-405 | refactor | Modularización de God Files (`chal/mod.rs`, `useAegisStore.ts`, `ModulesAppHub.tsx`, `VideoStudioPanel.tsx`, scripts Python externos) | 📥 Todo | Media | Kernel Engineer + Shell Engineer |
 | CORE-406 | chore | Tests UI (Vitest), CI Extendido (`app/`, bridges, `update.ps1`, `sync_tickets_master.py`) y Actualización/Protección de OpenAPI (`/api/docs`) | 📥 Todo | Media | Shell Engineer + DevOps Engineer |
 

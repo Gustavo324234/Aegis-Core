@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Settings, X, Save, Cpu, Volume2, Globe, Check, Loader2, Sparkles, Shield, Server, Zap, Box, Cloud, Terminal, Activity, Info, Search, RefreshCw, Copy, FileText, Trash2, TrendingUp, Play, Square, Upload } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 import { PROVIDER_PRESETS, ProviderType } from '../constants/enginePresets';
@@ -89,7 +90,7 @@ const PERSONALITY_CHIPS = [
 
 const PersonaTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
-    const { fetchAgentName } = useAegisStore();
+    const fetchAgentName = useAegisStore((s) => s.fetchAgentName);
     const [persona, setPersona] = useState<PersonaData>({ prompt: '', name: '' });
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
@@ -535,7 +536,9 @@ interface GlobalProviderEntry {
 
 const MotorTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
-    const { lastRoutingInfo, lastError } = useAegisStore();
+    const { lastRoutingInfo, lastError } = useAegisStore(
+        useShallow((s) => ({ lastRoutingInfo: s.lastRoutingInfo, lastError: s.lastError })),
+    );
     const [globalProviders, setGlobalProviders] = useState<GlobalProviderEntry[]>([]);
     const [agyStatus, setAgyStatus] = useState<{
         sdk_installed: boolean;
@@ -808,7 +811,12 @@ interface ChatMessage {
 
 const LogsTab: React.FC<{ tenantId: string; sessionKey: string }> = ({ tenantId, sessionKey }) => {
     const { t } = useTranslation();
-    const { clearHistory, clearAgentTraces } = useAegisStore();
+    const { clearHistory, clearAgentTraces } = useAegisStore(
+        useShallow((s) => ({
+            clearHistory: s.clearHistory,
+            clearAgentTraces: s.clearAgentTraces,
+        })),
+    );
     const [subTab, setSubTab] = useState<'history' | 'traces'>('history');
     const [logs, setLogs] = useState<(ChatMessage | string)[]>([]);
     const [searchTerm, setSearchTerm] = useState('');

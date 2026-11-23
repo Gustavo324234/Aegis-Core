@@ -6,7 +6,7 @@ import { useAegisStore } from '../store/useAegisStore';
 
 const AdminSetupScreen: React.FC<{ onSetupComplete: () => void }> = ({ onSetupComplete }) => {
     const { t } = useTranslation();
-    const { logout } = useAegisStore();
+    const logout = useAegisStore((s) => s.logout);
     const [username, setUsername] = useState('root');
     const [passphrase, setPassphrase] = useState('');
     const [confirmPassphrase, setConfirmPassphrase] = useState('');

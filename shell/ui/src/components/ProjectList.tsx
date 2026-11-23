@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { FolderOpen, FolderArchive, Circle, Loader2, Lock, Unlock } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore, ProjectSummary } from '../store/useAegisStore';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -14,7 +15,14 @@ interface ProjectListProps {
 }
 
 export const ProjectList: React.FC<ProjectListProps> = ({ onSelectProject, selectedProjectId }) => {
-    const { activeProjects, agentTree, tenantId, sessionKey } = useAegisStore();
+    const { activeProjects, agentTree, tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({
+            activeProjects: s.activeProjects,
+            agentTree: s.agentTree,
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+        })),
+    );
     // Project IDs the user has put in autonomous mode (skip permission prompts).
     const [autonomous, setAutonomous] = useState<Set<string>>(new Set());
 

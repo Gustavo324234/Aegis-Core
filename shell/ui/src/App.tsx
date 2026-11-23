@@ -1,19 +1,35 @@
-import { useEffect, useState, Component, type ReactNode } from 'react';
+import { useEffect, useState, Component, Suspense, lazy, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from './store/useAegisStore';
+import { ApiError, apiGet } from './utils/apiClient';
 
-import ChatTerminal from './components/ChatTerminal';
-import LoginScreen from './components/LoginScreen';
-import AdminDashboard from './components/AdminDashboard';
-import ForcePasswordChangeScreen from './components/ForcePasswordChangeScreen';
-import BootstrapSetup from './components/BootstrapSetup';
-import EngineSetupWizard from './components/EngineSetupWizard';
-import { PersonalQuickSetup } from './components/PersonalQuickSetup';
-import Dashboard from '@/components/Dashboard';
-import { AgentInboxList } from './components/AgentInboxList';
-import { AgentThread } from './components/AgentThread';
-import { SupervisorQuestionModal } from './components/SupervisorQuestionModal';
+const ChatTerminal = lazy(() => import('./components/ChatTerminal'));
+const LoginScreen = lazy(() => import('./components/LoginScreen'));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
+const ForcePasswordChangeScreen = lazy(() => import('./components/ForcePasswordChangeScreen'));
+const BootstrapSetup = lazy(() => import('./components/BootstrapSetup'));
+const EngineSetupWizard = lazy(() => import('./components/EngineSetupWizard'));
+const PersonalQuickSetup = lazy(() =>
+    import('./components/PersonalQuickSetup').then((m) => ({ default: m.PersonalQuickSetup })),
+);
+const Dashboard = lazy(() => import('@/components/Dashboard'));
+const AgentInboxList = lazy(() =>
+    import('./components/AgentInboxList').then((m) => ({ default: m.AgentInboxList })),
+);
+const AgentThread = lazy(() =>
+    import('./components/AgentThread').then((m) => ({ default: m.AgentThread })),
+);
+const SupervisorQuestionModal = lazy(() =>
+    import('./components/SupervisorQuestionModal').then((m) => ({ default: m.SupervisorQuestionModal })),
+);
+
+const ViewFallback = () => (
+    <div className="flex items-center justify-center h-screen bg-black">
+        <Shield className="w-8 h-8 text-aegis-cyan/40 animate-pulse" />
+    </div>
+);
 
 
 // SRE-FIX: Error boundary para atrapar crashes de React y mostrar pantalla de recuperación
@@ -80,7 +96,26 @@ function App() {
         isEngineConfigured, setEngineConfigured,
         needsPasswordReset, setNeedsPasswordReset,
         currentView, setCurrentView
-    } = useAegisStore();
+    } = useAegisStore(
+        useShallow((s) => ({
+            _hydrated: s._hydrated,
+            status: s.status,
+            isAuthenticated: s.isAuthenticated,
+            isAdmin: s.isAdmin,
+            systemState: s.systemState,
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            connect: s.connect,
+            logout: s.logout,
+            fetchSystemState: s.fetchSystemState,
+            isEngineConfigured: s.isEngineConfigured,
+            setEngineConfigured: s.setEngineConfigured,
+            needsPasswordReset: s.needsPasswordReset,
+            setNeedsPasswordReset: s.setNeedsPasswordReset,
+            currentView: s.currentView,
+            setCurrentView: s.setCurrentView,
+        })),
+    );
     
     const [setupToken, setSetupToken] = useState<string | null>(null);
     // CORE-232: pre-rellenar el campo tenant en LoginScreen tras logout forzado por sessionKey null
@@ -112,23 +147,21 @@ function App() {
 
     useEffect(() => {
         if (!_hydrated || !isAuthenticated || isAdmin || needsPasswordReset || isEngineConfigured) return;
+        const controller = new AbortController();
         const checkGlobalEngine = async () => {
             try {
-                const headers: Record<string, string> = {};
-                if (tenantId && sessionKey) {
-                    headers['x-citadel-tenant'] = tenantId;
-                    headers['x-citadel-key'] = sessionKey;
-                }
-                const res = await fetch('/api/engine/status', { headers });
-                if (res.ok) {
-                    const data = await res.json() as { configured: boolean };
-                    if (data.configured) setEngineConfigured(true);
-                }
+                const data = await apiGet<{ configured: boolean }>('/api/engine/status', {
+                    auth: tenantId && sessionKey ? { tenantId, sessionKey } : false,
+                    signal: controller.signal,
+                });
+                if (data.configured) setEngineConfigured(true);
             } catch (err) {
+                if (err instanceof ApiError && err.code === 'ABORTED') return;
                 console.error('Failed to check global engine:', err);
             }
         };
-        checkGlobalEngine();
+        void checkGlobalEngine();
+        return () => controller.abort();
     }, [_hydrated, isAuthenticated, isAdmin, needsPasswordReset, isEngineConfigured, tenantId, sessionKey, setEngineConfigured]);
 
     useEffect(() => {
@@ -155,33 +188,45 @@ function App() {
                         </motion.div>
                     ) : setupToken ? (
                         <motion.div key="bootstrap_setup">
-                            <BootstrapSetup 
-                                token={setupToken} 
-                                onComplete={() => {
-                                    setSetupToken(null);
-                                    fetchSystemState();
-                                }} 
-                            />
+                            <Suspense fallback={<ViewFallback />}>
+                                <BootstrapSetup 
+                                    token={setupToken} 
+                                    onComplete={() => {
+                                        setSetupToken(null);
+                                        fetchSystemState();
+                                    }} 
+                                />
+                            </Suspense>
                         </motion.div>
                     ) : systemState === 'STATE_INITIALIZING' ? (
                         <motion.div key="admin_setup_lock">
-                            <PersonalQuickSetup setupToken={setupToken} />
+                            <Suspense fallback={<ViewFallback />}>
+                                <PersonalQuickSetup setupToken={setupToken} />
+                            </Suspense>
                         </motion.div>
                     ) : !isAuthenticated ? (
                         <motion.div key="login" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, scale: 0.95, filter: 'blur(10px)' }} transition={{ duration: 0.5 }} className="w-full">
-                            <LoginScreen onNeedsPasswordReset={() => setNeedsPasswordReset(true)} prefillTenantId={prefillTenantId} />
+                            <Suspense fallback={<ViewFallback />}>
+                                <LoginScreen onNeedsPasswordReset={() => setNeedsPasswordReset(true)} prefillTenantId={prefillTenantId} />
+                            </Suspense>
                         </motion.div>
                     ) : needsPasswordReset ? (
                         <motion.div key="force_reset">
-                            <ForcePasswordChangeScreen onPasswordChanged={() => setNeedsPasswordReset(false)} />
+                            <Suspense fallback={<ViewFallback />}>
+                                <ForcePasswordChangeScreen onPasswordChanged={() => setNeedsPasswordReset(false)} />
+                            </Suspense>
                         </motion.div>
                     ) : isAdmin ? (
                         <motion.div key="admin_dashboard" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                            <AdminDashboard />
+                            <Suspense fallback={<ViewFallback />}>
+                                <AdminDashboard />
+                            </Suspense>
                         </motion.div>
                     ) : !isEngineConfigured ? (
                         <motion.div key="engine_setup">
-                            <EngineSetupWizard />
+                            <Suspense fallback={<ViewFallback />}>
+                                <EngineSetupWizard />
+                            </Suspense>
                         </motion.div>
                     ) : status === 'connecting' ? (
                         <motion.div key="connecting_overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, scale: 1.1, filter: 'blur(10px)' }} transition={{ duration: 0.8 }} className="flex flex-col items-center justify-center min-h-screen p-4">
@@ -196,19 +241,21 @@ function App() {
                         </motion.div>
                     ) : (
                         <motion.div key="terminal" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: "easeOut" }} className="h-screen w-full">
-                            {currentView === 'chat' ? (
-                            <ChatTerminal />
-                        ) : currentView === 'agents' ? (
-                            <AgentInboxList />
-                        ) : currentView === 'agent_thread' ? (
-                            <AgentThread />
-                        ) : (
-                            <Dashboard />
-                        )}
-                        {/* CORE-FIX: supervisor questions pop up over ANY view
-                            (chat / agents / dashboard) so the user can answer
-                            inline instead of hunting for the agents thread. */}
-                        <SupervisorQuestionModal />
+                            <Suspense fallback={<ViewFallback />}>
+                                {currentView === 'chat' ? (
+                                    <ChatTerminal />
+                                ) : currentView === 'agents' ? (
+                                    <AgentInboxList />
+                                ) : currentView === 'agent_thread' ? (
+                                    <AgentThread />
+                                ) : (
+                                    <Dashboard />
+                                )}
+                                {/* CORE-FIX: supervisor questions pop up over ANY view
+                                    (chat / agents / dashboard) so the user can answer
+                                    inline instead of hunting for the agents thread. */}
+                                <SupervisorQuestionModal />
+                            </Suspense>
                         </motion.div>
                     )}
                 </AnimatePresence>
