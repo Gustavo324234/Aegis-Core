@@ -44,7 +44,7 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
 
   ui:
-    name: UI — build + lint
+    name: UI — test + build + lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,11 +58,69 @@ jobs:
       - name: Install dependencies
         run: cd shell/ui && npm ci
 
+      - name: Test
+        run: cd shell/ui && npm test
+
       - name: Build
         run: cd shell/ui && npm run build
 
       - name: Lint
         run: cd shell/ui && npm run lint
+
+  mobile-app:
+    name: Mobile App — tsc + lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'app/package-lock.json'
+
+      - name: Install dependencies
+        run: cd app && npm ci
+
+      - name: TypeScript check
+        run: cd app && npx tsc --noEmit
+
+      - name: Lint
+        run: cd app && npm run lint
+
+  bridges-and-governance:
+    name: Bridges & Governance — Node + Python + sync check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check WhatsApp bridge syntax
+        run: node --check tools/whatsapp_bridge/index.mjs
+
+      - name: Compile-check Python bridges and Video Studio scripts
+        run: |
+          python -m py_compile \
+            tools/antigravity_bridge/agy_worker.py \
+            tools/antigravity_bridge/ide_hook.py \
+            kernel/crates/ank-core/resources/video_studio/tts_edge.py \
+            kernel/crates/ank-core/resources/video_studio/render_card.py \
+            kernel/crates/ank-core/resources/video_studio/extract_ffmpeg.py
+
+      - name: Run Antigravity bridge unit tests
+        run: python -m unittest discover -s tools/antigravity_bridge -p "test_*.py"
+
+      - name: Governance anti-drift report
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tools/sync_tickets_master.py --report
 
   installer:
     name: Installer — shellcheck
@@ -91,22 +149,24 @@ jobs:
         shell: powershell
         run: |
           $failed = $false
-          Get-ChildItem installer -Filter *.ps1 | ForEach-Object {
+          $scripts = @(Get-ChildItem installer -Filter *.ps1) + @(Get-Item update.ps1)
+          $scripts | ForEach-Object {
+            $rel = Resolve-Path -Relative $_.FullName
             $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
             $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
             $hasNonAscii = $null -ne ($bytes | Where-Object { $_ -gt 127 } | Select-Object -First 1)
             if ($hasNonAscii -and -not $hasBom) {
               $failed = $true
-              Write-Host "::error file=installer/$($_.Name)::non-ASCII content without UTF-8 BOM (PS 5.1 will decode as ANSI)"
+              Write-Host "::error file=$rel::non-ASCII content without UTF-8 BOM (PS 5.1 will decode as ANSI)"
             }
             $tokens = $null; $errs = $null
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errs) | Out-Null
             if ($errs.Count -gt 0) {
               $failed = $true
-              Write-Host "::error file=installer/$($_.Name)::$($errs.Count) parse errors under PowerShell 5.1"
+              Write-Host "::error file=$rel::$($errs.Count) parse errors under PowerShell 5.1"
               $errs | ForEach-Object { Write-Host "  L$($_.Extent.StartLineNumber): $($_.Message)" }
             } else {
-              Write-Host "Parse OK: $($_.Name)"
+              Write-Host "Parse OK: $rel"
             }
           }
           if ($failed) { exit 1 }

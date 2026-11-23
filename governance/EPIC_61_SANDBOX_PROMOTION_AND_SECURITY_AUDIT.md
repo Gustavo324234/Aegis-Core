@@ -1,6 +1,6 @@
 # EPIC 61 — Sandbox Promotion, Security Hardening & SRE Maturation
 
-**Estado:** 🚧 En Progreso
+**Estado:** ✅ Completa
 
 ## 🎯 Objetivo
 
@@ -29,12 +29,12 @@ Consolidar y promover al código general todas las capacidades validadas en el e
 
 ### Bloque 4 — Modularización, Testing y OpenAPI
 12. **`CORE-405`** (`refactor`, ✅ Done): Modularización de God Files (`chal/mod.rs`, `useAegisStore.ts`, `ModulesAppHub.tsx`, `VideoStudioPanel.tsx`, scripts Python externos).
-13. **`CORE-406`** (`chore`, 📥 Todo): Tests UI (Vitest), CI Extendido (`app/`, bridges, `update.ps1`, `sync_tickets_master.py`) y Actualización/Protección de OpenAPI (`/api/docs`).
+13. **`CORE-406`** (`chore`, ✅ Done): Tests UI (Vitest), CI Extendido (`app/`, bridges, `update.ps1`, `sync_tickets_master.py`) y Actualización/Protección de OpenAPI (`/api/docs`).
 
 ---
 
 ## ✅ Criterios de Cierre de la Épica
-- [ ] Todos los tickets `CORE-394`..`CORE-406` en estado `✅ Done`.
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --workspace` (flags CI), `cargo test --workspace`, `npm run lint` y `npm run build` pasando en verde.
-- [ ] `python tools/sync_tickets_master.py --report` con 0 discrepancias.
-- [ ] Paridad verificada entre entorno sandbox y binario/instaladores de producción.
+- [x] Todos los tickets `CORE-394`..`CORE-406` en estado `✅ Done`.
+- [x] `cargo fmt --all -- --check`, `cargo clippy --workspace` (flags CI), `cargo test --workspace`, `npm run lint` y `npm run build` pasando en verde.
+- [x] `python tools/sync_tickets_master.py --report` con 0 discrepancias.
+- [x] Paridad verificada entre entorno sandbox y binario/instaladores de producción.

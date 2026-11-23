@@ -152,15 +152,30 @@ fn build_cors_layer(port: u16) -> CorsLayer {
     )
 }
 
-pub fn build_router(state: AppState) -> Router {
-    let swagger_ui =
-        SwaggerUi::new("/api/docs/:_").url("/api-docs/openapi.json", openapi::ApiDoc::openapi());
+pub(crate) fn should_expose_openapi_docs(is_debug: bool, env_flag: Option<&str>) -> bool {
+    match env_flag.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"),
+        None => is_debug,
+    }
+}
 
+pub fn build_router(state: AppState) -> Router {
     let cors = build_cors_layer(state.config.port);
 
-    Router::new()
-        .route("/health", get(status::health_check))
-        .merge(swagger_ui)
+    let router = Router::new().route("/health", get(status::health_check));
+    let expose_docs = should_expose_openapi_docs(
+        cfg!(debug_assertions),
+        std::env::var("AEGIS_ENABLE_OPENAPI").ok().as_deref(),
+    );
+    let router = if expose_docs {
+        let swagger_ui = SwaggerUi::new("/api/docs/:_")
+            .url("/api-docs/openapi.json", openapi::ApiDoc::openapi());
+        router.merge(swagger_ui)
+    } else {
+        router
+    };
+
+    router
         // API Routes
         .nest("/api/auth", auth::router())
         .nest("/api/admin", admin::router())
@@ -286,6 +301,32 @@ mod tests {
             Some("https://panel.aegis.local")
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn openapi_docs_exposure_follows_debug_and_explicit_override() {
+        assert!(should_expose_openapi_docs(true, None));
+        assert!(!should_expose_openapi_docs(false, None));
+        assert!(should_expose_openapi_docs(false, Some("1")));
+        assert!(should_expose_openapi_docs(false, Some("true")));
+        assert!(should_expose_openapi_docs(false, Some("YES")));
+        assert!(!should_expose_openapi_docs(true, Some("0")));
+        assert!(!should_expose_openapi_docs(true, Some("false")));
+        assert!(!should_expose_openapi_docs(false, Some("   ")));
+    }
+
+    #[test]
+    fn openapi_spec_contains_updated_routes_and_repo_url() -> anyhow::Result<()> {
+        let doc = openapi::ApiDoc::openapi();
+        let json = serde_json::to_string(&doc)?;
+
+        assert!(json.contains("/api/system/service/logs"));
+        assert!(json.contains("/api/router/keys/export"));
+        assert!(json.contains("/api/router/keys/import"));
+        assert!(json.contains("Gustavo324234/Aegis-Core/blob/main/governance/ADR/ADR-003.md"));
+        assert!(!json.contains("Aegis-Aegis/Aegis-Governance"));
+        assert!(!doc.paths.paths.is_empty());
         Ok(())
     }
 }
