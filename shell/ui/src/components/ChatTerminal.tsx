@@ -27,7 +27,7 @@ const PersonalAssistantDrawer = lazy(() =>
 );
 const ModulesAppHub = lazy(() => import('./ModulesAppHub'));
 const ChatVideoResultCard = lazy(() =>
-    import('./VideoStudioPanel').then((m) => ({ default: m.ChatVideoResultCard })),
+    import('./video_studio/ChatVideoResultCard').then((m) => ({ default: m.ChatVideoResultCard })),
 );
 
 function renderTextWithLineBreaks(node: React.ReactNode): React.ReactNode {

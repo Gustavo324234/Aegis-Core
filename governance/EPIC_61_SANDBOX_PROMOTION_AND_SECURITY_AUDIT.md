@@ -28,7 +28,7 @@ Consolidar y promover al código general todas las capacidades validadas en el e
 11. **`CORE-404`** (`perf`, ✅ Done): Optimización Frontend (`shell/ui`: selectores `useAegisStore`, `React.lazy()`, optimización de SVGs y `apiClient.ts`).
 
 ### Bloque 4 — Modularización, Testing y OpenAPI
-12. **`CORE-405`** (`refactor`, 📥 Todo): Modularización de God Files (`chal/mod.rs`, `useAegisStore.ts`, `ModulesAppHub.tsx`, `VideoStudioPanel.tsx`, scripts Python externos).
+12. **`CORE-405`** (`refactor`, ✅ Done): Modularización de God Files (`chal/mod.rs`, `useAegisStore.ts`, `ModulesAppHub.tsx`, `VideoStudioPanel.tsx`, scripts Python externos).
 13. **`CORE-406`** (`chore`, 📥 Todo): Tests UI (Vitest), CI Extendido (`app/`, bridges, `update.ps1`, `sync_tickets_master.py`) y Actualización/Protección de OpenAPI (`/api/docs`).
 
 ---
