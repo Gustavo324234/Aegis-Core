@@ -1505,7 +1505,7 @@ impl CognitiveHAL {
                         let tenant_keys = router.list_tenant_keys(tenant_id).await;
                         let catalog_models = router.list_models_for_catalog().await;
                         let providers_summary = summarize_configured_providers(
-                            tenant_keys.into_iter().chain(global_keys.into_iter()),
+                            tenant_keys.into_iter().chain(global_keys),
                             &catalog_models,
                         );
 

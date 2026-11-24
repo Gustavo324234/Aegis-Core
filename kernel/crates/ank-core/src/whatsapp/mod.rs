@@ -162,7 +162,7 @@ pub fn save_contact_alias(
         list.push(entry.clone());
     }
     if list.len() > 200 {
-        list.sort_by(|a, b| b.updated_at_epoch.cmp(&a.updated_at_epoch));
+        list.sort_by_key(|a| std::cmp::Reverse(a.updated_at_epoch));
         list.truncate(200);
     }
 

@@ -77,10 +77,7 @@ fn is_disallowed_ip(ip: IpAddr, allow_local_admin: bool) -> bool {
             if is_cloud_metadata_or_special_v4(v4) {
                 return true;
             }
-            if !allow_local_admin && (v4.is_loopback() || v4.is_private()) {
-                return true;
-            }
-            false
+            !allow_local_admin && (v4.is_loopback() || v4.is_private())
         }
         IpAddr::V6(v6) => {
             if let Some(mapped_v4) = v6.to_ipv4_mapped() {
@@ -94,10 +91,7 @@ fn is_disallowed_ip(ip: IpAddr, allow_local_admin: bool) -> bool {
             if v6.is_unspecified() || v6.is_multicast() || is_link_local || is_aws_imds_v6 {
                 return true;
             }
-            if !allow_local_admin && (v6.is_loopback() || is_ula) {
-                return true;
-            }
-            false
+            !allow_local_admin && (v6.is_loopback() || is_ula)
         }
     }
 }

@@ -94,14 +94,10 @@ pub(super) fn is_permanent_model_failure(err: &SystemError) -> bool {
         }
     }
     // Deprecated/removed model IDs (e.g. Google AI Studio 404 "no longer available to new users")
-    if lower.contains("404")
+    lower.contains("404")
         && (lower.contains("not found")
             || lower.contains("no longer available")
             || lower.contains("not supported for generatecontent"))
-    {
-        return true;
-    }
-    false
 }
 
 /// Errors that belong to a specific model or credit quota on that model rather

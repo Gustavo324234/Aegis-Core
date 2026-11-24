@@ -108,10 +108,7 @@ fn model_id_matches(catalog_id: &str, stored_id: &str) -> bool {
             }
         }
     }
-    if stored_id.ends_with(&format!("/{}", catalog_id)) {
-        return true;
-    }
-    false
+    stored_id.ends_with(&format!("/{}", catalog_id))
 }
 
 /// CORE-361: Whether a cloud catalog model (`org/model`) can fall back to an
