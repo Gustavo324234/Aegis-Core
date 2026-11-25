@@ -57,7 +57,7 @@ pub async fn spa_handler(State(state): State<AppState>, uri: Uri, req: Request<B
         let service = ServeDir::new(&dist_path);
         match service.oneshot(req).await {
             Ok(res) => res.into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(infallible) => match infallible {},
         }
     } else {
         // SPA Fallback: serve index.html for any non-file request (client-side routing)
@@ -71,7 +71,7 @@ pub async fn spa_handler(State(state): State<AppState>, uri: Uri, req: Request<B
             };
             match ServeDir::new(&dist_path).oneshot(index_req).await {
                 Ok(res) => res.into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+                Err(infallible) => match infallible {},
             }
         } else {
             StatusCode::NOT_FOUND.into_response()

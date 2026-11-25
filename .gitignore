@@ -89,6 +89,10 @@ auditorias/
 # Claude assistant local settings
 .claude/
 
+# Local AI agent rules & graphify knowledge graph (never commit)
+.agents/
+graphify-out/
+
 # Plugin Signer keys (generated on startup, never commit)
 plugin_signer.key
 plugin_signer.pub
