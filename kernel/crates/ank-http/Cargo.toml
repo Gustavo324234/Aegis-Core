@@ -46,6 +46,7 @@ include_dir = { version = "0.7", optional = true }
 
 [dev-dependencies]
 axum-test = "15"
+tempfile  = "3"
 tokio     = { workspace = true, features = ["test-util"] }
 
 [features]
