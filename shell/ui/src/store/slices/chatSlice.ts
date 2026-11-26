@@ -258,6 +258,7 @@ export const createChatSlice = (set: StoreSet, get: StoreGet): ChatSlice => ({
                                 if ((mode === 'conversation' || autoContinue) && !get().isRecording) {
                                     get().restartMicForConversation().catch(console.error);
                                 } else if (mode === 'wakeword' && !get().isRecording) {
+                                    get().armWakeFollowupWindow();
                                     get().startWakewordListener();
                                 }
                             };

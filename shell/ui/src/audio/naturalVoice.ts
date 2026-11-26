@@ -19,6 +19,8 @@ export interface VoicePrefs {
     pitch: number;             // default 1.0
     lang: string;              // default 'es-AR'
     autoContinueMic: boolean;  // Modo conversación manos libres
+    silenceHangoverMs: number; // Tolerancia a pausas / respiración (ms)
+    followupWindowSecs: number; // Segundos tras respuesta sin repetir wake-word
     avatarId: string;          // 'sol-amber' | 'orb-cyan' | 'nova-purple' | 'atlas-emerald' | 'crimson-flame' | 'minimal-bot' | 'custom'
     customAvatarUrl: string;   // Data URL si el usuario subió su propia imagen
 }
@@ -77,6 +79,8 @@ const DEFAULT_PREFS: VoicePrefs = {
     pitch: 1.0,
     lang: 'es-AR',
     autoContinueMic: false,
+    silenceHangoverMs: 2400,
+    followupWindowSecs: 8,
     avatarId: 'orb-cyan',
     customAvatarUrl: '',
 };
