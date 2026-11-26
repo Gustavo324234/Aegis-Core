@@ -477,6 +477,21 @@ impl TenantDB {
             )
             .context("Failed to initialize sync_log table")?;
 
+        // EPIC 63 (CORE-412): Perfiles de voz autorizados por tenant para biometría multi-voz
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS enrolled_voices (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                fingerprint_json TEXT NOT NULL,
+                threshold REAL NOT NULL DEFAULT 0.78,
+                sample_count INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+                [],
+            )
+            .context("Failed to initialize enrolled_voices table")?;
+
         Ok(())
     }
 
@@ -1637,6 +1652,85 @@ impl TenantDB {
         }
 
         Ok(block)
+    }
+
+    // ── EPIC 63 (CORE-412): Multi-Speaker Enrolled Voices & Biometrics Gate ──
+
+    pub fn list_enrolled_voices(&self) -> Result<Vec<crate::speaker_id::EnrolledSpeakerProfile>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, label, fingerprint_json, threshold, sample_count, COALESCE(created_at, '')
+             FROM enrolled_voices
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let label: String = row.get(1)?;
+                let fp_json: String = row.get(2)?;
+                let threshold: f32 = row.get::<_, f64>(3)? as f32;
+                let sample_count: usize = row.get::<_, i64>(4)?.max(1) as usize;
+                let created_at: String = row.get(5)?;
+                Ok((id, label, fp_json, threshold, sample_count, created_at))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(
+                |(id, label, fp_json, threshold, sample_count, created_at)| {
+                    let fingerprint: Vec<f32> = serde_json::from_str(&fp_json).ok()?;
+                    Some(crate::speaker_id::EnrolledSpeakerProfile {
+                        id,
+                        label,
+                        fingerprint,
+                        threshold,
+                        sample_count,
+                        created_at,
+                    })
+                },
+            )
+            .collect();
+        Ok(rows)
+    }
+
+    pub fn upsert_enrolled_voice(
+        &self,
+        profile: &crate::speaker_id::EnrolledSpeakerProfile,
+    ) -> Result<()> {
+        use anyhow::Context;
+        let fp_json = serde_json::to_string(&profile.fingerprint)?;
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO enrolled_voices (id, label, fingerprint_json, threshold, sample_count, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)",
+                rusqlite::params![
+                    profile.id,
+                    profile.label,
+                    fp_json,
+                    f64::from(profile.threshold),
+                    profile.sample_count as i64
+                ],
+            )
+            .context("Failed to upsert enrolled voice")?;
+        Ok(())
+    }
+
+    pub fn delete_enrolled_voice(&self, id: &str) -> Result<bool> {
+        let n = self
+            .connection
+            .execute("DELETE FROM enrolled_voices WHERE id = ?1", [id])?;
+        Ok(n > 0)
+    }
+
+    pub fn get_voice_gate_enabled(&self) -> Result<bool> {
+        match self.get_kv("voice_biometrics_gate")? {
+            Some(v) => Ok(v != "false" && v != "0"),
+            None => Ok(true),
+        }
+    }
+
+    pub fn set_voice_gate_enabled(&self, enabled: bool) -> Result<()> {
+        self.set_kv(
+            "voice_biometrics_gate",
+            if enabled { "true" } else { "false" },
+        )
     }
 }
 
@@ -2941,6 +3035,51 @@ mod tests {
         })
         .await?;
         assert_eq!(count, 8);
+        Ok(())
+    }
+
+    #[test]
+    fn test_enrolled_voices_crud_and_gate_toggle() -> Result<()> {
+        let _scoped = ScopedTestDataDir::new()?;
+        let db = TenantDB::open("voice_crud_tenant", "voice_secret_key_777")?;
+
+        assert!(db.get_voice_gate_enabled()?);
+        db.set_voice_gate_enabled(false)?;
+        assert!(!db.get_voice_gate_enabled()?);
+        db.set_voice_gate_enabled(true)?;
+        assert!(db.get_voice_gate_enabled()?);
+
+        let p1 = crate::speaker_id::EnrolledSpeakerProfile {
+            id: "v_primary".to_string(),
+            label: "Tavo PC".to_string(),
+            fingerprint: vec![0.1; 56],
+            threshold: 0.78,
+            sample_count: 3,
+            created_at: String::new(),
+        };
+        let p2 = crate::speaker_id::EnrolledSpeakerProfile {
+            id: "v_partner".to_string(),
+            label: "Invitado".to_string(),
+            fingerprint: vec![0.2; 56],
+            threshold: 0.78,
+            sample_count: 2,
+            created_at: String::new(),
+        };
+        db.upsert_enrolled_voice(&p1)?;
+        db.upsert_enrolled_voice(&p2)?;
+
+        let list = db.list_enrolled_voices()?;
+        assert_eq!(list.len(), 2);
+        assert!(list
+            .iter()
+            .any(|p| p.label == "Tavo PC" && p.sample_count == 3));
+        assert!(list.iter().any(|p| p.label == "Invitado"));
+
+        assert!(db.delete_enrolled_voice("v_partner")?);
+        assert!(!db.delete_enrolled_voice("v_partner")?);
+        let remaining = db.list_enrolled_voices()?;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "v_primary");
         Ok(())
     }
 }

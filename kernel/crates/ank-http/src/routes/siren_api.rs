@@ -1,6 +1,11 @@
 use crate::{citadel::CitadelAuthenticated, error::AegisHttpError, state::AppState};
 use ank_core::chal::drivers::siren::whisper_local::is_safe_whisper_model_id;
+use ank_core::enclave::TenantDB;
 use ank_core::scheduler::persistence::VoiceProfile;
+use ank_core::speaker_id::{
+    match_and_strip_wake_phrase, merge_enrollments, resample_pcm16_mono, verify_multi,
+    EnrolledSpeakerProfile, DEFAULT_THRESHOLD,
+};
 use axum::{
     extract::{Path, State},
     routing::{delete, get, post},
@@ -91,6 +96,12 @@ pub fn router() -> Router<AppState> {
         .route("/enroll", post(enroll_speaker))
         .route("/enroll", delete(delete_enrollment))
         .route("/enroll/status", get(enrollment_status))
+        .route("/voices/enrolled", get(list_enrolled_voices))
+        .route("/voices/enroll", post(enroll_multi_speaker))
+        .route("/voices/enrolled/:id", delete(delete_enrolled_voice))
+        .route("/voices/gate", post(set_voice_gate))
+        .route("/voices/verify-test", post(verify_speaker_test))
+        .route("/utterance", post(process_utterance))
         .route("/webrtc/offer/:tenant_id", post(webrtc_offer_handler))
 }
 
@@ -140,6 +151,15 @@ async fn get_siren_config(
         .await
         .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
 
+    let keypool_groq_exists = {
+        let router = state.router.read().await;
+        router
+            .key_pool_ref()
+            .get_any_key_for_provider("groq", &auth.tenant_id)
+            .await
+            .is_some()
+    };
+
     match profile {
         Some(p) => {
             let settings = serde_json::from_str::<serde_json::Value>(&p.settings_json).ok();
@@ -155,6 +175,7 @@ async fn get_siren_config(
                 .as_ref()
                 .and_then(|v| v["stt_api_key"].as_str())
                 .unwrap_or_default();
+            let groq_key_detected = !raw_stt_api_key.is_empty() || keypool_groq_exists;
             Ok(Json(json!({
                 "provider": p.engine_id,
                 "voice_id": p.voice_id,
@@ -163,6 +184,8 @@ async fn get_siren_config(
                 "stt_api_key": mask_secret(raw_stt_api_key),
                 "configured": true,
                 "stt_available": stt_available,
+                "groq_key_detected": groq_key_detected,
+                "stt_ready": stt_available || groq_key_detected,
                 "active_model": active_model
             })))
         }
@@ -174,6 +197,8 @@ async fn get_siren_config(
             "stt_api_key": "",
             "configured": false,
             "stt_available": stt_available,
+            "groq_key_detected": keypool_groq_exists,
+            "stt_ready": stt_available || keypool_groq_exists,
             "active_model": active_model
         }))),
     }
@@ -310,6 +335,446 @@ async fn enrollment_status(
         .is_some();
 
     Ok(Json(json!({ "enrolled": enrolled })))
+}
+
+// ── EPIC 63 (CORE-412): Multi-Speaker Biometrics & Utterance Endpoint ───────
+
+#[derive(Deserialize)]
+pub struct MultiEnrollBody {
+    pub label: String,
+    pub samples_pcm_b64: Vec<String>,
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+    #[serde(default)]
+    pub threshold: Option<f32>,
+}
+
+#[derive(Deserialize)]
+pub struct VoiceGateBody {
+    pub enabled: bool,
+}
+
+#[derive(Deserialize)]
+pub struct VerifyTestBody {
+    pub pcm_b64: String,
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+}
+
+#[derive(Deserialize)]
+pub struct UtteranceBody {
+    #[serde(default)]
+    pub pcm_b64: Option<String>,
+    #[serde(default)]
+    pub audio_b64: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub lang: Option<String>,
+}
+
+async fn resolve_tenant_assistant_name(tenant_id: &str, session_key_hash: &str) -> String {
+    TenantDB::with_async(tenant_id.to_string(), session_key_hash.to_string(), |db| {
+        let explicit = db.get_kv("assistant_name").ok().flatten();
+        let persona = db.get_persona().ok().flatten();
+        Ok((explicit, persona))
+    })
+    .await
+    .ok()
+    .and_then(|(explicit, persona)| {
+        explicit
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some(crate::routes::persona_api::parse_agent_name(&persona)))
+    })
+    .unwrap_or_else(|| "Aegis".to_string())
+}
+
+async fn list_enrolled_voices(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> Result<Json<Value>, AegisHttpError> {
+    let (profiles, gate_enabled) = TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        |db| {
+            let voices = db.list_enrolled_voices()?;
+            let gate = db.get_voice_gate_enabled()?;
+            Ok((voices, gate))
+        },
+    )
+    .await
+    .map_err(AegisHttpError::Internal)?;
+
+    let agent_name = resolve_tenant_assistant_name(&auth.tenant_id, &auth.session_key_hash).await;
+    let groq_key_detected = {
+        let router = state.router.read().await;
+        router
+            .key_pool_ref()
+            .get_any_key_for_provider("groq", &auth.tenant_id)
+            .await
+            .is_some()
+    };
+
+    let sanitized: Vec<Value> = profiles
+        .into_iter()
+        .map(|p| {
+            json!({
+                "id": p.id,
+                "label": p.label,
+                "threshold": p.threshold,
+                "sample_count": p.sample_count,
+                "created_at": p.created_at,
+                "dims": p.fingerprint.len(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "profiles": sanitized,
+        "gate_enabled": gate_enabled,
+        "agent_name": agent_name,
+        "groq_key_detected": groq_key_detected,
+    })))
+}
+
+async fn enroll_multi_speaker(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Json(req): Json<MultiEnrollBody>,
+) -> Result<Json<Value>, AegisHttpError> {
+    let label = req.label.trim().to_string();
+    if label.is_empty() || label.chars().count() > 40 {
+        return Err(AegisHttpError::BadRequest(
+            "La etiqueta de voz debe tener entre 1 y 40 caracteres.".to_string(),
+        ));
+    }
+    if req.samples_pcm_b64.is_empty() || req.samples_pcm_b64.len() > 6 {
+        return Err(AegisHttpError::BadRequest(
+            "Se requieren entre 1 y 6 muestras de audio para registrar la voz.".to_string(),
+        ));
+    }
+
+    let threshold = req.threshold.unwrap_or(DEFAULT_THRESHOLD);
+    if !threshold.is_finite() || !(0.4..=0.98).contains(&threshold) {
+        return Err(AegisHttpError::BadRequest(
+            "Umbral inválido (debe estar entre 0.40 y 0.98)".to_string(),
+        ));
+    }
+
+    let src_rate = req.sample_rate.unwrap_or(16_000).clamp(8_000, 96_000);
+    let mut pcm_samples = Vec::with_capacity(req.samples_pcm_b64.len());
+    for b64 in &req.samples_pcm_b64 {
+        if b64.len() > MAX_ENROLL_B64_BYTES {
+            return Err(AegisHttpError::BadRequest(
+                "Una de las muestras excede el límite de 8 MiB.".to_string(),
+            ));
+        }
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| AegisHttpError::BadRequest(format!("Base64 PCM inválido: {}", e)))?;
+        pcm_samples.push(resample_pcm16_mono(&raw, src_rate, 16_000));
+    }
+
+    let centroid = merge_enrollments(&pcm_samples).ok_or_else(|| {
+        AegisHttpError::BadRequest(
+            "No se detectó voz suficiente en las muestras grabadas.".to_string(),
+        )
+    })?;
+
+    let profile = EnrolledSpeakerProfile {
+        id: format!("voice_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
+        label: label.clone(),
+        fingerprint: centroid.clone(),
+        threshold,
+        sample_count: pcm_samples.len(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    let profile_clone = profile.clone();
+    TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        move |db| db.upsert_enrolled_voice(&profile_clone),
+    )
+    .await
+    .map_err(AegisHttpError::Internal)?;
+
+    // Keep persistence primary fingerprint aligned for WebRTC path as well.
+    let _ = state
+        .persistence
+        .save_voice_fingerprint(&auth.tenant_id, &centroid, threshold)
+        .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "profile": {
+            "id": profile.id,
+            "label": profile.label,
+            "threshold": profile.threshold,
+            "sample_count": profile.sample_count,
+            "dims": profile.fingerprint.len(),
+        }
+    })))
+}
+
+async fn delete_enrolled_voice(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AegisHttpError> {
+    let tid = auth.tenant_id.clone();
+    let (deleted, remaining) = TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        move |db| {
+            let removed = db.delete_enrolled_voice(&id)?;
+            let left = db.list_enrolled_voices()?;
+            Ok((removed, left))
+        },
+    )
+    .await
+    .map_err(AegisHttpError::Internal)?;
+
+    if let Some(first) = remaining.first() {
+        let _ = state
+            .persistence
+            .save_voice_fingerprint(&tid, &first.fingerprint, first.threshold)
+            .await;
+    } else {
+        let _ = state.persistence.delete_voice_fingerprint(&tid).await;
+    }
+
+    Ok(Json(json!({
+        "success": deleted,
+        "remaining_count": remaining.len(),
+    })))
+}
+
+async fn set_voice_gate(
+    State(_state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Json(req): Json<VoiceGateBody>,
+) -> Result<Json<Value>, AegisHttpError> {
+    let enabled = req.enabled;
+    TenantDB::with_async(auth.tenant_id, auth.session_key_hash, move |db| {
+        db.set_voice_gate_enabled(enabled)
+    })
+    .await
+    .map_err(AegisHttpError::Internal)?;
+
+    Ok(Json(json!({
+        "success": true,
+        "gate_enabled": enabled,
+    })))
+}
+
+async fn verify_speaker_test(
+    State(_state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Json(req): Json<VerifyTestBody>,
+) -> Result<Json<Value>, AegisHttpError> {
+    if req.pcm_b64.len() > MAX_ENROLL_B64_BYTES {
+        return Err(AegisHttpError::BadRequest(
+            "Audio payload exceeds 8 MiB limit".to_string(),
+        ));
+    }
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(&req.pcm_b64)
+        .map_err(|e| AegisHttpError::BadRequest(format!("Invalid base64 PCM: {}", e)))?;
+    let src_rate = req.sample_rate.unwrap_or(16_000).clamp(8_000, 96_000);
+    let pcm_16k = resample_pcm16_mono(&raw, src_rate, 16_000);
+
+    let profiles = TenantDB::with_async(auth.tenant_id, auth.session_key_hash, |db| {
+        db.list_enrolled_voices()
+    })
+    .await
+    .map_err(AegisHttpError::Internal)?;
+
+    if profiles.is_empty() {
+        return Ok(Json(json!({
+            "accepted": true,
+            "matched_label": serde_json::Value::Null,
+            "score": 1.0,
+            "threshold": DEFAULT_THRESHOLD,
+            "enrolled_count": 0,
+        })));
+    }
+
+    let count = profiles.len();
+    let (accepted, matched_label, score, threshold) = verify_multi(&pcm_16k, &profiles);
+    Ok(Json(json!({
+        "accepted": accepted,
+        "matched_label": matched_label,
+        "score": score,
+        "threshold": threshold,
+        "enrolled_count": count,
+    })))
+}
+
+async fn process_utterance(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Json(req): Json<UtteranceBody>,
+) -> Result<Json<Value>, AegisHttpError> {
+    let mode = req.mode.as_deref().unwrap_or("direct");
+    let pcm_16k = if let Some(ref b64) = req.pcm_b64 {
+        if b64.len() > MAX_ENROLL_B64_BYTES {
+            return Err(AegisHttpError::BadRequest(
+                "PCM payload exceeds 8 MiB limit".to_string(),
+            ));
+        }
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| AegisHttpError::BadRequest(format!("Invalid base64 PCM: {}", e)))?;
+        let src_rate = req.sample_rate.unwrap_or(16_000).clamp(8_000, 96_000);
+        Some(resample_pcm16_mono(&raw, src_rate, 16_000))
+    } else {
+        None
+    };
+
+    let encoded_audio = if let Some(ref b64) = req.audio_b64 {
+        if b64.len() > MAX_ENROLL_B64_BYTES {
+            return Err(AegisHttpError::BadRequest(
+                "Audio payload exceeds 8 MiB limit".to_string(),
+            ));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| AegisHttpError::BadRequest(format!("Invalid base64 audio: {}", e)))?;
+        let mime = req
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "audio/m4a".to_string());
+        let ext = if mime.contains("webm") {
+            "audio.webm"
+        } else if mime.contains("wav") {
+            "audio.wav"
+        } else if mime.contains("ogg") {
+            "audio.ogg"
+        } else {
+            "audio.m4a"
+        };
+        Some((bytes, ext.to_string(), mime))
+    } else {
+        None
+    };
+
+    if pcm_16k.is_none() && encoded_audio.is_none() {
+        return Err(AegisHttpError::BadRequest(
+            "Se requiere pcm_b64 o audio_b64.".to_string(),
+        ));
+    }
+
+    let (profiles, gate_enabled) = TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        |db| {
+            let voices = db.list_enrolled_voices()?;
+            let gate = db.get_voice_gate_enabled()?;
+            Ok((voices, gate))
+        },
+    )
+    .await
+    .map_err(AegisHttpError::Internal)?;
+
+    let agent_name = resolve_tenant_assistant_name(&auth.tenant_id, &auth.session_key_hash).await;
+
+    // Step 1: Fast zero-token local speaker biometrics gate when PCM & profiles are present.
+    let (matched_speaker, score, threshold) = if !profiles.is_empty() {
+        if let Some(ref pcm) = pcm_16k {
+            let (accepted, matched_label, score, thresh) = verify_multi(pcm, &profiles);
+            if gate_enabled && !accepted {
+                return Ok(Json(json!({
+                    "accepted": false,
+                    "reason": "speaker_mismatch",
+                    "matched_speaker": serde_json::Value::Null,
+                    "score": score,
+                    "threshold": thresh,
+                    "wake_only": false,
+                    "command": "",
+                    "transcript": "",
+                    "agent_name": agent_name,
+                })));
+            }
+            (matched_label, score, thresh)
+        } else {
+            (None, 1.0, DEFAULT_THRESHOLD)
+        }
+    } else {
+        (None, 1.0, DEFAULT_THRESHOLD)
+    };
+
+    // Step 2: Zero-config Groq Whisper Turbo (from VoiceProfile or KeyPool) with Whisper Local fallback.
+    let keypool_groq_key = {
+        let router = state.router.read().await;
+        router
+            .key_pool_ref()
+            .get_any_key_for_provider("groq", &auth.tenant_id)
+            .await
+    };
+
+    let (transcript, stt_engine) = state
+        .siren_router
+        .transcribe_with_fallback(
+            &auth.tenant_id,
+            pcm_16k,
+            encoded_audio,
+            keypool_groq_key,
+            req.lang.as_deref(),
+        )
+        .await
+        .map_err(|e| AegisHttpError::BadRequest(e.to_string()))?;
+
+    if transcript.trim().is_empty() {
+        return Ok(Json(json!({
+            "accepted": false,
+            "reason": "empty_speech",
+            "matched_speaker": matched_speaker,
+            "score": score,
+            "threshold": threshold,
+            "wake_only": false,
+            "command": "",
+            "transcript": "",
+            "stt_engine": stt_engine,
+            "agent_name": agent_name,
+        })));
+    }
+
+    // Step 3: Dynamic wake-word check when in "wakeword" standby.
+    if mode == "wakeword" {
+        let wm = match_and_strip_wake_phrase(&transcript, &agent_name);
+        return Ok(Json(json!({
+            "accepted": wm.matched,
+            "reason": if wm.matched { "ok" } else { "no_wake_phrase" },
+            "wake_only": wm.wake_only,
+            "command": wm.command,
+            "matched_phrase": wm.matched_phrase,
+            "transcript": transcript,
+            "matched_speaker": matched_speaker,
+            "score": score,
+            "threshold": threshold,
+            "stt_engine": stt_engine,
+            "agent_name": agent_name,
+        })));
+    }
+
+    Ok(Json(json!({
+        "accepted": true,
+        "reason": "ok",
+        "wake_only": false,
+        "command": transcript.clone(),
+        "transcript": transcript,
+        "matched_speaker": matched_speaker,
+        "score": score,
+        "threshold": threshold,
+        "stt_engine": stt_engine,
+        "agent_name": agent_name,
+    })))
 }
 
 async fn list_siren_voices(_auth: CitadelAuthenticated) -> Json<Value> {

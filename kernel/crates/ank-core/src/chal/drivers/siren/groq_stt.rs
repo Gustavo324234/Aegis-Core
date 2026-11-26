@@ -21,37 +21,35 @@ impl GroqSttEngine {
             .map_err(|e| anyhow!("Failed to build reqwest client: {}", e))?;
         Ok(Self { api_key, client })
     }
-}
 
-#[async_trait]
-impl SirenEngine for GroqSttEngine {
-    fn id(&self) -> &str {
-        "groq"
-    }
-
-    async fn synthesize(&self, _text: String) -> Result<Vec<u8>> {
-        Err(anyhow!(
-            "GroqSttEngine: TTS no soportado. Usá ElevenLabs o Voxtral para síntesis."
-        ))
-    }
-
-    /// Transcribe PCM 16kHz 16-bit mono a texto usando Groq Whisper API.
-    async fn transcribe(&self, audio: Vec<u8>) -> Result<String> {
-        if audio.is_empty() {
+    /// Transcribes pre-encoded audio bytes (WAV, M4A, WebM, OGG) using Groq Whisper Turbo.
+    pub async fn transcribe_encoded(
+        &self,
+        audio_bytes: Vec<u8>,
+        filename: &str,
+        mime: &str,
+        lang_hint: Option<&str>,
+    ) -> Result<String> {
+        if audio_bytes.is_empty() {
             return Ok(String::new());
         }
 
-        let wav_data = pcm_to_wav(&audio, 16000);
-
-        let file_part = multipart::Part::bytes(wav_data)
-            .file_name("audio.wav")
-            .mime_str("audio/wav")
+        let file_part = multipart::Part::bytes(audio_bytes)
+            .file_name(filename.to_string())
+            .mime_str(mime)
             .map_err(|e| anyhow!("MIME error: {}", e))?;
 
-        let form = multipart::Form::new()
+        let mut form = multipart::Form::new()
             .part("file", file_part)
             .text("model", "whisper-large-v3-turbo")
             .text("response_format", "text");
+
+        if let Some(lang) = lang_hint.filter(|l| !l.trim().is_empty()) {
+            let short = lang.split(['-', '_']).next().unwrap_or(lang).trim();
+            if !short.is_empty() {
+                form = form.text("language", short.to_string());
+            }
+        }
 
         let response = self
             .client
@@ -74,6 +72,38 @@ impl SirenEngine for GroqSttEngine {
             .map_err(|e| anyhow!("Failed to read Groq response: {}", e))?;
 
         Ok(text.trim().to_string())
+    }
+
+    /// Transcribe PCM 16kHz 16-bit mono a texto usando Groq Whisper API con hint opcional de idioma.
+    pub async fn transcribe_with_lang(
+        &self,
+        audio: Vec<u8>,
+        lang_hint: Option<&str>,
+    ) -> Result<String> {
+        if audio.is_empty() {
+            return Ok(String::new());
+        }
+        let wav_data = pcm_to_wav(&audio, 16000);
+        self.transcribe_encoded(wav_data, "audio.wav", "audio/wav", lang_hint)
+            .await
+    }
+}
+
+#[async_trait]
+impl SirenEngine for GroqSttEngine {
+    fn id(&self) -> &str {
+        "groq"
+    }
+
+    async fn synthesize(&self, _text: String) -> Result<Vec<u8>> {
+        Err(anyhow!(
+            "GroqSttEngine: TTS no soportado. Usá ElevenLabs o Voxtral para síntesis."
+        ))
+    }
+
+    /// Transcribe PCM 16kHz 16-bit mono a texto usando Groq Whisper API.
+    async fn transcribe(&self, audio: Vec<u8>) -> Result<String> {
+        self.transcribe_with_lang(audio, None).await
     }
 }
 

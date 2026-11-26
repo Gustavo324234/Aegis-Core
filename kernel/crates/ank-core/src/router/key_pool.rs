@@ -296,6 +296,39 @@ impl KeyPool {
         None
     }
 
+    /// CORE-412: Returns the first available plaintext API key for `provider` (ignoring `active_models`),
+    /// prioritizing tenant keys before global keys and free-tier keys first.
+    /// Useful for shared platform capabilities like Groq Whisper STT (`whisper-large-v3-turbo`).
+    pub async fn get_any_key_for_provider(
+        &self,
+        provider: &str,
+        tenant_id: &str,
+    ) -> Option<String> {
+        let target = crate::router::normalize_provider_id(provider);
+        let tenant_keys = self.tenant_keys.read().await;
+        let global_keys = self.global_keys.read().await;
+
+        let matches = |k: &&ApiKeyEntry| -> bool {
+            crate::router::normalize_provider_id(&k.provider) == target
+                && k.is_available()
+                && !k.api_key.trim().is_empty()
+        };
+
+        let tenant = tenant_keys
+            .get(tenant_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+
+        tenant
+            .iter()
+            .filter(|k| k.is_free_tier && matches(k))
+            .chain(global_keys.iter().filter(|k| k.is_free_tier && matches(k)))
+            .chain(tenant.iter().filter(|k| !k.is_free_tier && matches(k)))
+            .chain(global_keys.iter().filter(|k| !k.is_free_tier && matches(k)))
+            .next()
+            .map(|k| k.api_key.clone())
+    }
+
     async fn next_rr_index(&self, provider: &str) -> usize {
         let mut map = self.rr_index.write().await;
         let counter = map
