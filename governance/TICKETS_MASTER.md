@@ -26,6 +26,7 @@
 | EPIC 60 | Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience | ✅ Completa | 100% |
 | EPIC 61 | Sandbox Promotion, Security Hardening & SRE Maturation | ✅ Completa | 100% (13/13) |
 | EPIC 62 | Cognitive Efficiency, Adaptive Intelligence & 2026 Model Matrix | ✅ Completa | 100% (5/5) |
+| EPIC 63 | Hands-Free Voice Biometrics, Dynamic Wake-Word & Native Assistant | ✅ Completa | 100% (5/5) |
 
 ## EPIC 49 — Cognitive Loop
 
@@ -333,6 +334,16 @@
 | CORE-409 | feat | CMR v4 — Complejidad Adaptativa de Chat (`Quick`/`Standard`/`DeepReasoning`), `benchmark_pct` y `max_tokens` para Razonadores | ✅ Done | Crítica | Kernel Engineer + AI Architect |
 | CORE-410 | feat | Catálogo Curado 2026 (`models.yaml`), `update_models.py` y Presets Recomendados en UI/Sandbox | ✅ Done | Alta | AI Architect + Shell Engineer |
 | CORE-411 | test | Suite de Regresión de Tokens/Inteligencia, Documentación PinchBench/README y Verificación SRE Completa | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
+
+## EPIC 63 — Hands-Free Voice Biometrics, Dynamic Wake-Word & Native Assistant
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-412 | feat | Biometría Vocal Multi-Perfil v2, Groq Whisper Zero-Config y Endpoint `/api/siren/utterance` | ✅ Done | Crítica | Kernel Engineer + AI Architect |
+| CORE-413 | feat | VAD Natural Tolerante a Respiración (`smartVadRecorder`) y Estudio de Voces/Wake-Word en `shell/ui` | ✅ Done | Crítica | Shell Engineer |
+| CORE-414 | feat | Demonio de Voz de Escritorio Siempre Activo con Navegador Cerrado (`tools/desktop_voice/`) | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
+| CORE-415 | feat | App Android como Asistente Digital Predeterminado (`ROLE_ASSISTANT`) + `ForegroundService` de Escucha Continua | ✅ Done | Crítica | Shell Engineer |
+| CORE-416 | test | Suite de Pruebas de Biometría/Wake-Word/Daemon, Documentación Android Studio/PC y Sincronización SRE | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
 
 ## Governance & Tooling
 
