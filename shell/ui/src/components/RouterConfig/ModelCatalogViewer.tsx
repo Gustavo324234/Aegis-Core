@@ -19,6 +19,8 @@ interface ModelInfo {
     cost_input_per_mtok: number;
     cost_output_per_mtok: number;
     is_local: boolean;
+    benchmark_pct?: number | null;
+    free_tier_eligible?: boolean;
     task_scores: ModelTaskScores;
 }
 
@@ -34,7 +36,7 @@ function ScoreDots({ score }: { score: number }) {
     );
 }
 
-function BenchScore({ scores, syncedAt }: { scores?: ModelTaskScores | null; syncedAt: string | null }) {
+function BenchScore({ scores, benchmarkPct, syncedAt }: { scores?: ModelTaskScores | null; benchmarkPct?: number | null; syncedAt: string | null }) {
     const { t } = useTranslation();
     if (!scores) {
         return <span className="text-white/20 font-mono" title={t('bench_no_data')}>{t('bench_no_data')}</span>;
@@ -57,13 +59,18 @@ function BenchScore({ scores, syncedAt }: { scores?: ModelTaskScores | null; syn
     else if (rounded <= 4.5) colorClass = 'bg-green-400';
     else colorClass = 'bg-green-500';
 
-    const tooltipText = syncedAt
+    const baseTooltip = syncedAt
         ? t('bench_tooltip_synced', { date: new Date(syncedAt).toLocaleDateString() })
         : t('bench_tooltip');
+    const tooltipText = benchmarkPct && benchmarkPct > 0
+        ? `PinchBench: ${benchmarkPct.toFixed(1)}% · ${baseTooltip}`
+        : baseTooltip;
 
     return (
         <span className="group relative inline-flex items-center gap-1 cursor-default" title={tooltipText}>
-            <span className="text-[10px] font-mono text-white/60 w-4 text-right">{rounded.toFixed(1)}</span>
+            <span className="text-[10px] font-mono text-white/60 text-right">
+                {benchmarkPct && benchmarkPct > 0 ? `${Math.round(benchmarkPct)}%` : rounded.toFixed(1)}
+            </span>
             <span className="inline-flex gap-[1px]">
                 {Array.from({ length: 5 }, (_, i) => (
                     <span
@@ -270,7 +277,7 @@ const ModelCatalogViewer: React.FC<{
                                     </td>
                                     <td className="py-3 pr-4 text-white/40">{m.provider}</td>
                                     <td className="py-3 pr-4 text-center">
-                                        <BenchScore scores={m.task_scores} syncedAt={syncedAt} />
+                                        <BenchScore scores={m.task_scores} benchmarkPct={m.benchmark_pct} syncedAt={syncedAt} />
                                     </td>
                                     <td className="py-3 pr-4 text-center">
                                         <ScoreDots score={m.task_scores?.chat ?? 0} />

@@ -295,6 +295,11 @@ def update_models(models, prices, bench_scores,
                     f"{f}: {old_scores.get(f, 0)}→{new_scores[f]}"
                     for f in TASK_FIELDS if old_scores.get(f, 0) != new_scores[f]
                 ]
+                overall = round(float(be.get("overall", 0.0)), 2)
+                old_bench = model.get("benchmark_pct")
+                if overall > 0 and (old_bench is None or abs(float(old_bench) - overall) > 0.05):
+                    model["benchmark_pct"] = overall
+                    diffs.append(f"benchmark_pct: {old_bench}→{overall}")
                 if diffs:
                     model["task_scores"] = new_scores
                     changes.append(f"  📊 {mid}: {', '.join(diffs)}")

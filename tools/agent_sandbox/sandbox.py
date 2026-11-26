@@ -60,15 +60,15 @@ class LLMClient:
         if provider == "gemini":
             self.api_keys = self.env.get("GEMINI_API_KEYS") or self.env.get("GEMINI_API_KEY", [])
             self.api_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-            self.model = model or "gemini-2.5-flash"
+            self.model = model or "gemini-3.6-flash"
         elif provider == "openrouter":
             self.api_keys = self.env.get("OPENROUTER_API_KEYS") or self.env.get("OPENROUTER_API_KEY", [])
             self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-            self.model = model or "google/gemini-2.5-flash"
+            self.model = model or "openrouter/free"
         elif provider == "groq":
             self.api_keys = self.env.get("GROQ_API_KEYS") or self.env.get("GROQ_API_KEY", [])
             self.api_url = "https://api.groq.com/openai/v1/chat/completions"
-            self.model = model or "llama-3.3-70b-versatile"
+            self.model = model or "openai/gpt-oss-120b"
         else:
             raise ValueError(f"Unknown provider: {provider}")
 

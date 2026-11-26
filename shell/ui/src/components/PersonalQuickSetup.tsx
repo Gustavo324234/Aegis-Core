@@ -9,9 +9,10 @@ interface PersonalQuickSetupProps {
 }
 
 const PROVIDERS = [
-    { id: 'gemini', name: 'Google Gemini (Recomendado)', defaultModel: 'gemini-2.5-flash', requiresKey: true, placeholder: 'AIzaSy...' },
-    { id: 'openrouter', name: 'OpenRouter', defaultModel: 'meta-llama/llama-3.3-70b-instruct', requiresKey: true, placeholder: 'sk-or-v1-...' },
-    { id: 'groq', name: 'Groq (Ultra rápido)', defaultModel: 'groq/llama-3.3-70b-versatile', requiresKey: true, placeholder: 'gsk_...' },
+    { id: 'gemini', name: 'Google Gemini (Gratis AI Studio)', defaultModel: 'gemini-3.6-flash', requiresKey: true, placeholder: 'AIzaSy...' },
+    { id: 'openrouter', name: 'OpenRouter (Gratis :free o Pagos)', defaultModel: 'openrouter/free', requiresKey: true, placeholder: 'sk-or-v1-...' },
+    { id: 'groq', name: 'Groq (Gratis Ultra rápido)', defaultModel: 'openai/gpt-oss-120b', requiresKey: true, placeholder: 'gsk_...' },
+    { id: 'deepseek', name: 'DeepSeek (Ultra-eficiente pago)', defaultModel: 'deepseek-chat', requiresKey: true, placeholder: 'sk-...' },
     { id: 'ollama', name: 'Ollama Local (Gratis sin API Key)', defaultModel: 'llama3.2', requiresKey: false, placeholder: '' },
     { id: 'openai', name: 'OpenAI', defaultModel: 'openai/gpt-4o-mini', requiresKey: true, placeholder: 'sk-proj-...' },
     { id: 'anthropic', name: 'Anthropic Claude (vía OpenRouter)', defaultModel: 'anthropic/claude-sonnet-4-6', requiresKey: true, placeholder: 'sk-or-v1-...' },
@@ -233,6 +234,9 @@ export const PersonalQuickSetup: React.FC<PersonalQuickSetupProps> = ({ setupTok
                                     </option>
                                 ))}
                             </select>
+                            <p className="text-[10px] font-mono text-white/40 leading-relaxed">
+                                Tip: para empezar 100% gratis elegí Gemini + luego sumá Groq y OpenRouter (<code className="text-white/60">:free</code>). Para máxima inteligencia por centavos, usá OpenRouter con DeepSeek V4 Flash o GPT-5.6 Luna.
+                            </p>
                         </div>
 
                         {/* API Key (if required) */}

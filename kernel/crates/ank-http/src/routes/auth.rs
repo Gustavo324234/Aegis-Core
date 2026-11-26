@@ -649,7 +649,11 @@ pub async fn quick_personal_setup(
             ),
             "groq" => (
                 "https://api.groq.com/openai/v1/chat/completions".to_string(),
-                "groq/llama-3.3-70b-versatile".to_string(),
+                "openai/gpt-oss-120b".to_string(),
+            ),
+            "deepseek" => (
+                "https://api.deepseek.com/v1/chat/completions".to_string(),
+                "deepseek-chat".to_string(),
             ),
             "anthropic" => (
                 "https://openrouter.ai/api/v1/chat/completions".to_string(),
@@ -672,11 +676,7 @@ pub async fn quick_personal_setup(
             .filter(|k| !k.is_empty())
             .unwrap_or_else(|| "ollama".to_string());
 
-        let bare_hal_model = model
-            .strip_prefix("openai/")
-            .or_else(|| model.strip_prefix("groq/"))
-            .unwrap_or(&model)
-            .to_string();
+        let bare_hal_model = ank_core::router::bare_model_id(&model, &canonical_provider);
 
         state
             .hal
