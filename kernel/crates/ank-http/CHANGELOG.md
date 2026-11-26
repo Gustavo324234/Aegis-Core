@@ -38,6 +38,13 @@
 
 
 
+## [0.1.97](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.96...ank-http-v0.1.97) (2026-11-26)
+
+
+### Features
+
+* **epic-61:** Sandbox Promotion, Security Hardening & SRE Maturation (CORE-394..CORE-406) ([#380](https://github.com/Gustavo324234/Aegis-Core/issues/380)) ([bdff2b4](https://github.com/Gustavo324234/Aegis-Core/commit/bdff2b43b9b348aec7e102aad74206151f278993))
+
 ## [0.1.95](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.94...ank-http-v0.1.95) (2026-10-28)
 
 

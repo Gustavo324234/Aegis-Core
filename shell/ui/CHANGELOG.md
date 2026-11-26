@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.31.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.30.0...shell-ui-v1.31.0) (2026-11-26)
+
+
+### Features
+
+* **epic-61:** Sandbox Promotion, Security Hardening & SRE Maturation (CORE-394..CORE-406) ([#380](https://github.com/Gustavo324234/Aegis-Core/issues/380)) ([bdff2b4](https://github.com/Gustavo324234/Aegis-Core/commit/bdff2b43b9b348aec7e102aad74206151f278993))
+
 ## [1.30.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.29.4...shell-ui-v1.30.0) (2026-10-28)
 
 
