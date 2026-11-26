@@ -513,15 +513,21 @@ pub fn safe_resolve(workspace_root: &Path, path_str: &str) -> Option<std::path::
     // dentro del workspace.
     let workspace_canonical = workspace_root.canonicalize().ok()?;
 
-    let resolved = if candidate.exists() {
-        candidate.canonicalize().ok()?
-    } else {
-        // No existe (probablemente write_file de un archivo nuevo). Canonicaliza
-        // el padre y appendea el filename. Si el padre tampoco existe, ni
-        // siquiera se puede escribir — devolvemos None.
-        let parent = candidate.parent()?;
-        let parent_canonical = parent.canonicalize().ok()?;
-        parent_canonical.join(candidate.file_name()?)
+    let resolved = match std::fs::symlink_metadata(&candidate) {
+        Ok(_) => {
+            // Exists on disk (including a dangling symlink): canonicalize must
+            // succeed and stay inside workspace_canonical, rejecting dangling
+            // symlink write escapes.
+            candidate.canonicalize().ok()?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Truly does not exist yet (e.g. write_file for a new file).
+            // Canonicalize parent and append the filename.
+            let parent = candidate.parent()?;
+            let parent_canonical = parent.canonicalize().ok()?;
+            parent_canonical.join(candidate.file_name()?)
+        }
+        Err(_) => return None,
     };
 
     if resolved.starts_with(&workspace_canonical) {
@@ -662,6 +668,23 @@ mod tests {
             safe_resolve(workspace.path(), "link.txt").is_none(),
             "safe_resolve must reject symlinks that resolve outside the workspace"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_safe_resolve_blocks_dangling_symlink_escape() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+        let workspace = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        let nonexistent_outside = outside.path().join("pwned.txt");
+        let link = workspace.path().join("dangling.txt");
+        symlink(&nonexistent_outside, &link)?;
+
+        assert!(
+            safe_resolve(workspace.path(), "dangling.txt").is_none(),
+            "safe_resolve must reject dangling symlinks"
+        );
+        Ok(())
     }
 
     #[test]

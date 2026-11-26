@@ -385,7 +385,11 @@ mod tests {
         scribe.init_repo(tenant_id).await?;
 
         let outside_target = outside.path().join("pwned.txt");
-        let link_path = dir.path().join(tenant_id).join("escape.txt");
+        let link_path = dir
+            .path()
+            .join(tenant_id)
+            .join("workspace")
+            .join("escape.txt");
         symlink(&outside_target, &link_path)?;
 
         let metadata = CommitMetadata {
