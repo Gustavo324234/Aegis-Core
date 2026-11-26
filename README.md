@@ -360,6 +360,7 @@ We believe in absolute engineering honesty. The core cognitive kernel, single-bi
 | Epic 60 | **Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience** | `[Core / Stable]` ✅ Done ([EPIC 60](governance/EPIC_60_REAL_WORLD_CHANNELS_OAUTH_AND_RESILIENCE.md)) |
 | Epic 61 | **Sandbox Promotion, Security Hardening & SRE Maturation** | `[Core / Stable]` ✅ Done ([EPIC 61](governance/EPIC_61_SANDBOX_PROMOTION_AND_SRE.md)) |
 | Epic 62 | **Cognitive Efficiency (-60%–75% Tokens), CMR v4 & 2026 Model Matrix** | `[Core / Stable]` ✅ Done ([EPIC 62](governance/EPIC_62_COGNITIVE_EFFICIENCY_AND_MODELS_2026.md)) |
+| Epic 63 | **Hands-Free Voice Biometrics (56-dim), Breath-Aware VAD & Native Android/PC Assistant** | `[Core / Stable]` ✅ Done ([EPIC 63](governance/EPIC_63_VOICE_BIOMETRICS_WAKEWORD_AND_NATIVE_ASSISTANT.md)) |
 | Epic 52 | Voice Quality (Siren WebRTC stream stabilization & mic-mute feedback) | `[Experimental / R&D]` 🧪 Active R&D |
 | Epic 55 | Mobile App (Satellite and Cloud modes with Orion ID & Web integration) | `[Experimental / R&D]` 🧪 Active R&D |
 

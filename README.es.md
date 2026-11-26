@@ -349,6 +349,7 @@ Creemos en la honestidad de ingeniería absoluta. El núcleo cognitivo, la arqui
 | Epic 60 | **Canales Reales (WhatsApp y Google Calendar), UX de Chat y Resiliencia ReAct** | `[Core / Estable]` ✅ Listo ([EPIC 60](governance/EPIC_60_REAL_WORLD_CHANNELS_OAUTH_AND_RESILIENCE.md)) |
 | Epic 61 | **Promoción de Sandbox, Hardening de Seguridad y Maduración SRE** | `[Core / Estable]` ✅ Listo ([EPIC 61](governance/EPIC_61_SANDBOX_PROMOTION_AND_SRE.md)) |
 | Epic 62 | **Eficiencia Cognitiva (-60%–75% Tokens), CMR v4 y Matriz de Modelos 2026** | `[Core / Estable]` ✅ Listo ([EPIC 62](governance/EPIC_62_COGNITIVE_EFFICIENCY_AND_MODELS_2026.md)) |
+| Epic 63 | **Biometría Vocal Multi-Voz (56-dim), VAD Natural y Asistente Nativo Android/PC** | `[Core / Estable]` ✅ Listo ([EPIC 63](governance/EPIC_63_VOICE_BIOMETRICS_WAKEWORD_AND_NATIVE_ASSISTANT.md)) |
 | Epic 52 | Calidad de Voz (estabilización de stream Siren WebRTC y feedback de silenciar mic) | `[Experimental / I+D]` 🧪 I+D Activo |
 | Epic 55 | App Móvil (modos Satélite y Cloud con integración Orion ID y Web) | `[Experimental / I+D]` 🧪 I+D Activo |
 

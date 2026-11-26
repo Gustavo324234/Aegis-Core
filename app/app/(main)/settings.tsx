@@ -10,10 +10,18 @@ import * as secureStorage from '@/services/secureStorage';
 import { PROVIDERS } from '@/constants/providers';
 import { TRANSLATIONS, Language } from '@/constants/i18n';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as voiceService from '@/services/voiceService';
+import {
+  hasNativeAssistantModule,
+  isAlwaysOnListening,
+  openAndroidAssistantSettings,
+  startAlwaysOnListening,
+  stopAlwaysOnListening,
+} from '@/services/aegisAssistantNative';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { logout, mode, serverUrl } = useAuthStore();
+  const { logout, mode, serverUrl, tenantId, sessionKey } = useAuthStore();
   const {
     selectedProviderId,
     selectedModel,
@@ -35,6 +43,74 @@ export default function SettingsScreen() {
   const [keyInput, setKeyInput] = useState('');
   const [showCustomModel, setShowCustomModel] = useState(false);
   const [customModelInput, setCustomModelInput] = useState('');
+  const [alwaysOnActive, setAlwaysOnActive] = useState(false);
+  const [enrolledVoices, setEnrolledVoices] = useState<voiceService.EnrolledVoiceItem[]>([]);
+  const [wakeAgentName, setWakeAgentName] = useState('Aegis');
+  const [enrollingVoice, setEnrollingVoice] = useState(false);
+  const nativeReady = hasNativeAssistantModule();
+
+  const loadMobileVoiceState = useCallback(async () => {
+    if (nativeReady) {
+      setAlwaysOnActive(await isAlwaysOnListening().catch(() => false));
+    }
+    if (mode === 'satellite' && serverUrl && tenantId && sessionKey) {
+      try {
+        const res = await voiceService.fetchEnrolledVoices(serverUrl, tenantId, sessionKey);
+        setEnrolledVoices(res.profiles);
+        setWakeAgentName(res.agentName);
+      } catch {
+        // best-effort
+      }
+    }
+  }, [nativeReady, mode, serverUrl, tenantId, sessionKey]);
+
+  useEffect(() => {
+    loadMobileVoiceState();
+  }, [loadMobileVoiceState]);
+
+  const handleToggleAlwaysOn = async () => {
+    if (!nativeReady) {
+      Alert.alert(
+        'Compilación Android Studio',
+        'Para escucha en segundo plano 24/7 compilá la APK nativa con `npx expo prebuild --platform android` y Android Studio.'
+      );
+      return;
+    }
+    if (alwaysOnActive) {
+      await stopAlwaysOnListening();
+      setAlwaysOnActive(false);
+    } else {
+      if (!serverUrl || !tenantId || !sessionKey) {
+        Alert.alert('Modo Satélite requerido', 'Conectate primero a tu servidor Aegis.');
+        return;
+      }
+      const granted = await voiceService.requestPermissions();
+      if (!granted) {
+        Alert.alert('Permiso requerido', 'Habilitá el micrófono para Aegis.');
+        return;
+      }
+      await startAlwaysOnListening(serverUrl, tenantId, sessionKey, wakeAgentName, 2400);
+      setAlwaysOnActive(true);
+    }
+  };
+
+  const handleEnrollPhoneVoice = async () => {
+    if (!serverUrl || !tenantId || !sessionKey) return;
+    setEnrollingVoice(true);
+    try {
+      Alert.alert(
+        'Grabando tu voz (9 segundos)',
+        `Hablá naturalmente diciendo "${wakeAgentName} escuchame..." durante los próximos segundos.`
+      );
+      await voiceService.enrollVoiceSampleBatch(serverUrl, tenantId, sessionKey, 'Mi voz (Celular)');
+      await loadMobileVoiceState();
+      Alert.alert('Listo', 'Voz del celular registrada en tu servidor Aegis.');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo registrar la voz.');
+    } finally {
+      setEnrollingVoice(false);
+    }
+  };
 
   useEffect(() => {
     loadSettings();
@@ -175,6 +251,70 @@ export default function SettingsScreen() {
             )}
           </View>
         )}
+
+        {/* SECTION: ASISTENTE ANDROID & BIOMETRÍA */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>ASISTENTE ANDROID &amp; VOZ 24/7</Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>ACTIVACIÓN: &ldquo;{wakeAgentName} escuchame&rdquo;</Text>
+          <TouchableOpacity
+            style={styles.relinkBtn}
+            onPress={async () => {
+              const ok = await openAndroidAssistantSettings();
+              if (!ok) {
+                Alert.alert(
+                  'Ajustes de Android',
+                  'Andá a Ajustes → Aplicaciones → Apps predeterminadas → App de asistencia digital y elegí Aegis (requiere APK compilada en Android Studio).'
+                );
+              }
+            }}
+          >
+            <Text style={styles.relinkBtnText}>ELEGIR AEGIS COMO ASISTENTE DE ANDROID</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.relinkBtn, { marginTop: 10, borderColor: alwaysOnActive ? '#00E5CC' : '#333' }]}
+            onPress={handleToggleAlwaysOn}
+          >
+            <Text style={[styles.relinkBtnText, alwaysOnActive && { color: '#00E5CC' }]}>
+              {alwaysOnActive ? '● ESCUCHA 24/7 ACTIVA (TOCAR PARA PAUSAR)' : '○ ACTIVAR ESCUCHA CONTINUA 24/7'}
+            </Text>
+          </TouchableOpacity>
+
+          {mode === 'satellite' && (
+            <TouchableOpacity
+              style={[styles.relinkBtn, { marginTop: 10 }]}
+              onPress={handleEnrollPhoneVoice}
+              disabled={enrollingVoice}
+            >
+              <Text style={styles.relinkBtnText}>
+                {enrollingVoice ? 'GRABANDO MUESTRAS DE VOZ...' : '+ REGISTRAR MI VOZ DESDE EL CELULAR'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {enrolledVoices.length > 0 && (
+            <View style={{ marginTop: 12, gap: 6 }}>
+              <Text style={styles.cardLabel}>VOCES AUTORIZADAS EN SERVIDOR ({enrolledVoices.length})</Text>
+              {enrolledVoices.map((v) => (
+                <View key={v.id} style={styles.keyStatusRow}>
+                  <Text style={styles.modelTextActive}>{v.label}</Text>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      if (serverUrl && tenantId && sessionKey) {
+                        await voiceService.deleteEnrolledVoice(serverUrl, tenantId, sessionKey, v.id);
+                        await loadMobileVoiceState();
+                      }
+                    }}
+                  >
+                    <Text style={styles.removeLink}>ELIMINAR</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
 
         {/* SECTION: CLOUD PROVIDERS */}
         <View style={styles.sectionHeader}>
