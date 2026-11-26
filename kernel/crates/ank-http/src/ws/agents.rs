@@ -1,7 +1,4 @@
-use crate::{
-    citadel::{extract_ws_session_key_and_protocol, verify_ws_tenant, CitadelError},
-    state::AppState,
-};
+use crate::{citadel::authenticate_ws_upgrade, state::AppState};
 use ank_core::agents::event::AgentEvent;
 use axum::{
     extract::{
@@ -9,7 +6,7 @@ use axum::{
         Path, State,
     },
     http::HeaderMap,
-    response::{IntoResponse, Response},
+    response::Response,
     routing::get,
     Router,
 };
@@ -30,22 +27,11 @@ pub async fn ws_agents_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let (Some(session_key), protocol_header) = extract_ws_session_key_and_protocol(&headers) else {
-        warn!(
-            tenant = %tenant_id,
-            "[AgentWS] Rejected unauthenticated WebSocket upgrade (missing key)"
-        );
-        return CitadelError::MissingKey.into_response();
-    };
-
-    if let Err(err) = verify_ws_tenant(&state, &tenant_id, &session_key).await {
-        warn!(
-            tenant = %tenant_id,
-            error = %err,
-            "[AgentWS] Rejected unauthorized WebSocket upgrade"
-        );
-        return err.into_response();
-    }
+    let (_session_key, protocol_header) =
+        match authenticate_ws_upgrade(&state, &tenant_id, &headers, "AgentWS").await {
+            Ok(res) => res,
+            Err(resp) => return resp,
+        };
 
     let ws = if let Some(proto) = protocol_header {
         ws.protocols([proto])

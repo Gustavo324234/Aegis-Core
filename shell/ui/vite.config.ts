@@ -25,5 +25,29 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react-vendor',
+              test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+            },
+            {
+              name: 'motion-vendor',
+              test: /[\\/]node_modules[\\/]framer-motion[\\/]/,
+            },
+            {
+              name: 'markdown-vendor',
+              test: /[\\/]node_modules[\\/](react-markdown|remark-|rehype-|unified|mdast-|micromark|hast-|unist-|vfile|property-information|comma-separated-tokens|space-separated-tokens|decode-named-character-reference|character-entities)/,
+            },
+            {
+              name: 'icons-vendor',
+              test: /[\\/]node_modules[\\/]lucide-react[\\/]/,
+            },
+          ],
+        },
+      },
+    },
   },
 })

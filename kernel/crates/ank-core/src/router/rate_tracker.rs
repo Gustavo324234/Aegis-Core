@@ -318,6 +318,22 @@ impl ModelUsageTracker {
             .failures += 1;
     }
 
+    /// Model-scoped failure (e.g. 402 credits / 404 deprecated model / empty
+    /// stream on a single model): feeds the per-model error window and task
+    /// outcomes WITHOUT tripping the provider-wide circuit breaker so sibling
+    /// models on the same provider (like OpenRouter `:free`) stay available.
+    pub async fn record_model_failure_for_task(&self, model_id: &str, task: TaskType) {
+        self.record_error(model_id).await;
+        {
+            let mut map = self.outcomes.write().await;
+            map.entry(model_id.to_string()).or_default().failures += 1;
+            map.entry(Self::task_outcome_key(model_id, task))
+                .or_default()
+                .failures += 1;
+        }
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
     /// Increment the failure counter for a model and tally a provider-level
     /// failure for the circuit breaker.
     pub async fn record_failure(&self, model_id: &str, provider: &str) {
@@ -545,22 +561,23 @@ impl ModelUsageTracker {
 
     /// CORE-FIX (F): record a deterministic, non-retryable failure for a model
     /// (HTTP 401, or a Gemini 429 with `limit: 0`). Trips the model circuit on
-    /// the FIRST occurrence — kept in the same 5-minute sliding window.
+    /// the FIRST occurrence — kept in a 1-hour sliding window so deprecated or
+    /// quota-zero models aren't re-picked constantly.
     pub async fn record_model_unavailable(&self, model_id: &str) {
         let now = Instant::now();
         let mut map = self.model_unavailable.write().await;
         let queue = map.entry(model_id.to_string()).or_default();
-        let cutoff = now - Duration::from_secs(300);
+        let cutoff = now - Duration::from_secs(3600);
         while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
             queue.pop_front();
         }
         queue.push_back(now);
     }
 
-    /// Whether this model had a hard-unavailable event in the last 5 minutes.
+    /// Whether this model had a hard-unavailable event in the last hour.
     pub async fn model_unavailable_recent(&self, model_id: &str) -> bool {
         let now = Instant::now();
-        let cutoff = now - Duration::from_secs(300);
+        let cutoff = now - Duration::from_secs(3600);
         let mut map = self.model_unavailable.write().await;
         let queue = map.entry(model_id.to_string()).or_default();
         while queue.front().map(|t| *t < cutoff).unwrap_or(false) {
@@ -572,8 +589,8 @@ impl ModelUsageTracker {
     /// Circuit is "open" (i.e. skip this model in routing) when EITHER:
     /// - it returned an empty stream twice within the last 5 minutes
     ///   (transient/soft failure), OR
-    /// - it had ONE hard-unavailable event (401 / tier-0 quota) in the last
-    ///   5 minutes (deterministic failure — no point retrying).
+    /// - it had ONE hard-unavailable event (401 / 403 / 404 deprecated / tier-0 quota) in the last
+    ///   1 hour (deterministic failure — no point retrying).
     ///
     /// The circuit auto-closes as those events age out of the window.
     pub async fn is_model_circuit_open(&self, model_id: &str) -> bool {
@@ -584,7 +601,7 @@ impl ModelUsageTracker {
     }
 
     /// Seconds remaining until this model's circuit closes (when both the
-    /// `model_unavailable` and `empty_responses` 5-minute windows have aged
+    /// `model_unavailable` and `empty_responses` windows have aged
     /// past their open thresholds). `None` when the circuit is currently closed.
     pub async fn model_cooldown_remaining_secs(&self, model_id: &str) -> Option<u64> {
         let now = Instant::now();
@@ -610,14 +627,16 @@ impl ModelUsageTracker {
         }
 
         // 2. Check model_unavailable (CORE-362: circuit stays open while >= 1 event
-        //    in window; closes once the newest event slides past 300s).
+        //    in 1h window; closes once the newest event slides past 3600s).
         {
+            let unavail_window = Duration::from_secs(3600);
+            let unavail_cutoff = now.checked_sub(unavail_window).unwrap_or(now);
             let map = self.model_unavailable.read().await;
             if let Some(queue) = map.get(model_id) {
-                if let Some(&newest) = queue.iter().rfind(|&&t| t >= cutoff) {
+                if let Some(&newest) = queue.iter().rfind(|&&t| t >= unavail_cutoff) {
                     let age = now.duration_since(newest);
-                    if age < window {
-                        let rem = (window - age).as_secs().max(1);
+                    if age < unavail_window {
+                        let rem = (unavail_window - age).as_secs().max(1);
                         max_remaining = Some(max_remaining.map_or(rem, |cur| cur.max(rem)));
                     }
                 }
@@ -645,7 +664,7 @@ mod tests {
             .model_cooldown_remaining_secs("claude-sonnet-4-6")
             .await
             .expect("hard-unavailable model circuit must report remaining cooldown");
-        assert!(secs >= 1 && secs <= 300);
+        assert!(secs >= 1 && secs <= 3600);
         let open = t.open_model_circuits().await;
         assert!(
             open.get("claude-sonnet-4-6").copied().unwrap_or(0) >= 1,
@@ -806,5 +825,21 @@ mod tests {
                 .successes,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn model_scoped_failure_does_not_open_provider_circuit() {
+        let t = ModelUsageTracker::new();
+        for _ in 0..5 {
+            t.record_model_failure_for_task("openrouter/auto", TaskType::Chat)
+                .await;
+        }
+        assert!(
+            !t.is_provider_circuit_open("openrouter").await,
+            "model-level failures must not blacklist sibling models on the same provider"
+        );
+        let outcomes = t.outcomes_for("openrouter/auto").await.unwrap();
+        assert_eq!(outcomes.failures, 5);
+        assert_eq!(t.recent_errors("openrouter/auto").await, 5);
     }
 }

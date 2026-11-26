@@ -1,362 +1,545 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, Shield, Check, Terminal, Eye, EyeOff, Save, RefreshCw, Volume2, Globe, Zap, HardDrive, Fingerprint, Trash2, UserCheck, UserX } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { useShallow } from 'zustand/react/shallow';
+import {
+    Mic,
+    Check,
+    Eye,
+    EyeOff,
+    Save,
+    RefreshCw,
+    Volume2,
+    VolumeX,
+    Sparkles,
+    Play,
+    Square,
+    ChevronDown,
+    ChevronUp,
+    Sliders,
+} from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
-import { useTranslation } from '../i18n';
-import SttModelManager from './SttModelManager';
-import SpeakerEnrollModal from './SpeakerEnrollModal';
+import {
+    getScoredVoices,
+    loadVoicePrefs,
+    saveVoicePrefs,
+    speakNaturalText,
+    stopSpeaking,
+    ScoredVoice,
+    VoiceGender,
+    VOICE_STYLE_PRESETS,
+} from '../audio/naturalVoice';
 
-const SIREN_PROVIDERS = (t: (key: string) => string) => [
-    { id: 'voxtral', label: 'Voxtral Local', desc: t('voxtral_desc'), icon: <Mic className="w-5 h-5 text-aegis-cyan" /> },
-    { id: 'elevenlabs', label: 'ElevenLabs Cloud', desc: t('elevenlabs_desc'), icon: <Shield className="w-5 h-5 text-aegis-purple" /> },
-    { id: 'fish', label: 'Fish Speech', desc: t('fish_desc'), icon: <Volume2 className="w-5 h-5 text-green-400" /> },
+const MIC_LANGUAGES = [
+    { id: 'es-AR', label: 'Español (Argentina / Rioplatense)' },
+    { id: 'es-MX', label: 'Español (Latinoamérica / México)' },
+    { id: 'es-ES', label: 'Español (España)' },
+    { id: 'en-US', label: 'English (US)' },
 ];
 
-interface Voice {
-    id: string;
-    name: string;
-    provider: string;
-}
-
 const SirenConfigTab: React.FC = () => {
-    const { t } = useTranslation();
-    const { tenantId, sessionKey, sttAvailable } = useAegisStore();
-    const providersList = SIREN_PROVIDERS(t);
-    const [provider, setProvider] = useState('voxtral');
+    const { tenantId, sessionKey, voiceEnabled, setVoiceEnabled, fetchSirenConfig } = useAegisStore(
+        useShallow((s) => ({
+            tenantId: s.tenantId,
+            sessionKey: s.sessionKey,
+            voiceEnabled: s.voiceEnabled,
+            setVoiceEnabled: s.setVoiceEnabled,
+            fetchSirenConfig: s.fetchSirenConfig,
+        })),
+    );
+
+    const initialPrefs = loadVoicePrefs();
+    const [voiceURI, setVoiceURI] = useState<string>(initialPrefs.voiceURI);
+    const [voiceGender, setVoiceGender] = useState<VoiceGender>(initialPrefs.voiceGender || 'female');
+    const [voicePreset, setVoicePreset] = useState<string>(initialPrefs.voicePreset || 'female-warm');
+    const [rate, setRate] = useState<number>(initialPrefs.rate);
+    const [pitch, setPitch] = useState<number>(initialPrefs.pitch);
+    const [micLang, setMicLang] = useState<string>(initialPrefs.lang || 'es-AR');
+    const [autoContinueMic, setAutoContinueMic] = useState<boolean>(initialPrefs.autoContinueMic);
+    const [availableVoices, setAvailableVoices] = useState<ScoredVoice[]>([]);
+    const [isTestingVoice, setIsTestingVoice] = useState(false);
+    const [savedToast, setSavedToast] = useState(false);
+
+    // Opciones avanzadas cloud (plegadas por defecto)
+    const [showAdvancedCloud, setShowAdvancedCloud] = useState(false);
+    const [provider, setProvider] = useState('browser');
     const [apiKey, setApiKey] = useState('');
-    const [voiceId, setVoiceId] = useState('');
-    const [voices, setVoices] = useState<Voice[]>([]);
-    const [showKey, setShowKey] = useState(false);
-    const [isSaving, setIsSaving] = useState(false);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
-    const [success, setSuccess] = useState(false);
-    const [activeModel, setActiveModel] = useState<string | null>(null);
     const [sttProvider, setSttProvider] = useState('browser');
     const [sttApiKey, setSttApiKey] = useState('');
+    const [showKey, setShowKey] = useState(false);
     const [showSttKey, setShowSttKey] = useState(false);
-    const [isEnrolled, setIsEnrolled] = useState(false);
-    const [showEnrollModal, setShowEnrollModal] = useState(false);
-    const [isDeletingEnroll, setIsDeletingEnroll] = useState(false);
+    const [isSavingCloud, setIsSavingCloud] = useState(false);
 
-    const fetchEnrollmentStatus = useCallback(async () => {
-        if (!tenantId || !sessionKey) return;
-        try {
-            const res = await fetch('/api/siren/enroll/status', {
-                headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setIsEnrolled(data.enrolled ?? false);
-            }
-        } catch { /* silencio */ }
-    }, [tenantId, sessionKey]);
-
-    const fetchConfig = useCallback(async () => {
-        if (!tenantId || !sessionKey) return;
-        try {
-            const res = await fetch('/api/siren/config', {
-                headers: {
-                    'x-citadel-tenant': tenantId,
-                    'x-citadel-key': sessionKey,
-                }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setProvider(data.provider || 'voxtral');
-                setApiKey(data.api_key || '');
-                setVoiceId(data.voice_id || '');
-                setActiveModel(data.active_model ?? null);
-                setSttProvider(data.stt_provider ?? 'browser');
-                setSttApiKey(data.stt_api_key ?? '');
-            }
-        } catch (err) {
-            console.error('Fetch config error:', err);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [tenantId, sessionKey]);
-
-    const fetchVoices = useCallback(async () => {
-        if (!tenantId || !sessionKey) return;
-        try {
-            const res = await fetch('/api/siren/voices', {
-                headers: {
-                    'x-citadel-tenant': tenantId,
-                    'x-citadel-key': sessionKey,
-                }
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setVoices(data.voices || []);
-            }
-        } catch (err) {
-            console.error('Fetch voices error:', err);
-        }
-    }, [tenantId, sessionKey]);
+    const refreshBrowserVoices = useCallback((genderOverride?: VoiceGender) => {
+        const g = genderOverride ?? loadVoicePrefs().voiceGender ?? 'female';
+        const sorted = getScoredVoices('es', g);
+        setAvailableVoices(sorted);
+    }, []);
 
     useEffect(() => {
-        fetchConfig();
-        fetchVoices();
-        fetchEnrollmentStatus();
-    }, [fetchConfig, fetchVoices, fetchEnrollmentStatus]);
+        refreshBrowserVoices(voiceGender);
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+            window.speechSynthesis.onvoiceschanged = () => refreshBrowserVoices();
+        }
+        return () => {
+            if (typeof window !== 'undefined' && window.speechSynthesis) {
+                window.speechSynthesis.onvoiceschanged = null;
+            }
+        };
+    }, [refreshBrowserVoices, voiceGender]);
 
-    const handleSave = async (e: React.FormEvent) => {
+    useEffect(() => {
+        if (!tenantId || !sessionKey) return;
+        fetch('/api/siren/config', {
+            headers: {
+                'x-citadel-tenant': tenantId,
+                'x-citadel-key': sessionKey,
+            },
+        })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (data) {
+                    setProvider(data.provider || 'browser');
+                    setApiKey(data.api_key || '');
+                    setSttProvider(data.stt_provider || 'browser');
+                    setSttApiKey(data.stt_api_key || '');
+                }
+            })
+            .catch(() => {});
+    }, [tenantId, sessionKey]);
+
+    const handleUpdatePrefs = (
+        patch: Partial<{
+            voiceURI: string;
+            voiceGender: VoiceGender;
+            voicePreset: string;
+            rate: number;
+            pitch: number;
+            lang: string;
+            autoContinueMic: boolean;
+        }>
+    ) => {
+        const next = saveVoicePrefs(patch);
+        setVoiceURI(next.voiceURI);
+        setVoiceGender(next.voiceGender);
+        setVoicePreset(next.voicePreset);
+        setRate(next.rate);
+        setPitch(next.pitch);
+        setMicLang(next.lang);
+        setAutoContinueMic(next.autoContinueMic);
+        refreshBrowserVoices(next.voiceGender);
+        setSavedToast(true);
+        setTimeout(() => setSavedToast(false), 2000);
+    };
+
+    const handleSelectPreset = (presetId: string) => {
+        const found = VOICE_STYLE_PRESETS.find((p) => p.id === presetId);
+        if (!found) return;
+        handleUpdatePrefs({
+            voicePreset: found.id,
+            voiceGender: found.gender,
+            voiceURI: '', // Selección automática de la mejor voz para ese género
+            rate: found.rate,
+            pitch: found.pitch,
+        });
+    };
+
+    const handleTestVoice = () => {
+        if (isTestingVoice) {
+            stopSpeaking();
+            setIsTestingVoice(false);
+            return;
+        }
+        setIsTestingVoice(true);
+        const sampleText = micLang.startsWith('en')
+            ? "Hi! I'm your personal assistant. How can I help you today?"
+            : voiceGender === 'male'
+            ? '¡Hola! Soy tu asistente personal. Configuré mi voz masculina para sonar clara, natural y sin tono robótico.'
+            : '¡Hola! Soy tu asistente personal. Configuré mi voz femenina para sonar cálida, fluida y natural.';
+        speakNaturalText(sampleText, () => {
+            setIsTestingVoice(false);
+        });
+    };
+
+    const handleSaveCloudConfig = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!tenantId || !sessionKey) return;
-        setIsSaving(true);
-        setError(null);
-        setSuccess(false);
+        setIsSavingCloud(true);
         try {
             const response = await fetch('/api/siren/config', {
                 method: 'POST',
-                headers: { 
+                headers: {
                     'Content-Type': 'application/json',
                     'x-citadel-tenant': tenantId,
                     'x-citadel-key': sessionKey,
                 },
-                body: JSON.stringify({ provider, api_key: apiKey, voice_id: voiceId, stt_provider: sttProvider, stt_api_key: sttApiKey })
+                body: JSON.stringify({
+                    provider,
+                    api_key: apiKey,
+                    voice_id: '',
+                    stt_provider: sttProvider,
+                    stt_api_key: sttApiKey,
+                }),
             });
             if (response.ok) {
-                setSuccess(true);
-                setTimeout(() => setSuccess(false), 3000);
-            } else {
-                const errData = await response.json();
-                setError(errData.detail || t('voice_config_save_error'));
+                await fetchSirenConfig();
+                setSavedToast(true);
+                setTimeout(() => setSavedToast(false), 2500);
             }
-        } catch (err) {
-            setError(t('bff_communication_error'));
         } finally {
-            setIsSaving(false);
+            setIsSavingCloud(false);
         }
     };
 
-    const handleDeleteEnrollment = async () => {
-        if (!tenantId || !sessionKey) return;
-        setIsDeletingEnroll(true);
-        try {
-            await fetch('/api/siren/enroll', {
-                method: 'DELETE',
-                headers: { 'x-citadel-tenant': tenantId, 'x-citadel-key': sessionKey }
-            });
-            setIsEnrolled(false);
-        } catch { /* silencio */ } finally {
-            setIsDeletingEnroll(false);
-        }
-    };
-
-    if (isLoading) return <div className="flex justify-center p-12 animate-pulse font-mono text-white/30 text-xs uppercase tracking-widest">{t('syncing_siren_protocol')}</div>;
+    const topVoice = availableVoices[0];
+    const hasNativeMaleVoice = availableVoices.some((v) => v.gender === 'male');
 
     return (
-        <>
-        <div className="space-y-8 max-h-[70vh] overflow-y-auto pr-4 custom-scrollbar">
-            <div className="glass p-8 rounded-2xl border border-white/10 shadow-2xl relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-4 opacity-10">
-                    <Mic className="w-24 h-24 text-aegis-cyan" />
-                </div>
-                
-                <div className="flex items-center gap-4 mb-8 relative z-10">
-                    <div className="p-3 rounded-xl bg-aegis-cyan/10 border border-aegis-cyan/30">
-                        <Volume2 className="w-6 h-6 text-aegis-cyan" />
-                    </div>
-                    <div>
-                        <h2 className="text-xl font-bold tracking-[0.2em] uppercase text-white">{t('voice_config_siren')}</h2>
-                        <p className="text-[10px] font-mono text-white/30 uppercase tracking-[0.2em] mt-1">{t('neural_synth_control')}</p>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 relative z-10">
-                    {providersList.map((p) => (
-                        <button key={p.id} type="button" onClick={() => setProvider(p.id)} className={`p-6 rounded-2xl border transition-all duration-500 text-left group flex flex-col gap-3 ${provider === p.id ? 'bg-aegis-cyan/20 border-aegis-cyan shadow-[0_0_30px_rgba(0,186,211,0.1)]' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
-                            <div className="p-2 w-fit rounded-lg bg-black/30 border border-white/5">{p.icon}</div>
-                            <div>
-                                <h3 className="text-xs font-mono font-bold tracking-widest uppercase">{p.label}</h3>
-                                <p className="text-[9px] font-mono text-white/30 uppercase mt-1 leading-tight">{p.desc}</p>
-                            </div>
-                        </button>
-                    ))}
-                </div>
-
-                <form onSubmit={handleSave} className="space-y-6 relative z-10">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {provider !== 'voxtral' && provider !== 'mock' && (
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">API Key</label>
-                                <div className="relative">
-                                    <input type={showKey ? 'text' : 'password'} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={t('provider_key_placeholder')} className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 pr-10 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all placeholder:text-white/10" required={provider !== 'voxtral'} />
-                                    <button type="button" onClick={() => setShowKey(!showKey)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors">
-                                        {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                    </button>
-                                </div>
-                            </div>
-                        )}
-                        <div className="space-y-2 col-span-1">
-                            <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">{t('default_voice')}</label>
-                            <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 text-sm font-mono focus:border-aegis-cyan/50 focus:ring-0 transition-all appearance-none cursor-pointer">
-                                <option value="">{t('auto_default')}</option>
-                                {voices.filter(v => v.provider === provider).map(v => (
-                                    <option key={v.id} value={v.id}>{v.name}</option>
-                                ))}
-                            </select>
+        <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
+            {/* Tarjeta Principal: Voz Natural Simplificada */}
+            <div className="glass p-6 rounded-2xl border border-white/10 shadow-2xl relative overflow-hidden space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-5">
+                    <div className="flex items-center gap-3.5">
+                        <div className="p-3 rounded-xl bg-aegis-cyan/10 border border-aegis-cyan/30">
+                            <Sparkles className="w-6 h-6 text-aegis-cyan" />
+                        </div>
+                        <div>
+                            <h2 className="text-base sm:text-lg font-bold tracking-wider uppercase text-white">
+                                Tipo de Voz y Micrófono
+                            </h2>
+                            <p className="text-xs text-white/40 mt-0.5">
+                                Elegí entre voz femenina o masculina, estilo de entonación y conversación manos libres
+                            </p>
                         </div>
                     </div>
 
-                    {/* ── STT Provider ──────────────────────────────────────── */}
-                    <div className="pt-2 border-t border-white/5">
-                        <div className="mb-3">
-                            <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-white/50">{t('stt_provider_title')}</p>
-                            <p className="text-[9px] font-mono text-white/25 mt-0.5">{t('stt_provider_subtitle')}</p>
-                        </div>
-                        <div className="grid grid-cols-3 gap-3 mb-4">
-                            {([
-                                { id: 'browser', label: t('stt_browser_label'), desc: t('stt_browser_desc'), icon: <Globe className="w-4 h-4 text-blue-400" /> },
-                                { id: 'groq',    label: t('stt_groq_label'),    desc: t('stt_groq_desc'),    icon: <Zap className="w-4 h-4 text-amber-400" /> },
-                                { id: 'local',   label: t('stt_local_label'),   desc: t('stt_local_desc'),   icon: <HardDrive className="w-4 h-4 text-green-400" /> },
-                            ] as const).map((p) => (
-                                <button key={p.id} type="button" onClick={() => setSttProvider(p.id)}
-                                    className={`p-4 rounded-xl border transition-all duration-300 text-left flex flex-col gap-2 ${sttProvider === p.id ? 'bg-aegis-cyan/15 border-aegis-cyan/40' : 'bg-white/3 border-white/8 hover:bg-white/8'}`}>
-                                    <div className="p-1.5 w-fit rounded-lg bg-black/30 border border-white/5">{p.icon}</div>
-                                    <div>
-                                        <p className="text-[9px] font-mono font-bold uppercase tracking-wider text-white/70">{p.label}</p>
-                                        <p className="text-[8px] font-mono text-white/25 mt-0.5 leading-snug">{p.desc}</p>
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                        {sttProvider === 'groq' && (
-                            <div className="space-y-1">
-                                <label className="text-[10px] font-mono text-white/40 uppercase ml-1 tracking-widest">{t('stt_groq_key_placeholder')}</label>
-                                <div className="relative">
-                                    <input type={showSttKey ? 'text' : 'password'} value={sttApiKey} onChange={(e) => setSttApiKey(e.target.value)}
-                                        placeholder="gsk_..." className="w-full bg-black/40 border border-white/10 rounded-lg py-3 px-4 pr-10 text-sm font-mono focus:border-amber-400/50 focus:ring-0 transition-all placeholder:text-white/10" />
-                                    <button type="button" onClick={() => setShowSttKey(!showSttKey)} className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/50 transition-colors">
-                                        {showSttKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                    </button>
-                                </div>
-                                <p className="text-[8px] font-mono text-white/25 ml-1">{t('stt_groq_get_key')}</p>
-                            </div>
-                        )}
-                    </div>
-
-                    {error && (
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-red-500/10 border border-red-500/30 p-3 rounded-lg flex items-center gap-3">
-                            <Terminal className="w-4 h-4 text-red-500 flex-shrink-0" />
-                            <span className="text-[10px] font-mono text-red-400 leading-tight">{error}</span>
-                        </motion.div>
-                    )}
-                    {success && (
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-green-500/10 border border-green-500/30 p-3 rounded-lg flex items-center gap-3">
-                            <Check className="w-4 h-4 text-green-500" />
-                            <span className="text-[10px] font-mono text-green-400 leading-tight uppercase tracking-widest">{t('siren_sync_success')}</span>
-                        </motion.div>
-                    )}
-
-                    <button type="submit" disabled={isSaving} className={`w-full group relative overflow-hidden rounded-xl py-5 transition-all duration-700 ${isSaving ? "bg-white/10 cursor-wait" : "bg-aegis-cyan/10 hover:bg-aegis-cyan/25 border border-aegis-cyan/40 hover:shadow-[0_0_40px_rgba(0,186,211,0.2)]"}`}>
-                        <div className="relative z-10 flex items-center justify-center gap-4">
-                            {isSaving ? <RefreshCw className="w-4 h-4 text-aegis-cyan animate-spin" /> : <Save className="w-4 h-4 text-aegis-cyan" />}
-                            <span className="text-sm font-mono font-bold tracking-[0.4em] uppercase text-aegis-cyan">{isSaving ? "SYNCING..." : t('save_config')}</span>
-                        </div>
-                    </button>
-                </form>
-            </div>
-            
-            {/* ── Speaker ID ────────────────────────────────────────────────── */}
-            <div className="glass p-6 rounded-2xl border border-white/10 shadow-xl">
-                <div className="flex items-center gap-3 mb-5">
-                    <div className="p-2 rounded-lg bg-aegis-purple/10 border border-aegis-purple/30">
-                        <Fingerprint className="w-5 h-5 text-aegis-purple" />
-                    </div>
-                    <div>
-                        <h3 className="text-xs font-mono font-bold tracking-widest uppercase text-white">Speaker ID</h3>
-                        <p className="text-[9px] font-mono text-white/30 mt-0.5">Verificación de voz — solo tú podés activar Aegis</p>
-                    </div>
-                    <div className="ml-auto">
-                        {isEnrolled
-                            ? <span className="flex items-center gap-1.5 text-[9px] font-mono font-bold uppercase tracking-widest text-green-400"><UserCheck className="w-3.5 h-3.5" /> Enrollado</span>
-                            : <span className="flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-widest text-white/30"><UserX className="w-3.5 h-3.5" /> Sin perfil</span>
-                        }
-                    </div>
-                </div>
-
-                <p className="text-[9px] font-mono text-white/30 leading-relaxed mb-5">
-                    {isEnrolled
-                        ? 'Tu huella de voz está activa. El kernel verificará tu identidad antes de procesar cada audio. Si falla la verificación, el mensaje no se envía.'
-                        : 'Sin perfil, cualquier voz puede activar Aegis. Registrá tu voz para habilitar la verificación automática de speaker.'
-                    }
-                </p>
-
-                <div className="flex gap-3">
                     <button
-                        onClick={() => setShowEnrollModal(true)}
-                        className="flex-1 py-3 rounded-xl bg-aegis-purple/10 hover:bg-aegis-purple/20 border border-aegis-purple/30 transition-all font-mono text-[10px] font-bold uppercase tracking-widest text-aegis-purple flex items-center justify-center gap-2"
+                        type="button"
+                        onClick={() => setVoiceEnabled(!voiceEnabled)}
+                        className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl border text-xs font-mono font-bold uppercase tracking-wider transition-all ${
+                            voiceEnabled
+                                ? 'bg-aegis-cyan/20 border-aegis-cyan text-aegis-cyan shadow-[0_0_20px_rgba(0,242,254,0.15)]'
+                                : 'bg-white/5 border-white/10 text-white/50 hover:text-white hover:bg-white/10'
+                        }`}
                     >
-                        <Mic className="w-3.5 h-3.5" />
-                        {isEnrolled ? 'Re-enrollar' : 'Enrollar voz'}
+                        {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                        {voiceEnabled ? 'Voz Activada' : 'Voz Silenciada'}
                     </button>
-                    {isEnrolled && (
-                        <button
-                            onClick={handleDeleteEnrollment}
-                            disabled={isDeletingEnroll}
-                            className="py-3 px-4 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all font-mono text-[10px] text-red-400 flex items-center gap-2 disabled:opacity-50"
+                </div>
+
+                {/* Perfiles Rápidos de Tipo de Voz (Femenina / Masculina) */}
+                <div className="space-y-2.5">
+                    <label className="text-xs font-mono text-white/60 uppercase tracking-wider block">
+                        Estilo y Timbre de Voz
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        {VOICE_STYLE_PRESETS.map((preset) => {
+                            const isSelected = voicePreset === preset.id;
+                            return (
+                                <button
+                                    key={preset.id}
+                                    type="button"
+                                    onClick={() => handleSelectPreset(preset.id)}
+                                    className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-1.5 ${
+                                        isSelected
+                                            ? 'bg-aegis-cyan/15 border-aegis-cyan text-white shadow-[0_0_20px_rgba(0,242,254,0.12)]'
+                                            : 'bg-white/[0.03] border-white/10 text-white/60 hover:bg-white/[0.06] hover:text-white'
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-xs font-mono font-bold uppercase tracking-wide flex items-center gap-1.5">
+                                            <span className={preset.gender === 'male' ? 'text-sky-400' : 'text-amber-300'}>
+                                                {preset.gender === 'male' ? '♂' : '♀'}
+                                            </span>
+                                            {preset.label}
+                                        </span>
+                                        {isSelected && <Check className="w-3.5 h-3.5 text-aegis-cyan" />}
+                                    </div>
+                                    <p className="text-[11px] text-white/40 leading-snug">{preset.desc}</p>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Selector específico de Voz del Sistema + Botón Probar */}
+                <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="text-xs font-mono text-white/60 uppercase tracking-wider">
+                            Motor de Voz Específico ({voiceGender === 'male' ? '♂ Priorizando Masculinas' : '♀ Priorizando Femeninas'})
+                        </label>
+                        {topVoice && !voiceURI && (
+                            <span className="text-[11px] font-mono text-aegis-cyan flex items-center gap-1">
+                                <Sparkles className="w-3 h-3" /> Activa: {topVoice.label}
+                            </span>
+                        )}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-3">
+                        <select
+                            value={voiceURI}
+                            onChange={(e) => handleUpdatePrefs({ voiceURI: e.target.value, voicePreset: 'custom' })}
+                            className="flex-1 bg-black/50 border border-white/15 rounded-xl py-3 px-4 text-sm text-white focus:border-aegis-cyan/60 focus:outline-none transition-all cursor-pointer"
                         >
-                            {isDeletingEnroll ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                            Eliminar
+                            <option value="">
+                                ✨ Automática ({voiceGender === 'male' ? 'Mejor voz masculina disponible' : 'Mejor voz femenina disponible'})
+                            </option>
+                            {availableVoices.map((item) => {
+                                const genderTag = item.gender === 'male' ? '♂ ' : item.gender === 'female' ? '♀ ' : '';
+                                return (
+                                    <option key={item.voice.voiceURI} value={item.voice.voiceURI}>
+                                        {item.isNatural ? '✨ ' : ''}
+                                        {genderTag}
+                                        {item.label} [{item.voice.lang}]
+                                    </option>
+                                );
+                            })}
+                        </select>
+
+                        <button
+                            type="button"
+                            onClick={handleTestVoice}
+                            className={`px-5 py-3 rounded-xl border font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all shrink-0 ${
+                                isTestingVoice
+                                    ? 'bg-red-500/20 border-red-500/40 text-red-300'
+                                    : 'bg-aegis-cyan/15 hover:bg-aegis-cyan/25 border-aegis-cyan/40 text-aegis-cyan'
+                            }`}
+                        >
+                            {isTestingVoice ? (
+                                <>
+                                    <Square className="w-3.5 h-3.5 fill-current" /> Detener
+                                </>
+                            ) : (
+                                <>
+                                    <Play className="w-3.5 h-3.5 fill-current" /> Probar Voz
+                                </>
+                            )}
                         </button>
+                    </div>
+
+                    {voiceGender === 'male' && !hasNativeMaleVoice && (
+                        <p className="text-[11px] text-amber-300/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+                            ℹ️ Tu navegador actual no reporta una voz masculina nativa instalada, por lo que aplicamos automáticamente un timbre grave (<em>pitch {pitch.toFixed(2)}</em>). Para voces masculinas neurales nativas (como <strong>Tomás - Argentina</strong> o <strong>Álvaro - España</strong>), abrí Aegis en <strong>Microsoft Edge</strong> o agregá el paquete de voz Español en Windows.
+                        </p>
                     )}
                 </div>
+
+                {/* Sliders de Velocidad y Tono */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-2">
+                    <div className="bg-white/[0.03] border border-white/5 rounded-xl p-4 space-y-2">
+                        <div className="flex justify-between text-xs font-mono">
+                            <span className="text-white/60 uppercase">Velocidad de lectura</span>
+                            <span className="text-aegis-cyan font-bold">{rate.toFixed(2)}x</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="0.80"
+                            max="1.25"
+                            step="0.05"
+                            value={rate}
+                            onChange={(e) => handleUpdatePrefs({ rate: parseFloat(e.target.value), voicePreset: 'custom' })}
+                            className="w-full accent-cyan-400 cursor-pointer"
+                        />
+                        <div className="flex justify-between text-[10px] font-mono text-white/25">
+                            <span>Pausada (0.85x)</span>
+                            <span>Natural (1.00x)</span>
+                            <span>Rápida (1.25x)</span>
+                        </div>
+                    </div>
+
+                    <div className="bg-white/[0.03] border border-white/5 rounded-xl p-4 space-y-2">
+                        <div className="flex justify-between text-xs font-mono">
+                            <span className="text-white/60 uppercase">Timbre / Tono</span>
+                            <span className="text-aegis-cyan font-bold">{pitch.toFixed(2)}</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="0.75"
+                            max="1.20"
+                            step="0.05"
+                            value={pitch}
+                            onChange={(e) => handleUpdatePrefs({ pitch: parseFloat(e.target.value), voicePreset: 'custom' })}
+                            className="w-full accent-cyan-400 cursor-pointer"
+                        />
+                        <div className="flex justify-between text-[10px] font-mono text-white/25">
+                            <span>Grave / Masculino (0.80)</span>
+                            <span>Neutro (1.00)</span>
+                            <span>Brillante (1.15)</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Configuración de Micrófono y Manos Libres */}
+                <div className="pt-4 border-t border-white/10 grid grid-cols-1 sm:grid-cols-2 gap-6 items-center">
+                    <div className="space-y-2">
+                        <label className="text-xs font-mono text-white/60 uppercase tracking-wider flex items-center gap-2">
+                            <Mic className="w-3.5 h-3.5 text-aegis-cyan" /> Idioma del Micrófono
+                        </label>
+                        <select
+                            value={micLang}
+                            onChange={(e) => handleUpdatePrefs({ lang: e.target.value })}
+                            className="w-full bg-black/50 border border-white/15 rounded-xl py-3 px-4 text-sm text-white focus:border-aegis-cyan/60 focus:outline-none transition-all cursor-pointer"
+                        >
+                            {MIC_LANGUAGES.map((l) => (
+                                <option key={l.id} value={l.id}>
+                                    {l.label}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="bg-white/[0.03] border border-white/10 rounded-xl p-4 flex items-center justify-between gap-4">
+                        <div>
+                            <p className="text-xs font-mono font-bold uppercase text-white">
+                                Conversación Continua (Manos Libres)
+                            </p>
+                            <p className="text-[11px] text-white/40 mt-0.5">
+                                Reactiva el micrófono automáticamente cuando el asistente termina de hablar.
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => handleUpdatePrefs({ autoContinueMic: !autoContinueMic })}
+                            className={`px-3.5 py-2 rounded-lg font-mono text-xs font-bold uppercase transition-all shrink-0 ${
+                                autoContinueMic
+                                    ? 'bg-green-500/20 border border-green-500/40 text-green-300'
+                                    : 'bg-white/5 border border-white/10 text-white/40 hover:text-white'
+                            }`}
+                        >
+                            {autoContinueMic ? 'Activo' : 'Inactivo'}
+                        </button>
+                    </div>
+                </div>
+
+                {savedToast && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-green-500/10 border border-green-500/30 p-3 rounded-xl flex items-center gap-2.5 text-xs font-mono text-green-400"
+                    >
+                        <Check className="w-4 h-4" /> Preferencias de voz actualizadas.
+                    </motion.div>
+                )}
             </div>
 
-            <div className="glass p-6 rounded-2xl border border-white/5 bg-white/2 shadow-xl">
-                <h3 className="text-xs font-mono font-bold tracking-widest uppercase text-white/40 flex items-center gap-2 mb-4">
-                    <Terminal className="w-3.5 h-3.5 text-aegis-cyan" /> {t('technical_info')}
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[10px] font-mono uppercase tracking-widest text-white/30">
-                    <div className="flex justify-between border-b border-white/5 pb-2">
-                        <span>{t('sample_rate')}</span>
-                        <span className="text-white/60">16kHz (Standard)</span>
+            {/* Opciones Cloud Avanzadas (Opcional, plegado por defecto) */}
+            <div className="glass rounded-2xl border border-white/10 overflow-hidden">
+                <button
+                    type="button"
+                    onClick={() => setShowAdvancedCloud(!showAdvancedCloud)}
+                    className="w-full p-5 flex items-center justify-between text-left hover:bg-white/[0.02] transition-colors"
+                >
+                    <div className="flex items-center gap-3">
+                        <Sliders className="w-4 h-4 text-white/40" />
+                        <div>
+                            <span className="text-xs font-mono font-bold uppercase tracking-wider text-white/60">
+                                Opciones Avanzadas Cloud (Opcional — ElevenLabs / Groq Whisper)
+                            </span>
+                            <p className="text-[11px] text-white/30">
+                                Solo si querés usar APIs externas pagas en lugar de la voz integrada del navegador
+                            </p>
+                        </div>
                     </div>
-                    <div className="flex justify-between border-b border-white/5 pb-2">
-                        <span>{t('output_format')}</span>
-                        <span className="text-white/60">PCM 16-bit Mono</span>
-                    </div>
-                    <div className="flex justify-between border-b border-white/5 pb-2">
-                        <span>{t('bridge_protocol')}</span>
-                        <span className="text-white/60">gRPC Bi-Stream (Siren)</span>
-                    </div>
-                    <div className="flex justify-between border-b border-white/5 pb-2">
-                        <span>{t('estimated_latency')}</span>
-                        <span className="text-white/60">~120ms (LAN)</span>
-                    </div>
-                </div>
-                <div className="mt-4">
-                    <SttModelManager
-                        activeModel={activeModel}
-                        onModelActivated={() => {
-                            setActiveModel(null); // will re-fetch
-                            fetchConfig();
-                        }}
-                    />
-                </div>
-                {sttAvailable && (
-                    <div className="mt-4 flex items-center gap-2 text-[10px] font-mono text-green-400/60">
-                        <Check className="w-3 h-3" />
-                        <span>{t('stt_available')}</span>
-                    </div>
+                    {showAdvancedCloud ? (
+                        <ChevronUp className="w-4 h-4 text-white/40" />
+                    ) : (
+                        <ChevronDown className="w-4 h-4 text-white/40" />
+                    )}
+                </button>
+
+                {showAdvancedCloud && (
+                    <form onSubmit={handleSaveCloudConfig} className="p-6 pt-2 border-t border-white/5 space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                                <label className="text-[11px] font-mono text-white/50 uppercase">
+                                    Proveedor de Transcripción (STT)
+                                </label>
+                                <select
+                                    value={sttProvider}
+                                    onChange={(e) => setSttProvider(e.target.value)}
+                                    className="w-full bg-black/50 border border-white/15 rounded-xl py-2.5 px-3 text-xs font-mono text-white"
+                                >
+                                    <option value="browser">Navegador integrado (Recomendado — Gratis)</option>
+                                    <option value="groq">Groq Whisper Cloud (Requiere API Key)</option>
+                                </select>
+                            </div>
+
+                            {sttProvider === 'groq' && (
+                                <div className="space-y-1.5">
+                                    <label className="text-[11px] font-mono text-white/50 uppercase">
+                                        Groq API Key
+                                    </label>
+                                    <div className="relative">
+                                        <input
+                                            type={showSttKey ? 'text' : 'password'}
+                                            value={sttApiKey}
+                                            onChange={(e) => setSttApiKey(e.target.value)}
+                                            placeholder="gsk_..."
+                                            className="w-full bg-black/50 border border-white/15 rounded-xl py-2.5 px-3 pr-9 text-xs font-mono text-white"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowSttKey(!showSttKey)}
+                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 hover:text-white"
+                                        >
+                                            {showSttKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="space-y-1.5">
+                                <label className="text-[11px] font-mono text-white/50 uppercase">
+                                    Proveedor TTS Externo
+                                </label>
+                                <select
+                                    value={provider}
+                                    onChange={(e) => setProvider(e.target.value)}
+                                    className="w-full bg-black/50 border border-white/15 rounded-xl py-2.5 px-3 text-xs font-mono text-white"
+                                >
+                                    <option value="browser">Voz Natural del Navegador (Recomendado)</option>
+                                    <option value="elevenlabs">ElevenLabs Cloud (Requiere API Key)</option>
+                                </select>
+                            </div>
+
+                            {provider === 'elevenlabs' && (
+                                <div className="space-y-1.5">
+                                    <label className="text-[11px] font-mono text-white/50 uppercase">
+                                        ElevenLabs API Key
+                                    </label>
+                                    <div className="relative">
+                                        <input
+                                            type={showKey ? 'text' : 'password'}
+                                            value={apiKey}
+                                            onChange={(e) => setApiKey(e.target.value)}
+                                            placeholder="sk_..."
+                                            className="w-full bg-black/50 border border-white/15 rounded-xl py-2.5 px-3 pr-9 text-xs font-mono text-white"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowKey(!showKey)}
+                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/30 hover:text-white"
+                                        >
+                                            {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <button
+                            type="submit"
+                            disabled={isSavingCloud}
+                            className="px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-mono uppercase tracking-wider text-white flex items-center gap-2"
+                        >
+                            {isSavingCloud ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            Guardar Opciones Cloud
+                        </button>
+                    </form>
                 )}
             </div>
         </div>
-
-        <AnimatePresence>
-            {showEnrollModal && tenantId && sessionKey && (
-                <SpeakerEnrollModal
-                    tenantId={tenantId}
-                    sessionKey={sessionKey}
-                    onSuccess={() => { setIsEnrolled(true); fetchEnrollmentStatus(); }}
-                    onClose={() => setShowEnrollModal(false)}
-                />
-            )}
-        </AnimatePresence>
-        </>
     );
 };
 

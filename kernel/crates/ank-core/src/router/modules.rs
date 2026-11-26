@@ -118,6 +118,16 @@ pub fn match_prompt_to_module(prompt: &str, manifest: &ModuleManifest) -> bool {
             "facturación",
             "facturacion",
             "contabilidad",
+            "venta",
+            "ventas",
+            "punto de venta",
+            "pos",
+            "catálogo",
+            "catalogo",
+            "código de barras",
+            "codigo de barras",
+            "mercadería",
+            "mercaderia",
             "aegis-biz",
             "aegis.domain.business",
         ];
@@ -132,6 +142,10 @@ pub fn match_prompt_to_module(prompt: &str, manifest: &ModuleManifest) -> bool {
             "proyecto de tienda",
             "nueva tienda",
             "nuevo negocio",
+            "registrar producto",
+            "registrar venta",
+            "vendí ",
+            "vendi ",
             "tienda de",
             "negocio de",
         ];
@@ -189,16 +203,160 @@ pub fn match_prompt_to_module(prompt: &str, manifest: &ModuleManifest) -> bool {
         || display_name.contains("desarrollo")
         || display_name.contains("código")
     {
-        let dev_keywords = &["compilar", "compiler", "depurar", "debugger", "aegis-dev"];
+        let dev_keywords = &[
+            "compilar",
+            "compiler",
+            "depurar",
+            "debugger",
+            "snippet",
+            "snippets",
+            "kanban",
+            "bug",
+            "bugs",
+            "refactor",
+            "pull request",
+            "repositorio",
+            "runbook",
+            "programación",
+            "programacion",
+            "aegis-dev",
+            "aegis.domain.dev",
+        ];
         let dev_phrases = &[
             "escribir código",
             "escribir codigo",
             "compilar proyecto",
             "ejecutar test",
             "ejecutar pruebas",
+            "proyecto de programación",
+            "proyecto de programacion",
+            "tarea técnica",
+            "tarea tecnica",
+            "guardar snippet",
         ];
         if dev_keywords.iter().any(|&kw| lower_prompt.contains(kw))
             || dev_phrases
+                .iter()
+                .any(|&phrase| lower_prompt.contains(phrase))
+        {
+            return true;
+        }
+    }
+
+    // 4. Heuristics for Social Media & Content Creation domain (Aegis Creator Studio)
+    if module_id.contains("creator")
+        || module_id.contains("social")
+        || module_id.contains("content")
+        || display_name.contains("creator")
+        || display_name.contains("contenido")
+    {
+        let creator_keywords = &[
+            "reel",
+            "reels",
+            "tiktok",
+            "shorts",
+            "youtube",
+            "guion",
+            "guión",
+            "guiones",
+            "hook",
+            "hooks",
+            "viral",
+            "teleprompter",
+            "calendario editorial",
+            "instagram",
+            "linkedin",
+            "carrusel",
+            "miniatura",
+            "thumbnail",
+            "creador",
+            "aegis-creator",
+            "aegis.domain.creator",
+        ];
+        let creator_phrases = &[
+            "redes sociales",
+            "crear contenido",
+            "creación de contenido",
+            "creacion de contenido",
+            "post para",
+            "hilo de x",
+            "hilo para x",
+            "guion para",
+            "guión para",
+            "banco de ideas",
+            "idea de video",
+            "ideas de video",
+        ];
+        if creator_keywords.iter().any(|&kw| lower_prompt.contains(kw))
+            || creator_phrases
+                .iter()
+                .any(|&phrase| lower_prompt.contains(phrase))
+        {
+            return true;
+        }
+    }
+
+    // 5. Heuristics for AI Video Production & Studio domain (Aegis Video Studio)
+    if module_id.contains("video")
+        || display_name.contains("video studio")
+        || display_name.contains("video")
+    {
+        let video_keywords = &[
+            "video",
+            "videos",
+            "video studio",
+            "storyboard",
+            "google veo",
+            "edge tts",
+            "edge-tts",
+            "elevenlabs",
+            "ffmpeg",
+            "pexels",
+            "locución",
+            "locucion",
+            "voiceover",
+            "voz en off",
+            "subtítulos",
+            "subtitulos",
+            "renderizar",
+            "exportar mp4",
+            "mp4",
+            "9:16",
+            "16:9",
+            "escena",
+            "escenas",
+            "cortometraje",
+            "preset",
+            "free_builtin",
+            "gemini_studio",
+            "hybrid_pro",
+            "charon",
+            "andrewmultilingual",
+            "reproductor",
+            "publicitar",
+            "promocionando",
+            "promocional",
+            "aegis-video",
+            "aegis.domain.video",
+        ];
+        let video_phrases = &[
+            "crear video",
+            "crear un video",
+            "creame un video",
+            "proyecto vertical",
+            "generar video",
+            "generar un video",
+            "video con ia",
+            "video ia",
+            "editar video",
+            "editar un video",
+            "hacer un video",
+            "guion a video",
+            "guión a video",
+            "crear escenas",
+        ];
+        if video_keywords.iter().any(|&kw| lower_prompt.contains(kw))
+            || video_phrases
                 .iter()
                 .any(|&phrase| lower_prompt.contains(phrase))
         {
@@ -220,6 +378,40 @@ pub fn match_prompt_to_module(prompt: &str, manifest: &ModuleManifest) -> bool {
     false
 }
 
+/// Returns native `ToolDefinition`s for every domain module currently active for `tenant_id`.
+pub fn collect_enabled_module_tools(
+    modules: &HashMap<String, ModuleManifest>,
+    tenant_id: &str,
+    session_key: &str,
+) -> Vec<crate::pcb::ToolDefinition> {
+    let Ok(db) = crate::enclave::TenantDB::open(tenant_id, session_key) else {
+        return Vec::new();
+    };
+    let mut keys: Vec<&String> = modules.keys().collect();
+    keys.sort();
+    let mut defs = Vec::new();
+    for mod_id in keys {
+        let is_enabled = db
+            .get_kv(&format!("module_active:{}", mod_id))
+            .unwrap_or(None)
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        if !is_enabled {
+            continue;
+        }
+        if let Some(manifest) = modules.get(mod_id) {
+            for tool in &manifest.exposed_tools {
+                defs.push(crate::pcb::ToolDefinition::new(
+                    tool.name.clone(),
+                    format!("[Módulo {}] {}", manifest.display_name, tool.description),
+                    tool.parameters.clone(),
+                ));
+            }
+        }
+    }
+    defs
+}
+
 /// Generates a markdown system prompt specifying active module schemas or available suggestions based on TenantDB activation.
 pub fn generate_system_prompt_for_modules(
     modules: &HashMap<String, ModuleManifest>,
@@ -233,17 +425,17 @@ pub fn generate_system_prompt_for_modules(
     let db = crate::enclave::TenantDB::open(tenant_id, session_key).ok();
 
     for manifest in modules.values() {
-        if match_prompt_to_module(prompt, manifest) {
-            let is_enabled = if let Some(ref tenant_db) = db {
-                tenant_db
-                    .get_kv(&format!("module_active:{}", manifest.module_id))
-                    .unwrap_or(None)
-                    .map(|v| v == "true")
-                    .unwrap_or(false)
-            } else {
-                false
-            };
+        let is_enabled = if let Some(ref tenant_db) = db {
+            tenant_db
+                .get_kv(&format!("module_active:{}", manifest.module_id))
+                .unwrap_or(None)
+                .map(|v| v == "true")
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
+        if match_prompt_to_module(prompt, manifest) {
             if is_enabled {
                 relevant_enabled.push(manifest);
             } else {
@@ -254,35 +446,53 @@ pub fn generate_system_prompt_for_modules(
 
     let mut system_prompt = String::new();
 
-    // 1. Inject schemas for already enabled modules
+    // 1. Inject concise schemas for already enabled modules (avoid repeating full JSON Schema blobs already sent via native `tools`)
     if !relevant_enabled.is_empty() {
         system_prompt.push_str("\n## HERRAMIENTAS DE MÓDULOS DE DOMINIO (MICROKERNEL) ACTIVAS\n");
-        system_prompt.push_str("You can invoke active microkernel tools using the system call [SYS_MCP_EXEC(tool_name, {args})].\n\n");
+        system_prompt.push_str("Invocá directamente estas herramientas mediante Tool Calling nativo (o `[SYS_MCP_EXEC(tool_name, {args})]` como respaldo):\n\n");
         for manifest in relevant_enabled {
             system_prompt.push_str(&format!(
                 "### {} ({})\n",
                 manifest.display_name, manifest.version
             ));
             for tool in &manifest.exposed_tools {
-                system_prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
-                system_prompt.push_str(&format!(
-                    "  Args Schema: {}\n\n",
-                    serde_json::to_string(&tool.parameters).unwrap_or_default()
-                ));
+                let param_names = tool
+                    .parameters
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .map(|props| {
+                        let mut keys: Vec<&str> = props.keys().map(String::as_str).collect();
+                        keys.sort();
+                        keys.join(", ")
+                    })
+                    .unwrap_or_default();
+                if param_names.is_empty() {
+                    system_prompt.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+                } else {
+                    system_prompt.push_str(&format!(
+                        "- **{}** ({}): {}\n",
+                        tool.name, param_names, tool.description
+                    ));
+                }
             }
+            if manifest.module_id == "aegis.domain.video" {
+                system_prompt.push_str(
+                    "\nRegla Video Studio: Preferí llamar a `video_produce_auto` en UN SOLO PASO pasando SIEMPRE el arreglo explícito `scenes` (`[{title, narration_text, on_screen_text, visual_prompt, stock_keywords}]`) con una escena por cada bloque o tema que pidió el usuario y locución `narration_text` natural lista para leer en voz alta (nunca copies instrucciones técnicas en `narration_text`). La tool instala el motor si falta, genera voces y visuales con fallback automático, exporta el MP4 y devuelve `[AEGIS_VIDEO_CARD:<project_id>]` + diagnóstico `advisor`. Si algún motor pedido tuvo que adaptarse por límites de plan gratuito o hardware local, mencioná brevemente el aviso de `fallbacks_applied` y las recomendaciones de `advisor` (planes de API o modelos locales según la PC del usuario) junto con `[AEGIS_VIDEO_CARD:<project_id>]`. PROHIBIDO usar `spawn_agent` para pedidos de video: ejecutá siempre `video_*` directamente y nunca digas que no se puede descargar ni muestres rutas del sistema de archivos.\n",
+                );
+            }
+            system_prompt.push('\n');
         }
     }
 
     // 2. Inject suggestion instructions for available but inactive modules
     if !relevant_suggested.is_empty() {
         system_prompt.push_str("\n## MÓDULOS DE DOMINIO DISPONIBLES (INSTALACIÓN BAJO DEMANDA)\n");
-        system_prompt.push_str("The following microkernel modules are highly relevant to the user's specific request but NOT yet installed or active in their secure enclave database. \
-                                You MUST NOT invoke their tools yet. Instead, you MUST ask the user if they want to install/enable the module to gain full control and specialized capabilities for this task. \
-                                Be highly specific to the user's request (e.g., if they ask to create a store or business project, ask them if they want to install the Business module to have control over product listings, stock, inventory, and secure billing). \
-                                If the user explicitly authorizes it, you MUST output the privileged system call [SYS_ENABLE_MODULE(\"module_id\")] in your response to perform the secure installation:\n\n");
+        system_prompt.push_str("Los siguientes módulos del microkernel son relevantes para el pedido del usuario pero aún NO están activos en su enclave.\n\
+                                - Si el usuario simplemente pide hacer una tarea de ese dominio por primera vez, ofrecé activar el módulo correspondiente (explicando brevemente qué herramientas/Mini-App suma) antes de usar sus herramientas.\n\
+                                - Si el usuario ya confirmó o pidió expresamente instalarlo/activarlo, ejecutá `manage_modules(action=\"enable\", module_id=\"...\")` (o `[SYS_ENABLE_MODULE(\"module_id\")]`) y luego respondé.\n\n");
         for manifest in relevant_suggested {
             system_prompt.push_str(&format!(
-                "- **{}** (ID: `{}`): Exposes tools to manage this domain.\n",
+                "- **{}** (ID: `{}`): Expone herramientas especializadas para este dominio.\n",
                 manifest.display_name, manifest.module_id
             ));
             system_prompt.push_str(&format!(
@@ -394,6 +604,99 @@ pub async fn call_module_tool_pooled(
         }
         Err(e) => Err(format!("Module tool execution failed: {}", e)),
     }
+}
+
+/// Executes a domain module tool with full kernel context (data_dir, KeyPool, Router, WS progress).
+pub async fn execute_module_tool_with_context(
+    manifest: &ModuleManifest,
+    tool_name: &str,
+    args_json: &str,
+    tenant_id: &str,
+    session_key: &str,
+    video_ctx: Option<&crate::video_studio::VideoExecContext>,
+) -> Result<String, String> {
+    if manifest.module_id == "aegis.domain.video" {
+        let default_ctx;
+        let ctx_ref = match video_ctx {
+            Some(c) => c,
+            None => {
+                default_ctx = crate::video_studio::VideoExecContext::default();
+                &default_ctx
+            }
+        };
+        return crate::video_studio::execute_video_tool(
+            tool_name,
+            args_json,
+            tenant_id,
+            session_key,
+            ctx_ref,
+        )
+        .await;
+    }
+
+    let is_native = manifest
+        .ipc_transport
+        .protocol
+        .eq_ignore_ascii_case("native")
+        || manifest.ipc_transport.endpoint.starts_with("local://");
+
+    if is_native {
+        return super::module_runtime::execute_native_module_tool(
+            &manifest.module_id,
+            tool_name,
+            args_json,
+            tenant_id,
+            session_key,
+        );
+    }
+
+    match call_module_tool_pooled(
+        &manifest.ipc_transport.endpoint,
+        tool_name,
+        args_json,
+        tenant_id,
+    )
+    .await
+    {
+        Ok(resp) => {
+            if resp.success {
+                Ok(resp.result_json)
+            } else {
+                Err(resp.result_json)
+            }
+        }
+        Err(grpc_err) if super::module_runtime::supports_native_runtime(&manifest.module_id) => {
+            warn!(
+                module_id = %manifest.module_id,
+                endpoint = %manifest.ipc_transport.endpoint,
+                error = %grpc_err,
+                "External gRPC module endpoint unreachable — falling back to embedded TenantDB runtime"
+            );
+            super::module_runtime::execute_native_module_tool(
+                &manifest.module_id,
+                tool_name,
+                args_json,
+                tenant_id,
+                session_key,
+            )
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Executes a domain module tool using either the embedded native SQLCipher runtime
+/// (`protocol: "native"` / `local://enclave`) or an external gRPC microservice (`protocol: "gRPC"`),
+/// automatically falling back to the embedded runtime if a configured local runtime module's
+/// external gRPC daemon is offline.
+pub async fn execute_module_tool_for_tenant(
+    manifest: &ModuleManifest,
+    tool_name: &str,
+    args_json: &str,
+    tenant_id: &str,
+    session_key: &str,
+) -> Result<String, String> {
+    execute_module_tool_with_context(manifest, tool_name, args_json, tenant_id, session_key, None)
+        .await
 }
 
 #[cfg(test)]

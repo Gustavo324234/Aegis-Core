@@ -15,4 +15,26 @@ export type AgentEventPayload =
       project_name: string;
       summary: string;
     }
-  | { type: 'supervisor_timed_out'; agent_id: string; project_name: string };
+  | { type: 'supervisor_timed_out'; agent_id: string; project_name: string }
+  | {
+      type: 'spawned';
+      agent_id: string;
+      project_id: string;
+      model: string;
+      task_type: string;
+    }
+  | {
+      type: 'state_changed';
+      agent_id: string;
+      state: string;
+    }
+  | {
+      type: 'activity';
+      agent_id: string;
+      description: string;
+    }
+  | {
+      type: 'reported';
+      agent_id: string;
+      summary: string;
+    };

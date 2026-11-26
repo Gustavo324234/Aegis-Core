@@ -1,11 +1,11 @@
-use crate::{citadel::hash_passphrase, state::AppState};
+use crate::state::AppState;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, State,
     },
     http::HeaderMap,
-    response::IntoResponse,
+    response::Response,
     routing::get,
     Router,
 };
@@ -24,86 +24,31 @@ pub async fn ws_siren_handler(
     Path(tenant_id): Path<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> impl IntoResponse {
-    let (session_key, protocol_header) = extract_session_key_and_protocol(&headers);
+) -> Response {
+    let (session_key, protocol_header) = match crate::citadel::authenticate_ws_upgrade(
+        &state, &tenant_id, &headers, "SirenWS",
+    )
+    .await
+    {
+        Ok(res) => res,
+        Err(resp) => return resp,
+    };
 
     let ws = if let Some(proto) = protocol_header {
         ws.protocols([proto])
     } else {
-        ws.protocols(["session-key"])
+        ws
     };
 
     ws.on_upgrade(move |socket| handle_siren(socket, tenant_id, session_key, state))
 }
 
-fn extract_session_key_and_protocol(headers: &HeaderMap) -> (Option<String>, Option<String>) {
-    let header_val = headers
-        .get("sec-websocket-protocol")
-        .and_then(|v| v.to_str().ok());
-
-    let Some(val) = header_val else {
-        return (None, None);
-    };
-
-    let proto = val
-        .split(',')
-        .find(|p| p.trim().starts_with("session-key."))
-        .map(|p| p.trim().to_string());
-
-    let session_key = proto.as_ref().map(|p| p.replace("session-key.", ""));
-
-    (session_key, proto)
-}
-
 async fn handle_siren(
     mut socket: WebSocket,
     tenant_id: String,
-    raw_session_key: Option<String>,
+    session_key_hash: String,
     state: AppState,
 ) {
-    let session_key = match raw_session_key {
-        Some(k) => k,
-        None => {
-            let _ = socket.close().await;
-            return;
-        }
-    };
-
-    let hash = hash_passphrase(&session_key);
-
-    // 1. Authenticate (Master or Tenant)
-    {
-        let citadel = state.citadel.lock().await;
-        let is_master = citadel
-            .enclave
-            .authenticate_master(&tenant_id, &hash)
-            .await
-            .unwrap_or(false);
-        let is_auth = if is_master {
-            true
-        } else {
-            citadel
-                .enclave
-                .authenticate_tenant(&tenant_id, &hash)
-                .await
-                .unwrap_or(false)
-        };
-
-        if !is_auth {
-            let _ = socket
-                .send(Message::Text(
-                    json!({
-                        "event": "error",
-                        "data": "Siren Auth Failed: Access Denied."
-                    })
-                    .to_string(),
-                ))
-                .await;
-            let _ = socket.close().await;
-            return;
-        }
-    }
-
     info!("Siren Stream: WebSocket established for {}", tenant_id);
 
     // 2. Loop
@@ -192,7 +137,7 @@ async fn handle_siren(
                     let mut pcb =
                         ank_core::PCB::new("Voice Task".to_string(), 5, transcript.clone());
                     pcb.tenant_id = Some(tenant_id.clone());
-                    pcb.session_key = Some(session_key.clone());
+                    pcb.session_key = Some(session_key_hash.clone());
                     pcb.task_type = ank_core::pcb::TaskType::Chat;
                     let pid = pcb.pid.clone();
 

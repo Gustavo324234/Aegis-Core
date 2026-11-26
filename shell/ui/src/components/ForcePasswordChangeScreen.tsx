@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Key, Terminal, ChevronRight } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 import { useTranslation } from '../i18n';
 
 const ForcePasswordChangeScreen: React.FC<{ onPasswordChanged: () => void }> = ({ onPasswordChanged }) => {
     const { t } = useTranslation();
-    const { sessionKey, changeOwnPassword } = useAegisStore();
+    const { sessionKey, changeOwnPassword } = useAegisStore(
+        useShallow((s) => ({ sessionKey: s.sessionKey, changeOwnPassword: s.changeOwnPassword })),
+    );
     const [newPassphrase, setNewPassphrase] = useState('');
     const [confirmPassphrase, setConfirmPassphrase] = useState('');
     const [isUpdating, setIsUpdating] = useState(false);

@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { Key, Terminal } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 import { motion } from 'framer-motion';
 import { useTranslation } from '../i18n';
 
 const UserPasswordChange: React.FC<{ onComplete?: () => void }> = ({ onComplete }) => {
-    const { sessionKey, changeOwnPassword } = useAegisStore();
+    const { sessionKey, changeOwnPassword } = useAegisStore(
+        useShallow((s) => ({ sessionKey: s.sessionKey, changeOwnPassword: s.changeOwnPassword })),
+    );
     const [newPassphrase, setNewPassphrase] = useState('');
     const [confirmPassphrase, setConfirmPassphrase] = useState('');
     const [isUpdating, setIsUpdating] = useState(false);

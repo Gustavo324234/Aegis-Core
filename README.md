@@ -1,6 +1,8 @@
-# Aegis OS
+# Aegis OS — Your Self-Hosted Autonomous Personal Assistant
 
-> **A cognitive operating system.** One binary. Zero runtime dependencies. LLMs as ALUs under a deterministic execution engine.
+> **One infinite chat. Short & long-term memory. Non-blocking background agents. One single Rust binary.**
+>
+> 🌐 **[🇪🇸 Leer en Español](README.es.md)** · **[⚡ Try the Brain in 30s (`agent_sandbox`)](tools/agent_sandbox/README.md)** · **[🤝 Contribute (`EPIC 58`)](CONTRIBUTING.md)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Build & Test](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
@@ -10,52 +12,82 @@
 
 ---
 
-## What is Aegis?
+## 🤖 What is Aegis?
 
-Aegis is a self-hosted cognitive operating system — a platform where AI agents run as first-class processes, with memory, scheduling, multi-tenancy, and tool execution built into the kernel.
+Aegis is a **private, self-hosted autonomous personal assistant**, built on top of a deterministic Rust cognitive engine (`ank-server`).
 
-The core mission of Aegis is to be the **ultimate personal assistant that manages a comprehensive ecosystem of specialized agents, acting as the "CIO (Chief Information Officer) of the company of your life."** It is built to be run locally or on a private server, ensuring absolute security (local-first with tenant-encrypted storage) so it can safely hold your personal or corporate data, allowing anyone—from individuals to entire organizations—to have their own private, autonomous assistant.
+Instead of managing dozens of disposable chat threads that forget who you are, Aegis gives you **a single infinite conversation** that learns about your life, manages your daily finances and reminders, and spawns autonomous workers in the background while you keep talking:
 
-It is not a chatbot wrapper. It is not a LangChain pipeline. It is a kernel-level runtime for autonomous cognitive workloads.
+| Capability | Real-World Example | How Aegis Handles It |
+| :--- | :--- | :--- |
+| **💰 Semantic Life & Expense Tracking** | *"Add $10,000 from the supermarket and $4,500 from the butcher"* | Automatically infers both belong to **`food` (`comida`)**, logs them to your encrypted personal ledger, and replies with your updated category total in <1s. |
+| **🧠 Short-Term & Long-Term Memory** | *"Remember I'm lactose intolerant and train Tuesdays at 7 PM"* | Persists facts into long-term memory (`facts` + L3 vector swap) and injects relevant context into every future turn. |
+| **🌙 Implicit Nightly Learning (`Chronos`)** | You mention a project deadline or preference in passing during a chat | The `Chronos` background daemon consolidates recent conversations while idle and extracts durable facts without you having to ask. |
+| **⚡ Non-Blocking Background Workers** | *"While we chat, write a Python script that analyzes my monthly expenses"* | Spawns an autonomous background worker (`read_file`, `write_file`, `execute_command`, `web_search`) and immediately returns control of the chat, notifying you (`🔔 Background Task Complete`) when done. |
+
+Under the hood, Aegis is not a fragile LangChain wrapper—it runs as **a single zero-dependency Rust binary** with SQLCipher encrypted storage (**Citadel Protocol**) and multi-provider routing (OpenRouter, Gemini, Anthropic, OpenAI, and 100% local Ollama).
+
+---
+
+## ⚡ Try the Aegis Brain in 30 Seconds (Zero Rust Build Required)
+
+Want to test Aegis's conversational memory, semantic expense tracking, and background workers right now—or contribute prompt/tool improvements without compiling Rust? Run the standalone **Agent Sandbox** (requires only Python 3.10+):
+
+```bash
+git clone https://github.com/Gustavo324234/Aegis-Core.git
+cd Aegis-Core
+
+# Configure a free Gemini or OpenRouter API key in .env (or use --provider ollama)
+python tools/agent_sandbox/sandbox.py
+
+# Or run the automated 5-scenario Personal Assistant verification suite:
+python tools/agent_sandbox/sandbox.py --test
+
+# On Windows, launch both the isolated test web server (http://localhost:8090) and CLI:
+run_sandbox.bat   # Use run_sandbox.bat --server-only to launch only the test server
+```
+
+See [tools/agent_sandbox/README.md](tools/agent_sandbox/README.md) for all interactive commands (`/memoria`, `/gastos`, `/chronos`, `/jobs`).
 
 ---
 
 ## 🎬 System Showcase & Execution Flow
 
 ```
-[ User Prompt ] ──> "Build & test web app feature for ticket CORE-280"
-                        │
-                        ▼
-               ┌─────────────────┐
-               │   Chat Maestro  │ (Root Supervisor Process)
-               └────────┬────────┘
-                        │  (Spawns Specialized Sub-Agent)
-                        ▼
-            ┌───────────────────────┐
-            │ Specialist: Web Dev   │ (Process ID: agent-8823)
-            └───────────┬───────────┘
-                        │
-      ┌─────────────────┼─────────────────┐
-      ▼                 ▼                 ▼
- [ Filesystem ]    [ Terminal ]      [ Git Manager ]
- (Read/Write Code) (Run `npm test`)  (Commit & Push)
-      │                 │                 │
-      └─────────────────┼─────────────────┘
-                        │
-                        ▼
-              ┌───────────────────┐
-              │ Live Process Tree │ (Dashboard UI Real-time Telemetry)
-              └───────────────────┘
+[ User in Single Infinite Chat ]
+       │
+       ├──> "Add $10,000 from the supermarket"
+       │         └──> [ Instant Personal Tool: log_expense_or_entry ]
+       │              └──> Infers category "comida" ──> Updates Ledger ($10,000)
+       │
+       └──> "Build & test a Python expense report script in the background"
+                 │
+                 ▼
+        ┌─────────────────┐
+        │   Aegis Chat    │ (Main Conversational Conductor — Never Blocks)
+        └────────┬────────┘
+                 │  (Spawns Non-Blocking Background Worker)
+                 ▼
+     ┌───────────────────────┐
+     │ Background Specialist │ (Worker Process)
+     └───────────┬───────────┘
+                 │
+       ┌─────────┼─────────┐
+       ▼         ▼         ▼
+  [ Filesystem ] [ Terminal ] [ Web Search ]
+       │         │         │
+       └─────────┼─────────┘
+                 ▼
+  🔔 Live Notification injected back into Infinite Chat
 ```
 
-**Core ideas:**
+**Core engineering pillars:**
 
 - **LLMs as ALUs** — language models are probabilistic compute units under a deterministic scheduler, not oracles
 - **Zero-Panic kernel** — written in Rust with `clippy::unwrap_used` denied at CI level
-- **Citadel Protocol** — Zero-Trust multi-tenant authentication at every layer
+- **Citadel Protocol** — Zero-Trust multi-tenant authentication and SQLCipher encryption at every layer
 - **One binary** — `ank-server` serves the HTTP API, WebSocket streams, and the React UI with no external runtime
-- **Distro-ready** — designed to run as a system service, eventually embedded in a minimal Linux distribution
-- **Aegis Connect** — secure, persistent WebSocket tunnels replacing random/ephemeral Cloudflare Quick Tunnels, mapping your local instance directly to a permanent secure URL via your Orion ID account
+- **Aegis Connect** — secure, persistent WebSocket tunnels mapping your local instance to a permanent URL via Orion ID
 
 ---
 
@@ -289,10 +321,15 @@ aegis-core/
 │   │   └── ank-proto        Protobuf contracts & generated Rust code
 │   └── proto/       Protobuf contracts (gRPC & Siren audio protocol)
 ├── shell/ui/        Web interface — React 18 / Vite / TypeScript / Tailwind
+├── tools/
+│   ├── agent_sandbox/      Fast Python Personal Assistant simulator & isolated web launcher (:8090)
+│   ├── whatsapp_bridge/    Local Node.js Baileys sidecar for multi-tenant WhatsApp QR sessions
+│   └── antigravity_bridge/ Python SDK worker & IDE hooks for Antigravity agent delegation
 ├── app/             Mobile client — React Native / Expo (Satellite and Cloud modes)
 ├── installer/       Deployment — install.sh, install.ps1, aegis CLI, systemd service
-├── governance/      Tickets, active epics, architecture docs, codex
-└── distro/          (future) Linux distribution
+├── governance/      Tickets (TICKETS_MASTER.md), active epics, architecture docs
+├── run_sandbox.bat  Windows sandbox launcher (test web server + interactive CLI)
+└── distro/          NixOS immutable Linux distribution flake
 ```
 
 ---
@@ -317,7 +354,10 @@ We believe in absolute engineering honesty. The core cognitive kernel, single-bi
 | Epic 54 | Aegis Connect (Persistent WebSocket tunneling mapped to Orion ID) | `[Core / Stable]` ✅ Done |
 | CORE-150 | Sandbox scripting (Maker Capability - autonomous JS sandbox) | `[Core / Stable]` ✅ Done |
 | CORE-151 | Project context integration (Git/VCM active context tracking) | `[Core / Stable]` ✅ Done |
-| Epic 46 | Public Launch (docs, community, open source health) | `[Core / Active]` 🚧 Pre-Launch |
+| Epic 46 | Public Launch (docs, community, open source health) | `[Core / Stable]` ✅ Done |
+| Epic 58 | **Personal Assistant Experience, Zero-Friction UX & Community Onboarding** | `[Core / Stable]` ✅ Done ([EPIC 58](governance/EPIC_58_PERSONAL_ASSISTANT_UX_AND_COMMUNITY.md)) |
+| Epic 59 | **Antigravity SDK Delegation, Bidirectional IDE Bridge & Voice/Identity Studio** | `[Core / Stable]` ✅ Done ([EPIC 59](governance/EPIC_59_ANTIGRAVITY_SDK_AND_VOICE_IDENTITY.md)) |
+| Epic 60 | **Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience** | `[Core / Stable]` ✅ Done ([EPIC 60](governance/EPIC_60_REAL_WORLD_CHANNELS_OAUTH_AND_RESILIENCE.md)) |
 | Epic 52 | Voice Quality (Siren WebRTC stream stabilization & mic-mute feedback) | `[Experimental / R&D]` 🧪 Active R&D |
 | Epic 55 | Mobile App (Satellite and Cloud modes with Orion ID & Web integration) | `[Experimental / R&D]` 🧪 Active R&D |
 

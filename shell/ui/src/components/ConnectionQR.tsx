@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { X, RefreshCw, Smartphone, Globe, Shield } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
+import { ApiError, apiGet } from '../utils/apiClient';
 
 interface ConnectionInfo {
   local_url: string;
@@ -11,36 +13,44 @@ interface ConnectionInfo {
 }
 
 export const ConnectionQR: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  const { tenantId, sessionKey } = useAegisStore();
+  const { tenantId, sessionKey } = useAegisStore(
+    useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
+  );
   const [info, setInfo] = useState<ConnectionInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchInfo = useCallback(async () => {
-    try {
-      const headers: Record<string, string> = {};
-      if (tenantId && sessionKey) {
-        headers['x-citadel-tenant'] = tenantId;
-        headers['x-citadel-key'] = sessionKey;
+  const fetchInfo = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const data = await apiGet<ConnectionInfo>('/api/system/connection-info', {
+          auth: tenantId && sessionKey ? { tenantId, sessionKey } : false,
+          signal,
+        });
+        setInfo(data);
+        setError(null);
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 'ABORTED') return;
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      } finally {
+        if (!signal?.aborted) {
+          setLoading(false);
+        }
       }
-      const res = await fetch('/api/system/connection-info', { headers });
-      if (!res.ok) throw new Error('Failed to fetch connection info');
-      const data = (await res.json()) as ConnectionInfo;
-      setInfo(data);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  }, [tenantId, sessionKey]);
+    },
+    [tenantId, sessionKey],
+  );
 
   useEffect(() => {
-    void fetchInfo();
+    const controller = new AbortController();
+    void fetchInfo(controller.signal);
     const timer = setInterval(() => {
-      void fetchInfo();
+      void fetchInfo(controller.signal);
     }, 30000);
-    return () => clearInterval(timer);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
   }, [fetchInfo]);
 
   return (

@@ -1,6 +1,7 @@
 pub mod catalog;
 pub mod discovery;
 pub mod key_pool;
+pub mod module_runtime;
 pub mod modules;
 pub mod rate_tracker;
 pub mod siren;
@@ -157,6 +158,23 @@ impl CognitiveRouter {
         self.key_pool.get_raw_key_by_id(key_id, tenant_id).await
     }
 
+    /// Returns the full (unredacted) entry for a provider. Used when probing
+    /// models or testing connectivity without an explicit key_id.
+    pub async fn get_raw_key_for_provider(
+        &self,
+        provider: &str,
+        tenant_id: Option<&str>,
+    ) -> Option<key_pool::ApiKeyEntry> {
+        self.key_pool
+            .get_raw_key_for_provider(provider, tenant_id)
+            .await
+    }
+
+    /// Returns a shared handle to the underlying `KeyPool`.
+    pub fn key_pool_arc(&self) -> Arc<KeyPool> {
+        Arc::clone(&self.key_pool)
+    }
+
     /// Dynamic Domain Module loading interface.
     pub async fn load_modules(&self, path: &std::path::Path) -> anyhow::Result<usize> {
         let loaded = modules::load_modules_from_dir(path)?;
@@ -177,6 +195,25 @@ impl CognitiveRouter {
         modules::generate_system_prompt_for_modules(&registry, prompt, tenant_id, session_key)
     }
 
+    /// Returns native ToolDefinitions for all domain modules enabled in `tenant_id`'s encrypted TenantDB.
+    pub async fn get_enabled_module_tools(
+        &self,
+        tenant_id: &str,
+        session_key: &str,
+    ) -> Vec<crate::pcb::ToolDefinition> {
+        let registry = self.modules.read().await;
+        modules::collect_enabled_module_tools(&registry, tenant_id, session_key)
+    }
+
+    /// Finds the domain module manifest exposing `tool_name`, if any.
+    pub async fn find_module_for_tool(&self, tool_name: &str) -> Option<modules::ModuleManifest> {
+        let registry = self.modules.read().await;
+        registry
+            .values()
+            .find(|m| m.exposed_tools.iter().any(|t| t.name == tool_name))
+            .cloned()
+    }
+
     pub async fn list_models_for_catalog(&self) -> Vec<ModelEntry> {
         self.catalog.all_entries().await
     }
@@ -186,15 +223,35 @@ impl CognitiveRouter {
     }
 
     pub async fn decide(&self, pcb: &PCB) -> Result<RoutingDecision, SystemError> {
+        self.decide_inner(pcb, None).await
+    }
+
+    /// Selects the best available model while skipping any model IDs already tried
+    /// and failing during the current execution turn. Bypasses sticky caching so
+    /// failover immediately rotates to another healthy model or provider.
+    pub async fn decide_excluding(
+        &self,
+        pcb: &PCB,
+        excluded_models: &std::collections::HashSet<String>,
+    ) -> Result<RoutingDecision, SystemError> {
+        self.decide_inner(pcb, Some(excluded_models)).await
+    }
+
+    async fn decide_inner(
+        &self,
+        pcb: &PCB,
+        excluded_models: Option<&std::collections::HashSet<String>>,
+    ) -> Result<RoutingDecision, SystemError> {
         let task_type = pcb.task_type;
         let model_pref = pcb.model_pref;
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+        let has_exclusions = excluded_models.is_some_and(|s| !s.is_empty());
 
         // CORE-FIX (B4): If we have a recent sticky decision for this exact
         // intent and no model_override was forced, reuse it. Keeps a
         // conversation on the same model across turns instead of letting
         // the CMR flip between Claude / GPT / Gemini mid-chat.
-        if pcb.model_override.is_none() {
+        if pcb.model_override.is_none() && !has_exclusions {
             let sticky_key = StickyKey {
                 tenant_id: tenant_id.to_string(),
                 conversation_id: pcb.conversation_id.clone(),
@@ -238,38 +295,101 @@ impl CognitiveRouter {
             }
         }
 
-        // CORE-299: Si el PCB tiene un model_override, bypassear el CMR y resolver directo.
+        // CORE-299: Si el PCB tiene un model_override, intentar resolverlo directo
+        // construyendo una fallback_chain real. Si su circuito está abierto o no tiene
+        // API key disponible, hacer fallback limpio al CMR automático en vez de fallar.
         if let Some(ref model_id) = pcb.model_override {
-            if let Some(entry) = self.catalog.find(model_id).await {
-                let key = self.resolve_key(&entry, tenant_id).await.ok_or_else(|| {
-                    SystemError::HardwareFailure(format!(
-                        "No key available for model_override '{}'",
-                        model_id
-                    ))
-                })?;
-                let effective_provider = if entry.is_local {
-                    entry.provider.clone()
+            let override_excluded = excluded_models.is_some_and(|ex| ex.contains(model_id));
+            if !override_excluded {
+                if let Some(entry) = self.catalog.find(model_id).await {
+                    let provider_open =
+                        self.tracker.is_provider_circuit_open(&entry.provider).await
+                            && !self
+                                .tracker
+                                .provider_circuit_allows_probe(&entry.provider)
+                                .await;
+                    let model_open = self.model_circuit_open_merged(&entry).await;
+                    if provider_open || model_open {
+                        warn!(
+                            model_id = %model_id,
+                            provider = %entry.provider,
+                            "model_override circuit is open — falling through to automatic CMR selection"
+                        );
+                    } else if let Some(key) = self.resolve_key(&entry, tenant_id).await {
+                        let effective_provider = if entry.is_local {
+                            entry.provider.clone()
+                        } else {
+                            key.provider.clone()
+                        };
+                        let raw_candidates = self.catalog.get_candidates(task_type).await;
+                        let mut healthy_fallbacks = Vec::new();
+                        for cand in raw_candidates {
+                            if cand.model_id == entry.model_id {
+                                continue;
+                            }
+                            if let Some(excluded) = excluded_models {
+                                if excluded.contains(&cand.model_id)
+                                    || excluded
+                                        .contains(&bare_model_id(&cand.model_id, &cand.provider))
+                                {
+                                    continue;
+                                }
+                            }
+                            let cand_provider_open =
+                                self.tracker.is_provider_circuit_open(&cand.provider).await
+                                    && !self
+                                        .tracker
+                                        .provider_circuit_allows_probe(&cand.provider)
+                                        .await;
+                            if cand_provider_open || self.model_circuit_open_merged(&cand).await {
+                                continue;
+                            }
+                            if !cand.free_tier_eligible && !cand.is_local {
+                                let has_paid = self
+                                    .key_pool
+                                    .has_paid_key_for_tenant(
+                                        &cand.provider,
+                                        &cand.model_id,
+                                        tenant_id,
+                                    )
+                                    .await;
+                                if !has_paid {
+                                    continue;
+                                }
+                            }
+                            healthy_fallbacks.push(cand);
+                        }
+                        let fb_refs: Vec<&ModelEntry> = healthy_fallbacks.iter().collect();
+                        let fallback_chain = self
+                            .build_fallback_chain(&entry.provider, &fb_refs, tenant_id)
+                            .await;
+                        return Ok(RoutingDecision {
+                            model_id: bare_model_id(&entry.model_id, &effective_provider),
+                            provider: effective_provider.clone(),
+                            api_url: normalize_chat_api_url(
+                                &effective_provider,
+                                key.api_url.clone().unwrap_or_else(|| {
+                                    provider_default_chat_url(&effective_provider)
+                                }),
+                            ),
+                            api_key: key.api_key.clone(),
+                            key_id: Some(key.key_id.clone()),
+                            fallback_chain,
+                        });
+                    } else {
+                        warn!(
+                            model_id = %model_id,
+                            provider = %entry.provider,
+                            "model_override has no available key — falling through to automatic CMR selection"
+                        );
+                    }
                 } else {
-                    key.provider.clone()
-                };
-                return Ok(RoutingDecision {
-                    model_id: bare_model_id(&entry.model_id, &effective_provider),
-                    provider: effective_provider.clone(),
-                    api_url: normalize_chat_api_url(
-                        &effective_provider,
-                        key.api_url
-                            .clone()
-                            .unwrap_or_else(|| provider_default_chat_url(&effective_provider)),
-                    ),
-                    api_key: key.api_key.clone(),
-                    key_id: Some(key.key_id.clone()),
-                    fallback_chain: vec![],
-                });
+                    warn!(
+                        "model_override '{}' not found in catalog, falling back to CMR",
+                        model_id
+                    );
+                }
             }
-            warn!(
-                "model_override '{}' not found in catalog, falling back to CMR",
-                model_id
-            );
         }
 
         // Step 1: Get candidates from catalog
@@ -342,6 +462,13 @@ impl CognitiveRouter {
             std::collections::HashSet::new();
         let mut models_in_cooldown: Vec<(String, String)> = Vec::new();
         for entry in filtered {
+            if let Some(excluded) = excluded_models {
+                if excluded.contains(&entry.model_id)
+                    || excluded.contains(&bare_model_id(&entry.model_id, &entry.provider))
+                {
+                    continue;
+                }
+            }
             // CORE-360: Strictly scope key lookup to the requesting tenant + global pool.
             let has_key = self
                 .key_pool
@@ -571,46 +698,10 @@ impl CognitiveRouter {
         } else {
             primary_key.provider.clone()
         };
-        let mut fallback_candidates: Vec<&ModelEntry> =
-            scored.iter().skip(1).map(|(_, e)| e).collect();
-        fallback_candidates.sort_by_key(|e| e.provider == primary_provider);
-
-        let mut fallback_chain: Vec<FallbackDecision> = Vec::new();
-        for entry in fallback_candidates {
-            if fallback_chain.len() >= 2 {
-                break;
-            }
-            let fb_key = match self.resolve_key(entry, tenant_id).await {
-                Some(k) => k,
-                None => {
-                    warn!(
-                        provider = %entry.provider,
-                        model = %entry.model_id,
-                        "skipping fallback: no api key available for provider"
-                    );
-                    continue;
-                }
-            };
-            let fb_effective_provider = if entry.is_local {
-                entry.provider.clone()
-            } else {
-                fb_key.provider.clone()
-            };
-            let api_url = normalize_chat_api_url(
-                &fb_effective_provider,
-                fb_key
-                    .api_url
-                    .clone()
-                    .unwrap_or_else(|| provider_default_chat_url(&fb_effective_provider)),
-            );
-            fallback_chain.push(FallbackDecision {
-                model_id: bare_model_id(&entry.model_id, &fb_effective_provider),
-                provider: fb_effective_provider,
-                api_url,
-                api_key: fb_key.api_key.clone(),
-                key_id: Some(fb_key.key_id.clone()),
-            });
-        }
+        let fallback_refs: Vec<&ModelEntry> = scored.iter().skip(1).map(|(_, e)| e).collect();
+        let fallback_chain = self
+            .build_fallback_chain(&primary_provider, &fallback_refs, tenant_id)
+            .await;
 
         let api_model_id = bare_model_id(&primary.model_id, &primary_effective_provider);
 
@@ -654,7 +745,7 @@ impl CognitiveRouter {
 
         // CORE-FIX (B4): cache this decision for the next turn from the same tenant.
         // Skipped for model_override flows (those bypass the CMR entirely).
-        if pcb.model_override.is_none() {
+        if pcb.model_override.is_none() && !has_exclusions {
             // CORE-319: key by the ORIGINAL request preference — the lookup at
             // the top of decide() uses pcb.model_pref, so inserting under
             // effective_pref (light-task override, LocalOnly downgrade) made
@@ -673,6 +764,55 @@ impl CognitiveRouter {
         }
 
         Ok(decision)
+    }
+
+    /// Build up to 2 fallback entries prioritizing providers different from `primary_provider`.
+    async fn build_fallback_chain(
+        &self,
+        primary_provider: &str,
+        candidates: &[&ModelEntry],
+        tenant_id: &str,
+    ) -> Vec<FallbackDecision> {
+        let mut ordered: Vec<&ModelEntry> = candidates.to_vec();
+        ordered.sort_by_key(|e| e.provider == primary_provider);
+
+        let mut fallback_chain: Vec<FallbackDecision> = Vec::new();
+        for entry in ordered {
+            if fallback_chain.len() >= 2 {
+                break;
+            }
+            let fb_key = match self.resolve_key(entry, tenant_id).await {
+                Some(k) => k,
+                None => {
+                    warn!(
+                        provider = %entry.provider,
+                        model = %entry.model_id,
+                        "skipping fallback: no api key available for provider"
+                    );
+                    continue;
+                }
+            };
+            let fb_effective_provider = if entry.is_local {
+                entry.provider.clone()
+            } else {
+                fb_key.provider.clone()
+            };
+            let api_url = normalize_chat_api_url(
+                &fb_effective_provider,
+                fb_key
+                    .api_url
+                    .clone()
+                    .unwrap_or_else(|| provider_default_chat_url(&fb_effective_provider)),
+            );
+            fallback_chain.push(FallbackDecision {
+                model_id: bare_model_id(&entry.model_id, &fb_effective_provider),
+                provider: fb_effective_provider,
+                api_url,
+                api_key: fb_key.api_key.clone(),
+                key_id: Some(fb_key.key_id.clone()),
+            });
+        }
+        fallback_chain
     }
 
     /// CORE-FIX (B4): Drop the sticky cache entry for this tenant so the next
@@ -926,7 +1066,7 @@ impl CognitiveRouter {
         // CORE-324: task-weighted — long-output tasks amplify output cost.
         let total_cost = task_weighted_cost(entry, task_type);
         let cost_inv = if max_cost > 0.0 {
-            1.0 - (total_cost / max_cost)
+            (1.0 - (total_cost / max_cost)).clamp(0.0, 1.0)
         } else {
             1.0
         };
@@ -1025,8 +1165,13 @@ impl CognitiveRouter {
             let is_chat = matches!(task_type, TaskType::Chat);
             let is_backup = entry.is_local
                 || entry.provider == "ollama_cloud"
-                || entry.cost_input_per_mtok == 0.0
+                || (entry.cost_input_per_mtok == 0.0 && entry.model_id != "openrouter/auto")
                 || entry.model_id.ends_with(":free");
+            let is_chat_primary = is_backup
+                || (entry.free_tier_eligible
+                    && entry.cost_input_per_mtok <= 0.5
+                    && !entry.model_id.contains("pro")
+                    && entry.model_id != "openrouter/auto");
             // CORE-320: fold in the runtime tool-use probe (CORE-237). A model
             // whose tool_use_support was observed as Degraded has PROVEN it
             // can't drive the ReAct loop, regardless of what the static
@@ -1035,10 +1180,10 @@ impl CognitiveRouter {
                 && entry.tool_use_support != crate::router::catalog::ToolUseSupport::Degraded;
 
             if is_chat {
-                if is_backup {
-                    2.0 // Boost backup models for Chat so they always win
+                if is_chat_primary {
+                    2.0 // Boost backup & free-tier chat models for Chat so they win
                 } else {
-                    0.05 // Heavily penalize premium models for Chat to keep them as last-resort fallbacks
+                    0.05 // Heavily penalize premium/dynamic-router models for Chat to keep them as last-resort fallbacks
                 }
             } else {
                 // For subagents/specialist tasks (Coding, Planning, Analysis, etc.)
@@ -1209,7 +1354,7 @@ fn task_weighted_cost(entry: &ModelEntry, task: TaskType) -> f64 {
         TaskType::Code | TaskType::Planning | TaskType::Creative => 3.0,
         _ => 1.0,
     };
-    entry.cost_input_per_mtok + entry.cost_output_per_mtok * out_weight
+    entry.cost_input_per_mtok.max(0.0) + entry.cost_output_per_mtok.max(0.0) * out_weight
 }
 
 /// Analyses the prompt with lexical signals and returns a boost (0.0–0.30)
@@ -1331,7 +1476,7 @@ fn entry_api_url(entry: &ModelEntry) -> String {
 
 /// CORE-FIX (F) / CORE-361: normalise a stored/user-supplied chat URL so it points
 /// at the OpenAI-compatible `/chat/completions` endpoint that `CloudProxyDriver` speaks.
-fn normalize_chat_api_url(provider: &str, url: String) -> String {
+pub(crate) fn normalize_chat_api_url(provider: &str, url: String) -> String {
     let p = normalize_provider_id(provider);
     let trimmed = url.trim_end_matches('/');
     if p == "ollama" || p == "ollama_cloud" {
@@ -1707,6 +1852,112 @@ mod tests {
         // Heavy task score and complex prompt score should be dramatically lower (approx 10% or at least < 50%) compared to base quality
         assert!(score_heavy_task < score_light * 0.5);
         assert!(score_complex_prompt < score_light * 0.5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_chat_prefers_gemini_flash_over_auto_and_curated_over_expensive(
+    ) -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let flash = router.catalog_find("gemini-2.5-flash").await.unwrap();
+        let auto = router.catalog_find("openrouter/auto").await.unwrap();
+        let gpt4o = router.catalog_find("openai/gpt-4o").await.unwrap();
+
+        assert!(!auto.free_tier_eligible);
+        let max_cost = task_weighted_cost(&gpt4o, TaskType::Chat);
+        let ctx = ScoreCtx {
+            prompt: "hola",
+            max_cost,
+            max_latency: 5000.0,
+            observed_latency: None,
+            recent_errors: 0,
+            estimated_tokens: 10,
+            routing_policy: RoutingPolicy::CostOptimized,
+            outcomes: ModelOutcomes::default(),
+        };
+
+        let s_flash = router.compute_score(&flash, TaskType::Chat, &ctx);
+        let s_auto = router.compute_score(&auto, TaskType::Chat, &ctx);
+        let s_gpt4o = router.compute_score(&gpt4o, TaskType::Chat, &ctx);
+
+        assert!(
+            s_flash > s_auto && s_flash > s_gpt4o,
+            "Expected Flash ({s_flash}) to beat openrouter/auto ({s_auto}) and gpt-4o ({s_gpt4o}) in Chat"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_free_tier_picks_openrouter_free_never_auto_or_paid(
+    ) -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_global_key(ApiKeyEntry {
+                key_id: "or-free-key".to_string(),
+                provider: "openrouter".to_string(),
+                api_key: "sk-or-test-free".to_string(),
+                api_url: None,
+                label: None,
+                is_active: true,
+                rate_limited_until: None,
+                active_models: Some(vec![
+                    "openrouter/free".to_string(),
+                    "openrouter/auto".to_string(),
+                    "meta-llama/llama-3.3-70b-instruct".to_string(),
+                    "meta-llama/llama-4-maverick".to_string(),
+                    "meta-llama/llama-4-scout".to_string(),
+                ]),
+                is_free_tier: true,
+            })
+            .await?;
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let or_free = router.catalog_find("openrouter/free").await.unwrap();
+        let or_auto = router.catalog_find("openrouter/auto").await.unwrap();
+        let llama33 = router
+            .catalog_find("meta-llama/llama-3.3-70b-instruct")
+            .await
+            .unwrap();
+        let llama4_mav = router
+            .catalog_find("meta-llama/llama-4-maverick")
+            .await
+            .unwrap();
+        let llama4_scout = router
+            .catalog_find("meta-llama/llama-4-scout")
+            .await
+            .unwrap();
+
+        assert!(or_free.free_tier_eligible);
+        assert_eq!(or_free.cost_input_per_mtok, 0.0);
+        assert!(!or_auto.free_tier_eligible);
+        assert!(!llama33.free_tier_eligible);
+        assert!(!llama4_mav.free_tier_eligible);
+        assert!(!llama4_scout.free_tier_eligible);
+
+        let mut pcb = PCB::new(
+            "test-or-free".to_string(),
+            5,
+            "Explain how free routing works in Aegis Core in one sentence.".to_string(),
+        );
+        pcb.task_type = TaskType::Chat;
+        pcb.model_pref = ModelPreference::CloudOnly;
+
+        let decision = router.decide(&pcb).await?;
+        assert_eq!(decision.provider, "openrouter");
+        assert_eq!(
+            decision.model_id, "openrouter/free",
+            "Expected free-tier OpenRouter key to select openrouter/free, got {}",
+            decision.model_id
+        );
+
         Ok(())
     }
 
@@ -2262,6 +2513,63 @@ mod tests {
         assert_eq!(
             d_hub.api_url,
             "https://openrouter.ai/api/v1/chat/completions"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn decide_excluding_bypasses_sticky_and_skips_failed_models() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Hybrid,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_tenant_key(
+                "ex-user",
+                ApiKeyEntry {
+                    key_id: "k-gemini".to_string(),
+                    provider: "gemini".to_string(),
+                    api_key: "AIza-test".to_string(),
+                    api_url: None,
+                    label: None,
+                    is_active: true,
+                    rate_limited_until: None,
+                    active_models: None,
+                    is_free_tier: true,
+                },
+            )
+            .await?;
+        key_pool
+            .add_tenant_key(
+                "ex-user",
+                ApiKeyEntry {
+                    key_id: "k-groq".to_string(),
+                    provider: "groq".to_string(),
+                    api_key: "gsk-test".to_string(),
+                    api_url: None,
+                    label: None,
+                    is_active: true,
+                    rate_limited_until: None,
+                    active_models: None,
+                    is_free_tier: true,
+                },
+            )
+            .await?;
+
+        let router = CognitiveRouter::new(catalog, key_pool);
+        let mut pcb = PCB::new("ex-test".to_string(), 5, "hola!".to_string());
+        pcb.tenant_id = Some("ex-user".to_string());
+        pcb.task_type = TaskType::Chat;
+        pcb.model_pref = ModelPreference::CloudOnly;
+
+        let first = router.decide(&pcb).await?;
+        let mut excluded = std::collections::HashSet::new();
+        excluded.insert(first.model_id.clone());
+
+        let second = router.decide_excluding(&pcb, &excluded).await?;
+        assert_ne!(
+            second.model_id, first.model_id,
+            "decide_excluding must skip excluded model despite active sticky entry"
         );
         Ok(())
     }

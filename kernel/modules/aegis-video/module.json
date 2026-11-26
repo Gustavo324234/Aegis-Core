@@ -1,0 +1,231 @@
+{
+  "module_id": "aegis.domain.video",
+  "display_name": "Aegis Video Studio",
+  "version": "1.0.0",
+  "ipc_transport": {
+    "protocol": "native",
+    "endpoint": "local://enclave"
+  },
+  "database": {
+    "driver": "sqlite",
+    "encryption": true
+  },
+  "exposed_tools": [
+    {
+      "name": "video_produce_auto",
+      "description": "HERRAMIENTA PRINCIPAL (1 paso automático): Crea un proyecto de Video IA, instala dependencias si faltan, divide en escenas, genera voz y visuales (con fallback automático y resiliente), exporta el MP4 final con subtítulos karaoke y devuelve el reproductor `[AEGIS_VIDEO_CARD:<id>]` + diagnóstico de PC/APIs.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "prompt": { "type": "string", "description": "Descripción completa del video, tema, escenas o guion a producir." },
+          "title": { "type": "string", "description": "Título corto opcional." },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": ["9:16", "16:9", "1:1"],
+            "description": "Formato: '9:16' vertical (Reels/TikTok/Shorts), '16:9' horizontal, '1:1' cuadrado."
+          },
+          "preset": {
+            "type": "string",
+            "enum": ["auto", "free_builtin", "gemini_studio", "hybrid_pro", "cloud_pro", "local_ai", "custom"],
+            "description": "Opcional. Por defecto 'auto' elige el mejor motor disponible y aplica fallback automático si falta cuota."
+          },
+          "voice_id": { "type": "string", "description": "Voz opcional (ej: en-US-AndrewMultilingualNeural, Charon, Aoede, es-AR-ElenaNeural)." },
+          "bgm_style": {
+            "type": "string",
+            "enum": ["ambient_pulse", "cinematic_pad", "none"]
+          },
+          "scenes": {
+            "type": "array",
+            "description": "Escenas explícitas del video (respetar cantidad y temas pedidos).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": { "type": "string", "description": "Nombre corto de la escena (ej: Hook, Módulos a medida, Privacidad, CTA)." },
+                "narration_text": { "type": "string", "description": "Texto natural que locuta la voz en off (sin meta-instrucciones)." },
+                "on_screen_text": { "type": "string", "description": "Titular breve en pantalla (2 a 6 palabras)." },
+                "visual_prompt": { "type": "string", "description": "Descripción visual en inglés para fondo o imagen IA." },
+                "stock_keywords": { "type": "string", "description": "Palabras clave en inglés para búsqueda Pexels." },
+                "duration_hint_secs": { "type": "number", "description": "Duración sugerida en segundos (3.0 - 15.0)." }
+              },
+              "required": ["title", "narration_text"]
+            }
+          }
+        },
+        "required": ["prompt"]
+      }
+    },
+    {
+      "name": "video_create_project",
+      "description": "Crea un proyecto de Video IA (opcionalmente con `auto_render: true` para generar recursos y exportar MP4 directamente en el mismo paso).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "description": "Título del video." },
+          "prompt": { "type": "string", "description": "Idea, tema o guion base del video." },
+          "auto_render": { "type": "boolean", "description": "Si es true, instala runtime si falta, genera recursos y exporta el MP4 automáticamente." },
+          "creator_script_id": { "type": "string", "description": "ID opcional de un guion guardado en Aegis Creator Studio para importarlo directamente." },
+          "platform": {
+            "type": "string",
+            "enum": ["tiktok_reels", "youtube", "shorts", "instagram", "linkedin", "x_twitter"]
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": ["9:16", "16:9", "1:1"],
+            "description": "Relación de aspecto: '9:16' vertical, '16:9' horizontal, '1:1' cuadrado."
+          },
+          "preset": {
+            "type": "string",
+            "enum": ["free_builtin", "gemini_studio", "hybrid_pro", "cloud_pro", "local_ai", "custom"]
+          },
+          "voice_engine": {
+            "type": "string",
+            "enum": ["edge_tts", "gemini_tts", "openai_tts", "elevenlabs", "local_tts", "none"]
+          },
+          "voice_id": { "type": "string", "description": "ID de voz (ej: en-US-AndrewMultilingualNeural, Charon, Orus, Aoede, es-AR-ElenaNeural, es-AR-TomasNeural, onyx, etc.)." },
+          "bgm_style": {
+            "type": "string",
+            "enum": ["ambient_pulse", "cinematic_pad", "none"],
+            "description": "Fondo musical sutil mezclado bajo la voz."
+          },
+          "visual_engine": {
+            "type": "string",
+            "enum": ["pollinations_ai", "kinetic_card", "pexels_stock", "pixabay_stock", "gemini_imagen", "openai_image", "google_veo", "local_ai"]
+          },
+          "hook_video_engine": {
+            "type": "string",
+            "enum": ["inherit", "pollinations_ai", "kinetic_card", "pexels_stock", "pixabay_stock", "gemini_imagen", "openai_image", "google_veo", "local_ai"]
+          },
+          "subtitle_engine": {
+            "type": "string",
+            "enum": ["scene_auto", "groq_whisper", "openai_whisper", "whisper_local", "disabled"]
+          },
+          "subtitle_style": {
+            "type": "string",
+            "enum": ["tiktok_bold", "amber_highlight", "clean_bottom"]
+          },
+          "scenes": {
+            "type": "array",
+            "description": "Lista opcional de escenas ya desglosadas ({title, narration_text, on_screen_text, visual_prompt, stock_keywords, duration_hint_secs}).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": { "type": "string" },
+                "narration_text": { "type": "string" },
+                "on_screen_text": { "type": "string" },
+                "visual_prompt": { "type": "string" },
+                "stock_keywords": { "type": "string" },
+                "duration_hint_secs": { "type": "number" }
+              },
+              "required": ["title", "narration_text"]
+            }
+          }
+        },
+        "required": ["title"]
+      }
+    },
+    {
+      "name": "video_manage_scene",
+      "description": "Agrega, actualiza, elimina o reordena escenas en un proyecto de Video Studio (incluyendo motor visual/voz propio por escena).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["add", "update", "delete", "move"] },
+          "project_id": { "type": "string", "description": "ID del proyecto de video." },
+          "scene_id": { "type": "string", "description": "ID de la escena para update/delete/move." },
+          "title": { "type": "string" },
+          "narration_text": { "type": "string", "description": "Texto que locuta la voz IA en esta escena." },
+          "on_screen_text": { "type": "string", "description": "Texto destacado o título en pantalla." },
+          "visual_prompt": { "type": "string", "description": "Prompt descriptivo para generar imagen/video IA." },
+          "stock_keywords": { "type": "string", "description": "Palabras clave en inglés para búsqueda en stock (Pexels)." },
+          "motion_effect": { "type": "string", "enum": ["zoom_in", "zoom_out", "pan_left", "static"] },
+          "visual_override": { "type": "string", "enum": ["inherit", "pollinations_ai", "kinetic_card", "pexels_stock", "pixabay_stock", "gemini_imagen", "openai_image", "google_veo", "local_ai"] },
+          "voice_override": { "type": "string", "enum": ["inherit", "edge_tts", "gemini_tts", "openai_tts", "elevenlabs", "local_tts", "none"] },
+          "duration_hint_secs": { "type": "number" },
+          "new_index": { "type": "integer", "description": "Nueva posición (0-based) cuando action='move'." }
+        },
+        "required": ["action", "project_id"]
+      }
+    },
+    {
+      "name": "video_configure_engines",
+      "description": "Configura los motores de voz, imagen, video generativo, subtítulos o endpoints locales por defecto (o para un proyecto específico).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_id": { "type": "string", "description": "Si se omite, actualiza los valores por defecto del módulo Video Studio." },
+          "preset": { "type": "string", "enum": ["free_builtin", "gemini_studio", "hybrid_pro", "cloud_pro", "local_ai", "custom"] },
+          "voice_engine": { "type": "string", "enum": ["edge_tts", "gemini_tts", "openai_tts", "elevenlabs", "local_tts", "none"] },
+          "voice_id": { "type": "string" },
+          "visual_engine": { "type": "string", "enum": ["pollinations_ai", "kinetic_card", "pexels_stock", "pixabay_stock", "gemini_imagen", "openai_image", "google_veo", "local_ai"] },
+          "hook_video_engine": { "type": "string", "enum": ["inherit", "pollinations_ai", "kinetic_card", "pexels_stock", "pixabay_stock", "gemini_imagen", "openai_image", "google_veo", "local_ai"] },
+          "subtitle_engine": { "type": "string", "enum": ["scene_auto", "groq_whisper", "openai_whisper", "whisper_local", "disabled"] },
+          "subtitle_style": { "type": "string", "enum": ["tiktok_bold", "amber_highlight", "clean_bottom"] },
+          "bgm_style": { "type": "string", "enum": ["ambient_pulse", "cinematic_pad", "none"] },
+          "aspect_ratio": { "type": "string", "enum": ["9:16", "16:9", "1:1"] },
+          "local_image_url": { "type": "string", "description": "URL local opcional para servidor de imágenes/ComfyUI (ej: http://127.0.0.1:8188)." },
+          "local_tts_url": { "type": "string", "description": "URL local opcional para TTS compatible con /v1/audio/speech." }
+        }
+      }
+    },
+    {
+      "name": "video_generate_assets",
+      "description": "Genera la voz en off y los recursos visuales (imágenes, clips Veo, stock o placas animadas) de todo un proyecto o de una escena puntual. Instala dependencias automáticamente si faltan.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_id": { "type": "string", "description": "ID del proyecto." },
+          "scene_id": { "type": "string", "description": "ID opcional para regenerar solo una escena." }
+        },
+        "required": ["project_id"]
+      }
+    },
+    {
+      "name": "video_render_mp4",
+      "description": "Ensambla todas las escenas del proyecto, genera los subtítulos y exporta el archivo MP4 descargable (el chat renderiza el reproductor con `[AEGIS_VIDEO_CARD:<project_id>]`).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_id": { "type": "string", "description": "ID del proyecto a exportar." },
+          "auto_generate_missing": { "type": "boolean", "description": "Si true, genera antes cualquier escena pendiente automáticamente." }
+        },
+        "required": ["project_id"]
+      }
+    },
+    {
+      "name": "video_install_runtime",
+      "description": "Verifica e instala automáticamente bajo demanda el motor multimedia necesario (FFmpeg portable + entorno Python aislado con Edge TTS y Pillow).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "force": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "name": "video_get_overview",
+      "description": "Consulta los proyectos de Aegis Video Studio, el estado de motores/claves disponibles (sin exponer secretos) y los guiones de Creator Studio listos para importar.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "project_id": { "type": "string", "description": "Opcional para filtrar o ver detalle de un proyecto." }
+        }
+      }
+    }
+  ],
+  "ui_views": [
+    {
+      "view_id": "new_video_project_form",
+      "type": "form",
+      "title": "Nuevo Video con IA",
+      "description": "Crea un proyecto base en Aegis Video Studio",
+      "icon": "Plus",
+      "tool_name": "video_create_project",
+      "fields": [
+        { "name": "title", "label": "Título del Video", "type": "text", "placeholder": "Ej. 3 razones para usar IA local", "required": true },
+        { "name": "prompt", "label": "Tema o Guion Inicial", "type": "text", "placeholder": "Explicá el tema principal del video...", "required": false },
+        { "name": "aspect_ratio", "label": "Formato (9:16, 16:9, 1:1)", "type": "text", "placeholder": "9:16", "required": false },
+        { "name": "preset", "label": "Preset (free_builtin, hybrid_pro, cloud_pro, local_ai)", "type": "text", "placeholder": "free_builtin", "required": false }
+      ]
+    }
+  ]
+}

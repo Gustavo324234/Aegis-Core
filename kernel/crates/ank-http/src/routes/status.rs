@@ -1,8 +1,4 @@
-use crate::{
-    citadel::{hash_passphrase, CitadelError},
-    error::AegisHttpError,
-    state::AppState,
-};
+use crate::{citadel::CitadelError, error::AegisHttpError, state::AppState};
 use ank_core::SchedulerEvent;
 use axum::{
     extract::{ConnectInfo, FromRequestParts, State},
@@ -94,30 +90,10 @@ async fn require_service_master_auth(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(), AegisHttpError> {
-    let tenant_id = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingTenant))?;
-
-    let raw_key = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingKey))?;
-
-    let hash = hash_passphrase(raw_key);
-    let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(tenant_id, &hash)
+    crate::citadel::authenticate_master_headers(state, headers)
         .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-    }
-
-    Ok(())
+        .map(|_| ())
+        .map_err(AegisHttpError::Citadel)
 }
 
 #[utoipa::path(
@@ -171,11 +147,12 @@ pub async fn service_restart(
     require_service_master_auth(&state, &headers).await?;
 
     tracing::warn!(
-        "CORE-256: service restart requested by master admin — exiting for process manager restart"
+        "CORE-256: service restart requested by master admin — triggering graceful shutdown"
     );
-    tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        std::process::exit(0);
+    let shutdown_tx = state.shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let _ = shutdown_tx.send(true);
     });
 
     Ok(StatusCode::ACCEPTED)
@@ -200,10 +177,13 @@ pub async fn service_stop(
 ) -> Result<StatusCode, AegisHttpError> {
     require_service_master_auth(&state, &headers).await?;
 
-    tracing::warn!("CORE-256: service stop requested by master admin — exiting");
-    tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        std::process::exit(0);
+    tracing::warn!(
+        "CORE-256: service stop requested by master admin — triggering graceful shutdown"
+    );
+    let shutdown_tx = state.shutdown_tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let _ = shutdown_tx.send(true);
     });
 
     Ok(StatusCode::ACCEPTED)
@@ -226,49 +206,14 @@ pub async fn get_system_status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<SystemStatusResponse>, AegisHttpError> {
-    // Auth desde headers Citadel — consistente con todos los demás endpoints
-    let tenant_id = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::MissingTenant,
-        ))?;
+    crate::citadel::authenticate_headers(&state, &headers)
+        .await
+        .map_err(|e| match e {
+            CitadelError::MissingTenant | CitadelError::MissingKey => AegisHttpError::Citadel(e),
+            _ => AegisHttpError::Citadel(CitadelError::Unauthorized),
+        })?;
 
-    let raw_key = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(
-            crate::citadel::CitadelError::MissingKey,
-        ))?;
-
-    let hash = hash_passphrase(raw_key);
-
-    {
-        let citadel = state.citadel.lock().await;
-
-        // El admin (master) también puede consultar el status
-        let is_master = citadel
-            .enclave
-            .authenticate_master(tenant_id, &hash)
-            .await
-            .unwrap_or(false);
-
-        if !is_master {
-            let is_tenant = citadel
-                .enclave
-                .authenticate_tenant(tenant_id, &hash)
-                .await
-                .map_err(|_| AegisHttpError::Citadel(crate::citadel::CitadelError::Unauthorized))?;
-
-            if !is_tenant {
-                return Err(AegisHttpError::Citadel(
-                    crate::citadel::CitadelError::Unauthorized,
-                ));
-            }
-        }
-    }
-
-    let hw_profile = std::env::var("HW_PROFILE").unwrap_or_else(|_| "1".to_string());
+    let hw_profile = state.hw_profile.read().await.clone();
     let hw_profile_name = match hw_profile.as_str() {
         "1" => "cloud",
         "2" => "local",
@@ -328,8 +273,11 @@ pub async fn get_system_status(
 pub async fn get_public_system_state(
     State(state): State<AppState>,
 ) -> Json<PublicSystemStateResponse> {
-    let citadel = state.citadel.lock().await;
-    let exists = citadel.enclave.admin_exists().await.unwrap_or(false);
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
+    let exists = enclave.admin_exists().await.unwrap_or(false);
     Json(PublicSystemStateResponse {
         state: if exists {
             "STATE_OPERATIONAL".to_string()
@@ -379,7 +327,36 @@ fn is_cloudflared_installed() -> bool {
     })
 }
 
-fn is_direct_local_cli_probe(peer_addr: Option<SocketAddr>, headers: &HeaderMap) -> bool {
+pub(crate) fn has_proxy_headers(headers: &HeaderMap) -> bool {
+    const PROXY_HEADERS: [&str; 10] = [
+        "cf-connecting-ip",
+        "cf-ray",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-real-ip",
+        "forwarded",
+        "via",
+        "true-client-ip",
+        "fly-client-ip",
+    ];
+    PROXY_HEADERS.iter().any(|h| headers.contains_key(*h))
+}
+
+pub(crate) fn has_browser_origin_headers(headers: &HeaderMap) -> bool {
+    const BROWSER_HEADERS: [&str; 4] = [
+        "origin",
+        "sec-fetch-site",
+        "sec-fetch-mode",
+        "sec-fetch-dest",
+    ];
+    BROWSER_HEADERS.iter().any(|h| headers.contains_key(*h))
+}
+
+pub(crate) fn is_direct_local_cli_probe(
+    peer_addr: Option<SocketAddr>,
+    headers: &HeaderMap,
+) -> bool {
     let Some(addr) = peer_addr else {
         return false;
     };
@@ -387,15 +364,9 @@ fn is_direct_local_cli_probe(peer_addr: Option<SocketAddr>, headers: &HeaderMap)
         return false;
     }
 
-    // Reject requests forwarded through cloudflared, reverse proxies, or aegis-connect-relay
-    const PROXY_HEADERS: [&str; 5] = [
-        "cf-connecting-ip",
-        "cf-ray",
-        "x-forwarded-for",
-        "x-real-ip",
-        "forwarded",
-    ];
-    if PROXY_HEADERS.iter().any(|h| headers.contains_key(*h)) {
+    // Reject requests forwarded through cloudflared, reverse proxies, aegis-connect-relay,
+    // or originating from browser contexts (`Origin` / Fetch Metadata headers).
+    if has_proxy_headers(headers) || has_browser_origin_headers(headers) {
         return false;
     }
 
@@ -406,9 +377,10 @@ fn is_direct_local_cli_probe(peer_addr: Option<SocketAddr>, headers: &HeaderMap)
         .trim()
         .strip_prefix('[')
         .and_then(|s| s.split(']').next())
-        .unwrap_or_else(|| host.trim().split(':').next().unwrap_or(""));
+        .unwrap_or_else(|| host.trim().split(':').next().unwrap_or(""))
+        .to_ascii_lowercase();
 
-    matches!(host_only, "localhost" | "127.0.0.1" | "::1")
+    matches!(host_only.as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
 pub async fn get_connection_info(
@@ -416,15 +388,16 @@ pub async fn get_connection_info(
     headers: HeaderMap,
     OptionalPeerAddr(peer_addr): OptionalPeerAddr,
 ) -> Result<Json<ConnectionInfoResponse>, AegisHttpError> {
-    // CORE-368: Allow authenticated Citadel sessions from any origin, or direct non-proxied
-    // loopback probes used by `aegis status` on the local host.
-    let citadel_tenant = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok());
-    let citadel_key = headers.get("x-citadel-key").and_then(|v| v.to_str().ok());
+    // CORE-368 / CORE-402: Allow authenticated Citadel sessions (`cst_*` tokens or legacy keys)
+    // from any origin, or direct non-proxied loopback probes used by `aegis status` on localhost.
+    let has_citadel_creds = headers.contains_key("x-citadel-token")
+        || headers.contains_key("authorization")
+        || (headers.contains_key("x-citadel-tenant") && headers.contains_key("x-citadel-key"));
 
-    let authorized = if let (Some(t), Some(k)) = (citadel_tenant, citadel_key) {
-        crate::citadel::verify_ws_tenant(&state, t, k).await.is_ok()
+    let authorized = if has_citadel_creds {
+        crate::citadel::authenticate_headers(&state, &headers)
+            .await
+            .is_ok()
     } else {
         is_direct_local_cli_probe(peer_addr, &headers)
     };
@@ -492,6 +465,50 @@ pub struct LogsResponse {
     pub logs: String,
 }
 
+const MAX_LOG_LINES: usize = 2_000;
+const MAX_LOG_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+fn read_tail_lines(
+    path: &std::path::Path,
+    max_lines: usize,
+    max_bytes: u64,
+) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    if max_lines == 0 || max_bytes == 0 {
+        return Ok(String::new());
+    }
+
+    let mut file = std::fs::File::open(path)?;
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(String::new());
+    }
+
+    let bytes_to_read = file_len.min(max_bytes);
+    let start_offset = file_len.saturating_sub(bytes_to_read);
+    file.seek(SeekFrom::Start(start_offset))?;
+
+    let cap = usize::try_from(bytes_to_read).unwrap_or(usize::MAX);
+    let mut buf = Vec::with_capacity(cap);
+    file.take(bytes_to_read).read_to_end(&mut buf)?;
+
+    let slice = if start_offset > 0 {
+        if let Some(first_nl) = buf.iter().position(|&b| b == b'\n') {
+            &buf[first_nl + 1..]
+        } else {
+            &buf[..]
+        }
+    } else {
+        &buf[..]
+    };
+
+    let text = String::from_utf8_lossy(slice);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    Ok(lines[start..].join("\n"))
+}
+
 #[utoipa::path(
     get,
     path = "/api/system/service/logs",
@@ -514,41 +531,32 @@ pub async fn get_service_logs(
 ) -> Result<Json<LogsResponse>, AegisHttpError> {
     require_service_master_auth(&state, &headers).await?;
 
-    let lines_to_read = query.lines.unwrap_or(100);
+    let lines_to_read = query.lines.unwrap_or(100).clamp(1, MAX_LOG_LINES);
     let logs_dir = state.config.data_dir.join("logs");
 
-    if !logs_dir.exists() {
-        return Ok(Json(LogsResponse {
-            logs: "[System Logs] Logs directory does not exist yet.".to_string(),
-        }));
-    }
-
-    let mut entries = std::fs::read_dir(&logs_dir)
-        .map_err(|e| AegisHttpError::Kernel(format!("Failed to read logs directory: {}", e)))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("ank.log"))
-        .collect::<Vec<_>>();
-
-    entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
-
-    let latest = match entries.last() {
-        Some(e) => e,
-        None => {
-            return Ok(Json(LogsResponse {
-                logs: "[System Logs] No active log files found.".to_string(),
-            }));
+    let logs_content = tokio::task::spawn_blocking(move || -> Result<String, AegisHttpError> {
+        if !logs_dir.exists() {
+            return Ok("[System Logs] Logs directory does not exist yet.".to_string());
         }
-    };
 
-    let file = std::fs::File::open(latest.path())
-        .map_err(|e| AegisHttpError::Kernel(format!("Failed to open log file: {}", e)))?;
-    let reader = std::io::BufReader::new(file);
-    use std::io::BufRead;
-    let all_lines = reader.lines().map_while(Result::ok).collect::<Vec<_>>();
+        let mut entries = std::fs::read_dir(&logs_dir)
+            .map_err(|e| AegisHttpError::Kernel(format!("Failed to read logs directory: {}", e)))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("ank.log"))
+            .collect::<Vec<_>>();
 
-    let start = all_lines.len().saturating_sub(lines_to_read);
-    let selected_lines = &all_lines[start..];
-    let logs_content = selected_lines.join("\n");
+        entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
+
+        let latest = match entries.last() {
+            Some(e) => e,
+            None => return Ok("[System Logs] No active log files found.".to_string()),
+        };
+
+        read_tail_lines(&latest.path(), lines_to_read, MAX_LOG_TAIL_BYTES)
+            .map_err(|e| AegisHttpError::Kernel(format!("Failed to read log file: {}", e)))
+    })
+    .await
+    .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!("Log reader join error: {}", e)))??;
 
     Ok(Json(LogsResponse { logs: logs_content }))
 }
@@ -590,5 +598,66 @@ mod tests {
         let mut lan_headers = HeaderMap::new();
         lan_headers.insert("host", HeaderValue::from_static("192.168.1.10:8000"));
         assert!(!is_direct_local_cli_probe(lan_peer, &lan_headers));
+
+        // Additional proxy headers
+        for hdr in ["x-forwarded-host", "via"] {
+            let mut h = HeaderMap::new();
+            h.insert("host", HeaderValue::from_static("localhost:8000"));
+            h.insert(hdr, HeaderValue::from_static("proxy.internal"));
+            assert!(!is_direct_local_cli_probe(peer, &h));
+        }
+
+        // Browser origin / Fetch Metadata headers must be rejected even from loopback
+        for (hdr, val) in [
+            ("origin", "https://evil.example"),
+            ("origin", "http://localhost:8000"),
+            ("sec-fetch-site", "cross-site"),
+            ("sec-fetch-site", "same-origin"),
+            ("sec-fetch-mode", "no-cors"),
+            ("sec-fetch-dest", "empty"),
+        ] {
+            let mut browser_headers = HeaderMap::new();
+            browser_headers.insert("host", HeaderValue::from_static("localhost:8000"));
+            browser_headers.insert(hdr, HeaderValue::from_static(val));
+            assert!(
+                !is_direct_local_cli_probe(peer, &browser_headers),
+                "Expected browser header {hdr}={val} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn read_tail_lines_caps_bytes_and_lines() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("aegis_tail_test_{}.log", std::process::id()));
+
+        let content: String = (1..=50).map(|i| format!("linea número {}\n", i)).collect();
+        let write_res = std::fs::write(&path, content.as_bytes());
+        assert!(write_res.is_ok());
+
+        // 1. Cap by max_lines within full file
+        let tail5 = read_tail_lines(&path, 5, 64 * 1024);
+        assert!(tail5.is_ok());
+        let tail5 = tail5.unwrap_or_default();
+        assert_eq!(
+            tail5,
+            "linea número 46\nlinea número 47\nlinea número 48\nlinea número 49\nlinea número 50"
+        );
+
+        // 2. Cap by max_bytes smaller than file size -> drops partial first line cleanly
+        let tail_bytes = read_tail_lines(&path, 100, 60);
+        assert!(tail_bytes.is_ok());
+        let tail_bytes = tail_bytes.unwrap_or_default();
+        assert!(tail_bytes.ends_with("linea número 50"));
+        assert!(!tail_bytes.contains("linea número 1\n"));
+        for line in tail_bytes.lines() {
+            assert!(
+                line.starts_with("linea número "),
+                "Partial truncated line leaked: {:?}",
+                line
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
     }
 }

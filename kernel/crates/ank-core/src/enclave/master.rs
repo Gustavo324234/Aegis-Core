@@ -2,9 +2,16 @@ use anyhow::Result;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
 use tracing::info;
+
+static DUMMY_ARGON2_HASH: LazyLock<String> = LazyLock::new(|| {
+    MasterEnclave::hash_password("aegis_timing_oracle_dummy_passphrase").unwrap_or_else(|_| {
+        "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            .to_string()
+    })
+});
 
 #[derive(Clone)]
 pub struct MasterEnclave {
@@ -141,6 +148,35 @@ impl MasterEnclave {
         Ok(password_hash)
     }
 
+    /// CORE-402: Ejecuta hashing Argon2id en el threadpool bloqueante de Tokio.
+    async fn hash_password_async(password: String) -> Result<String> {
+        tokio::task::spawn_blocking(move || Self::hash_password(&password))
+            .await
+            .map_err(|e| anyhow::anyhow!("Argon2 hashing task failed: {}", e))?
+    }
+
+    /// CORE-402: Verifica Argon2id en `spawn_blocking` usando un hash dummy cuando
+    /// el usuario no existe para evitar oráculos de timing.
+    async fn verify_password_async(password: String, stored_hash: Option<String>) -> bool {
+        tokio::task::spawn_blocking(move || {
+            use argon2::{
+                password_hash::{PasswordHash, PasswordVerifier},
+                Argon2,
+            };
+            let has_real_hash = stored_hash.is_some();
+            let candidate_hash = stored_hash.unwrap_or_else(|| DUMMY_ARGON2_HASH.clone());
+            let Ok(parsed_hash) = PasswordHash::new(&candidate_hash) else {
+                return false;
+            };
+            let ok = Argon2::default()
+                .verify_password(password.as_bytes(), &parsed_hash)
+                .is_ok();
+            has_real_hash && ok
+        })
+        .await
+        .unwrap_or(false)
+    }
+
     pub async fn admin_exists(&self) -> Result<bool> {
         let conn = self.connection.lock().await;
 
@@ -167,9 +203,17 @@ impl MasterEnclave {
             anyhow::bail!("Master Admin is already initialized. Cannot overwrite.");
         }
 
-        let hash = Self::hash_password(passphrase_sha256).context("Failed to hash password")?;
+        let hash = Self::hash_password_async(passphrase_sha256.to_string())
+            .await
+            .context("Failed to hash password")?;
         {
             let conn = self.connection.lock().await;
+            let existing: i64 = conn
+                .query_row("SELECT count(*) FROM master_admin", [], |row| row.get(0))
+                .unwrap_or(0);
+            if existing > 0 {
+                anyhow::bail!("Master Admin is already initialized. Cannot overwrite.");
+            }
             conn.execute(
                 "INSERT INTO master_admin (id, username, password_hash) VALUES (1, ?1, ?2)",
                 [&username, &hash.as_str()],
@@ -196,7 +240,7 @@ impl MasterEnclave {
         Ok(())
     }
 
-    async fn checkpoint(&self) -> Result<()> {
+    pub async fn checkpoint(&self) -> Result<()> {
         let conn = self.connection.lock().await;
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
             .map_err(|e| anyhow::anyhow!("WAL checkpoint failed: {}", e))?;
@@ -208,28 +252,18 @@ impl MasterEnclave {
         username: &str,
         passphrase_or_session: &str,
     ) -> Result<bool> {
-        let conn = self.connection.lock().await;
-        let mut stmt =
-            conn.prepare("SELECT password_hash FROM master_admin WHERE username = ?1 LIMIT 1")?;
-        let hash_result: rusqlite::Result<String> = stmt.query_row([username], |row| row.get(0));
-
-        match hash_result {
-            Ok(real_hash) => {
-                use argon2::{
-                    password_hash::{PasswordHash, PasswordVerifier},
-                    Argon2,
-                };
-                let parsed_hash = match PasswordHash::new(&real_hash) {
-                    Ok(ph) => ph,
-                    Err(_) => return Ok(false),
-                };
-                Ok(Argon2::default()
-                    .verify_password(passphrase_or_session.as_bytes(), &parsed_hash)
-                    .is_ok())
+        let real_hash_opt: Option<String> = {
+            let conn = self.connection.lock().await;
+            let mut stmt =
+                conn.prepare("SELECT password_hash FROM master_admin WHERE username = ?1 LIMIT 1")?;
+            match stmt.query_row([username], |row| row.get(0)) {
+                Ok(h) => Some(h),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(anyhow::anyhow!("Database authentication error: {}", e)),
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(e) => Err(anyhow::anyhow!("Database authentication error: {}", e)),
-        }
+        };
+
+        Ok(Self::verify_password_async(passphrase_or_session.to_string(), real_hash_opt).await)
     }
 
     /// SECURITY: passphrase arrives pre-hashed as SHA-256.
@@ -239,41 +273,43 @@ impl MasterEnclave {
         tenant_id: &str,
         passphrase_or_session: &str,
     ) -> Result<bool> {
-        let conn = self.connection.lock().await;
-        let mut stmt = conn.prepare(
-            "SELECT password_hash, password_must_change FROM tenants WHERE tenant_id = ?1 LIMIT 1",
-        )?;
-        let result: rusqlite::Result<(String, i32)> =
-            stmt.query_row([tenant_id], |row| Ok((row.get(0)?, row.get(1)?)));
-
-        match result {
-            Ok((real_hash, must_change)) => {
-                use argon2::{
-                    password_hash::{PasswordHash, PasswordVerifier},
-                    Argon2,
-                };
-                let parsed_hash = match PasswordHash::new(&real_hash) {
-                    Ok(ph) => ph,
-                    Err(_) => return Ok(false),
-                };
-                let is_valid = Argon2::default()
-                    .verify_password(passphrase_or_session.as_bytes(), &parsed_hash)
-                    .is_ok();
-                if is_valid && must_change == 1 {
-                    anyhow::bail!("PASSWORD_MUST_CHANGE");
+        let row_opt: Option<(String, i32)> = {
+            let conn = self.connection.lock().await;
+            let mut stmt = conn.prepare(
+                "SELECT password_hash, password_must_change FROM tenants WHERE tenant_id = ?1 LIMIT 1",
+            )?;
+            match stmt.query_row([tenant_id], |row| Ok((row.get(0)?, row.get(1)?))) {
+                Ok(pair) => Some(pair),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Database tenant authentication error: {}",
+                        e
+                    ))
                 }
-                Ok(is_valid)
             }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(e) => Err(anyhow::anyhow!(
-                "Database tenant authentication error: {}",
-                e
-            )),
+        };
+
+        let (stored_hash, must_change) = match row_opt {
+            Some((h, m)) => (Some(h), m),
+            None => (None, 0),
+        };
+        let is_valid =
+            Self::verify_password_async(passphrase_or_session.to_string(), stored_hash).await;
+        if is_valid && must_change == 1 {
+            anyhow::bail!("PASSWORD_MUST_CHANGE");
         }
+        Ok(is_valid)
     }
 
     pub async fn create_tenant(&self, tenant_id: &str) -> Result<(u32, String)> {
         use anyhow::Context;
+        let temp_passphrase = uuid::Uuid::new_v4().to_string().replace("-", "")[0..12].to_string();
+        let sha256_pass = format!("{:x}", Sha256::digest(temp_passphrase.as_bytes()));
+        let hash = Self::hash_password_async(sha256_pass)
+            .await
+            .context("Failed to hash temp passphrase")?;
+
         let conn = self.connection.lock().await;
         let mut stmt = conn.prepare("SELECT MAX(network_port) FROM tenants")?;
         let max_port: Option<u32> = stmt.query_row([], |row| row.get(0)).unwrap_or(Some(50051));
@@ -288,10 +324,6 @@ impl MasterEnclave {
             50052
         };
 
-        let temp_passphrase = uuid::Uuid::new_v4().to_string().replace("-", "")[0..12].to_string();
-        let sha256_pass = format!("{:x}", Sha256::digest(temp_passphrase.as_bytes()));
-        let hash = Self::hash_password(&sha256_pass).context("Failed to hash temp passphrase")?;
-
         conn.execute(
             "INSERT INTO tenants (tenant_id, username, network_port, password_must_change, password_hash) VALUES (?1, ?1, ?2, 1, ?3)",
             rusqlite::params![tenant_id, next_port, hash],
@@ -304,14 +336,52 @@ impl MasterEnclave {
         Ok((next_port, temp_passphrase))
     }
 
+    /// CORE-377: Crea un tenant personal con contraseña definitiva (password_must_change = 0)
+    pub async fn create_personal_tenant(
+        &self,
+        tenant_id: &str,
+        passphrase_sha256: &str,
+    ) -> Result<u32> {
+        use anyhow::Context;
+        let hash = Self::hash_password_async(passphrase_sha256.to_string())
+            .await
+            .context("Failed to hash passphrase")?;
+
+        let conn = self.connection.lock().await;
+        let mut stmt = conn.prepare("SELECT MAX(network_port) FROM tenants")?;
+        let max_port: Option<u32> = stmt.query_row([], |row| row.get(0)).unwrap_or(Some(50051));
+
+        let next_port = if let Some(p) = max_port {
+            if p >= 50052 {
+                p + 1
+            } else {
+                50052
+            }
+        } else {
+            50052
+        };
+
+        conn.execute(
+            "INSERT INTO tenants (tenant_id, username, network_port, password_must_change, password_hash) VALUES (?1, ?1, ?2, 0, ?3)",
+            rusqlite::params![tenant_id, next_port, hash],
+        ).with_context(|| format!("Failed to create personal tenant {}", tenant_id))?;
+
+        info!(
+            "Created personal tenant {} assigned to port {} with must_change_password=0",
+            tenant_id, next_port
+        );
+        Ok(next_port)
+    }
+
     pub async fn reset_tenant_password(
         &self,
         tenant_id: &str,
         new_passphrase_sha256: &str,
     ) -> Result<()> {
         use anyhow::Context;
-        let new_hash =
-            Self::hash_password(new_passphrase_sha256).context("Failed to hash new passphrase")?;
+        let new_hash = Self::hash_password_async(new_passphrase_sha256.to_string())
+            .await
+            .context("Failed to hash new passphrase")?;
         let conn = self.connection.lock().await;
         let rows = conn
             .execute(
@@ -334,20 +404,22 @@ impl MasterEnclave {
         new_passphrase_sha256: &str,
     ) -> Result<()> {
         use anyhow::Context;
-        let new_hash = Self::hash_password(new_passphrase_sha256)
+        let new_hash = Self::hash_password_async(new_passphrase_sha256.to_string())
+            .await
             .context("Failed to hash new master passphrase")?;
-        let conn = self.connection.lock().await;
-        let rows = conn
-            .execute(
-                "UPDATE master_admin SET password_hash = ?1 WHERE username = ?2",
-                rusqlite::params![new_hash, username],
-            )
-            .context("Failed to update master admin password")?;
+        {
+            let conn = self.connection.lock().await;
+            let rows = conn
+                .execute(
+                    "UPDATE master_admin SET password_hash = ?1 WHERE username = ?2",
+                    rusqlite::params![new_hash, username],
+                )
+                .context("Failed to update master admin password")?;
 
-        if rows == 0 {
-            anyhow::bail!("Master admin {} not found.", username);
+            if rows == 0 {
+                anyhow::bail!("Master admin {} not found.", username);
+            }
         }
-        drop(conn);
         self.checkpoint()
             .await
             .context("Failed to checkpoint WAL after reset_master_password")?;
@@ -392,8 +464,10 @@ impl MasterEnclave {
             }
         }
 
-        // SECURITY (Tenant Isolation): Purge physical user directory on disk
-        // to prevent data leaks or residual session state inheritance upon tenant re-creation.
+        // SECURITY (Tenant Isolation): Evict any pooled SQLCipher handles first so
+        // directory deletion succeeds cleanly (especially on Windows) and purge physical
+        // user directory on disk to prevent data leaks upon tenant re-creation.
+        crate::enclave::TenantDB::evict_tenant(tenant_id);
         let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
         let tenant_dir = std::path::Path::new(&base_dir)
             .join("users")
@@ -671,6 +745,49 @@ mod tests {
         enclave.consume_setup_token(token).await?;
         assert!(!enclave.validate_setup_token_only(token).await?);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_nonexistent_returns_false_without_error() -> anyhow::Result<()> {
+        let enclave = MasterEnclave::new_in_memory().await?;
+        assert!(!enclave.authenticate_master("nobody", "anyhash").await?);
+        assert!(!enclave.authenticate_tenant("nobody", "anyhash").await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_argon2id_authentication() -> anyhow::Result<()> {
+        let enclave = Arc::new(MasterEnclave::new_in_memory().await?);
+        let admin_hash = format!("{:x}", Sha256::digest(b"master_pass"));
+        enclave.initialize_master("admin", &admin_hash).await?;
+
+        let tenant_hash = format!("{:x}", Sha256::digest(b"tenant_pass"));
+        enclave
+            .create_personal_tenant("alice", &tenant_hash)
+            .await?;
+
+        let mut handles = Vec::new();
+        for i in 0..8usize {
+            let enc = Arc::clone(&enclave);
+            let admin_h = admin_hash.clone();
+            let tenant_h = tenant_hash.clone();
+            handles.push(tokio::spawn(async move {
+                match i % 3 {
+                    0 => enc.authenticate_master("admin", &admin_h).await,
+                    1 => enc.authenticate_tenant("alice", &tenant_h).await,
+                    _ => enc.authenticate_tenant("alice", "wrong_hash").await,
+                }
+            }));
+        }
+
+        for (i, h) in handles.into_iter().enumerate() {
+            let res = h.await??;
+            match i % 3 {
+                0 | 1 => assert!(res),
+                _ => assert!(!res),
+            }
+        }
         Ok(())
     }
 }

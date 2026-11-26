@@ -1,0 +1,127 @@
+{
+  "module_id": "aegis.domain.dev",
+  "display_name": "Aegis Dev Studio",
+  "version": "1.0.0",
+  "ipc_transport": {
+    "protocol": "native",
+    "endpoint": "local://enclave"
+  },
+  "database": {
+    "driver": "sqlite",
+    "encryption": true
+  },
+  "exposed_tools": [
+    {
+      "name": "dev_manage_project",
+      "description": "Registra, actualiza, lista o elimina proyectos y repositorios en Aegis Dev Studio (ruta, stack, comandos de build y test).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["add", "update", "delete", "list"]
+          },
+          "id": { "type": "string" },
+          "name": { "type": "string", "description": "Nombre del proyecto/repositorio." },
+          "repo_path": { "type": "string", "description": "Ruta local o URL del repositorio." },
+          "stack": { "type": "string", "description": "Tecnologías (ej: Rust + React + SQLCipher)." },
+          "description": { "type": "string" },
+          "default_branch": { "type": "string", "description": "Rama principal (ej: main)." },
+          "build_cmd": { "type": "string", "description": "Comando de build (ej: cargo build --release)." },
+          "test_cmd": { "type": "string", "description": "Comando de tests (ej: cargo test)." },
+          "status": { "type": "string", "enum": ["active", "maintenance", "shipped"] }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "dev_manage_task",
+      "description": "Gestiona tareas técnicas, bugs, refactors y features en el Kanban de Ingeniería.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["add", "update", "delete", "list"]
+          },
+          "id": { "type": "string" },
+          "project_id": { "type": "string", "description": "ID o nombre del proyecto asociado (opcional)." },
+          "title": { "type": "string", "description": "Título de la tarea o bug." },
+          "kind": {
+            "type": "string",
+            "enum": ["feature", "bug", "refactor", "security", "devops"]
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["backlog", "in_progress", "review", "done"]
+          },
+          "file_refs": { "type": "string", "description": "Archivos o módulos relacionados." },
+          "notes": { "type": "string", "description": "Criterios de aceptación, stacktrace o notas técnicas." }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "dev_manage_snippet",
+      "description": "Guarda, lista o elimina snippets de código, comandos frecuentes y runbooks técnicos en la bóveda del módulo Dev.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["save", "delete", "list"]
+          },
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "language": { "type": "string", "description": "rust, typescript, bash, sql, python, etc." },
+          "code": { "type": "string" },
+          "tags": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "dev_get_overview",
+      "description": "Obtiene todo el estado de Aegis Dev Studio: proyectos, tablero Kanban de tareas/bugs y biblioteca de snippets.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ],
+  "ui_views": [
+    {
+      "view_id": "new_dev_task_form",
+      "type": "form",
+      "title": "Nueva Tarea / Bug Técnico",
+      "description": "Añade un ticket al Kanban de Ingeniería",
+      "icon": "Plus",
+      "tool_name": "dev_manage_task",
+      "fields": [
+        { "name": "title", "label": "Título", "type": "text", "placeholder": "Ej. Optimizar query de historial", "required": true },
+        { "name": "kind", "label": "Tipo (feature, bug, refactor, security, devops)", "type": "text", "placeholder": "feature", "required": false },
+        { "name": "priority", "label": "Prioridad (critical, high, medium, low)", "type": "text", "placeholder": "high", "required": false },
+        { "name": "file_refs", "label": "Archivos afectados", "type": "text", "placeholder": "src/main.rs", "required": false }
+      ]
+    },
+    {
+      "view_id": "new_dev_project_form",
+      "type": "form",
+      "title": "Registrar Proyecto / Repo",
+      "description": "Configura stack y comandos de build/test",
+      "icon": "Settings",
+      "tool_name": "dev_manage_project",
+      "fields": [
+        { "name": "name", "label": "Nombre del Proyecto", "type": "text", "placeholder": "Aegis-Core", "required": true },
+        { "name": "stack", "label": "Stack", "type": "text", "placeholder": "Rust + React + SQLCipher", "required": false },
+        { "name": "build_cmd", "label": "Comando Build", "type": "text", "placeholder": "cargo build --release", "required": false },
+        { "name": "test_cmd", "label": "Comando Tests", "type": "text", "placeholder": "cargo test", "required": false }
+      ]
+    }
+  ]
+}

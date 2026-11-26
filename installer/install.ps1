@@ -174,7 +174,10 @@ function New-AegisDirs {
         "$DataDir\logs",
         "$DataDir\plugins",
         "$DataDir\users",
-        "$DataDir\agents"
+        "$DataDir\agents",
+        "$DataDir\modules",
+        "$DataDir\whatsapp_bridge",
+        "$DataDir\antigravity_bridge"
     )
 
     foreach ($dir in $dirs) {
@@ -267,30 +270,78 @@ function Get-AegisUI {
     Write-OK "UI assets -> $uiDir"
 }
 
-function Get-AgentsConfig {
-    Write-Step "Descargando configuracion de agentes..."
+function Get-ReleaseArchive {
+    param(
+        [string]$ArchiveName,
+        [string]$TargetDir,
+        [string]$StepLabel,
+        [string]$OkLabel,
+        [string]$MissingWarning
+    )
+    Write-Step $StepLabel
 
-    $tarPath = "$env:TEMP\agents-config.tar.gz"
-    $configUrl = "$RELEASE_URL/agents-config.tar.gz"
+    $tarPath = "$env:TEMP\$ArchiveName"
+    $url     = "$RELEASE_URL/$ArchiveName"
 
     try {
-        Invoke-WebRequest -Uri $configUrl -OutFile $tarPath -UseBasicParsing
-        
+        Invoke-WebRequest -Uri $url -OutFile $tarPath -UseBasicParsing
+
         $expectedHash = ""
         try {
-            $expectedHash = (Invoke-RestMethod -Uri "$configUrl.sha256" -UseBasicParsing).Trim()
+            $expectedHash = (Invoke-RestMethod -Uri "$url.sha256" -UseBasicParsing).Trim()
         } catch {}
 
         if ($expectedHash) {
             Verify-FileHash -filePath $tarPath -expectedHash $expectedHash
         }
 
-        tar -xzf $tarPath -C "$DataDir\agents"
-        Remove-Item $tarPath -Force
-        Write-OK "Agent config -> $DataDir\agents"
+        if (-not (Test-Path $TargetDir)) {
+            New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+        }
+
+        tar -xzf $tarPath -C $TargetDir
+        Remove-Item $tarPath -Force -ErrorAction SilentlyContinue
+        Write-OK "$OkLabel -> $TargetDir"
     } catch {
-        Write-Warn "agents-config.tar.gz no disponible — usando fallbacks compilados."
+        Remove-Item $tarPath -Force -ErrorAction SilentlyContinue
+        Write-Warn $MissingWarning
     }
+}
+
+function Get-AgentsConfig {
+    Get-ReleaseArchive `
+        -ArchiveName "agents-config.tar.gz" `
+        -TargetDir "$DataDir\agents" `
+        -StepLabel "Descargando configuracion de agentes..." `
+        -OkLabel "Agent config" `
+        -MissingWarning "agents-config.tar.gz no disponible — usando fallbacks compilados."
+}
+
+function Get-ModulesConfig {
+    Get-ReleaseArchive `
+        -ArchiveName "modules-config.tar.gz" `
+        -TargetDir "$DataDir\modules" `
+        -StepLabel "Descargando modulos de dominio..." `
+        -OkLabel "Domain modules" `
+        -MissingWarning "modules-config.tar.gz no disponible en el release."
+}
+
+function Get-WhatsAppBridge {
+    Get-ReleaseArchive `
+        -ArchiveName "whatsapp-bridge.tar.gz" `
+        -TargetDir "$DataDir\whatsapp_bridge" `
+        -StepLabel "Descargando WhatsApp bridge..." `
+        -OkLabel "WhatsApp bridge" `
+        -MissingWarning "whatsapp-bridge.tar.gz no disponible en el release."
+}
+
+function Get-AntigravityBridge {
+    Get-ReleaseArchive `
+        -ArchiveName "antigravity-bridge.tar.gz" `
+        -TargetDir "$DataDir\antigravity_bridge" `
+        -StepLabel "Descargando Antigravity bridge..." `
+        -OkLabel "Antigravity bridge" `
+        -MissingWarning "antigravity-bridge.tar.gz no disponible en el release."
 }
 
 function New-AegisEnvFile {
@@ -304,11 +355,18 @@ function New-AegisEnvFile {
         # Normalizar vars de path en archivos de versiones anteriores:
         # - Backslashes -> forward slashes
         # - Valores con espacios -> entre comillas dobles
-        $pathVars = @("AEGIS_DATA_DIR", "AEGIS_AGENTS_CONFIG_DIR", "UI_DIST_PATH")
+        $pathVars = @(
+            "AEGIS_DATA_DIR",
+            "AEGIS_AGENTS_CONFIG_DIR",
+            "AEGIS_MODULES_DIR",
+            "AEGIS_WHATSAPP_BRIDGE_DIR",
+            "AEGIS_ANTIGRAVITY_BRIDGE_DIR",
+            "UI_DIST_PATH"
+        )
         $lines    = Get-Content $envPath
         $changed  = $false
 
-        $newLines = $lines | ForEach-Object {
+        $newLines = @($lines | ForEach-Object {
             $line = $_
             foreach ($varName in $pathVars) {
                 if ($line -match "^$varName=(.*)$") {
@@ -320,7 +378,7 @@ function New-AegisEnvFile {
                 }
             }
             $line
-        }
+        })
 
         # Release builds require a plugin signer key. The server auto-generates
         # a local ed25519 keypair on first boot and persists it in the data
@@ -341,9 +399,25 @@ function New-AegisEnvFile {
             $changed = $true
         }
 
+        # Backfill module & bridge paths if missing
+        $parityVars = [ordered]@{
+            "AEGIS_MODULES_DIR"            = (Format-EnvPath "$DataDir\modules")
+            "AEGIS_WHATSAPP_BRIDGE_DIR"    = (Format-EnvPath "$DataDir\whatsapp_bridge")
+            "AEGIS_ANTIGRAVITY_BRIDGE_DIR" = (Format-EnvPath "$DataDir\antigravity_bridge")
+        }
+        foreach ($kv in $parityVars.GetEnumerator()) {
+            $k = $kv.Key
+            $v = $kv.Value
+            if (-not ($newLines | Where-Object { $_ -match "^$k=" })) {
+                $newLines += "$k=$v"
+                Write-OK "Backfilled $k=$v."
+                $changed = $true
+            }
+        }
+
         if ($changed) {
             Set-Content -Path $envPath -Value $newLines -Encoding UTF8
-            Write-OK "aegis.env actualizado (path normalization + plugin-key backfill)."
+            Write-OK "aegis.env actualizado (path normalization + parity backfill)."
         }
         return
     }
@@ -356,6 +430,9 @@ function New-AegisEnvFile {
 AEGIS_ROOT_KEY=$rootKey
 AEGIS_DATA_DIR=$(Format-EnvPath $DataDir)
 AEGIS_AGENTS_CONFIG_DIR=$(Format-EnvPath "$DataDir\agents")
+AEGIS_MODULES_DIR=$(Format-EnvPath "$DataDir\modules")
+AEGIS_WHATSAPP_BRIDGE_DIR=$(Format-EnvPath "$DataDir\whatsapp_bridge")
+AEGIS_ANTIGRAVITY_BRIDGE_DIR=$(Format-EnvPath "$DataDir\antigravity_bridge")
 UI_DIST_PATH=$(Format-EnvPath "$InstallDir\ui")
 AEGIS_MODEL_PROFILE=cloud
 DEFAULT_MODEL_PREF=CloudOnly
@@ -554,6 +631,9 @@ function Wait-AndShow {
         Write-Host "  Aegis esta corriendo en:" -ForegroundColor White
         Write-Host "    http://localhost:$AEGIS_HTTP_PORT" -ForegroundColor Cyan
         if ($ip) { Write-Host "    http://${ip}:$AEGIS_HTTP_PORT  (red local)" -ForegroundColor Cyan }
+        Write-Host ""
+        Write-Host "  Siguiente paso: Abre http://localhost:$AEGIS_HTTP_PORT en tu navegador" -ForegroundColor Green
+        Write-Host "  para completar la configuracion rapida en 1 solo paso." -ForegroundColor Green
     } else {
         Write-Host "  [!] Aegis no respondio en 30s." -ForegroundColor Yellow
         Write-Host "      Abre una terminal nueva y ejecuta: aegis diag" -ForegroundColor DarkGray
@@ -609,6 +689,9 @@ New-AegisDirs
 Get-AegisBinaries
 Get-AegisUI
 Get-AgentsConfig
+Get-ModulesConfig
+Get-WhatsAppBridge
+Get-AntigravityBridge
 New-AegisEnvFile
 Repair-DatabaseIfCorrupted
 Install-AegisCLI

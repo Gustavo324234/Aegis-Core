@@ -21,7 +21,21 @@ use tracing::{info, warn};
 
 pub mod autocorrect;
 pub mod drivers;
+mod failover;
 pub mod hardware;
+mod prompt_helpers;
+mod sanitizer;
+#[cfg(test)]
+mod tests;
+mod tool_handlers;
+
+pub(crate) use failover::summarize_configured_providers;
+use failover::{
+    collect_rendered_video_card_ids, consume_recovery_stream, format_model_error_meta_token,
+    is_casual_chat_turn, is_model_scoped_failure, is_permanent_model_failure,
+    summarise_provider_failure,
+};
+use sanitizer::{emit_stream_text_chunk, StreamTextSanitizer};
 #[async_trait]
 pub trait EmbeddingDriver: Send + Sync {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, SystemError>;
@@ -80,8 +94,6 @@ MAKER — ENTORNO DE EJECUCIÓN JS:\n\
 /// Esta constante se mantiene vacía para no romper los sitios de uso en build_prompt.
 pub const SPAWN_INSTRUCTIONS: &str = "";
 
-/// Template para inyectar la Persona del tenant cuando está configurada (CORE-129).
-/// `{persona}` se reemplaza con el texto libre del operador.
 pub const PERSONA_SECTION_TEMPLATE: &str =
     "\n\n[IDENTIDAD CONFIGURADA POR EL OPERADOR]\n{persona}\n[FIN DE IDENTIDAD]\n";
 
@@ -223,6 +235,8 @@ pub struct CognitiveHAL {
     pub agent_orchestrator: RwLock<Option<Arc<crate::agents::orchestrator::AgentOrchestrator>>>,
     /// CORE-267: Referencia al router para notificar rate-limits desde el driver.
     pub router_ref: RwLock<Option<Arc<RwLock<CognitiveRouter>>>>,
+    /// Gestor de WhatsApp Web (Baileys sidecar + rate limiter + confirmación).
+    pub whatsapp: RwLock<Option<Arc<crate::whatsapp::WhatsAppManager>>>,
 }
 
 #[cfg(test)]
@@ -230,165 +244,6 @@ fn _assert_hal_is_sync() {
     fn assert_sync<T: Sync>() {}
     assert_sync::<CognitiveHAL>();
 }
-
-/// CORE-FIX (B): translate the raw `SystemError` we got from a failed provider
-/// call into a one-sentence user-facing description. The chat layer uses this
-/// to compose "No pude responder con X. <summary>" so the user understands
-/// *why* every model failed instead of seeing silent empty output.
-fn summarise_provider_failure(err: &SystemError) -> String {
-    let s = err.to_string();
-    let lower = s.to_lowercase();
-    if lower.contains("401") || lower.contains("unauthorized") {
-        return "Las API keys configuradas no son válidas o no tienen acceso a \
-                este modelo (HTTP 401)."
-            .to_string();
-    }
-    if lower.contains("429")
-        || lower.contains("resource_exhausted")
-        || lower.contains("quota")
-        || lower.contains("rate")
-    {
-        return "Te quedaste sin cuota gratuita o sos rate-limited (HTTP 429). \
-                Esperá unos segundos o agregá billing al proveedor."
-            .to_string();
-    }
-    if lower.contains("404") {
-        return "El modelo no existe o el endpoint está mal configurado \
-                (HTTP 404)."
-            .to_string();
-    }
-    if lower.contains("timeout") || lower.contains("timed out") {
-        return "El proveedor no respondió a tiempo (timeout).".to_string();
-    }
-    if lower.contains("connection") || lower.contains("dns") {
-        return "No pude alcanzar el endpoint del proveedor (problema de red).".to_string();
-    }
-    "El proveedor devolvió un error desconocido.".to_string()
-}
-
-/// CORE-FIX (F): is this a DETERMINISTIC failure that won't succeed on retry
-/// with the same model? Two cases the smoke test exposed:
-///   - HTTP 401 Unauthorized: the key isn't authorized for this model/provider.
-///   - Gemini 429 with `limit: 0`: the model isn't on the key's tier at all
-///     (e.g. gemini-2.5-pro on the free tier — quota is literally zero, not
-///     "temporarily exhausted"). A normal 429 with retryDelay is NOT permanent.
-///
-/// When true, the caller trips the per-model circuit so the router stops
-/// re-picking a model that can never work and rotates to one that can
-/// (gemini-2.5-flash, gpt-oss:120b, …).
-fn is_permanent_model_failure(err: &SystemError) -> bool {
-    let s = err.to_string();
-    let lower = s.to_lowercase();
-    if lower.contains("401") || lower.contains("unauthorized") {
-        return true;
-    }
-    // HTTP 403 / subscription-gated model: the key authenticates fine but this
-    // specific model isn't on its plan (e.g. Ollama free tier returns 403
-    // "this model requires a subscription, upgrade for access" for the 671B
-    // models, which the /models listing still advertises). Retrying never
-    // helps — pin the model out so the router promotes a callable sibling.
-    if lower.contains("403")
-        || lower.contains("forbidden")
-        || lower.contains("requires a subscription")
-        || lower.contains("upgrade for access")
-    {
-        return true;
-    }
-    // Gemini tier-0: the body carries `"limit": 0` (possibly with spaces).
-    // Only treat 429s this way — a 200 with limit:0 makes no sense.
-    if lower.contains("429") || lower.contains("resource_exhausted") {
-        let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-        if compact.contains("\"limit\":0") || compact.contains("limit:0") {
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(test)]
-mod summarise_tests {
-    use super::*;
-
-    #[test]
-    fn detects_401() {
-        let e =
-            SystemError::HardwareFailure("Cloud API Error 401 Unauthorized: unauthorized".into());
-        assert!(summarise_provider_failure(&e).contains("401"));
-    }
-
-    #[test]
-    fn detects_429_and_quota() {
-        for body in [
-            "API Error 429 Too Many Requests",
-            "RESOURCE_EXHAUSTED",
-            "rate limit exceeded",
-            "quota exhausted",
-        ] {
-            let e = SystemError::HardwareFailure(body.into());
-            assert!(
-                summarise_provider_failure(&e).contains("429"),
-                "expected 429 summary for {:?}",
-                body
-            );
-        }
-    }
-
-    #[test]
-    fn falls_back_to_unknown() {
-        let e = SystemError::HardwareFailure("something weird happened".into());
-        assert!(summarise_provider_failure(&e).contains("desconocido"));
-    }
-
-    #[test]
-    fn permanent_failure_detects_401() {
-        let e =
-            SystemError::HardwareFailure("Cloud API Error 401 Unauthorized: unauthorized".into());
-        assert!(is_permanent_model_failure(&e));
-    }
-
-    #[test]
-    fn permanent_failure_detects_403_subscription() {
-        // Ollama free tier serving a 671B model: key is valid but the model
-        // is subscription-gated. Must be treated as permanent, not retried.
-        let e = SystemError::HardwareFailure(
-            "Cloud API Error 403 Forbidden: {\"error\":\"this model requires a \
-             subscription, upgrade for access: https://ollama.com/upgrade\"}"
-                .into(),
-        );
-        assert!(is_permanent_model_failure(&e));
-    }
-
-    #[test]
-    fn permanent_failure_detects_gemini_tier_zero() {
-        // The real shape from the smoke test: 429 RESOURCE_EXHAUSTED with limit: 0.
-        let e = SystemError::HardwareFailure(
-            "API Error 429 Too Many Requests: { \"error\": { \"code\": 429, \
-             \"message\": \"Quota exceeded ... limit: 0, model: gemini-2.5-pro\", \
-             \"status\": \"RESOURCE_EXHAUSTED\" } }"
-                .into(),
-        );
-        assert!(is_permanent_model_failure(&e));
-    }
-
-    #[test]
-    fn permanent_failure_ignores_transient_429() {
-        // A normal rate limit (limit > 0, has retryDelay) is NOT permanent —
-        // the model works, it's just throttled. Must not trip the model circuit.
-        let e = SystemError::HardwareFailure(
-            "API Error 429 Too Many Requests: Rate limit reached ... \
-             Limit 12000, Used 10797. Please try again in 11.725s"
-                .into(),
-        );
-        assert!(!is_permanent_model_failure(&e));
-    }
-
-    #[test]
-    fn permanent_failure_ignores_plain_500() {
-        let e = SystemError::HardwareFailure("API Error 500 Internal Server Error".into());
-        assert!(!is_permanent_model_failure(&e));
-    }
-}
-
 impl CognitiveHAL {
     pub fn new(plugin_manager: Arc<RwLock<PluginManager>>) -> Result<Self, SystemError> {
         let http_client = Arc::new(
@@ -430,7 +285,10 @@ impl CognitiveHAL {
                 ),
             ))
         } else {
-            None
+            // CORE-378: Fallback nativo a LocalEmbeddingDriver determinista y local
+            Some(Arc::new(
+                crate::chal::drivers::embeddings::LocalEmbeddingDriver::default(),
+            ))
         };
 
         Ok(Self {
@@ -446,6 +304,7 @@ impl CognitiveHAL {
             instruction_loader,
             agent_orchestrator: RwLock::new(None),
             router_ref: RwLock::new(None),
+            whatsapp: RwLock::new(None),
         })
     }
 
@@ -458,6 +317,11 @@ impl CognitiveHAL {
     pub async fn set_router_ref(&self, router: Arc<RwLock<CognitiveRouter>>) {
         let mut r = self.router_ref.write().await;
         *r = Some(router);
+    }
+
+    pub async fn set_whatsapp(&self, manager: Arc<crate::whatsapp::WhatsAppManager>) {
+        let mut w = self.whatsapp.write().await;
+        *w = Some(manager);
     }
 
     /// CORE-325: single point for feeding a model failure into the router's
@@ -477,11 +341,15 @@ impl CognitiveHAL {
         if let Some(r) = self.router_ref.read().await.clone() {
             let router = r.read().await;
             let tracker = router.tracker_ref();
-            // CORE-328: tally under the (model, task) composite too, so the
-            // scorer can learn that a model fails THIS kind of task.
-            tracker
-                .record_failure_for_task(model_id, provider, task)
-                .await;
+            // Record 402/404/subscription/limit:0 at model scope so healthy sibling
+            // models and keys on the same provider stay routable.
+            if err.is_some_and(is_model_scoped_failure) {
+                tracker.record_model_failure_for_task(model_id, task).await;
+            } else {
+                tracker
+                    .record_failure_for_task(model_id, provider, task)
+                    .await;
+            }
             if let Some(e) = err {
                 if is_permanent_model_failure(e) {
                     tracker.record_model_unavailable(model_id).await;
@@ -492,20 +360,18 @@ impl CognitiveHAL {
 
     /// CORE-325: a 200-OK stream with zero content tokens is an implicit
     /// failure — feed both the per-model empty-response circuit and the
-    /// failure window so decide() reranks away from the silent model.
+    /// model-scoped task failure window without poisoning sibling models on the provider.
     async fn note_empty_response(
         &self,
         model_id: &str,
-        provider: &str,
+        _provider: &str,
         task: crate::pcb::TaskType,
     ) {
         if let Some(r) = self.router_ref.read().await.clone() {
             let router = r.read().await;
             let tracker = router.tracker_ref();
             tracker.record_empty_response(model_id).await;
-            tracker
-                .record_failure_for_task(model_id, provider, task)
-                .await;
+            tracker.record_model_failure_for_task(model_id, task).await;
         }
     }
 
@@ -659,6 +525,41 @@ impl CognitiveHAL {
         driver.generate_stream(messages, None, None).await
     }
 
+    async fn cooldown_and_invalidate_sticky(&self, providers: &[&str], tenant_id: &str) -> u64 {
+        let mut max_cooldown: u64 = 0;
+        if let Some(r) = self.router_ref.read().await.clone() {
+            let tr = r.read().await;
+            let tracker = tr.tracker_ref();
+            for prov in providers {
+                if let Some(s) = tracker.provider_cooldown_remaining_secs(prov).await {
+                    max_cooldown = max_cooldown.max(s);
+                }
+            }
+            tr.invalidate_sticky(tenant_id).await;
+        }
+        max_cooldown
+    }
+
+    fn effective_retry_after_secs(max_cooldown: u64, err_text: &str) -> u64 {
+        if max_cooldown > 0 {
+            return max_cooldown;
+        }
+        let lc = err_text.to_lowercase();
+        if lc.contains("429")
+            || lc.contains("rate")
+            || lc.contains("quota")
+            || lc.contains("satur")
+            || lc.contains("timed out")
+            || lc.contains("timeout")
+            || lc.contains("502")
+            || lc.contains("503")
+        {
+            15
+        } else {
+            0
+        }
+    }
+
     /// CORE-261: Bucle ReAct — tool call → resultado → LLM, hasta MAX_ITERATIONS.
     /// Envía tokens de texto al caller via `text_tx`; nunca reenvía `__TOOL_CALL__` tokens.
     async fn execute_with_decision(
@@ -706,17 +607,79 @@ impl CognitiveHAL {
             make_rate_limited_cb(decision.key_id.clone()),
         );
 
-        let provider = ProviderKind::from_string(&decision.provider);
-        let tools = {
-            let defs = ToolRegistry::tools_for(&AgentRole::ChatAgent, &provider);
-            if defs.is_empty() {
-                None
-            } else {
-                Some(defs)
+        let casual_turn = is_casual_chat_turn(pcb);
+        // CORE-377: Cachear herramientas dinámicas descubiertas vía MCP para poder reconstruir
+        // el esquema si el router hace failover hacia otro proveedor en medio del turno.
+        let cached_mcp_tools = self.mcp_registry.list_tools().await;
+        let module_tenant = pcb.tenant_id.as_deref().unwrap_or("default").to_string();
+        let module_skey_opt = Self::valid_pcb_session_key(pcb).map(ToString::to_string);
+
+        let is_video_req =
+            Self::has_video_context(&pcb.memory_pointers.l1_instruction, &pcb.message_history);
+        let load_extra_tools = || async {
+            let mut list: Vec<crate::pcb::ToolDefinition> = cached_mcp_tools
+                .iter()
+                .map(|m| {
+                    crate::pcb::ToolDefinition::new(
+                        m.name.clone(),
+                        m.description.clone(),
+                        m.input_schema.clone(),
+                    )
+                })
+                .collect();
+            if let Some(ref module_skey) = module_skey_opt {
+                if is_video_req {
+                    if let Ok(db) = crate::enclave::TenantDB::open(&module_tenant, module_skey) {
+                        if db
+                            .get_kv("module_active:aegis.domain.video")
+                            .unwrap_or(None)
+                            .as_deref()
+                            != Some("true")
+                        {
+                            let _ = db.set_kv("module_active:aegis.domain.video", "true");
+                        }
+                    }
+                }
+                if let Some(r) = self.router_ref.read().await.clone() {
+                    let router_guard = r.read().await;
+                    let mod_tools = router_guard
+                        .get_enabled_module_tools(&module_tenant, module_skey)
+                        .await;
+                    list.extend(mod_tools);
+                }
             }
+            list
         };
 
-        let (mut messages, build_warnings) = self.build_messages_with_warnings(pcb, persona).await;
+        let mut extra_tools = if casual_turn {
+            Vec::new()
+        } else {
+            load_extra_tools().await
+        };
+
+        let build_tools_for = |prov_str: &str,
+                               dyn_tools: &[crate::pcb::ToolDefinition]|
+         -> Option<Vec<serde_json::Value>> {
+            if casual_turn {
+                return None;
+            }
+            let prov_kind = ProviderKind::from_string(prov_str);
+            let mut list = ToolRegistry::tools_for(&AgentRole::ChatAgent, &prov_kind);
+            for dyn_tool in dyn_tools {
+                list.push(ToolRegistry::serialize_canonical(dyn_tool, &prov_kind));
+            }
+            if list.is_empty() {
+                None
+            } else {
+                Some(list)
+            }
+        };
+        let mut active_key_id = decision.key_id.clone();
+        let mut tools = build_tools_for(&decision.provider, &extra_tools);
+
+        let (mut messages, build_warnings) = self
+            .build_messages_for_chat_with_warnings(pcb, persona)
+            .await;
 
         // CORE-FIX (A2): tell the client which model is about to answer so
         // the UI can render a "Claude Sonnet 4.6" / "GPT-4o" badge. The token
@@ -745,6 +708,14 @@ impl CognitiveHAL {
 
         const MAX_ITERATIONS: usize = 10;
         let mut finished = false;
+        let mut last_assistant_text = String::new();
+        let primary_model_id = decision.model_id.clone();
+        let mut tried_models: std::collections::HashSet<String> = std::collections::HashSet::new();
+        tried_models.insert(decision.model_id.clone());
+        let mut pending_fallback_warning: Option<(String, String, &'static str, String)> = None;
+        let mut has_streamed_text = false;
+        let mut last_streamed_ends_newline = false;
+        let mut rendered_video_ids: Vec<String> = Vec::new();
 
         for iteration in 0..MAX_ITERATIONS {
             let mut autocorrect_retries = 0;
@@ -752,6 +723,7 @@ impl CognitiveHAL {
 
             let mut assistant_text = String::new();
             let mut tool_calls: Vec<ToolCallRecord> = Vec::new();
+            let mut needs_paragraph_break = has_streamed_text && !last_streamed_ends_newline;
 
             loop {
                 // CORE-FIX (B1): on the FIRST iteration, if the primary model
@@ -794,7 +766,11 @@ impl CognitiveHAL {
                             // quota ran out, here's a Groq response" and "your Gemini
                             // quota ran out, here's a response from your other
                             // Gemini key".
-                            if let Some(r) = &tracker {
+                            let err_lc = primary_err.to_string().to_lowercase();
+                            let skip_key_rotation = is_model_scoped_failure(&primary_err)
+                                || err_lc.contains("timed out")
+                                || err_lc.contains("error sending request");
+                            if let (false, Some(r)) = (skip_key_rotation, &tracker) {
                                 let kp = r.read().await.key_pool_ref();
                                 let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                                 let mut tried: std::collections::HashSet<String> =
@@ -802,7 +778,7 @@ impl CognitiveHAL {
                                 if let Some(ref kid) = decision.key_id {
                                     tried.insert(kid.clone());
                                 }
-                                for attempt in 0..3u32 {
+                                for attempt in 0..2u32 {
                                     // CORE-362: Use get_available_key_excluding so we never
                                     // re-pick a key already in `tried` even if the spawned
                                     // mark_key_rate_limited task has not acquired the lock yet.
@@ -840,19 +816,18 @@ impl CognitiveHAL {
                                         .await
                                     {
                                         Ok(s) => {
-                                            let wpayload = serde_json::json!({
-                                                "category": "key_rotated",
-                                                "provider": active_provider,
-                                                "attempt": attempt + 1,
-                                                "message": format!(
+                                            pending_fallback_warning = Some((
+                                                active_model_id.clone(),
+                                                active_provider.clone(),
+                                                "key_rotated",
+                                                format!(
                                                     "La key primaria de {} se agotó; \
                                                      cambié a otra del mismo proveedor.",
                                                     active_provider
                                                 ),
-                                            });
-                                            let _ = text_tx
-                                                .send(Ok(format!("__WARNING__{}", wpayload)));
+                                            ));
                                             driver = alt_driver;
+                                            active_key_id = Some(alt.key_id.clone());
                                             recovered = Some(s);
                                             break;
                                         }
@@ -877,36 +852,12 @@ impl CognitiveHAL {
                                 }
                             }
 
-                            // If rotation didn't help AND we have no fallback chain,
-                            // surface a user-visible message before bubbling the
-                            // original error up — otherwise the chat shows nothing.
-                            if recovered.is_none() && decision.fallback_chain.is_empty() {
-                                if let Some(r) = &tracker {
-                                    let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-                                    r.read().await.invalidate_sticky(tenant_id).await;
-                                }
-                                let summary = summarise_provider_failure(&primary_err);
-                                let msg = format!(
-                                    "No pude responder con '{}'. {} No tengo modelos \
-                                     de respaldo configurados — revisá las API keys \
-                                     o agregá otro proveedor.",
-                                    active_model_id, summary
-                                );
-                                let _ = text_tx.send(Ok(msg.clone()));
-                                let wpayload = serde_json::json!({
-                                    "category": "all_models_failed",
-                                    "primary_model": active_model_id,
-                                    "primary_provider": active_provider,
-                                    "reason": summary,
-                                    "message": msg,
-                                });
-                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
-                                return Err(primary_err);
-                            }
-
                             for fb in &decision.fallback_chain {
                                 if recovered.is_some() {
                                     break;
+                                }
+                                if !tried_models.insert(fb.model_id.clone()) {
+                                    continue;
                                 }
                                 let fb_driver = CloudProxyDriver::new_with_callback(
                                     Arc::clone(&self.http_client),
@@ -916,28 +867,26 @@ impl CognitiveHAL {
                                     fb.key_id.clone(),
                                     make_rate_limited_cb(fb.key_id.clone()),
                                 );
+                                let fb_tools = build_tools_for(&fb.provider, &extra_tools);
                                 match fb_driver
-                                    .generate_stream(local_messages.clone(), None, tools.clone())
+                                    .generate_stream(local_messages.clone(), None, fb_tools.clone())
                                     .await
                                 {
                                     Ok(s) => {
                                         active_model_id = fb.model_id.clone();
                                         active_provider = fb.provider.clone();
+                                        active_key_id = fb.key_id.clone();
+                                        tools = fb_tools;
                                         driver = fb_driver;
-                                        send_model_event(
-                                            &text_tx,
-                                            &active_model_id,
-                                            &active_provider,
-                                        );
-                                        let wpayload = serde_json::json!({
-                                            "category": "model_fallback",
-                                            "message": format!(
-                                                "El modelo primario falló; respondiendo con {}.",
-                                                fb.model_id
-                                            )
-                                        });
-                                        let _ =
-                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                        pending_fallback_warning = Some((
+                                            fb.model_id.clone(),
+                                            fb.provider.clone(),
+                                            "model_fallback",
+                                            format!(
+                                                "El modelo primario ({}) falló; respondiendo con {}.",
+                                                primary_model_id, fb.model_id
+                                            ),
+                                        ));
                                         recovered = Some(s);
                                         break;
                                     }
@@ -959,20 +908,91 @@ impl CognitiveHAL {
                                 }
                             }
 
+                            if recovered.is_none() {
+                                if let Some(r) = &tracker {
+                                    for _hop in 0..3u32 {
+                                        let dyn_dec = match r
+                                            .read()
+                                            .await
+                                            .decide_excluding(pcb, &tried_models)
+                                            .await
+                                        {
+                                            Ok(d) => d,
+                                            Err(_) => break,
+                                        };
+                                        if !tried_models.insert(dyn_dec.model_id.clone()) {
+                                            break;
+                                        }
+                                        let dyn_driver = CloudProxyDriver::new_with_callback(
+                                            Arc::clone(&self.http_client),
+                                            dyn_dec.api_url.clone(),
+                                            dyn_dec.api_key.clone(),
+                                            dyn_dec.model_id.clone(),
+                                            dyn_dec.key_id.clone(),
+                                            make_rate_limited_cb(dyn_dec.key_id.clone()),
+                                        );
+                                        let dyn_tools =
+                                            build_tools_for(&dyn_dec.provider, &extra_tools);
+                                        match dyn_driver
+                                            .generate_stream(
+                                                local_messages.clone(),
+                                                None,
+                                                dyn_tools.clone(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(s) => {
+                                                active_model_id = dyn_dec.model_id.clone();
+                                                active_provider = dyn_dec.provider.clone();
+                                                active_key_id = dyn_dec.key_id.clone();
+                                                tools = dyn_tools;
+                                                driver = dyn_driver;
+                                                pending_fallback_warning = Some((
+                                                    dyn_dec.model_id.clone(),
+                                                    dyn_dec.provider.clone(),
+                                                    "model_fallback",
+                                                    format!(
+                                                        "El modelo primario ({}) falló; respondiendo con {}.",
+                                                        primary_model_id, dyn_dec.model_id
+                                                    ),
+                                                ));
+                                                recovered = Some(s);
+                                                break;
+                                            }
+                                            Err(dyn_err) => {
+                                                self.note_model_failure(
+                                                    &dyn_dec.model_id,
+                                                    &dyn_dec.provider,
+                                                    pcb.task_type,
+                                                    Some(&dyn_err),
+                                                )
+                                                .await;
+                                                warn!(
+                                                    pid = %pid,
+                                                    fallback = %dyn_dec.model_id,
+                                                    error = %dyn_err,
+                                                    "dynamic router fallback also failed"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             match recovered {
                                 Some(s) => s,
                                 None => {
-                                    // All fallbacks failed too. Invalidate sticky so
-                                    // the next request re-evaluates from scratch, and
-                                    // surface a user-visible message — without this
-                                    // the chat appears silent on cascading failures
-                                    // (smoke-test symptom: Gemini quota exhausted +
-                                    // all OpenRouter fallbacks 401).
-                                    if let Some(r) = &tracker {
-                                        let tenant_id =
-                                            pcb.tenant_id.as_deref().unwrap_or("default");
-                                        r.read().await.invalidate_sticky(tenant_id).await;
+                                    let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                                    let mut providers: Vec<&str> = vec![active_provider.as_str()];
+                                    for fb in &decision.fallback_chain {
+                                        providers.push(fb.provider.as_str());
                                     }
+                                    let max_cooldown = self
+                                        .cooldown_and_invalidate_sticky(&providers, tenant_id)
+                                        .await;
+                                    let err_str = primary_err.to_string();
+                                    let retry_after =
+                                        Self::effective_retry_after_secs(max_cooldown, &err_str);
                                     let summary = summarise_provider_failure(&primary_err);
                                     let attempted: Vec<String> = decision
                                         .fallback_chain
@@ -984,7 +1004,7 @@ impl CognitiveHAL {
                                          Probamos '{}' y los respaldos ({}) sin \
                                          éxito. {} Reintentá en unos segundos o \
                                          configurá otro proveedor.",
-                                        active_model_id,
+                                        primary_model_id,
                                         if attempted.is_empty() {
                                             "sin respaldos".to_string()
                                         } else {
@@ -992,23 +1012,22 @@ impl CognitiveHAL {
                                         },
                                         summary
                                     );
-                                    let _ = text_tx.send(Ok(msg.clone()));
-                                    let wpayload = serde_json::json!({
-                                        "category": "all_models_failed",
-                                        "primary_model": active_model_id,
-                                        "primary_provider": active_provider,
-                                        "attempted_fallbacks": attempted,
-                                        "reason": summary,
-                                        "message": msg,
-                                    });
-                                    let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                                    if !has_streamed_text {
+                                        let _ = text_tx.send(Ok(format_model_error_meta_token(
+                                            &msg,
+                                            retry_after,
+                                        )));
+                                    } else {
+                                        let _ = text_tx.send(Ok(msg));
+                                    }
                                     return Err(primary_err);
                                 }
                             }
                         }
                     }
                 } else {
-                    // Subsequent retries of the autocorrect loop: call driver directly
+                    // Subsequent retries of the autocorrect loop: call driver directly,
+                    // recovering via alternate keys or fallback_chain if the provider fails mid-turn.
                     match driver
                         .generate_stream(local_messages.clone(), None, tools.clone())
                         .await
@@ -1022,7 +1041,228 @@ impl CognitiveHAL {
                                 Some(&e),
                             )
                             .await;
-                            return Err(e);
+
+                            let err_lc = e.to_string().to_lowercase();
+                            let skip_keys = is_model_scoped_failure(&e)
+                                || err_lc.contains("timed out")
+                                || err_lc.contains("error sending request");
+                            let mut recovered_stream = None;
+
+                            if !skip_keys {
+                                if let Some(r) = self.router_ref.read().await.clone() {
+                                    let kp = r.read().await.key_pool_ref();
+                                    let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                                    let mut tried: std::collections::HashSet<String> =
+                                        std::collections::HashSet::new();
+                                    if let Some(kid) = driver.current_key_id() {
+                                        tried.insert(kid.to_string());
+                                    }
+                                    for _attempt in 0..2u32 {
+                                        let Some(alt) = kp
+                                            .get_available_key_excluding(
+                                                &active_provider,
+                                                &active_model_id,
+                                                tenant_id,
+                                                &tried,
+                                            )
+                                            .await
+                                        else {
+                                            break;
+                                        };
+                                        tried.insert(alt.key_id.clone());
+                                        driver.swap_api_key(
+                                            alt.api_key.clone(),
+                                            Some(alt.key_id.clone()),
+                                            make_rate_limited_cb(Some(alt.key_id.clone())),
+                                        );
+                                        match driver
+                                            .generate_stream(
+                                                local_messages.clone(),
+                                                None,
+                                                tools.clone(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(s) => {
+                                                tracing::info!(
+                                                    pid = %pid,
+                                                    provider = %active_provider,
+                                                    model = %active_model_id,
+                                                    key_id = %alt.key_id,
+                                                    "ReAct continuation recovered via alternate key"
+                                                );
+                                                active_key_id = Some(alt.key_id.clone());
+                                                recovered_stream = Some(s);
+                                                break;
+                                            }
+                                            Err(alt_err) => {
+                                                self.note_model_failure(
+                                                    &active_model_id,
+                                                    &active_provider,
+                                                    pcb.task_type,
+                                                    Some(&alt_err),
+                                                )
+                                                .await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if recovered_stream.is_none() {
+                                for fb in &decision.fallback_chain {
+                                    if !tried_models.insert(fb.model_id.clone()) {
+                                        continue;
+                                    }
+                                    let fb_driver = CloudProxyDriver::new_with_callback(
+                                        Arc::clone(&self.http_client),
+                                        fb.api_url.clone(),
+                                        fb.api_key.clone(),
+                                        fb.model_id.clone(),
+                                        fb.key_id.clone(),
+                                        make_rate_limited_cb(fb.key_id.clone()),
+                                    );
+                                    let fb_tools = build_tools_for(&fb.provider, &extra_tools);
+                                    match fb_driver
+                                        .generate_stream(
+                                            local_messages.clone(),
+                                            None,
+                                            fb_tools.clone(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(s) => {
+                                            let prev = active_model_id.clone();
+                                            let reason = summarise_provider_failure(&e);
+                                            active_model_id = fb.model_id.clone();
+                                            active_provider = fb.provider.clone();
+                                            active_key_id = fb.key_id.clone();
+                                            tools = fb_tools;
+                                            driver = fb_driver;
+                                            pending_fallback_warning = Some((
+                                                fb.model_id.clone(),
+                                                fb.provider.clone(),
+                                                "model_fallback",
+                                                format!(
+                                                    "El modelo ({}) falló ({}); respondiendo con {}.",
+                                                    prev, reason, fb.model_id
+                                                ),
+                                            ));
+                                            recovered_stream = Some(s);
+                                            break;
+                                        }
+                                        Err(fb_err) => {
+                                            self.note_model_failure(
+                                                &fb.model_id,
+                                                &fb.provider,
+                                                pcb.task_type,
+                                                Some(&fb_err),
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if recovered_stream.is_none() {
+                                if let Some(r) = self.router_ref.read().await.clone() {
+                                    for _hop in 0..3u32 {
+                                        let dyn_dec = match r
+                                            .read()
+                                            .await
+                                            .decide_excluding(pcb, &tried_models)
+                                            .await
+                                        {
+                                            Ok(d) => d,
+                                            Err(_) => break,
+                                        };
+                                        if !tried_models.insert(dyn_dec.model_id.clone()) {
+                                            break;
+                                        }
+                                        let dyn_driver = CloudProxyDriver::new_with_callback(
+                                            Arc::clone(&self.http_client),
+                                            dyn_dec.api_url.clone(),
+                                            dyn_dec.api_key.clone(),
+                                            dyn_dec.model_id.clone(),
+                                            dyn_dec.key_id.clone(),
+                                            make_rate_limited_cb(dyn_dec.key_id.clone()),
+                                        );
+                                        let dyn_tools =
+                                            build_tools_for(&dyn_dec.provider, &extra_tools);
+                                        match dyn_driver
+                                            .generate_stream(
+                                                local_messages.clone(),
+                                                None,
+                                                dyn_tools.clone(),
+                                            )
+                                            .await
+                                        {
+                                            Ok(s) => {
+                                                let prev = active_model_id.clone();
+                                                let reason = summarise_provider_failure(&e);
+                                                active_model_id = dyn_dec.model_id.clone();
+                                                active_provider = dyn_dec.provider.clone();
+                                                active_key_id = dyn_dec.key_id.clone();
+                                                tools = dyn_tools;
+                                                driver = dyn_driver;
+                                                pending_fallback_warning = Some((
+                                                    dyn_dec.model_id.clone(),
+                                                    dyn_dec.provider.clone(),
+                                                    "model_fallback",
+                                                    format!(
+                                                        "El modelo ({}) falló ({}); respondiendo con {}.",
+                                                        prev, reason, dyn_dec.model_id
+                                                    ),
+                                                ));
+                                                recovered_stream = Some(s);
+                                                break;
+                                            }
+                                            Err(dyn_err) => {
+                                                self.note_model_failure(
+                                                    &dyn_dec.model_id,
+                                                    &dyn_dec.provider,
+                                                    pcb.task_type,
+                                                    Some(&dyn_err),
+                                                )
+                                                .await;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(s) = recovered_stream {
+                                s
+                            } else {
+                                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                                let mut providers: Vec<&str> = vec![active_provider.as_str()];
+                                for fb in &decision.fallback_chain {
+                                    providers.push(fb.provider.as_str());
+                                }
+                                let max_cooldown = self
+                                    .cooldown_and_invalidate_sticky(&providers, tenant_id)
+                                    .await;
+                                let err_str = e.to_string();
+                                let retry_after =
+                                    Self::effective_retry_after_secs(max_cooldown, &err_str);
+                                let summary = summarise_provider_failure(&e);
+                                let msg = format!(
+                                    "No pude completar la respuesta tras ejecutar la herramienta ({}). Reintentá en unos segundos.",
+                                    summary
+                                );
+                                if !has_streamed_text {
+                                    let _ = text_tx
+                                        .send(Ok(format_model_error_meta_token(&msg, retry_after)));
+                                } else {
+                                    let prefix = if !last_streamed_ends_newline {
+                                        "\n\n"
+                                    } else {
+                                        ""
+                                    };
+                                    let _ = text_tx.send(Ok(format!("{}{}", prefix, msg)));
+                                }
+                                return Ok(());
+                            }
                         }
                     }
                 };
@@ -1031,10 +1271,24 @@ impl CognitiveHAL {
 
                 assistant_text = String::new();
                 tool_calls = Vec::new();
+                let mut stream_sanitizer = StreamTextSanitizer::default();
 
                 while let Some(token_result) = raw_stream.next().await {
                     match token_result {
                         Ok(token) if token.starts_with("__TOOL_CALL__") => {
+                            if let Some((fb_model, fb_prov, cat, warn_msg)) =
+                                pending_fallback_warning.take()
+                            {
+                                if cat == "model_fallback" {
+                                    send_model_event(&text_tx, &fb_model, &fb_prov);
+                                }
+                                let wpayload = serde_json::json!({
+                                    "category": cat,
+                                    "provider": fb_prov,
+                                    "message": warn_msg,
+                                });
+                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                            }
                             if autocorrect_retries == 0 {
                                 let _ = text_tx.send(Ok(token.clone()));
                             }
@@ -1068,51 +1322,128 @@ impl CognitiveHAL {
                                 });
                                 continue; // never emit legacy token to output
                             }
-                            assistant_text.push_str(&text);
-                            if autocorrect_retries == 0 {
-                                let _ = text_tx.send(Ok(text));
+                            let clean_text = stream_sanitizer.push(&text);
+                            if clean_text.is_empty() {
+                                continue;
                             }
+                            if let Some((fb_model, fb_prov, cat, warn_msg)) =
+                                pending_fallback_warning.take()
+                            {
+                                if cat == "model_fallback" {
+                                    send_model_event(&text_tx, &fb_model, &fb_prov);
+                                }
+                                let wpayload = serde_json::json!({
+                                    "category": cat,
+                                    "provider": fb_prov,
+                                    "message": warn_msg,
+                                });
+                                let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
+                            }
+                            emit_stream_text_chunk(
+                                &text_tx,
+                                clean_text,
+                                autocorrect_retries == 0,
+                                &mut assistant_text,
+                                &mut has_streamed_text,
+                                &mut last_streamed_ends_newline,
+                                &mut needs_paragraph_break,
+                            );
                         }
                         Err(e) => {
+                            let sys_err = SystemError::HardwareFailure(format!("{}", e));
+                            self.note_model_failure(
+                                &active_model_id,
+                                &active_provider,
+                                pcb.task_type,
+                                Some(&sys_err),
+                            )
+                            .await;
+                            if autocorrect_retries == 0
+                                && assistant_text.is_empty()
+                                && tool_calls.is_empty()
+                                && !has_streamed_text
+                            {
+                                warn!(
+                                    pid = %pid,
+                                    model = %active_model_id,
+                                    provider = %active_provider,
+                                    error = %e,
+                                    "CHAL: stream interrupted with 0 tokens emitted — triggering empty-stream failover"
+                                );
+                                break;
+                            }
+                            if iteration == 0
+                                && autocorrect_retries == 0
+                                && pcb.agent_id.is_none()
+                                && is_video_req
+                                && tool_calls.is_empty()
+                            {
+                                warn!(
+                                    pid = %pid,
+                                    model = %active_model_id,
+                                    provider = %active_provider,
+                                    error = %e,
+                                    "CHAL: stream interrupted mid-video-request before tool call — falling through to CHAL Guard video_produce_auto"
+                                );
+                                if has_streamed_text && !last_streamed_ends_newline {
+                                    needs_paragraph_break = true;
+                                }
+                                break;
+                            }
                             if autocorrect_retries == 0 {
                                 let _ = text_tx.send(Err(e.clone()));
                             }
-                            return Err(SystemError::HardwareFailure(format!("{}", e)));
+                            return Err(sys_err);
                         }
                     }
                 }
 
-                // CORE-FIX (A): the smoke test caught cogito-2.1:671b on ollama_cloud
-                // returning 200 OK with zero content tokens.
-                let stream_was_empty = iteration == 0
-                    && autocorrect_retries == 0
-                    && assistant_text.is_empty()
-                    && tool_calls.is_empty();
+                let sanitized_tail = stream_sanitizer.flush();
+                if !sanitized_tail.is_empty() {
+                    emit_stream_text_chunk(
+                        &text_tx,
+                        sanitized_tail,
+                        autocorrect_retries == 0,
+                        &mut assistant_text,
+                        &mut has_streamed_text,
+                        &mut last_streamed_ends_newline,
+                        &mut needs_paragraph_break,
+                    );
+                }
+
+                // CORE-FIX (A): recover when ANY turn (including post-tool ReAct
+                // continuations on iteration > 0) returns 200 OK with zero tokens.
+                let stream_was_empty =
+                    autocorrect_retries == 0 && assistant_text.is_empty() && tool_calls.is_empty();
 
                 if stream_was_empty {
+                    // Discard any unconfirmed fallback notice since 0 tokens arrived.
+                    pending_fallback_warning = None;
                     self.note_empty_response(&active_model_id, &active_provider, pcb.task_type)
                         .await;
                     warn!(
                         pid = %pid,
+                        iteration = iteration,
                         model = %active_model_id,
-                        "primary returned 0 content tokens — trying key rotation then fallback chain"
+                        "model returned 0 content tokens — trying key rotation then fallback chain"
                     );
 
                     let mut recovered = false;
 
-                    // CORE-FIX: same key-rotation logic as the 429 path. If the
-                    // current key gave us an empty stream, try other keys of the
-                    // SAME (provider, model) before switching models.
+                    // 1. Try other keys of the SAME (provider, model).
                     if let Some(r) = self.router_ref.read().await.clone() {
                         let kp = r.read().await.key_pool_ref();
                         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
                         let mut tried: std::collections::HashSet<String> =
                             std::collections::HashSet::new();
-                        if let Some(ref kid) = decision.key_id {
+                        if let Some(ref kid) = active_key_id {
                             tried.insert(kid.clone());
                         }
-                        for attempt in 0..3u32 {
-                            let alt = match kp
+                        if let Some(kid) = driver.current_key_id() {
+                            tried.insert(kid.to_string());
+                        }
+                        for attempt in 0..2u32 {
+                            let Some(alt) = kp
                                 .get_available_key_excluding(
                                     &active_provider,
                                     &active_model_id,
@@ -1120,9 +1451,8 @@ impl CognitiveHAL {
                                     &tried,
                                 )
                                 .await
-                            {
-                                Some(k) => k,
-                                None => break,
+                            else {
+                                break;
                             };
                             tried.insert(alt.key_id.clone());
                             let alt_url = alt
@@ -1142,61 +1472,35 @@ impl CognitiveHAL {
                                 .await
                             {
                                 Ok(s) => {
-                                    tokio::pin!(s);
-                                    let mut alt_text = String::new();
-                                    let mut alt_tool_calls: Vec<ToolCallRecord> = Vec::new();
-                                    while let Some(tr) = s.next().await {
-                                        match tr {
-                                            Ok(token) if token.starts_with("__TOOL_CALL__") => {
-                                                let _ = text_tx.send(Ok(token.clone()));
-                                                let json_str = token
-                                                    .strip_prefix("__TOOL_CALL__")
-                                                    .unwrap_or_default();
-                                                if let Ok(tc) =
-                                                    serde_json::from_str::<DriverToolCallPayload>(
-                                                        json_str,
-                                                    )
-                                                {
-                                                    alt_tool_calls.push(ToolCallRecord {
-                                                        id: tc.id,
-                                                        type_: "function".to_string(),
-                                                        function: FunctionCallRecord {
-                                                            name: tc.name,
-                                                            arguments: tc.arguments.to_string(),
-                                                        },
-                                                    });
-                                                }
-                                            }
-                                            Ok(text) => {
-                                                alt_text.push_str(&text);
-                                                let _ = text_tx.send(Ok(text));
-                                            }
-                                            Err(e) => {
-                                                let _ = text_tx.send(Err(e));
-                                            }
-                                        }
-                                    }
+                                    let mut rec_sanitizer = StreamTextSanitizer::default();
+                                    let warn_msg = format!(
+                                        "El modelo no respondió con la primera key; cambié a otra del mismo proveedor ({}).",
+                                        active_provider
+                                    );
+                                    let (alt_text, alt_tool_calls) = consume_recovery_stream(
+                                        s,
+                                        &text_tx,
+                                        &active_model_id,
+                                        &active_provider,
+                                        "key_rotated",
+                                        warn_msg,
+                                        false,
+                                        &mut rec_sanitizer,
+                                        &mut has_streamed_text,
+                                        &mut last_streamed_ends_newline,
+                                        &mut needs_paragraph_break,
+                                        pid,
+                                        "alternate key",
+                                    )
+                                    .await;
                                     if !alt_text.is_empty() || !alt_tool_calls.is_empty() {
-                                        let wpayload = serde_json::json!({
-                                            "category": "key_rotated",
-                                            "provider": active_provider,
-                                            "attempt": attempt + 1,
-                                            "message": format!(
-                                                "El modelo no respondió con la \
-                                                 primera key; cambié a otra del \
-                                                 mismo proveedor ({}).",
-                                                active_provider
-                                            ),
-                                        });
-                                        let _ =
-                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                         driver = alt_driver;
+                                        active_key_id = Some(alt.key_id.clone());
                                         assistant_text = alt_text;
                                         tool_calls = alt_tool_calls;
                                         recovered = true;
                                         break;
                                     } else {
-                                        // Alt key also empty — record + try next.
                                         self.note_empty_response(
                                             &active_model_id,
                                             &active_provider,
@@ -1233,13 +1537,12 @@ impl CognitiveHAL {
                         }
                     }
 
-                    if recovered {
-                        if tool_calls.is_empty() {
-                            finished = true;
-                            break;
-                        }
-                    } else {
+                    // 2. Try static fallback chain models.
+                    if !recovered {
                         for fb in &decision.fallback_chain {
+                            if !tried_models.insert(fb.model_id.clone()) {
+                                continue;
+                            }
                             let fb_driver = CloudProxyDriver::new_with_callback(
                                 Arc::clone(&self.http_client),
                                 fb.api_url.clone(),
@@ -1248,69 +1551,44 @@ impl CognitiveHAL {
                                 fb.key_id.clone(),
                                 make_rate_limited_cb(fb.key_id.clone()),
                             );
+                            let fb_tools = build_tools_for(&fb.provider, &extra_tools);
                             match fb_driver
-                                .generate_stream(local_messages.clone(), None, tools.clone())
+                                .generate_stream(local_messages.clone(), None, fb_tools.clone())
                                 .await
                             {
                                 Ok(s) => {
-                                    tokio::pin!(s);
-                                    let mut fb_text = String::new();
-                                    let mut fb_tool_calls: Vec<ToolCallRecord> = Vec::new();
-                                    while let Some(tr) = s.next().await {
-                                        match tr {
-                                            Ok(token) if token.starts_with("__TOOL_CALL__") => {
-                                                let _ = text_tx.send(Ok(token.clone()));
-                                                let json_str = token
-                                                    .strip_prefix("__TOOL_CALL__")
-                                                    .unwrap_or_default();
-                                                if let Ok(tc) =
-                                                    serde_json::from_str::<DriverToolCallPayload>(
-                                                        json_str,
-                                                    )
-                                                {
-                                                    fb_tool_calls.push(ToolCallRecord {
-                                                        id: tc.id,
-                                                        type_: "function".to_string(),
-                                                        function: FunctionCallRecord {
-                                                            name: tc.name,
-                                                            arguments: tc.arguments.to_string(),
-                                                        },
-                                                    });
-                                                }
-                                            }
-                                            Ok(text) => {
-                                                fb_text.push_str(&text);
-                                                let _ = text_tx.send(Ok(text));
-                                            }
-                                            Err(e) => {
-                                                let _ = text_tx.send(Err(e));
-                                            }
-                                        }
-                                    }
+                                    let mut rec_sanitizer = StreamTextSanitizer::default();
+                                    let warn_msg = format!(
+                                        "El modelo ({}) no respondió; cambiamos a {}.",
+                                        active_model_id, fb.model_id
+                                    );
+                                    let (fb_text, fb_tool_calls) = consume_recovery_stream(
+                                        s,
+                                        &text_tx,
+                                        &fb.model_id,
+                                        &fb.provider,
+                                        "model_fallback",
+                                        warn_msg,
+                                        true,
+                                        &mut rec_sanitizer,
+                                        &mut has_streamed_text,
+                                        &mut last_streamed_ends_newline,
+                                        &mut needs_paragraph_break,
+                                        pid,
+                                        "fallback",
+                                    )
+                                    .await;
                                     if !fb_text.is_empty() || !fb_tool_calls.is_empty() {
                                         active_model_id = fb.model_id.clone();
                                         active_provider = fb.provider.clone();
+                                        active_key_id = fb.key_id.clone();
+                                        tools = fb_tools;
                                         driver = fb_driver;
-                                        send_model_event(
-                                            &text_tx,
-                                            &active_model_id,
-                                            &active_provider,
-                                        );
-                                        let wpayload = serde_json::json!({
-                                            "category": "model_fallback",
-                                            "message": format!(
-                                                "El modelo primario no respondió; cambiamos a {}.",
-                                                fb.model_id
-                                            )
-                                        });
-                                        let _ =
-                                            text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
                                         assistant_text = fb_text;
                                         tool_calls = fb_tool_calls;
                                         recovered = true;
                                         break;
                                     } else {
-                                        // Fallback also returned empty. Record and try next.
                                         self.note_empty_response(
                                             &fb.model_id,
                                             &fb.provider,
@@ -1343,30 +1621,100 @@ impl CognitiveHAL {
                         }
                     }
 
+                    // 3. Dynamic router failover across any remaining healthy providers/models.
                     if !recovered {
-                        // CORE-FIX (B): emit a user-visible message before bailing,
-                        // so the chat doesn't show a silent empty response.
-                        let mut max_cooldown: u64 = 0;
                         if let Some(r) = self.router_ref.read().await.clone() {
-                            let tr = r.read().await;
-                            let tracker = tr.tracker_ref();
-                            if let Some(s) = tracker
-                                .provider_cooldown_remaining_secs(&active_provider)
-                                .await
-                            {
-                                max_cooldown = max_cooldown.max(s);
-                            }
-                            for fb in &decision.fallback_chain {
-                                if let Some(s) =
-                                    tracker.provider_cooldown_remaining_secs(&fb.provider).await
+                            for _hop in 0..3u32 {
+                                let dyn_dec =
+                                    match r.read().await.decide_excluding(pcb, &tried_models).await
+                                    {
+                                        Ok(d) => d,
+                                        Err(_) => break,
+                                    };
+                                if !tried_models.insert(dyn_dec.model_id.clone()) {
+                                    break;
+                                }
+                                let dyn_driver = CloudProxyDriver::new_with_callback(
+                                    Arc::clone(&self.http_client),
+                                    dyn_dec.api_url.clone(),
+                                    dyn_dec.api_key.clone(),
+                                    dyn_dec.model_id.clone(),
+                                    dyn_dec.key_id.clone(),
+                                    make_rate_limited_cb(dyn_dec.key_id.clone()),
+                                );
+                                let dyn_tools = build_tools_for(&dyn_dec.provider, &extra_tools);
+                                match dyn_driver
+                                    .generate_stream(
+                                        local_messages.clone(),
+                                        None,
+                                        dyn_tools.clone(),
+                                    )
+                                    .await
                                 {
-                                    max_cooldown = max_cooldown.max(s);
+                                    Ok(s) => {
+                                        let mut rec_sanitizer = StreamTextSanitizer::default();
+                                        let warn_msg = format!(
+                                            "El modelo ({}) no respondió; cambiamos a {}.",
+                                            active_model_id, dyn_dec.model_id
+                                        );
+                                        let (dyn_text, dyn_tool_calls) = consume_recovery_stream(
+                                            s,
+                                            &text_tx,
+                                            &dyn_dec.model_id,
+                                            &dyn_dec.provider,
+                                            "model_fallback",
+                                            warn_msg,
+                                            true,
+                                            &mut rec_sanitizer,
+                                            &mut has_streamed_text,
+                                            &mut last_streamed_ends_newline,
+                                            &mut needs_paragraph_break,
+                                            pid,
+                                            "dynamic fallback",
+                                        )
+                                        .await;
+                                        if !dyn_text.is_empty() || !dyn_tool_calls.is_empty() {
+                                            active_model_id = dyn_dec.model_id.clone();
+                                            active_provider = dyn_dec.provider.clone();
+                                            active_key_id = dyn_dec.key_id.clone();
+                                            tools = dyn_tools;
+                                            driver = dyn_driver;
+                                            assistant_text = dyn_text;
+                                            tool_calls = dyn_tool_calls;
+                                            recovered = true;
+                                            break;
+                                        } else {
+                                            self.note_empty_response(
+                                                &dyn_dec.model_id,
+                                                &dyn_dec.provider,
+                                                pcb.task_type,
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.note_model_failure(
+                                            &dyn_dec.model_id,
+                                            &dyn_dec.provider,
+                                            pcb.task_type,
+                                            Some(&e),
+                                        )
+                                        .await;
+                                    }
                                 }
                             }
-                            // Invalidate sticky so next request re-evaluates from scratch.
-                            let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-                            tr.invalidate_sticky(tenant_id).await;
                         }
+                    }
+
+                    if !recovered {
+                        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+                        let mut providers: Vec<&str> = vec![active_provider.as_str()];
+                        for fb in &decision.fallback_chain {
+                            providers.push(fb.provider.as_str());
+                        }
+                        let max_cooldown = self
+                            .cooldown_and_invalidate_sticky(&providers, tenant_id)
+                            .await;
 
                         let msg = if max_cooldown > 0 {
                             format!(
@@ -1378,7 +1726,7 @@ impl CognitiveHAL {
                         } else if decision.fallback_chain.is_empty() {
                             format!(
                                 "El modelo '{}' no devolvió respuesta y no hay \
-                                 modelos de respaldo configurados. Revisá tu \
+                                 otros modelos disponibles ahora. Revisá tu \
                                  selección de proveedor o agregá una alternativa.",
                                 active_model_id
                             )
@@ -1391,22 +1739,108 @@ impl CognitiveHAL {
                             )
                         };
 
-                        // Visible to the user as assistant text.
-                        let _ = text_tx.send(Ok(msg.clone()));
-                        // Also surface as a structured warning event for the UI.
-                        let wpayload = serde_json::json!({
-                            "category": "all_models_failed",
-                            "primary_model": active_model_id,
-                            "primary_provider": active_provider,
-                            "cooldown_secs": max_cooldown,
-                            "message": msg.clone(),
-                        });
-                        let _ = text_tx.send(Ok(format!("__WARNING__{}", wpayload)));
-
-                        drop(msg); // mark used so clippy is happy
+                        if !has_streamed_text {
+                            let _ =
+                                text_tx.send(Ok(format_model_error_meta_token(&msg, max_cooldown)));
+                        } else {
+                            let prefix = if !last_streamed_ends_newline {
+                                "\n\n"
+                            } else {
+                                ""
+                            };
+                            let _ = text_tx.send(Ok(format!("{}{}", prefix, msg)));
+                        }
                         tool_calls.clear();
                         finished = true;
                         break;
+                    }
+                }
+
+                // CORE-ARCH / GUARD: Si el ChatAgent (Nivel 0) no emitió tool calls pero prometió en texto
+                // que el equipo/supervisor trabajaría, o si el pedido del usuario es técnico (script, código, etc.),
+                // NO permitir alucinación en texto sin ejecución real. Sintetizar spawn_agent para garantizar
+                // que el supervisor se cree, aparezca en el Dashboard y ejecute la tarea en segundo plano.
+                if tool_calls.is_empty() && pcb.agent_id.is_none() && iteration == 0 {
+                    if Self::is_status_query(&pcb.memory_pointers.l1_instruction) {
+                        info!(
+                            pid = %pid,
+                            "CHAL Guard: ChatAgent Level 0 status query intercepted without tool call. Auto-synthesizing get_agent_status."
+                        );
+                        tool_calls.push(ToolCallRecord {
+                            id: format!("call_status_{}", uuid::Uuid::new_v4()),
+                            type_: "function".to_string(),
+                            function: FunctionCallRecord {
+                                name: "get_agent_status".to_string(),
+                                arguments: serde_json::json!({}).to_string(),
+                            },
+                        });
+                    } else if let Some(resolved_video_prompt) = Self::resolve_video_request_prompt(
+                        &pcb.memory_pointers.l1_instruction,
+                        &pcb.message_history,
+                        &assistant_text,
+                    ) {
+                        info!(
+                            pid = %pid,
+                            "CHAL Guard: ChatAgent Level 0 video request/nudge intercepted without tool call. Auto-synthesizing video_produce_auto."
+                        );
+                        tool_calls.push(ToolCallRecord {
+                            id: format!("call_video_{}", uuid::Uuid::new_v4()),
+                            type_: "function".to_string(),
+                            function: FunctionCallRecord {
+                                name: "video_produce_auto".to_string(),
+                                arguments: serde_json::json!({
+                                    "prompt": resolved_video_prompt,
+                                })
+                                .to_string(),
+                            },
+                        });
+                    } else {
+                        let is_video_advisory = Self::is_video_advisory_or_followup_query(
+                            &pcb.memory_pointers.l1_instruction,
+                        );
+                        let task_is_technical = !is_video_advisory
+                            && Self::has_technical_context(
+                                &pcb.memory_pointers.l1_instruction,
+                                &pcb.message_history,
+                            );
+                        let claims_delegation = Self::assistant_claims_delegation(&assistant_text);
+
+                        if claims_delegation || task_is_technical {
+                            let project_scope = Self::derive_task_scope(
+                                &pcb.memory_pointers.l1_instruction,
+                                &pcb.message_history,
+                            );
+                            let project_name = Self::derive_task_project_name(&project_scope);
+                            let task_type_str = match crate::pcb::infer_task_type(&project_scope) {
+                                crate::pcb::TaskType::Code => "code",
+                                crate::pcb::TaskType::Analysis => "analysis",
+                                crate::pcb::TaskType::Planning => "planning",
+                                _ => "code",
+                            };
+
+                            info!(
+                                pid = %pid,
+                                project = %project_name,
+                                claims_delegation,
+                                task_is_technical,
+                                "CHAL Guard: ChatAgent Level 0 delegating via synthesized spawn_agent tool call"
+                            );
+
+                            tool_calls.push(ToolCallRecord {
+                                id: format!("call_auto_{}", uuid::Uuid::new_v4()),
+                                type_: "function".to_string(),
+                                function: FunctionCallRecord {
+                                    name: "spawn_agent".to_string(),
+                                    arguments: serde_json::json!({
+                                        "role": "project_supervisor",
+                                        "name": project_name,
+                                        "scope": project_scope,
+                                        "task_type": task_type_str,
+                                    })
+                                    .to_string(),
+                                },
+                            });
+                        }
                     }
                 }
 
@@ -1420,7 +1854,39 @@ impl CognitiveHAL {
                 let role = AgentRole::ChatAgent;
 
                 for tc in &tool_calls {
-                    match autocorrect::validate_and_sanitize_tool_call(tc, &role) {
+                    // Never allow ChatAgent to hijack a video request into a background ProjectSupervisor.
+                    let rewritten_tc;
+                    let target_tc = if is_video_req && tc.function.name == "spawn_agent" {
+                        info!(
+                            pid = %pid,
+                            "CHAL Guard: Redirecting accidental spawn_agent on video request to video_produce_auto"
+                        );
+                        let resolved_prompt = Self::resolve_video_request_prompt(
+                            &pcb.memory_pointers.l1_instruction,
+                            &pcb.message_history,
+                            &assistant_text,
+                        )
+                        .unwrap_or_else(|| pcb.memory_pointers.l1_instruction.clone());
+                        rewritten_tc = ToolCallRecord {
+                            id: tc.id.clone(),
+                            type_: "function".to_string(),
+                            function: FunctionCallRecord {
+                                name: "video_produce_auto".to_string(),
+                                arguments: serde_json::json!({
+                                    "prompt": resolved_prompt,
+                                })
+                                .to_string(),
+                            },
+                        };
+                        &rewritten_tc
+                    } else {
+                        tc
+                    };
+                    match autocorrect::validate_and_sanitize_tool_call_with_extra(
+                        target_tc,
+                        &role,
+                        &extra_tools,
+                    ) {
                         Ok(sanitized) => validated_calls.push(sanitized),
                         Err(e) => validation_errors.push(e),
                     }
@@ -1496,6 +1962,20 @@ impl CognitiveHAL {
             }
 
             if tool_calls.is_empty() {
+                last_assistant_text = assistant_text.clone();
+                if !rendered_video_ids.is_empty() {
+                    let mut suffix = String::new();
+                    for vid_id in &rendered_video_ids {
+                        let tag = format!("[AEGIS_VIDEO_CARD:{}]", vid_id);
+                        if !last_assistant_text.contains(&tag) {
+                            suffix.push_str(&format!("\n\n{}", tag));
+                        }
+                    }
+                    if !suffix.is_empty() {
+                        let _ = text_tx.send(Ok(suffix.clone()));
+                        last_assistant_text.push_str(&suffix);
+                    }
+                }
                 finished = true;
                 break;
             }
@@ -1513,8 +1993,36 @@ impl CognitiveHAL {
             });
 
             // Ejecutar cada tool call e inyectar resultado
+            let mut refresh_module_tools = false;
             for tc in &tool_calls {
-                let result = self.execute_tool_call_internal(tc, pid, pcb).await;
+                if tc.function.name == "manage_modules" {
+                    refresh_module_tools = true;
+                }
+                if tc.function.name.starts_with("video_") {
+                    let msg = if tc.function.name == "video_produce_auto" {
+                        "🎬 Iniciando Aegis Video Studio: preparando escenas, locución y exportación MP4...".to_string()
+                    } else {
+                        format!(
+                            "🎬 Ejecutando {} en Aegis Video Studio...",
+                            tc.function.name
+                        )
+                    };
+                    let start_prog = serde_json::json!({
+                        "stage": tc.function.name,
+                        "progress": 0.05,
+                        "message": msg,
+                        "done": false,
+                    });
+                    let _ = text_tx.send(Ok(format!("__PROGRESS__{}", start_prog)));
+                }
+                let result = self
+                    .execute_tool_call_with_progress(tc, pid, pcb, Some(&text_tx))
+                    .await;
+                collect_rendered_video_card_ids(
+                    &tc.function.name,
+                    &result,
+                    &mut rendered_video_ids,
+                );
                 tracing::info!(
                     pid = %pid,
                     tool = %tc.function.name,
@@ -1527,6 +2035,10 @@ impl CognitiveHAL {
                     name: Some(tc.function.name.clone()),
                     ..Default::default()
                 });
+            }
+            if refresh_module_tools && !casual_turn {
+                extra_tools = load_extra_tools().await;
+                tools = build_tools_for(&active_provider, &extra_tools);
             }
         }
 
@@ -1546,6 +2058,18 @@ impl CognitiveHAL {
                 .tracker_ref()
                 .record_success_for_task(&active_model_id, pcb.task_type)
                 .await;
+        }
+
+        // CORE-378: Indexación episódica semántica automática del turno conversacional
+        if finished && !last_assistant_text.is_empty() {
+            let tenant = pcb.tenant_id.as_deref().unwrap_or("default");
+            let safe_user_text = Self::mask_api_keys_in_text(&pcb.memory_pointers.l1_instruction);
+            let safe_assistant_text = Self::mask_api_keys_in_text(last_assistant_text.trim());
+            let memory_entry = format!(
+                "User: {}\nAssistant: {}",
+                safe_user_text, safe_assistant_text
+            );
+            let _ = self.store_memory(tenant, &memory_entry).await;
         }
 
         Ok(())
@@ -1613,7 +2137,7 @@ impl CognitiveHAL {
         let mut messages = messages;
         const MAX_ITERATIONS: usize = 10;
 
-        let agent_task_type = {
+        let (agent_task_type, agent_role_meta, agent_model_pref) = {
             let orch = self.agent_orchestrator.read().await.clone();
             match orch {
                 Some(o) => o
@@ -1621,9 +2145,34 @@ impl CognitiveHAL {
                     .read()
                     .await
                     .get(&agent_id)
-                    .map(|n| n.task_type)
-                    .unwrap_or(crate::pcb::TaskType::Code),
-                None => crate::pcb::TaskType::Code,
+                    .map(|n| (n.task_type, n.role.clone(), n.model_preference))
+                    .unwrap_or((
+                        crate::pcb::TaskType::Code,
+                        AgentRole::Supervisor {
+                            name: "Agent".to_string(),
+                            scope: "generic".to_string(),
+                        },
+                        crate::scheduler::ModelPreference::HybridSmart,
+                    )),
+                None => (
+                    crate::pcb::TaskType::Code,
+                    AgentRole::Supervisor {
+                        name: "Agent".to_string(),
+                        scope: "generic".to_string(),
+                    },
+                    crate::scheduler::ModelPreference::HybridSmart,
+                ),
+            }
+        };
+        let mut tools = tools;
+        let mut tried_models: std::collections::HashSet<String> = std::collections::HashSet::new();
+        tried_models.insert(decision.model_id.clone());
+        let build_agent_tools = |prov: &str| -> Option<Vec<serde_json::Value>> {
+            let defs = ToolRegistry::tools_for(&agent_role_meta, &ProviderKind::from_string(prov));
+            if defs.is_empty() {
+                None
+            } else {
+                Some(defs)
             }
         };
 
@@ -1650,6 +2199,9 @@ impl CognitiveHAL {
                         .await;
                         let mut recovered = None;
                         for fb in &decision.fallback_chain {
+                            if !tried_models.insert(fb.model_id.clone()) {
+                                continue;
+                            }
                             let fb_driver = CloudProxyDriver::new_with_callback(
                                 Arc::clone(&self.http_client),
                                 fb.api_url.clone(),
@@ -1658,13 +2210,15 @@ impl CognitiveHAL {
                                 fb.key_id.clone(),
                                 make_rate_limited_cb(fb.key_id.clone()),
                             );
+                            let fb_tools = build_agent_tools(&fb.provider);
                             match fb_driver
-                                .generate_stream(local_messages.clone(), None, tools.clone())
+                                .generate_stream(local_messages.clone(), None, fb_tools.clone())
                                 .await
                             {
                                 Ok(s) => {
                                     active_model_id = fb.model_id.clone();
                                     active_provider = fb.provider.clone();
+                                    tools = fb_tools;
                                     driver = fb_driver;
                                     recovered = Some(s);
                                     break;
@@ -1677,6 +2231,68 @@ impl CognitiveHAL {
                                         Some(&e),
                                     )
                                     .await;
+                                }
+                            }
+                        }
+                        if recovered.is_none() {
+                            if let Some(r) = self.router_ref.read().await.clone() {
+                                let mut dyn_pcb = crate::pcb::PCB::new(
+                                    format!("agent_fb_{}", agent_id),
+                                    5,
+                                    String::new(),
+                                );
+                                dyn_pcb.task_type = agent_task_type;
+                                dyn_pcb.model_pref = agent_model_pref;
+                                dyn_pcb.agent_id = Some(agent_id);
+                                dyn_pcb.tenant_id = agent_tenant_id.clone();
+                                for _hop in 0..3u32 {
+                                    let dyn_dec = match r
+                                        .read()
+                                        .await
+                                        .decide_excluding(&dyn_pcb, &tried_models)
+                                        .await
+                                    {
+                                        Ok(d) => d,
+                                        Err(_) => break,
+                                    };
+                                    if !tried_models.insert(dyn_dec.model_id.clone()) {
+                                        break;
+                                    }
+                                    let dyn_driver = CloudProxyDriver::new_with_callback(
+                                        Arc::clone(&self.http_client),
+                                        dyn_dec.api_url.clone(),
+                                        dyn_dec.api_key.clone(),
+                                        dyn_dec.model_id.clone(),
+                                        dyn_dec.key_id.clone(),
+                                        make_rate_limited_cb(dyn_dec.key_id.clone()),
+                                    );
+                                    let dyn_tools = build_agent_tools(&dyn_dec.provider);
+                                    match dyn_driver
+                                        .generate_stream(
+                                            local_messages.clone(),
+                                            None,
+                                            dyn_tools.clone(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(s) => {
+                                            active_model_id = dyn_dec.model_id.clone();
+                                            active_provider = dyn_dec.provider.clone();
+                                            tools = dyn_tools;
+                                            driver = dyn_driver;
+                                            recovered = Some(s);
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            self.note_model_failure(
+                                                &dyn_dec.model_id,
+                                                &dyn_dec.provider,
+                                                agent_task_type,
+                                                Some(&e),
+                                            )
+                                            .await;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1727,10 +2343,18 @@ impl CognitiveHAL {
                             }
                         }
                         Err(e) => {
+                            let sys_err = SystemError::HardwareFailure(format!("{}", e));
+                            self.note_model_failure(
+                                &active_model_id,
+                                &active_provider,
+                                agent_task_type,
+                                Some(&sys_err),
+                            )
+                            .await;
                             if autocorrect_retries == 0 {
                                 let _ = text_tx.send(Err(e.clone()));
                             }
-                            return Err(SystemError::HardwareFailure(format!("{}", e)));
+                            return Err(sys_err);
                         }
                     }
                 }
@@ -1882,1077 +2506,6 @@ impl CognitiveHAL {
         Ok(())
     }
 
-    // --- CORE-275: Filesystem helpers ---
-
-    fn get_tenant_workspace(pcb: &PCB) -> std::path::PathBuf {
-        let data_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let tenant = pcb.tenant_id.as_deref().unwrap_or("default");
-        std::path::Path::new(&data_dir)
-            .join("users")
-            .join(tenant)
-            .join("workspace")
-    }
-
-    async fn get_approved_paths(pcb: &PCB) -> Vec<String> {
-        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-        let session_key = pcb.session_key.as_deref().unwrap_or("");
-        match crate::enclave::TenantDB::open(tenant_id, session_key) {
-            Ok(db) => db.get_approved_paths().unwrap_or_default(),
-            Err(_) => vec![],
-        }
-    }
-
-    /// CORE-276 (autonomous mode): whether the project the calling agent belongs
-    /// to is marked autonomous — i.e. the user opted this project into skipping
-    /// the external-path approval gate (full filesystem access, no per-path
-    /// prompts). Resolves the agent's project via the orchestrator tree, then
-    /// checks the tenant enclave. Defaults to false (locked down) on any miss.
-    async fn is_project_autonomous(&self, pcb: &PCB) -> bool {
-        let agent_id = match pcb.agent_id {
-            Some(id) => id,
-            None => return false,
-        };
-        let orchestrator = match self.agent_orchestrator.read().await.clone() {
-            Some(o) => o,
-            None => return false,
-        };
-        let project_id = {
-            let tree = orchestrator.tree.read().await;
-            match tree.get(&agent_id) {
-                Some(node) => node.project_id.clone(),
-                None => return false,
-            }
-        };
-        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-        let session_key = pcb.session_key.as_deref().unwrap_or("");
-        match crate::enclave::TenantDB::open(tenant_id, session_key) {
-            Ok(db) => db.is_project_autonomous(&project_id),
-            Err(_) => false,
-        }
-    }
-
-    fn strip_unc_prefix(path: &std::path::Path) -> std::path::PathBuf {
-        let path_str = path.to_string_lossy();
-        if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
-            if let Some(unc_stripped) = stripped.strip_prefix("UNC\\") {
-                std::path::PathBuf::from(format!(r"\\{}", unc_stripped))
-            } else {
-                std::path::PathBuf::from(stripped)
-            }
-        } else {
-            path.to_path_buf()
-        }
-    }
-
-    fn resolve_path(
-        workspace: &std::path::Path,
-        input_path: &str,
-        approved_paths: &[String],
-        autonomous: bool,
-    ) -> Result<std::path::PathBuf, String> {
-        let candidate = if std::path::Path::new(input_path).is_absolute() {
-            std::path::PathBuf::from(input_path)
-        } else {
-            workspace.join(input_path)
-        };
-
-        // Canonicalizar para resolver .. y symlinks.
-        // Si el archivo no existe aún (write_file), canonicalizar el padre.
-        let canonical = if candidate.exists() {
-            candidate
-                .canonicalize()
-                .map_err(|e| format!("{{\"error\":\"invalid_path\",\"detail\":\"{}\"}}", e))?
-        } else {
-            let parent = candidate.parent().ok_or_else(|| {
-                "{\"error\":\"invalid_path\",\"detail\":\"no parent\"}".to_string()
-            })?;
-            let canonical_parent = parent
-                .canonicalize()
-                .unwrap_or_else(|_| parent.to_path_buf());
-            canonical_parent.join(candidate.file_name().unwrap_or_default())
-        };
-
-        // CORE-FIX: canonicalize workspace BEFORE comparing. Without this, a
-        // workspace that contains a symlink anywhere in its path (e.g. /var/lib
-        // is a symlink to /mnt/data/lib on the host) produces a canonical
-        // candidate under /mnt/data/lib/... that does NOT start_with the
-        // original /var/lib/... — and we'd incorrectly reject legitimate paths.
-        let workspace_canonical = workspace
-            .canonicalize()
-            .unwrap_or_else(|_| workspace.to_path_buf());
-
-        let canonical_clean = Self::strip_unc_prefix(&canonical);
-        let workspace_canonical_clean = Self::strip_unc_prefix(&workspace_canonical);
-
-        if canonical_clean.starts_with(&workspace_canonical_clean) {
-            return Ok(canonical);
-        }
-
-        // Autonomous project: the user opted this project into full filesystem
-        // access, so external paths are allowed without per-path approval.
-        if autonomous {
-            return Ok(canonical);
-        }
-
-        // Path externo — verificar aprobaciones
-        let canonical_str = canonical_clean.to_string_lossy().to_string();
-        let approved = approved_paths.iter().any(|a| {
-            let approved_clean = Self::strip_unc_prefix(std::path::Path::new(a));
-            canonical_clean.starts_with(&approved_clean)
-        });
-
-        if approved {
-            Ok(canonical)
-        } else {
-            Err(format!(
-                "{{\"error\":\"path_requires_approval\",\"path\":\"{}\",\"message\":\"Este path está fuera del workspace. El usuario debe aprobarlo primero.\"}}",
-                canonical_str
-            ))
-        }
-    }
-
-    /// CORE-261: Ejecuta un tool call interno y retorna el resultado como String.
-    async fn execute_tool_call_internal(
-        &self,
-        tc: &ToolCallRecord,
-        _pid: &str,
-        pcb: &PCB,
-    ) -> String {
-        let args: serde_json::Value =
-            serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-
-        match tc.function.name.as_str() {
-            "spawn_agent" => {
-                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
-                match orchestrator_opt {
-                    None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
-                    Some(orchestrator) => {
-                        let name = args["name"].as_str().map(String::from);
-                        let scope = args["scope"].as_str().unwrap_or("").to_string();
-                        let task_type_str = args["task_type"].as_str().unwrap_or("planning");
-                        let task_type = Some(crate::syscalls::parse_task_type(task_type_str));
-
-                        if let Some(caller_id) = pcb.agent_id {
-                            let role_str = args["role"].as_str().unwrap_or("").to_string();
-                            let agent_role = match role_str.to_lowercase().as_str() {
-                                "project_supervisor" => {
-                                    crate::agents::node::AgentRole::ProjectSupervisor {
-                                        name: name.clone().unwrap_or_else(|| scope.clone()),
-                                        description: scope.clone(),
-                                    }
-                                }
-                                "supervisor" => crate::agents::node::AgentRole::Supervisor {
-                                    name: name.clone().unwrap_or_else(|| scope.clone()),
-                                    scope: scope.clone(),
-                                },
-                                _ => crate::agents::node::AgentRole::Specialist {
-                                    scope: scope.clone(),
-                                },
-                            };
-
-                            let call = crate::agents::message::AgentToolCall::Spawn {
-                                role: agent_role,
-                                name,
-                                scope,
-                                task_type,
-                            };
-
-                            match orchestrator.handle_tool_call(caller_id, call).await {
-                                Ok(result) => result,
-                                Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                            }
-                        } else {
-                            let project_name = name
-                                .clone()
-                                .unwrap_or_else(|| scope.chars().take(40).collect());
-
-                            match orchestrator
-                                .create_project(
-                                    project_name.clone(),
-                                    scope,
-                                    task_type,
-                                    pcb.tenant_id.clone(),
-                                )
-                                .await
-                            {
-                                Ok(agent_id) => {
-                                    let task = pcb.memory_pointers.l1_instruction.clone();
-                                    if !task.is_empty() {
-                                        if let Err(e) =
-                                            orchestrator.dispatch(agent_id, task, vec![]).await
-                                        {
-                                            tracing::warn!(
-                                                agent = %agent_id,
-                                                "CORE-264: dispatch post-spawn falló: {}",
-                                                e
-                                            );
-                                        } else {
-                                            tracing::info!(
-                                                agent = %agent_id,
-                                                project = %project_name,
-                                                "CORE-264: Dispatch automático enviado al supervisor recién creado."
-                                            );
-                                        }
-                                    }
-                                    format!(
-                                        "{{\"status\":\"spawned\",\"project\":\"{}\",\"agent_id\":\"{}\"}}",
-                                        project_name,
-                                        agent_id
-                                    )
-                                }
-                                Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                            }
-                        }
-                    }
-                }
-            }
-
-            "query_agent" => {
-                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
-                match orchestrator_opt {
-                    None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
-                    Some(orchestrator) => {
-                        let caller_id = match pcb.agent_id {
-                            Some(id) => id,
-                            None => {
-                                return "{\"error\":\"query_agent requiere agent_id en PCB\"}"
-                                    .to_string()
-                            }
-                        };
-                        let project = args["project"].as_str().unwrap_or("").to_string();
-                        let question = args["question"].as_str().unwrap_or("").to_string();
-                        let call =
-                            crate::agents::message::AgentToolCall::Query { project, question };
-                        match orchestrator.handle_tool_call(caller_id, call).await {
-                            Ok(result) => result,
-                            Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                        }
-                    }
-                }
-            }
-
-            "call_plugin" => {
-                let plugin_name = args["plugin_name"].as_str().unwrap_or("").to_string();
-                let plugin_args = args["args"]
-                    .as_object()
-                    .map(|o| serde_json::Value::Object(o.clone()).to_string())
-                    .unwrap_or_else(|| "{}".to_string());
-                let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-                let pm = self.plugin_manager.read().await;
-                match pm
-                    .execute_plugin(
-                        tenant_id,
-                        &plugin_name,
-                        &plugin_args,
-                        pcb.session_key.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(result) => result,
-                    // CORE-253: mensaje legible al usuario cuando el plugin no existe.
-                    Err(crate::plugins::PluginError::FunctionNotFound(_)) => format!(
-                        "El plugin '{}' no está instalado o no está activo en este tenant. \
-                         Podés activarlo desde Configuración → Plugins.",
-                        plugin_name
-                    ),
-                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                }
-            }
-
-            // CORE-263: supervisor pausa su ejecución esperando respuesta del usuario
-            "ask_user" => {
-                let question = args["question"].as_str().unwrap_or("").to_string();
-                let context = args
-                    .get("context")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-
-                let agent_uuid = match pcb.agent_id {
-                    Some(id) => id,
-                    None => return "{\"error\":\"ask_user requiere agent_id en PCB\"}".to_string(),
-                };
-
-                // Autonomous project: don't pause for the user. Auto-approve so the
-                // supervisor proceeds without per-question permission prompts — the
-                // behavioural half of "omitir permisos por proyecto" (the gate
-                // bypass in resolve_path is the filesystem half).
-                if self.is_project_autonomous(pcb).await {
-                    tracing::info!(
-                        agent = %agent_uuid,
-                        question = %question,
-                        "ask_user auto-approved — project is in autonomous mode"
-                    );
-                    return serde_json::json!({
-                        "user_answer": "Modo autónomo activo en este proyecto: tenés acceso completo, procedé sin pedir permiso."
-                    })
-                    .to_string();
-                }
-
-                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
-                let orchestrator = match orchestrator_opt {
-                    Some(o) => o,
-                    None => return "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
-                };
-
-                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
-                orchestrator.register_user_reply(agent_uuid, reply_tx).await;
-
-                let project_name = {
-                    let tree = orchestrator.tree.read().await;
-                    tree.get(&agent_uuid)
-                        .map(|n| n.project_id.clone())
-                        .unwrap_or_else(|| "proyecto".to_string())
-                };
-
-                {
-                    let mut tree = orchestrator.tree.write().await;
-                    if let Some(node) = tree.get_mut(&agent_uuid) {
-                        node.set_state(crate::agents::node::AgentState::WaitingUser);
-                    }
-                }
-
-                tracing::info!(
-                    agent = %agent_uuid,
-                    question = %question,
-                    "CORE-263: supervisor pausado esperando respuesta del usuario"
-                );
-
-                // CORE-268: notificar a la UI que el supervisor necesita respuesta.
-                // Guardamos también el evento para re-enviarlo si el usuario
-                // reconecta el WebSocket mientras el supervisor sigue esperando.
-                let question_event = crate::agents::event::AgentEvent::SupervisorQuestion {
-                    agent_id: agent_uuid,
-                    project_name: project_name.clone(),
-                    question: question.clone(),
-                    context: context.clone(),
-                    timestamp: chrono::Utc::now(),
-                };
-                orchestrator
-                    .set_pending_question(agent_uuid, question_event.clone())
-                    .await;
-                orchestrator.emit_event(question_event);
-
-                match tokio::time::timeout(std::time::Duration::from_secs(600), reply_rx).await {
-                    Ok(Ok(answer)) => {
-                        orchestrator.clear_pending_question(&agent_uuid).await;
-                        {
-                            let mut tree = orchestrator.tree.write().await;
-                            if let Some(node) = tree.get_mut(&agent_uuid) {
-                                node.set_state(crate::agents::node::AgentState::Running);
-                            }
-                        }
-                        orchestrator.emit_event(
-                            crate::agents::event::AgentEvent::SupervisorResumed {
-                                agent_id: agent_uuid,
-                            },
-                        );
-                        format!("{{\"user_answer\": {}}}", serde_json::json!(answer))
-                    }
-                    _ => {
-                        orchestrator.clear_pending_question(&agent_uuid).await;
-                        {
-                            let mut tree = orchestrator.tree.write().await;
-                            if let Some(node) = tree.get_mut(&agent_uuid) {
-                                node.set_state(crate::agents::node::AgentState::Running);
-                            }
-                        }
-                        orchestrator.emit_event(
-                            crate::agents::event::AgentEvent::SupervisorTimedOut {
-                                agent_id: agent_uuid,
-                                project_name,
-                            },
-                        );
-                        "{\"user_answer\": null, \"reason\": \"timeout\"}".to_string()
-                    }
-                }
-            }
-
-            // CORE-276: supervisor aprueba un path externo tras recibir OK del usuario
-            "approve_path" => {
-                let path = args["path"].as_str().unwrap_or("").to_string();
-
-                if path.is_empty() {
-                    return "{\"error\":\"empty_path\"}".to_string();
-                }
-
-                if !std::path::Path::new(&path).exists() {
-                    return format!("{{\"error\":\"path_not_found\",\"path\":\"{}\"}}", path);
-                }
-
-                let tenant_id = match &pcb.tenant_id {
-                    Some(t) => t.clone(),
-                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
-                };
-                let session_key = pcb.session_key.as_deref().unwrap_or("");
-
-                match crate::enclave::TenantDB::open(&tenant_id, session_key) {
-                    Ok(db) => match db.add_approved_path(&path) {
-                        Ok(_) => serde_json::json!({
-                            "status": "approved",
-                            "path": path
-                        })
-                        .to_string(),
-                        Err(e) => {
-                            format!("{{\"error\":\"persist_failed\",\"detail\":\"{}\"}}", e)
-                        }
-                    },
-                    Err(e) => {
-                        format!("{{\"error\":\"enclave_open_failed\",\"detail\":\"{}\"}}", e)
-                    }
-                }
-            }
-
-            // CORE-277: búsqueda web para specialists
-            "web_search" => {
-                let query = args["query"].as_str().unwrap_or("").to_string();
-                let max_results = args
-                    .get("max_results")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(5)
-                    .min(10) as usize;
-
-                if query.is_empty() {
-                    return "{\"error\":\"empty_query\"}".to_string();
-                }
-
-                let api_key = match std::env::var("BRAVE_SEARCH_API_KEY").ok() {
-                    Some(k) if !k.is_empty() => k,
-                    _ => {
-                        return "{\"error\":\"web_search_not_configured\",\"detail\":\"BRAVE_SEARCH_API_KEY not set\"}".to_string();
-                    }
-                };
-
-                match self
-                    .http_client
-                    .get("https://api.search.brave.com/res/v1/web/search")
-                    .header("X-Subscription-Token", api_key)
-                    .header("Accept", "application/json")
-                    .query(&[("q", &query), ("count", &max_results.to_string())])
-                    .send()
-                    .await
-                {
-                    Ok(resp) => match resp.json::<serde_json::Value>().await {
-                        Ok(data) => {
-                            let empty = vec![];
-                            let raw = data["web"]["results"].as_array().unwrap_or(&empty);
-                            let results: Vec<serde_json::Value> = raw
-                                .iter()
-                                .take(max_results)
-                                .map(|r| {
-                                    serde_json::json!({
-                                        "title": r["title"],
-                                        "url": r["url"],
-                                        "snippet": r["description"]
-                                    })
-                                })
-                                .collect();
-                            let count = results.len();
-                            serde_json::json!({
-                                "results": results,
-                                "query": query,
-                                "count": count
-                            })
-                            .to_string()
-                        }
-                        Err(e) => {
-                            format!("{{\"error\":\"parse_failed\",\"detail\":\"{}\"}}", e)
-                        }
-                    },
-                    Err(e) => format!("{{\"error\":\"search_failed\",\"detail\":\"{}\"}}", e),
-                }
-            }
-
-            // CORE-263: Chat Agent entrega la respuesta del usuario al supervisor pausado
-            "answer_supervisor" => {
-                let agent_id_str = args["agent_id"].as_str().unwrap_or("");
-                let answer = args["answer"].as_str().unwrap_or("").to_string();
-
-                let agent_uuid = match agent_id_str.parse::<uuid::Uuid>() {
-                    Ok(id) => id,
-                    Err(_) => return "{\"error\":\"agent_id inválido\"}".to_string(),
-                };
-
-                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
-                match orchestrator_opt {
-                    None => "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
-                    Some(orchestrator) => {
-                        if orchestrator.answer_user_question(agent_uuid, answer).await {
-                            "{\"status\":\"answer_delivered\"}".to_string()
-                        } else {
-                            "{\"status\":\"no_supervisor_waiting\"}".to_string()
-                        }
-                    }
-                }
-            }
-
-            // CORE-275: Specialist filesystem tools
-            "read_file" => {
-                let input_path = args["path"].as_str().unwrap_or("").to_string();
-                let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let length = args.get("length").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
-
-                let workspace = Self::get_tenant_workspace(pcb);
-                let approved = Self::get_approved_paths(pcb).await;
-                let autonomous = self.is_project_autonomous(pcb).await;
-
-                let resolved =
-                    match Self::resolve_path(&workspace, &input_path, &approved, autonomous) {
-                        Ok(p) => p,
-                        Err(e) => return e,
-                    };
-
-                match tokio::fs::read_to_string(&resolved).await {
-                    Ok(content) => {
-                        let lines: Vec<&str> = content.lines().collect();
-                        let total = lines.len();
-                        let start = offset.min(total);
-                        let end = (offset + length).min(total);
-                        let slice = &lines[start..end];
-                        serde_json::json!({
-                            "content": slice.join("\n"),
-                            "total_lines": total,
-                            "offset": offset,
-                            "returned_lines": slice.len()
-                        })
-                        .to_string()
-                    }
-                    Err(e) => format!("{{\"error\":\"read_failed\",\"detail\":\"{}\"}}", e),
-                }
-            }
-
-            "write_file" => {
-                use tokio::io::AsyncWriteExt;
-
-                let input_path = args["path"].as_str().unwrap_or("").to_string();
-                let content = args["content"].as_str().unwrap_or("").to_string();
-                let mode = args
-                    .get("mode")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("rewrite");
-
-                let workspace = Self::get_tenant_workspace(pcb);
-                let autonomous = self.is_project_autonomous(pcb).await;
-
-                // write_file stays inside the workspace — unless the project is
-                // autonomous, in which case external writes are allowed too.
-                let resolved = match Self::resolve_path(&workspace, &input_path, &[], autonomous) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        return "{\"error\":\"write_outside_workspace\",\"message\":\"write_file solo puede escribir dentro del workspace del tenant.\"}".to_string();
-                    }
-                };
-
-                // Crear directorios intermedios si es necesario
-                if let Some(parent) = resolved.parent() {
-                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return format!("{{\"error\":\"mkdir_failed\",\"detail\":\"{}\"}}", e);
-                    }
-                }
-
-                let result = if mode == "append" {
-                    match tokio::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&resolved)
-                        .await
-                    {
-                        Ok(mut f) => f.write_all(content.as_bytes()).await,
-                        Err(e) => Err(e),
-                    }
-                } else {
-                    tokio::fs::write(&resolved, content.as_bytes()).await
-                };
-
-                match result {
-                    Ok(_) => serde_json::json!({
-                        "status": "written",
-                        "path": resolved.to_string_lossy()
-                    })
-                    .to_string(),
-                    Err(e) => format!("{{\"error\":\"write_failed\",\"detail\":\"{}\"}}", e),
-                }
-            }
-
-            "list_files" => {
-                let input_path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-                let depth = args
-                    .get("depth")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(2)
-                    .min(4) as usize;
-
-                let workspace = Self::get_tenant_workspace(pcb);
-                let approved = Self::get_approved_paths(pcb).await;
-                let autonomous = self.is_project_autonomous(pcb).await;
-
-                let resolved =
-                    match Self::resolve_path(&workspace, input_path, &approved, autonomous) {
-                        Ok(p) => p,
-                        Err(e) => return e,
-                    };
-
-                fn walk(dir: &std::path::Path, max_depth: usize, current: usize) -> Vec<String> {
-                    if current > max_depth {
-                        return vec![];
-                    }
-                    let mut entries = vec![];
-                    if let Ok(rd) = std::fs::read_dir(dir) {
-                        let mut items: Vec<_> = rd.flatten().collect();
-                        items.sort_by_key(|e| e.file_name());
-                        for entry in items {
-                            let path = entry.path();
-                            let name = path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-                            if name.starts_with('.') || name == "target" || name == "node_modules" {
-                                continue;
-                            }
-                            if path.is_dir() {
-                                entries.push(format!("[DIR]  {}", name));
-                                for s in walk(&path, max_depth, current + 1) {
-                                    entries.push(format!("  {}", s));
-                                }
-                            } else {
-                                entries.push(format!("[FILE] {}", name));
-                            }
-                        }
-                    }
-                    entries
-                }
-
-                let listing = walk(&resolved, depth, 0);
-                serde_json::json!({
-                    "path": resolved.to_string_lossy(),
-                    "entries": listing
-                })
-                .to_string()
-            }
-
-            // CORE-272: Chat Agent consulta el ledger de un proyecto por nombre
-            "get_project_ledger" => {
-                let project_name = args["project_name"].as_str().unwrap_or("").to_string();
-
-                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
-                let orchestrator = match orchestrator_opt {
-                    Some(o) => o,
-                    None => return "{\"error\":\"orchestrator_not_configured\"}".to_string(),
-                };
-
-                let project_id = {
-                    let tree = orchestrator.tree.read().await;
-                    tree.all_nodes()
-                        .iter()
-                        .filter_map(|n| {
-                            if let crate::agents::node::AgentRole::ProjectSupervisor {
-                                name, ..
-                            } = &n.role
-                            {
-                                if name.to_lowercase().contains(&project_name.to_lowercase()) {
-                                    return Some(n.project_id.clone());
-                                }
-                            }
-                            None
-                        })
-                        .next()
-                };
-
-                let project_id = match project_id {
-                    Some(id) => id,
-                    None => {
-                        return format!(
-                            "{{\"error\":\"project_not_found\",\"project\":\"{}\"}}",
-                            project_name
-                        )
-                    }
-                };
-
-                let tenant_id = match &pcb.tenant_id {
-                    Some(t) => t.clone(),
-                    None => return "{\"error\":\"no_tenant_id\"}".to_string(),
-                };
-
-                let persistence = crate::agents::persistence::AgentPersistence::from_env();
-                match persistence.load_ledger(&tenant_id, &project_id) {
-                    Ok(Some(ledger)) => serde_json::to_string(&ledger)
-                        .unwrap_or_else(|_| "{\"error\":\"serialization_error\"}".to_string()),
-                    Ok(None) => format!(
-                        "{{\"error\":\"no_ledger\",\"project_id\":\"{}\"}}",
-                        project_id
-                    ),
-                    Err(e) => format!("{{\"error\":\"load_failed\",\"detail\":\"{}\"}}", e),
-                }
-            }
-
-            // CORE-273: Supervisores escriben al ledger del proyecto
-            "add_ledger_entry" => {
-                let content = args["content"].as_str().unwrap_or("").to_string();
-                if content.is_empty() {
-                    return "{\"error\":\"content is required\"}".to_string();
-                }
-
-                let agent_uuid = match pcb.agent_id {
-                    Some(id) => id,
-                    None => {
-                        return "{\"error\":\"add_ledger_entry requiere agent_id en PCB\"}"
-                            .to_string()
-                    }
-                };
-
-                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
-                let orchestrator = match orchestrator_opt {
-                    Some(o) => o,
-                    None => return "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
-                };
-
-                let tenant_id = pcb
-                    .tenant_id
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string());
-
-                match orchestrator
-                    .add_project_ledger_entry(&tenant_id, agent_uuid, content)
-                    .await
-                {
-                    Ok(_) => "{\"status\":\"recorded\"}".to_string(),
-                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                }
-            }
-
-            // CORE-289: Chat Agent consulta el estado actual del árbol de agentes
-            // CORE-300: filtrar por tenant_id del PCB — aislamiento cross-tenant.
-            "get_agent_status" => {
-                let project_name = args
-                    .get("project_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
-                let orchestrator = match orchestrator_opt {
-                    Some(o) => o,
-                    None => return "{\"error\":\"orchestrator_not_configured\"}".to_string(),
-                };
-
-                let tenant_id = pcb
-                    .tenant_id
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string());
-                let snapshot = orchestrator.tree_snapshot_for_tenant(&tenant_id).await;
-
-                let filtered: Vec<_> = if project_name.is_empty() {
-                    snapshot
-                } else {
-                    snapshot
-                        .into_iter()
-                        .filter(|n| {
-                            n.project_id
-                                .to_lowercase()
-                                .contains(&project_name.to_lowercase())
-                                || n.role_label
-                                    .to_lowercase()
-                                    .contains(&project_name.to_lowercase())
-                        })
-                        .collect()
-                };
-
-                if filtered.is_empty() {
-                    return serde_json::json!({
-                        "status": "no_active_agents",
-                        "project": project_name,
-                        "message": "No active agents for this project. You can spawn a new supervisor."
-                    })
-                    .to_string();
-                }
-
-                serde_json::to_string(&serde_json::json!({
-                    "agents": filtered.iter().map(|n| serde_json::json!({
-                        "role": n.role_label,
-                        "state": n.state,
-                        "project": n.project_id,
-                        "last_report": n.last_report,
-                        "degraded": n.degraded,
-                    })).collect::<Vec<_>>()
-                }))
-                .unwrap_or_else(|_| "{\"error\":\"serialization_error\"}".to_string())
-            }
-
-            // CORE-FIX: Antes no existía handler para `report` — la tool definida en
-            // ToolRegistry caía en el fallback "Unknown tool: report" y los agentes
-            // del árbol no podían reportar status=error|blocked al supervisor padre.
-            // Ahora delegamos a AgentOrchestrator::handle_tool_call que ya tiene la
-            // lógica para setear AgentState y last_report en el nodo.
-            "report" => {
-                let caller_id = match pcb.agent_id {
-                    Some(id) => id,
-                    None => {
-                        return "{\"error\":\"report requires agent_id in PCB (only tree agents can report)\"}".to_string();
-                    }
-                };
-                let orchestrator_opt = self.agent_orchestrator.read().await.clone();
-                let orchestrator = match orchestrator_opt {
-                    Some(o) => o,
-                    None => return "{\"error\":\"AgentOrchestrator not configured\"}".to_string(),
-                };
-
-                let status_str = args["status"].as_str().unwrap_or("completed");
-                let status = match status_str.to_lowercase().as_str() {
-                    "error" => crate::agents::message::ToolCallReportStatus::Error,
-                    "blocked" => crate::agents::message::ToolCallReportStatus::Blocked,
-                    _ => crate::agents::message::ToolCallReportStatus::Completed,
-                };
-                let summary = args["summary"].as_str().unwrap_or("").to_string();
-                let observations = args
-                    .get("observations")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-
-                let call = crate::agents::message::AgentToolCall::Report {
-                    status,
-                    summary,
-                    observations,
-                };
-                match orchestrator.handle_tool_call(caller_id, call).await {
-                    Ok(result) => result,
-                    Err(e) => format!("{{\"error\":\"{}\"}}", e),
-                }
-            }
-
-            // CORE-FIX: Specialists declaran "Verify the result (build, test, lint)"
-            // en su prompt pero antes no tenían ninguna tool para hacerlo. Esta tool
-            // permite ejecutar comandos de verificación con una whitelist estricta,
-            // timeout de 60s y output truncado a 8KB. No es un shell general.
-            "execute_command" => {
-                const ALLOWED_PROGRAMS: &[&str] = &[
-                    "cargo", "rustc", "npm", "pnpm", "yarn", "git", "python", "python3", "pytest",
-                    "node", "deno", "bun", "go", "gradle", "mvn", "make", "ls", "echo", "pwd",
-                    "cat", "head", "tail", "protoc",
-                ];
-                let timeout_secs = std::env::var("AEGIS_COMMAND_TIMEOUT")
-                    .ok()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(300); // Generous 5-minute default
-                const MAX_OUTPUT_BYTES: usize = 8 * 1024;
-
-                let command = args["command"].as_str().unwrap_or("").trim().to_string();
-                if command.is_empty() {
-                    return "{\"error\":\"empty_command\"}".to_string();
-                }
-
-                let program = command.split_whitespace().next().unwrap_or("");
-                if !ALLOWED_PROGRAMS.contains(&program) {
-                    return format!(
-                        "{{\"error\":\"command_not_allowed\",\"detail\":\"'{}' is not whitelisted\",\"allowed\":{}}}",
-                        program,
-                        serde_json::to_string(ALLOWED_PROGRAMS).unwrap_or_else(|_| "[]".to_string())
-                    );
-                }
-
-                let mut cmd_str = command.clone();
-                if cfg!(windows) {
-                    // Quick translation of common Unix shell commands to Windows CMD builtins
-                    if cmd_str.starts_with("ls ") || cmd_str == "ls" {
-                        cmd_str = cmd_str.replace("ls", "dir");
-                    }
-                    if cmd_str.starts_with("cat ") {
-                        cmd_str = cmd_str.replace("cat", "type");
-                    }
-                    if cmd_str.starts_with("rm -rf ") {
-                        let target = cmd_str.strip_prefix("rm -rf ").unwrap_or("").trim();
-                        cmd_str = format!("rmdir /s /q {}", target);
-                    }
-                    if cmd_str == "pwd" {
-                        cmd_str = "cd".to_string();
-                    }
-                    if cmd_str == "clear" {
-                        cmd_str = "cls".to_string();
-                    }
-                }
-
-                // --- Auto-installation check on Linux ---
-                if cfg!(target_os = "linux") {
-                    fn check_tool_exists(prog: &str) -> bool {
-                        std::process::Command::new("sh")
-                            .args(["-c", &format!("command -v {}", prog)])
-                            .output()
-                            .map(|o| o.status.success())
-                            .unwrap_or_else(|_| {
-                                std::process::Command::new("which")
-                                    .arg(prog)
-                                    .output()
-                                    .map(|o| o.status.success())
-                                    .unwrap_or(false)
-                            })
-                    }
-
-                    fn install_tool_on_linux(prog: &str) {
-                        let package = match prog {
-                            "git" => "git",
-                            "protoc" | "protobuf" => "protobuf-compiler",
-                            "node" | "npm" => "nodejs npm",
-                            "cargo" | "rustc" => "rustc cargo",
-                            "make" | "gcc" => "build-essential pkg-config libssl-dev",
-                            _ => return,
-                        };
-
-                        println!("[AEGIS] La herramienta '{}' no esta instalada. Intentando instalar el paquete '{}' de forma rapida...", prog, package);
-
-                        // Try fast apt-get install directly first (saves 10-20 seconds!)
-                        let fast_cmd = format!("apt-get install -y {}", package);
-                        let output = std::process::Command::new("sh")
-                            .args(["-c", &fast_cmd])
-                            .output();
-
-                        if let Ok(ref out) = output {
-                            if out.status.success() {
-                                println!(
-                                    "[AEGIS] Instale con exito '{}' de forma rapida.",
-                                    package
-                                );
-                                return;
-                            }
-                        }
-
-                        // Fallback: update package list and try again
-                        println!("[AEGIS] Intento rapido fallido. Actualizando repositorio e instalando '{}'...", package);
-                        let cmd = format!("apt-get update && apt-get install -y {}", package);
-                        let output = std::process::Command::new("sh").args(["-c", &cmd]).output();
-
-                        if let Ok(ref out) = output {
-                            if out.status.success() {
-                                println!(
-                                    "[AEGIS] Instale con exito '{}' via apt-get con actualizacion.",
-                                    package
-                                );
-                                return;
-                            }
-                        }
-
-                        // Try with sudo if previous attempts failed
-                        let sudo_cmd =
-                            format!("sudo apt-get update && sudo apt-get install -y {}", package);
-                        let _ = std::process::Command::new("sh")
-                            .args(["-c", &sudo_cmd])
-                            .output();
-                    }
-
-                    // Check primary program
-                    let exists = if program == "cargo" || program == "rustc" {
-                        check_tool_exists("cargo") && check_tool_exists("rustc")
-                    } else {
-                        check_tool_exists(program)
-                    };
-
-                    if !exists {
-                        install_tool_on_linux(program);
-                    }
-
-                    // Check protobuf compiler if program is cargo or make
-                    if (program == "cargo" || program == "make") && !check_tool_exists("protoc") {
-                        install_tool_on_linux("protoc");
-                    }
-
-                    // Check gcc/make compiler tools if program is cargo or make
-                    if (program == "cargo" || program == "make")
-                        && (!check_tool_exists("gcc") || !check_tool_exists("make"))
-                    {
-                        install_tool_on_linux("make");
-                    }
-                }
-
-                let workspace = Self::get_tenant_workspace(pcb);
-                // CORE-FIX: make sure the workspace exists before we try to run
-                // anything in it — otherwise a specialist's first command
-                // (typically `git clone …` on a brand-new tenant) fails at
-                // spawn time with "No such file or directory" because
-                // current_dir() points at a path that was never created.
-                if let Err(e) = tokio::fs::create_dir_all(&workspace).await {
-                    return format!(
-                        "{{\"error\":\"workspace_unavailable\",\"detail\":\"{}\"}}",
-                        e
-                    );
-                }
-                let cwd_arg = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
-                let cwd = match Self::resolve_path(&workspace, cwd_arg, &[], false) {
-                    Ok(p) if p.is_dir() => p,
-                    _ => workspace.clone(),
-                };
-
-                // OPTIMIZATION: Configure Shared Cargo Target Directory cache to speed up subagent rust checks from minutes to seconds
-                let central_target = workspace
-                    .parent()
-                    .unwrap_or(&workspace)
-                    .join("cargo_target_cache");
-
-                let output_result = if cfg!(windows) {
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        tokio::process::Command::new("cmd")
-                            .args(["/C", cmd_str.as_str()])
-                            .current_dir(&cwd)
-                            .env("CARGO_TARGET_DIR", &central_target)
-                            .output(),
-                    )
-                    .await
-                } else {
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(timeout_secs),
-                        tokio::process::Command::new("sh")
-                            .args(["-c", cmd_str.as_str()])
-                            .current_dir(&cwd)
-                            .env("CARGO_TARGET_DIR", &central_target)
-                            .output(),
-                    )
-                    .await
-                };
-
-                fn truncate_output(s: String, max: usize) -> String {
-                    if s.len() > max {
-                        let half = max / 2;
-                        let head: String = s.chars().take(half).collect();
-                        let tail: String = s
-                            .chars()
-                            .skip(s.chars().count().saturating_sub(half))
-                            .collect();
-                        format!("{}\n\n[...truncated...]\n\n{}", head, tail)
-                    } else {
-                        s
-                    }
-                }
-
-                match output_result {
-                    Ok(Ok(output)) => {
-                        let stdout = truncate_output(
-                            String::from_utf8_lossy(&output.stdout).to_string(),
-                            MAX_OUTPUT_BYTES,
-                        );
-                        let stderr = truncate_output(
-                            String::from_utf8_lossy(&output.stderr).to_string(),
-                            MAX_OUTPUT_BYTES,
-                        );
-                        serde_json::json!({
-                            "exit_code": output.status.code(),
-                            "stdout": stdout,
-                            "stderr": stderr,
-                            "cwd": cwd.to_string_lossy(),
-                        })
-                        .to_string()
-                    }
-                    Ok(Err(e)) => {
-                        format!("{{\"error\":\"spawn_failed\",\"detail\":\"{}\"}}", e)
-                    }
-                    Err(_) => format!(
-                        "{{\"error\":\"timeout\",\"detail\":\"command exceeded {}s\"}}",
-                        timeout_secs
-                    ),
-                }
-            }
-
-            other => format!("{{\"error\":\"Unknown tool: {}\"}}", other),
-        }
-    }
-
     /// Almacena un fragmento de texto en la base de datos neuronal (L3).
     pub async fn store_memory(&self, tenant_id: &str, text: &str) -> Result<String, SystemError> {
         let driver = self.embedding_driver.as_ref().ok_or_else(|| {
@@ -2964,6 +2517,24 @@ impl CognitiveHAL {
             .store_fragment(tenant_id, text, vector)
             .await
             .map_err(|e| SystemError::HardwareFailure(format!("Swap storage failed: {}", e)))
+    }
+
+    /// CORE-378: Realiza una búsqueda semántica en la memoria L3 del tenant
+    pub async fn search_memory(
+        &self,
+        tenant_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::vcm::swap::MemoryFragment>, SystemError> {
+        let driver = self.embedding_driver.as_ref().ok_or_else(|| {
+            SystemError::HardwareFailure("No embedding driver configured for memory search".into())
+        })?;
+
+        let query_vec = driver.embed(query).await?;
+        self.swap_manager
+            .search(tenant_id, query_vec, limit)
+            .await
+            .map_err(|e| SystemError::HardwareFailure(format!("Swap search failed: {}", e)))
     }
 
     /// Detecta si un modelo Ollama soporta tool use y actualiza el catálogo (CORE-237).
@@ -3116,49 +2687,98 @@ impl CognitiveHAL {
         pcb: &PCB,
         persona: Option<&str>,
     ) -> (Vec<ChatMessage>, Vec<String>) {
+        self.build_messages_internal(pcb, persona, false).await
+    }
+
+    /// Compact chat-session variant used by `execute_chat_react`: omits redundant
+    /// `[SYS_CALL_PLUGIN]` instructions for tools already exposed natively (`ledger`,
+    /// `chronos`), and strips heavy sections on casual greetings.
+    pub async fn build_messages_for_chat_with_warnings(
+        &self,
+        pcb: &PCB,
+        persona: Option<&str>,
+    ) -> (Vec<ChatMessage>, Vec<String>) {
+        self.build_messages_internal(pcb, persona, true).await
+    }
+
+    async fn build_messages_internal(
+        &self,
+        pcb: &PCB,
+        persona: Option<&str>,
+        compact_chat: bool,
+    ) -> (Vec<ChatMessage>, Vec<String>) {
         let mut warnings: Vec<String> = Vec::new();
+        let casual_turn = compact_chat && is_casual_chat_turn(pcb);
 
-        // 1. Ensamblar contexto via VCM (L1 + L2 + L3)
-        let assembled_context = self
-            .vcm
-            .assemble_context(
-                pcb,
-                &self.swap_manager,
-                self.embedding_driver.as_deref(),
-                4096,
-            )
-            .await
-            .unwrap_or_else(|e| {
-                warn!(
-                    "VCM assembly failed: {}. Falling back to raw instruction.",
-                    e
-                );
-                warnings.push(format!(
-                    "Context assembly failed; responding with reduced memory. Detail: {}",
-                    e
-                ));
-                pcb.memory_pointers.l1_instruction.clone()
-            });
+        // Skip heavy VCM assembly (git/governance/embeddings) for direct Chat turns
+        // with no explicit L2/swap pointers so prompts stay compact and fast.
+        let skip_vcm = pcb.task_type == crate::pcb::TaskType::Chat
+            && pcb.agent_id.is_none()
+            && pcb.memory_pointers.l2_context_refs.is_empty()
+            && pcb.memory_pointers.swap_refs.is_empty();
 
-        let tool_prompt = self
-            .plugin_manager
-            .read()
-            .await
-            .get_available_tools_prompt();
-        let mcp_tool_prompt = self.mcp_registry.generate_system_prompt().await;
-
-        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-        let session_key = pcb.session_key.as_deref().unwrap_or("default");
-
-        let modules_tool_prompt = if let Some(ref router_lock) = *self.router.read().await {
-            let router = router_lock.read().await;
-            router
-                .generate_modules_prompt(
-                    &pcb.memory_pointers.l1_instruction,
-                    tenant_id,
-                    session_key,
+        // 1. Ensamblar contexto via VCM (L1 + L2 + L3) cuando aplique
+        let assembled_context = if skip_vcm {
+            pcb.memory_pointers.l1_instruction.clone()
+        } else {
+            self.vcm
+                .assemble_context(
+                    pcb,
+                    &self.swap_manager,
+                    self.embedding_driver.as_deref(),
+                    4096,
                 )
                 .await
+                .unwrap_or_else(|e| {
+                    warn!(
+                        "VCM assembly failed: {}. Falling back to raw instruction.",
+                        e
+                    );
+                    warnings.push(format!(
+                        "Context assembly failed; responding with reduced memory. Detail: {}",
+                        e
+                    ));
+                    pcb.memory_pointers.l1_instruction.clone()
+                })
+        };
+
+        let tool_prompt = if casual_turn {
+            String::new()
+        } else if compact_chat && pcb.agent_id.is_none() {
+            // ledger & chronos are already exposed as native ChatAgent function tools
+            self.plugin_manager
+                .read()
+                .await
+                .get_available_tools_prompt_excluding(&["ledger", "chronos"])
+        } else {
+            self.plugin_manager
+                .read()
+                .await
+                .get_available_tools_prompt()
+        };
+        let mcp_tool_prompt = if casual_turn {
+            String::new()
+        } else {
+            self.mcp_registry.generate_system_prompt().await
+        };
+
+        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+
+        let modules_tool_prompt = if casual_turn {
+            String::new()
+        } else if let Some(session_key) = Self::valid_pcb_session_key(pcb) {
+            if let Some(ref router_lock) = *self.router.read().await {
+                let router = router_lock.read().await;
+                router
+                    .generate_modules_prompt(
+                        &pcb.memory_pointers.l1_instruction,
+                        tenant_id,
+                        session_key,
+                    )
+                    .await
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         };
@@ -3169,11 +2789,12 @@ impl CognitiveHAL {
         };
 
         // CORE-148: Music instructions are only injected if the music_search plugin is active.
-        let has_music_plugin = self
-            .plugin_manager
-            .read()
-            .await
-            .is_plugin_active("music_search");
+        let has_music_plugin = !casual_turn
+            && self
+                .plugin_manager
+                .read()
+                .await
+                .is_plugin_active("music_search");
 
         let music_section = if has_music_plugin {
             "\n\nMÚSICA — INSTRUCCIONES:\
@@ -3208,14 +2829,29 @@ impl CognitiveHAL {
             "build_messages: role instructions loaded"
         );
 
-        let has_maker_plugin = self.plugin_manager.read().await.is_plugin_active("maker");
-        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
+        let has_maker_plugin =
+            !casual_turn && self.plugin_manager.read().await.is_plugin_active("maker");
 
         let maker_section = if has_maker_plugin && pcb.agent_id.is_none() {
             let dynamic_scripts = Self::get_dynamic_scripts_section(tenant_id).await;
-            format!("{}{}", MAKER_INSTRUCTIONS, dynamic_scripts)
+            if !compact_chat {
+                format!("{}{}", MAKER_INSTRUCTIONS, dynamic_scripts)
+            } else {
+                let prompt_lower = pcb.memory_pointers.l1_instruction.to_lowercase();
+                let wants_maker = !dynamic_scripts.trim().is_empty()
+                    || prompt_lower.contains("script")
+                    || prompt_lower.contains("javascript")
+                    || prompt_lower.contains("maker")
+                    || prompt_lower.contains("automatiz")
+                    || prompt_lower.contains("boa");
+                if wants_maker {
+                    format!("{}{}", MAKER_INSTRUCTIONS, dynamic_scripts)
+                } else {
+                    String::new()
+                }
+            }
         } else {
-            "".to_string()
+            String::new()
         };
 
         let system_content = if tool_prompt.trim().is_empty()
@@ -3244,9 +2880,47 @@ impl CognitiveHAL {
             )
         };
 
+        // CORE-375: Bloque de memoria a largo plazo y resumen financiero del tenant
+        let personal_memory_section = if !casual_turn && pcb.agent_id.is_none() {
+            if let (Some(tid), Some(skey)) = (&pcb.tenant_id, &pcb.session_key) {
+                if let Ok(db) = crate::enclave::TenantDB::open(tid, skey) {
+                    db.build_personal_memory_prompt_block().unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        let mut full_system_content = system_content;
+        if pcb.agent_id.is_none() {
+            use chrono::Datelike;
+            let now_local = chrono::Local::now();
+            let weekday_es = match now_local.weekday() {
+                chrono::Weekday::Mon => "Lunes",
+                chrono::Weekday::Tue => "Martes",
+                chrono::Weekday::Wed => "Miércoles",
+                chrono::Weekday::Thu => "Jueves",
+                chrono::Weekday::Fri => "Viernes",
+                chrono::Weekday::Sat => "Sábado",
+                chrono::Weekday::Sun => "Domingo",
+            };
+            full_system_content.push_str(&format!(
+                "\n\n[CONTEXTO TEMPORAL ACTUAL]\n- Fecha y hora local del sistema: {} {}\n",
+                weekday_es,
+                now_local.format("%Y-%m-%d %H:%M (%:z)")
+            ));
+        }
+        if !personal_memory_section.is_empty() {
+            full_system_content.push_str(&personal_memory_section);
+        }
+
         let mut messages = vec![ChatMessage {
             role: ChatRole::System,
-            content: Some(system_content),
+            content: Some(full_system_content),
             ..Default::default()
         }];
 
@@ -3289,436 +2963,6 @@ impl InferenceDriver for DummyDriver {
     }
 
     async fn load_model(&mut self, _id: &str) -> Result<(), SystemError> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::pcb::PCB;
-    use crate::scheduler::ModelPreference;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-    use tokio_stream::StreamExt;
-
-    #[tokio::test]
-    async fn test_hybrid_smart_routing_high_priority() -> anyhow::Result<()> {
-        let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let hal = Arc::new(CognitiveHAL::new(pm)?);
-        hal.register_driver(
-            "local-driver",
-            Box::new(DummyDriver {
-                name: "local".to_string(),
-            }),
-        )
-        .await;
-        hal.register_driver(
-            "cloud-driver",
-            Box::new(DummyDriver {
-                name: "cloud".to_string(),
-            }),
-        )
-        .await;
-        let mut pcb = PCB::mock("Complex Mission", 10);
-        pcb.model_pref = ModelPreference::HybridSmart;
-        let shared_pcb = Arc::new(RwLock::new(pcb));
-        let stream_res = hal.route_and_execute(shared_pcb, None).await?;
-        let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
-        assert_eq!(tokens.len(), 1);
-        let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
-        assert!(
-            response.contains("[cloud]"),
-            "Debe haber seleccionado el driver cloud por alta prioridad"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_hybrid_smart_routing_low_priority() -> anyhow::Result<()> {
-        let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let hal = Arc::new(CognitiveHAL::new(pm)?);
-        hal.register_driver(
-            "local-driver",
-            Box::new(DummyDriver {
-                name: "local".to_string(),
-            }),
-        )
-        .await;
-        hal.register_driver(
-            "cloud-driver",
-            Box::new(DummyDriver {
-                name: "cloud".to_string(),
-            }),
-        )
-        .await;
-        let mut pcb = PCB::mock("Simple task", 5);
-        pcb.model_pref = ModelPreference::HybridSmart;
-        let shared_pcb = Arc::new(RwLock::new(pcb));
-        let stream_res = hal.route_and_execute(shared_pcb, None).await?;
-        let tokens: Vec<Result<String, ExecutionError>> = stream_res.collect().await;
-        let response = tokens[0].as_ref().map_err(|e| anyhow::anyhow!("{}", e))?;
-        assert!(
-            response.contains("[local]"),
-            "Debe haber seleccionado el driver local por baja prioridad"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_build_messages_default_tools_presence() -> anyhow::Result<()> {
-        let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let hal = CognitiveHAL::new(pm)?;
-        let pcb = PCB::new("test".into(), 5, "hola".into());
-        let messages = hal.build_messages(&pcb, None).await;
-        let system_msg = messages
-            .iter()
-            .find(|m| m.role == ChatRole::System)
-            .unwrap()
-            .content
-            .as_ref()
-            .unwrap();
-        let user_msg = messages
-            .iter()
-            .find(|m| m.role == ChatRole::User)
-            .unwrap()
-            .content
-            .as_ref()
-            .unwrap();
-
-        assert!(
-            !system_msg.contains("[USER_PROCESS_INSTRUCTION]"),
-            "El prompt no debe contener el tag USER_PROCESS_INSTRUCTION"
-        );
-        assert!(
-            system_msg.contains("HERRAMIENTAS (PLUGINS) DISPONIBLES:")
-                || system_msg.contains("HERRAMIENTAS DISPONIBLES:"),
-            "Deben aparecer los plugins de dominio por defecto"
-        );
-        assert!(
-            system_msg.contains("ledger") && system_msg.contains("chronos"),
-            "Debe contener las herramientas ledger y chronos"
-        );
-        assert!(
-            user_msg.contains("hola"),
-            "El mensaje de usuario debe contener la instrucción"
-        );
-        // CORE-148: Music instructions are only injected if plugin is active.
-        assert!(
-            !system_msg.contains("MÚSICA"),
-            "Music instructions must NOT be present if plugin is not active (CORE-148)"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_build_messages_with_persona() -> anyhow::Result<()> {
-        let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let hal = CognitiveHAL::new(pm)?;
-        let pcb = PCB::new("test".into(), 5, "hola".into());
-        let messages = hal
-            .build_messages(&pcb, Some("Eres Eve, asistente de ACME Corp."))
-            .await;
-        let system_msg = messages
-            .iter()
-            .find(|m| m.role == ChatRole::System)
-            .unwrap()
-            .content
-            .as_ref()
-            .unwrap();
-        let user_msg = messages
-            .iter()
-            .find(|m| m.role == ChatRole::User)
-            .unwrap()
-            .content
-            .as_ref()
-            .unwrap();
-
-        assert!(
-            system_msg.contains("Eve"),
-            "El mensaje de sistema debe contener la persona"
-        );
-        assert!(
-            user_msg.contains("hola"),
-            "El mensaje de usuario debe contener la instrucción"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_strip_unc_prefix() {
-        let p1 = std::path::Path::new(r"\\?\C:\foo\bar");
-        let p2 = std::path::Path::new(r"\\?\UNC\server\share\foo");
-        let p3 = std::path::Path::new(r"C:\foo\bar");
-
-        assert_eq!(
-            CognitiveHAL::strip_unc_prefix(p1),
-            std::path::PathBuf::from(r"C:\foo\bar")
-        );
-        assert_eq!(
-            CognitiveHAL::strip_unc_prefix(p2),
-            std::path::PathBuf::from(r"\\server\share\foo")
-        );
-        assert_eq!(
-            CognitiveHAL::strip_unc_prefix(p3),
-            std::path::PathBuf::from(r"C:\foo\bar")
-        );
-    }
-
-    #[test]
-    fn test_resolve_path_unc_and_nonexistent() {
-        let temp_dir = std::env::temp_dir();
-        let ws_dir = temp_dir.join("aegis_test_ws");
-        let _ = std::fs::create_dir_all(&ws_dir);
-
-        let existing_sub = ws_dir.join("existing_folder");
-        let _ = std::fs::create_dir_all(&existing_sub);
-
-        let new_file = "existing_folder/new_file.txt";
-
-        let resolved = CognitiveHAL::resolve_path(&ws_dir, new_file, &[], false);
-        assert!(resolved.is_ok());
-        let res_path = resolved.unwrap();
-        assert!(res_path.to_string_lossy().contains("new_file.txt"));
-
-        let _ = std::fs::remove_dir_all(&ws_dir);
-    }
-
-    #[test]
-    fn test_autocorrect_typo_correction() {
-        use super::autocorrect::normalize_tool_name;
-        assert_eq!(normalize_tool_name("spawnagent"), "spawn_agent");
-        assert_eq!(normalize_tool_name("writefile"), "write_file");
-        assert_eq!(normalize_tool_name("run_command"), "execute_command");
-        assert_eq!(normalize_tool_name("websearch"), "web_search");
-    }
-
-    #[test]
-    fn test_autocorrect_balance_braces() {
-        use super::autocorrect::balance_braces;
-        assert_eq!(balance_braces("{\"a\": 1"), "{\"a\": 1}");
-        assert_eq!(balance_braces("{\"a\": [1, 2"), "{\"a\": [1, 2]}");
-        assert_eq!(balance_braces("{\"a\": \"val"), "{\"a\": \"val\"}");
-    }
-
-    #[test]
-    fn test_autocorrect_sanitize_json_string() {
-        use super::autocorrect::sanitize_json_string;
-        assert_eq!(
-            sanitize_json_string("```json\n{\"a\": 1}\n```"),
-            "{\"a\": 1}"
-        );
-        assert_eq!(
-            sanitize_json_string("  ```\n{\"a\": 1\n```  "),
-            "{\"a\": 1}"
-        );
-    }
-
-    #[test]
-    fn test_validate_and_sanitize_tool_call() {
-        use super::autocorrect::validate_and_sanitize_tool_call;
-        use crate::agents::node::AgentRole;
-        use crate::chal::FunctionCallRecord;
-        use crate::chal::ToolCallRecord;
-
-        // Valid spawn_agent call with coercion and typo fix
-        let tc = ToolCallRecord {
-            id: "call-123".to_string(),
-            type_: "function".to_string(),
-            function: FunctionCallRecord {
-                name: "spawnagent".to_string(),
-                arguments: "```json\n{\n  \"name\": \"Test Supervisor\",\n  \"scope\": \"Test Scope\",\n  \"task_type\": \"planning\",\n  \"role\": \"supervisor\"\n}\n```".to_string(),
-            },
-        };
-
-        let res = validate_and_sanitize_tool_call(&tc, &AgentRole::ChatAgent);
-        assert!(res.is_ok(), "Should successfully validate: {:?}", res.err());
-        let sanitized = res.unwrap();
-        assert_eq!(sanitized.function.name, "spawn_agent");
-
-        let args: serde_json::Value = serde_json::from_str(&sanitized.function.arguments).unwrap();
-        assert_eq!(args["name"], "Test Supervisor");
-        assert_eq!(args["role"], "supervisor");
-
-        // Specialist tool call with type coercion: write_file
-        let tc_spec = ToolCallRecord {
-            id: "call-456".to_string(),
-            type_: "function".to_string(),
-            function: FunctionCallRecord {
-                name: "writefile".to_string(), // Typo fix
-                arguments:
-                    "{\"path\": \"test.txt\", \"content\": \"hello\", \"mode\": \"rewrite\"}"
-                        .to_string(),
-            },
-        };
-        let res_spec = validate_and_sanitize_tool_call(
-            &tc_spec,
-            &AgentRole::Specialist {
-                scope: "code".to_string(),
-            },
-        );
-        assert!(res_spec.is_ok(), "Should validate: {:?}", res_spec.err());
-        let sanitized_spec = res_spec.unwrap();
-        assert_eq!(sanitized_spec.function.name, "write_file");
-
-        // Expect failure when non-permitted tool is used
-        let tc_invalid = ToolCallRecord {
-            id: "call-789".to_string(),
-            type_: "function".to_string(),
-            function: FunctionCallRecord {
-                name: "execute_command".to_string(),
-                arguments: "{\"command\": \"ls\"}".to_string(),
-            },
-        };
-        let res_invalid = validate_and_sanitize_tool_call(&tc_invalid, &AgentRole::ChatAgent);
-        assert!(res_invalid.is_err(), "ChatAgent cannot run execute_command");
-    }
-
-    #[test]
-    fn test_sanitize_prompt_content() {
-        use super::autocorrect::sanitize_prompt_content;
-
-        // OpenAI key
-        let text1 =
-            "My key is sk-123456789012345678901234567890123456789012345678 and it is secret.";
-        assert_eq!(
-            sanitize_prompt_content(text1),
-            "My key is [REDACTED_OPENAI_KEY] and it is secret."
-        );
-
-        // OpenRouter key
-        let text2 = format!("OpenRouter key: sk-or-v1-{}", "a".repeat(64));
-        assert_eq!(
-            sanitize_prompt_content(&text2),
-            "OpenRouter key: [REDACTED_OPENROUTER_KEY]"
-        );
-
-        // Gemini key
-        let text3 = "Gemini AIzaSyAbC123_def456-ghi789_jkl123-mno45";
-        assert_eq!(
-            sanitize_prompt_content(text3),
-            "Gemini [REDACTED_GEMINI_KEY]"
-        );
-
-        // Anthropic key
-        let text4 = "Anthropic: sk-ant-sid01-123456789012345678901234567890123456789012345678901234567890abc123456789012345678901234567890";
-        assert_eq!(
-            sanitize_prompt_content(text4),
-            "Anthropic: [REDACTED_ANTHROPIC_KEY]"
-        );
-
-        // Private Key
-        let text5 = "Here is a key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0y...\n-----END RSA PRIVATE KEY-----\nEnd of text.";
-        assert_eq!(
-            sanitize_prompt_content(text5),
-            "Here is a key:\n[REDACTED_PRIVATE_KEY]\nEnd of text."
-        );
-
-        // Database Password
-        let text6 =
-            "Connect using postgres://admin:super_secret_password@localhost:5432/mydb and enjoy!";
-        assert_eq!(
-            sanitize_prompt_content(text6),
-            "Connect using postgres://admin:[REDACTED_PASSWORD]@localhost:5432/mydb and enjoy!"
-        );
-    }
-
-    #[test]
-    fn test_is_light_task() {
-        use super::autocorrect::is_light_task;
-        use crate::pcb::TaskType;
-
-        // Chat but very short -> true
-        assert!(is_light_task("hola", TaskType::Chat));
-        assert!(is_light_task("hi", TaskType::Chat));
-        assert!(is_light_task("what is the status?", TaskType::Chat));
-
-        // Code and short -> false (not TaskType::Chat)
-        assert!(!is_light_task("hola", TaskType::Code));
-
-        // Chat and very long -> false
-        let long_prompt = "A".repeat(150);
-        assert!(!is_light_task(&long_prompt, TaskType::Chat));
-    }
-
-    #[tokio::test]
-    async fn test_dynamic_maker_prompt_injection() -> anyhow::Result<()> {
-        let temp_dir = std::env::temp_dir();
-        let test_dir = temp_dir.join(format!("aegis_maker_test_{}", uuid::Uuid::new_v4()));
-        let workspace_dir = test_dir.join("users").join("test_tenant").join("workspace");
-        std::fs::create_dir_all(&workspace_dir)?;
-
-        // Define dynamic script inside workspace
-        let script_path = workspace_dir.join("my_custom_tool.js");
-        let script_content = r#"// Description: Multiplica dos números usando sandbox
-// Parameters: {"a": 2, "b": 3}
-function multiply(a, b) {
-    return a * b;
-}
-"#;
-        std::fs::write(&script_path, script_content)?;
-
-        // Set env variable
-        std::env::set_var("AEGIS_DATA_DIR", &test_dir);
-
-        // Call the helper directly
-        let section = CognitiveHAL::get_dynamic_scripts_section("test_tenant").await;
-
-        // Clean up environment
-        std::env::remove_var("AEGIS_DATA_DIR");
-        let _ = std::fs::remove_dir_all(&test_dir);
-
-        assert!(section.contains("DYNAMIC SCRIPTS"));
-        assert!(section.contains("my_custom_tool.js"));
-        assert!(section.contains("Multiplica dos números usando sandbox"));
-        assert!(section.contains("[SYS_CALL_MAKER(\"js\", \"return eval(read_file('my_custom_tool.js'))\", {\"a\": 2, \"b\": 3})]"));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_execute_command_configurable_timeout() -> anyhow::Result<()> {
-        let pm = Arc::new(RwLock::new(PluginManager::new()?));
-        let hal = CognitiveHAL::new(pm)?;
-        let pcb = PCB::new("test_tenant".into(), 5, "hola".into());
-
-        // 1. Test standard success command with a moderate timeout
-        std::env::set_var("AEGIS_COMMAND_TIMEOUT", "10");
-        let cmd = ToolCallRecord {
-            id: "call-123".to_string(),
-            type_: "function".to_string(),
-            function: FunctionCallRecord {
-                name: "execute_command".to_string(),
-                arguments: "{\"command\": \"echo test_ok\"}".to_string(),
-            },
-        };
-        let res = hal
-            .execute_tool_call_internal(&cmd, "some_agent", &pcb)
-            .await;
-        assert!(res.contains("test_ok"));
-
-        // 2. Test timeout trigger by setting a very short timeout (1s)
-        // and running a command that is slow (using whitelisted python)
-        std::env::set_var("AEGIS_COMMAND_TIMEOUT", "1");
-
-        let cmd_slow = ToolCallRecord {
-            id: "call-456".to_string(),
-            type_: "function".to_string(),
-            function: FunctionCallRecord {
-                name: "execute_command".to_string(),
-                arguments: "{\"command\": \"git clone http://10.255.255.1/repo.git\"}".to_string(),
-            },
-        };
-        let res_slow = hal
-            .execute_tool_call_internal(&cmd_slow, "some_agent", &pcb)
-            .await;
-        assert!(
-            res_slow.contains("timeout") || res_slow.contains("exceeded 1s"),
-            "res_slow was: {}",
-            res_slow
-        );
-
-        std::env::remove_var("AEGIS_COMMAND_TIMEOUT");
         Ok(())
     }
 }

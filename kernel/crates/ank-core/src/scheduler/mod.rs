@@ -526,6 +526,7 @@ impl CognitiveScheduler {
                                 ProcessState::Running
                                     | ProcessState::Ready
                                     | ProcessState::WaitingSyscall
+                                    | ProcessState::WaitingToolCall
                             )
                     })
                     .count() as u32;

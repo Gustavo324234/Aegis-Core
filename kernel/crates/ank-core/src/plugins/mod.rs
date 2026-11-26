@@ -159,6 +159,13 @@ impl PluginManager {
     /// modo inseguro si el operador lo activa a propósito con
     /// `AEGIS_ALLOW_INSECURE_PLUGINS=1` (útil para dev/CI).
     pub fn new() -> Result<Self, PluginError> {
+        let env_key = std::env::var("AEGIS_PLUGIN_ROOT_KEY").ok();
+        Self::new_with_root_key(env_key.as_deref())
+    }
+
+    /// CORE-403: Inicializa el gestor recibiendo explícitamente la clave raíz hexadecimal
+    /// para evitar mutar variables de entorno en tiempo de ejecución multihilo.
+    pub fn new_with_root_key(root_key_hex: Option<&str>) -> Result<Self, PluginError> {
         let allow_insecure = std::env::var("AEGIS_ALLOW_INSECURE_PLUGINS")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -169,9 +176,9 @@ impl PluginManager {
         // sandbox bypass.
         let permissive_default = cfg!(debug_assertions);
 
-        let signer = match std::env::var("AEGIS_PLUGIN_ROOT_KEY") {
-            Ok(hex_str) => {
-                let bytes = hex::decode(hex_str.trim()).map_err(|e| {
+        let signer = match root_key_hex.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(hex_str) => {
+                let bytes = hex::decode(hex_str).map_err(|e| {
                     PluginError::IOError(format!("AEGIS_PLUGIN_ROOT_KEY is not valid hex: {}", e))
                 })?;
                 if bytes.len() < 32 {
@@ -189,7 +196,7 @@ impl PluginManager {
                 }
                 .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?
             }
-            Err(_) if allow_insecure || permissive_default => {
+            None if allow_insecure || permissive_default => {
                 tracing::warn!(
                     "AEGIS_PLUGIN_ROOT_KEY not set — using permissive dev/test signer. \
                      Plugin signatures are NOT verified unless .wasm.sig is present. \
@@ -198,7 +205,7 @@ impl PluginManager {
                 PluginSigner::new_permissive(&[0u8; 32])
                     .map_err(|e| PluginError::IOError(format!("Failed to init Signer: {}", e)))?
             }
-            Err(_) => {
+            None => {
                 return Err(PluginError::IOError(
                     "AEGIS_PLUGIN_ROOT_KEY is required in release builds. Set the \
                      env var to a hex-encoded ed25519 public key (≥32 bytes), or \
@@ -739,23 +746,28 @@ impl PluginManager {
 
     /// Genera la "Tarjeta de Habilidades" (Tool Discovery) para inyectar en el System Prompt.
     pub fn get_available_tools_prompt(&self) -> String {
-        if self.plugins.is_empty() && self.domain_plugins.is_empty() {
-            return String::new();
-        }
+        self.get_available_tools_prompt_excluding(&[])
+    }
 
-        let mut prompt = String::from("HERRAMIENTAS (PLUGINS) DISPONIBLES:\n");
+    /// Variante que omite plugins ya expuestos mediante Tool Use nativo (por ejemplo `ledger`/`chronos`).
+    pub fn get_available_tools_prompt_excluding(&self, excluded: &[&str]) -> String {
+        let mut lines = Vec::new();
 
-        // Plugins Nativos (Dominios)
         for plugin in self.domain_plugins.values() {
-            prompt.push_str(&format!(
+            if excluded.iter().any(|&ex| ex == plugin.name) {
+                continue;
+            }
+            lines.push(format!(
                 "- {}: {} -> Uso: [SYS_CALL_PLUGIN(\"{}\", {})]\n",
                 plugin.name, plugin.description, plugin.name, plugin.parameter_example
             ));
         }
 
-        // Plugins WASM
         for plugin in self.plugins.values() {
-            prompt.push_str(&format!(
+            if excluded.iter().any(|&ex| ex == plugin.metadata.name) {
+                continue;
+            }
+            lines.push(format!(
                 "- {}: {} -> Uso: [SYS_CALL_PLUGIN(\"{}\", {})]\n",
                 plugin.metadata.name,
                 plugin.metadata.description,
@@ -763,7 +775,36 @@ impl PluginManager {
                 plugin.metadata.parameter_example
             ));
         }
+
+        if lines.is_empty() {
+            return String::new();
+        }
+        let mut prompt = String::from("HERRAMIENTAS (PLUGINS) DISPONIBLES:\n");
+        for line in lines {
+            prompt.push_str(&line);
+        }
         prompt
+    }
+
+    /// Lista los plugins nativos (dominio) y WASM cargados en el kernel.
+    pub fn list_plugin_summaries(&self) -> Vec<(String, String, &'static str)> {
+        let mut out = Vec::new();
+        for plugin in self.domain_plugins.values() {
+            out.push((
+                plugin.name.clone(),
+                plugin.description.clone(),
+                "native_domain",
+            ));
+        }
+        for plugin in self.plugins.values() {
+            out.push((
+                plugin.metadata.name.clone(),
+                plugin.metadata.description.clone(),
+                "wasm",
+            ));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// Ejecutor de Plugins de Dominio (Native Bridge to SQLCipher)

@@ -92,6 +92,8 @@ pub struct AgentOrchestrator {
     /// `run_agent_loop`s salgan limpiamente en lugar de seguir quemando
     /// tokens en background hasta el AGENT_IDLE_TIMEOUT de 5 min.
     cancel_tokens: Arc<RwLock<HashMap<AgentId, tokio_util::sync::CancellationToken>>>,
+    /// CORE-384: Runner opcional que delega supervisores y subagentes al SDK oficial `google-antigravity`.
+    pub agy_runner: Arc<crate::agents::antigravity_runner::AntigravityRunner>,
 }
 
 impl AgentOrchestrator {
@@ -120,6 +122,9 @@ impl AgentOrchestrator {
             pending_questions: Arc::new(RwLock::new(HashMap::new())),
             event_tx: std::sync::RwLock::new(None),
             cancel_tokens: Arc::new(RwLock::new(HashMap::new())),
+            agy_runner: Arc::new(crate::agents::antigravity_runner::AntigravityRunner::new(
+                workspace_root,
+            )),
         }
     }
 
@@ -133,6 +138,17 @@ impl AgentOrchestrator {
         tenant_id: &str,
         project_id: &ProjectId,
         project_description: &str,
+    ) -> anyhow::Result<AgentId> {
+        self.activate_project_with_task_type(tenant_id, project_id, project_description, None)
+            .await
+    }
+
+    pub async fn activate_project_with_task_type(
+        &self,
+        tenant_id: &str,
+        project_id: &ProjectId,
+        project_description: &str,
+        task_type: Option<TaskType>,
     ) -> anyhow::Result<AgentId> {
         // Verificar si ya está activo en memoria
         let root_info = {
@@ -166,7 +182,7 @@ impl AgentOrchestrator {
         }
 
         // Primera activación — crear ProjectSupervisor nuevo
-        self.create_project_supervisor(tenant_id, project_id, project_description)
+        self.create_project_supervisor(tenant_id, project_id, project_description, task_type)
             .await
     }
 
@@ -240,15 +256,16 @@ impl AgentOrchestrator {
         &self,
         name: String,
         scope: String,
-        _task_type: Option<crate::pcb::TaskType>,
+        task_type: Option<crate::pcb::TaskType>,
         tenant_id: Option<String>,
     ) -> anyhow::Result<crate::agents::node::AgentId> {
         // CORE-287: project_id es el nombre sanitizado, no el scope
         let project_id = sanitize_project_id(&name);
-        self.activate_project(
+        self.activate_project_with_task_type(
             tenant_id.as_deref().unwrap_or("default"),
             &project_id,
             &scope,
+            task_type,
         )
         .await
     }
@@ -258,6 +275,7 @@ impl AgentOrchestrator {
         tenant_id: &str,
         project_id: &ProjectId,
         description: &str,
+        task_type: Option<TaskType>,
     ) -> anyhow::Result<AgentId> {
         let role = AgentRole::ProjectSupervisor {
             name: project_id.clone(),
@@ -267,13 +285,15 @@ impl AgentOrchestrator {
             let mut loader = self.instruction_loader.write().await;
             loader.build_system_prompt(&role, project_id, None)
         };
-        let budget = ContextBudget::for_role(&role, TaskType::Planning);
+        let effective_task_type = task_type.unwrap_or(TaskType::Planning);
+        let budget = ContextBudget::for_role(&role, effective_task_type);
+        let role_for_event = role.clone();
         let mut node = crate::agents::node::AgentNode::new(
             role,
             project_id.clone(),
             None,
             system_prompt,
-            TaskType::Planning,
+            effective_task_type,
         )
         .with_tenant(tenant_id);
         node.context_budget = budget.max_tokens;
@@ -298,6 +318,14 @@ impl AgentOrchestrator {
             .await
             .insert(agent_id, cancel_token.clone());
         self.spawn_loop(agent_id, rx, None, cancel_token);
+        self.emit_event(AgentEvent::Spawned {
+            agent_id,
+            role: role_for_event,
+            parent_id: None,
+            project_id: project_id.clone(),
+            model: "auto".to_string(),
+            task_type: format!("{:?}", effective_task_type),
+        });
 
         info!(
             project = %project_id,
@@ -475,6 +503,7 @@ impl AgentOrchestrator {
                 .unwrap_or_default()
         };
 
+        let role_for_event = role.clone();
         let mut node = crate::agents::node::AgentNode::new(
             role,
             project_id.clone(),
@@ -509,6 +538,14 @@ impl AgentOrchestrator {
             .await
             .insert(agent_id, cancel_token.clone());
         self.spawn_loop(agent_id, rx, parent_tx, cancel_token);
+        self.emit_event(AgentEvent::Spawned {
+            agent_id,
+            role: role_for_event,
+            parent_id: Some(parent_id),
+            project_id: project_id.clone(),
+            model: "auto".to_string(),
+            task_type: format!("{:?}", task_type),
+        });
 
         info!(
             parent = %parent_id,
@@ -555,6 +592,10 @@ impl AgentOrchestrator {
                 n.set_state(AgentState::Running);
             }
         }
+        self.emit_event(AgentEvent::StateChanged {
+            agent_id,
+            state: "Running".to_string(),
+        });
         Ok(())
     }
 
@@ -964,9 +1005,19 @@ impl AgentOrchestrator {
                     .spawn_agent(agent_role, project_id, caller_id, None, tt)
                     .await?;
 
+                // CORE-FIX: Disparar de inmediato el Dispatch con el scope al nuevo agente
+                // para que no quede congelado en rx.recv() esperando una tarea que nunca llega.
+                if !scope.trim().is_empty() {
+                    if let Err(e) = self.dispatch(agent_id, scope.clone(), vec![]).await {
+                        tracing::warn!(agent = %agent_id, "Automatic post-spawn dispatch failed: {}", e);
+                    } else {
+                        tracing::info!(agent = %agent_id, "Automatic post-spawn dispatch sent successfully.");
+                    }
+                }
+
                 Ok(serde_json::json!({
                     "agent_id": agent_id.to_string(),
-                    "status": "spawned"
+                    "status": "spawned_and_dispatched"
                 })
                 .to_string())
             }
@@ -1301,6 +1352,7 @@ impl AgentOrchestrator {
         let channels_ref = Arc::clone(&self.channels);
         let cancel_tokens_ref = Arc::clone(&self.cancel_tokens);
         let hal_ref = Arc::clone(&self.hal);
+        let agy_runner_ref = Arc::clone(&self.agy_runner);
 
         tokio::spawn(async move {
             Self::run_agent_loop(
@@ -1312,6 +1364,7 @@ impl AgentOrchestrator {
                 parent_tx,
                 hal_ref,
                 cancel_token,
+                agy_runner_ref,
             )
             .await;
             // CORE-FIX (A1): limpiar el token cuando el loop termina, sea por
@@ -1338,6 +1391,7 @@ impl AgentOrchestrator {
         parent_tx: Option<mpsc::Sender<AgentMessage>>,
         hal: Arc<crate::chal::CognitiveHAL>,
         cancel_token: tokio_util::sync::CancellationToken,
+        agy_runner: Arc<crate::agents::antigravity_runner::AntigravityRunner>,
     ) {
         let (role_label, task_type, model_preference, node_tenant_id) = {
             let t = tree.read().await;
@@ -1465,48 +1519,20 @@ impl AgentOrchestrator {
                         suffix
                     );
 
-                    // CORE-208: CMR per-agent — usa task_type + model_preference del nodo
-                    let routing_result = {
-                        let r = router.read().await;
-                        let mut mock_pcb = crate::pcb::PCB::new(
-                            format!("agent_{}", agent_id),
-                            5,
-                            task_description.clone(),
-                        );
-                        mock_pcb.task_type = task_type;
-                        mock_pcb.model_pref = model_preference;
-                        mock_pcb.agent_id = Some(agent_id);
-                        if !node_tenant_id.is_empty() {
-                            mock_pcb.tenant_id = Some(node_tenant_id.clone());
-                        }
-                        r.decide(&mock_pcb).await
-                    };
-
-                    let decision = match routing_result {
-                        Ok(d) => {
-                            info!(
-                                "[{}][CORE-208] → modelo: {} (task: {:?}, pref: {:?})",
-                                role_label, d.model_id, task_type, model_preference
-                            );
-                            d
-                        }
-                        Err(e) => {
-                            warn!("[{}] CMR routing failed: {}", role_label, e);
-                            Self::fail_agent(agent_id, &e.to_string(), &tree, &parent_tx).await;
-                            return;
-                        }
-                    };
-
-                    // Construir mensajes del agente
-                    let system_prompt = {
+                    // Construir mensajes base del agente
+                    let (system_prompt, project_id_for_agy) = {
                         let t = tree.read().await;
                         let base = t
                             .get(&agent_id)
                             .map(|n| n.system_prompt.clone())
                             .unwrap_or_default();
+                        let pid = t
+                            .get(&agent_id)
+                            .map(|n| n.project_id.clone())
+                            .unwrap_or_else(|| format!("agent-{}", agent_id));
                         // CORE-281: Inyectar header [PROJECT] para ProjectSupervisor
                         // para que nunca pregunte cuál es su proyecto.
-                        if let Some(n) = t.get(&agent_id) {
+                        let prompt = if let Some(n) = t.get(&agent_id) {
                             if let AgentRole::ProjectSupervisor { name: ps_name, .. } = &n.role {
                                 format!(
                                     "[PROJECT]\nName: {}\nProject ID: {}\nYour role: ProjectSupervisor\n\
@@ -1519,7 +1545,8 @@ impl AgentOrchestrator {
                             }
                         } else {
                             base
-                        }
+                        };
+                        (prompt, pid)
                     };
 
                     let child_reports_text = context
@@ -1529,64 +1556,148 @@ impl AgentOrchestrator {
                         .collect::<Vec<_>>()
                         .join("\n");
 
-                    let mut messages = vec![crate::chal::ChatMessage {
-                        role: crate::chal::ChatRole::System,
-                        content: Some(system_prompt),
-                        ..Default::default()
-                    }];
-                    if !child_reports_text.is_empty() {
-                        messages.push(crate::chal::ChatMessage {
+                    // CORE-384: Si AntigravityRunner está activo, delegar el turno al SDK oficial `google-antigravity`
+                    let mut agy_completed: Option<(String, String)> = None;
+                    if agy_runner.is_enabled() {
+                        let effective_task = if child_reports_text.is_empty() {
+                            task_description.clone()
+                        } else {
+                            format!(
+                                "[REPORTES DE SUBAGENTES]\n{}\n\n[TAREA]\n{}",
+                                child_reports_text, task_description
+                            )
+                        };
+                        let orch_opt = hal.agent_orchestrator.read().await.clone();
+                        match agy_runner
+                            .dispatch_turn(
+                                &project_id_for_agy,
+                                &system_prompt,
+                                &effective_task,
+                                |desc| {
+                                    if let Some(ref orch) = orch_opt {
+                                        orch.emit_event(AgentEvent::Activity {
+                                            agent_id,
+                                            description: desc,
+                                        });
+                                    }
+                                },
+                            )
+                            .await
+                        {
+                            Ok(agy_text) => {
+                                info!(
+                                    "[{}][CORE-384] Completado vía Google Antigravity SDK ({} chars)",
+                                    role_label,
+                                    agy_text.len()
+                                );
+                                agy_completed =
+                                    Some((agy_text, "google-antigravity-sdk".to_string()));
+                            }
+                            Err(agy_err) => {
+                                warn!(
+                                    "[{}][CORE-384] Antigravity SDK falló ({}), intentando fallback CMR...",
+                                    role_label, agy_err
+                                );
+                            }
+                        }
+                    }
+
+                    let (response, model_id_for_meta) = if let Some(done) = agy_completed {
+                        done
+                    } else {
+                        // CORE-208: CMR per-agent — usa task_type + model_preference del nodo
+                        let routing_result = {
+                            let r = router.read().await;
+                            let mut mock_pcb = crate::pcb::PCB::new(
+                                format!("agent_{}", agent_id),
+                                5,
+                                task_description.clone(),
+                            );
+                            mock_pcb.task_type = task_type;
+                            mock_pcb.model_pref = model_preference;
+                            mock_pcb.agent_id = Some(agent_id);
+                            if !node_tenant_id.is_empty() {
+                                mock_pcb.tenant_id = Some(node_tenant_id.clone());
+                            }
+                            r.decide(&mock_pcb).await
+                        };
+
+                        let decision = match routing_result {
+                            Ok(d) => {
+                                info!(
+                                    "[{}][CORE-208] → modelo: {} (task: {:?}, pref: {:?})",
+                                    role_label, d.model_id, task_type, model_preference
+                                );
+                                d
+                            }
+                            Err(e) => {
+                                warn!("[{}] CMR routing failed: {}", role_label, e);
+                                Self::fail_agent(agent_id, &e.to_string(), &tree, &parent_tx, &hal)
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        let mut messages = vec![crate::chal::ChatMessage {
                             role: crate::chal::ChatRole::System,
-                            content: Some(format!(
-                                "[REPORTES DE SUBAGENTES]\n{}",
-                                child_reports_text
-                            )),
+                            content: Some(system_prompt),
+                            ..Default::default()
+                        }];
+                        if !child_reports_text.is_empty() {
+                            messages.push(crate::chal::ChatMessage {
+                                role: crate::chal::ChatRole::System,
+                                content: Some(format!(
+                                    "[REPORTES DE SUBAGENTES]\n{}",
+                                    child_reports_text
+                                )),
+                                ..Default::default()
+                            });
+                        }
+                        messages.push(crate::chal::ChatMessage {
+                            role: crate::chal::ChatRole::User,
+                            content: Some(task_description.clone()),
                             ..Default::default()
                         });
-                    }
-                    messages.push(crate::chal::ChatMessage {
-                        role: crate::chal::ChatRole::User,
-                        content: Some(task_description.clone()),
-                        ..Default::default()
-                    });
 
-                    let tools = {
-                        let t = tree.read().await;
-                        t.get(&agent_id).and_then(|n| {
-                            let provider = ProviderKind::from_string(&decision.provider);
-                            let defs = ToolRegistry::tools_for(&n.role, &provider);
-                            if defs.is_empty() {
-                                None
-                            } else {
-                                Some(defs)
+                        let tools = {
+                            let t = tree.read().await;
+                            t.get(&agent_id).and_then(|n| {
+                                let provider = ProviderKind::from_string(&decision.provider);
+                                let defs = ToolRegistry::tools_for(&n.role, &provider);
+                                if defs.is_empty() {
+                                    None
+                                } else {
+                                    Some(defs)
+                                }
+                            })
+                        };
+
+                        let (text_tx, mut text_rx) = tokio::sync::mpsc::unbounded_channel::<
+                            Result<String, crate::chal::ExecutionError>,
+                        >();
+                        let hal_clone = Arc::clone(&hal);
+                        let model_id = decision.model_id.clone();
+
+                        let collect_task = tokio::spawn(async move {
+                            let mut full = String::new();
+                            while let Some(Ok(token)) = text_rx.recv().await {
+                                full.push_str(&token);
                             }
-                        })
-                    };
+                            full
+                        });
 
-                    let (text_tx, mut text_rx) = tokio::sync::mpsc::unbounded_channel::<
-                        Result<String, crate::chal::ExecutionError>,
-                    >();
-                    let hal_clone = Arc::clone(&hal);
-                    let model_id_for_meta = decision.model_id.clone();
-
-                    let collect_task = tokio::spawn(async move {
-                        let mut full = String::new();
-                        while let Some(Ok(token)) = text_rx.recv().await {
-                            full.push_str(&token);
+                        if let Err(e) = hal_clone
+                            .execute_agent_loop(decision, messages, tools, text_tx, agent_id)
+                            .await
+                        {
+                            warn!("[{}] LLM execution failed: {}", role_label, e);
+                            Self::fail_agent(agent_id, &e.to_string(), &tree, &parent_tx, &hal)
+                                .await;
+                            return;
                         }
-                        full
-                    });
 
-                    if let Err(e) = hal_clone
-                        .execute_agent_loop(decision, messages, tools, text_tx, agent_id)
-                        .await
-                    {
-                        warn!("[{}] LLM execution failed: {}", role_label, e);
-                        Self::fail_agent(agent_id, &e.to_string(), &tree, &parent_tx).await;
-                        return;
-                    }
-
-                    let response = collect_task.await.unwrap_or_default();
+                        (collect_task.await.unwrap_or_default(), model_id)
+                    };
 
                     // CORE-FIX: Si el LLM llamó la tool `report` con status=error|blocked,
                     // el handler en chal::execute_tool_call_internal ya invocó
@@ -1851,12 +1962,36 @@ impl AgentOrchestrator {
         reason: &str,
         tree: &Arc<RwLock<AgentTree>>,
         parent_tx: &Option<mpsc::Sender<AgentMessage>>,
+        hal: &Arc<crate::chal::CognitiveHAL>,
     ) {
-        {
+        let (is_supervisor, project_name) = {
             let mut t = tree.write().await;
             if let Some(n) = t.get_mut(&agent_id) {
                 n.set_state(AgentState::Failed {
                     reason: reason.to_string(),
+                });
+                let sup = matches!(
+                    n.role,
+                    AgentRole::ProjectSupervisor { .. } | AgentRole::Supervisor { .. }
+                );
+                (sup, n.project_id.clone())
+            } else {
+                (false, "proyecto".to_string())
+            }
+        };
+        if let Some(orch) = hal.agent_orchestrator.read().await.clone() {
+            orch.emit_event(AgentEvent::StateChanged {
+                agent_id,
+                state: format!("Failed: {}", reason),
+            });
+            if is_supervisor {
+                orch.emit_event(AgentEvent::SupervisorCompleted {
+                    agent_id,
+                    project_name,
+                    summary: format!(
+                        "❌ No se pudo completar la tarea en segundo plano ({}).",
+                        reason
+                    ),
                 });
             }
         }

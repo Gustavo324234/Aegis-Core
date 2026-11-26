@@ -75,8 +75,8 @@ impl VirtualContextManager {
         let tenant_workspace = format!("{}/users/{}/workspace", base_dir, tenant_id);
 
         let computed = tokio::task::spawn_blocking(move || {
-            let repo = git2::Repository::discover(&tenant_workspace)
-                .or_else(|_| git2::Repository::discover("."));
+            // CORE-400: Confinar estrictamente al workspace del tenant (sin fallback a `.` del host).
+            let repo = git2::Repository::open(&tenant_workspace);
 
             let Ok(repo) = repo else {
                 return "[Git Branch]: unknown\n[Git Status]:\nnot a git repository\n[Last Commit]: no commits found".to_string();
@@ -226,52 +226,74 @@ impl VirtualContextManager {
         let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
 
         // --- PROJECT CONTEXT INJECTION (CORE-151 / CORE-352) ---
-        // Project state is best-effort: omitted silently when budget is tight.
+        // Skip heavy Git/Governance repo injection for casual root user Chat turns;
+        // retain it for agents and Code/Planning/Analysis tasks.
         let mut project_state_str = String::new();
-        let git_state = self.fetch_git_state(tenant_id).await;
-        let gov_state = self.fetch_governance_state().await;
-        let mut candidate = String::new();
-        candidate.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
-        candidate.push_str(&git_state);
-        candidate.push_str("\n\n");
-        candidate.push_str(&gov_state);
-        candidate.push('\n');
-        let project_tokens = estimate_tokens(&candidate);
-        if current_tokens + project_tokens <= actual_token_limit {
-            project_state_str = candidate;
-            current_tokens += project_tokens;
+        let include_project_state = pcb.agent_id.is_some()
+            || !matches!(pcb.task_type, crate::pcb::TaskType::Chat)
+            || !pcb.memory_pointers.l2_context_refs.is_empty();
+        if include_project_state {
+            let git_state = self.fetch_git_state(tenant_id).await;
+            let mut candidate = String::new();
+            candidate.push_str("\n## PROJECT STATE (GIT & GOVERNANCE)\n");
+            candidate.push_str(&git_state);
+            // CORE-400: Solo el entorno root/master recibe el estado de gobernanza del host.
+            if tenant_id == "root" {
+                let gov_state = self.fetch_governance_state().await;
+                candidate.push_str("\n\n");
+                candidate.push_str(&gov_state);
+            }
+            candidate.push('\n');
+            let project_tokens = estimate_tokens(&candidate);
+            if current_tokens + project_tokens <= actual_token_limit {
+                project_state_str = candidate;
+                current_tokens += project_tokens;
+            }
         }
 
         // L3 SEMANTIC MEMORY - Medium Priority
         let mut l3_added = false;
         let mut l3_str = String::new();
 
-        if !pcb.memory_pointers.swap_refs.is_empty() {
-            for _swap_query in &pcb.memory_pointers.swap_refs {
-                let query_vector = if let Some(driver) = embedding_driver {
-                    driver
-                        .embed(&pcb.memory_pointers.l1_instruction)
-                        .await
-                        .unwrap_or_else(|_| vec![0.0; 128])
-                } else {
-                    vec![0.0; 128]
-                };
+        // CORE-378: Búsqueda semántica automática en memoria L3 si swap_refs existe o consultando la instrucción actual
+        let is_trivial_chat = pcb.agent_id.is_none()
+            && crate::chal::autocorrect::is_light_task(
+                &pcb.memory_pointers.l1_instruction,
+                pcb.task_type,
+            );
+        let explicit_queries: Vec<String> = pcb
+            .memory_pointers
+            .swap_refs
+            .iter()
+            .filter(|q| !q.trim().is_empty() && q.as_str() != "semantic_memory")
+            .cloned()
+            .collect();
+        let queries_to_search: Vec<String> = if !explicit_queries.is_empty() {
+            explicit_queries
+        } else if !is_trivial_chat && !pcb.memory_pointers.l1_instruction.trim().is_empty() {
+            vec![pcb.memory_pointers.l1_instruction.clone()]
+        } else {
+            Vec::new()
+        };
 
-                if let Ok(fragments) = swap_manager.search(tenant_id, query_vector, 5).await {
-                    for fragment in fragments {
-                        let fragment_text =
-                            format!("[Memory ID: {}]\n{}\n", fragment.id, fragment.text);
-                        let fragment_tokens = estimate_tokens(&fragment_text) + 10;
-                        if current_tokens + fragment_tokens <= actual_token_limit {
-                            if !l3_added {
-                                l3_str.push_str("\n## L3 SEMANTIC MEMORY\n");
-                                l3_added = true;
+        if let Some(driver) = embedding_driver {
+            for query_text in &queries_to_search {
+                if let Ok(query_vector) = driver.embed(query_text).await {
+                    if let Ok(fragments) = swap_manager.search(tenant_id, query_vector, 3).await {
+                        for fragment in fragments {
+                            let fragment_text =
+                                format!("[Memory ID: {}]\n{}\n", fragment.id, fragment.text);
+                            let fragment_tokens = estimate_tokens(&fragment_text) + 10;
+                            if current_tokens + fragment_tokens <= actual_token_limit {
+                                if !l3_added {
+                                    l3_str.push_str("\n## L3 SEMANTIC MEMORY\n");
+                                    l3_added = true;
+                                }
+                                l3_str.push_str(&fragment_text);
+                                current_tokens += fragment_tokens;
+                            } else {
+                                break;
                             }
-                            l3_str.push_str(&fragment_text);
-                            current_tokens += fragment_tokens;
-                        } else {
-                            // Se reduce la cantidad de fragmentos devueltos al quedarse sin memoria
-                            break;
                         }
                     }
                 }
@@ -491,15 +513,21 @@ pub fn safe_resolve(workspace_root: &Path, path_str: &str) -> Option<std::path::
     // dentro del workspace.
     let workspace_canonical = workspace_root.canonicalize().ok()?;
 
-    let resolved = if candidate.exists() {
-        candidate.canonicalize().ok()?
-    } else {
-        // No existe (probablemente write_file de un archivo nuevo). Canonicaliza
-        // el padre y appendea el filename. Si el padre tampoco existe, ni
-        // siquiera se puede escribir — devolvemos None.
-        let parent = candidate.parent()?;
-        let parent_canonical = parent.canonicalize().ok()?;
-        parent_canonical.join(candidate.file_name()?)
+    let resolved = match std::fs::symlink_metadata(&candidate) {
+        Ok(_) => {
+            // Exists on disk (including a dangling symlink): canonicalize must
+            // succeed and stay inside workspace_canonical, rejecting dangling
+            // symlink write escapes.
+            candidate.canonicalize().ok()?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Truly does not exist yet (e.g. write_file for a new file).
+            // Canonicalize parent and append the filename.
+            let parent = candidate.parent()?;
+            let parent_canonical = parent.canonicalize().ok()?;
+            parent_canonical.join(candidate.file_name()?)
+        }
+        Err(_) => return None,
     };
 
     if resolved.starts_with(&workspace_canonical) {
@@ -533,8 +561,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_vcm_file_omission_on_overflow() -> anyhow::Result<()> {
+        let env = crate::enclave::ScopedTestDataDir::new()?;
         let vcm = VirtualContextManager::new();
-        let swap = LanceSwapManager::new("./test_users");
+        let swap = LanceSwapManager::new(&env.path().join("test_users").to_string_lossy());
 
         let tenant_id = format!(
             "test_tenant_vcm_overflow_{}",
@@ -543,22 +572,13 @@ mod tests {
                 .unwrap_or_else(|_| std::time::Duration::from_secs(0))
                 .as_millis()
         );
-        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let workspace_path = format!("{}/users/{}/workspace", base_dir, tenant_id);
+        let workspace_path = env.path().join("users").join(&tenant_id).join("workspace");
 
-        let mut retries = 5;
-        while retries > 0 {
-            if std::fs::create_dir_all(&workspace_path).is_ok() {
-                break;
-            }
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            retries -= 1;
-        }
         std::fs::create_dir_all(&workspace_path).context("Failed to create workspace dir")?;
 
         // Crear un archivo temporal con ruta relativa dentro del workspace del tenant
         let file_name = "test_overflow_dummy.txt";
-        let full_path = std::path::Path::new(&workspace_path).join(file_name);
+        let full_path = workspace_path.join(file_name);
 
         let mut file = std::fs::File::create(&full_path).context("Failed to create test file")?;
         let large_content = "X".repeat(2000); // ~500 tokens
@@ -573,9 +593,6 @@ mod tests {
 
         // Límite que permite el contexto base (Project Context) pero no el archivo grande
         let context = vcm.assemble_context(&pcb, &swap, None, 250).await?;
-
-        // Limpiar
-        let _ = std::fs::remove_dir_all(format!("{}/users/{}", base_dir, tenant_id));
 
         assert!(
             context.contains("omitido por falta de memoria")
@@ -651,6 +668,23 @@ mod tests {
             safe_resolve(workspace.path(), "link.txt").is_none(),
             "safe_resolve must reject symlinks that resolve outside the workspace"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_safe_resolve_blocks_dangling_symlink_escape() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+        let workspace = tempfile::tempdir()?;
+        let outside = tempfile::tempdir()?;
+        let nonexistent_outside = outside.path().join("pwned.txt");
+        let link = workspace.path().join("dangling.txt");
+        symlink(&nonexistent_outside, &link)?;
+
+        assert!(
+            safe_resolve(workspace.path(), "dangling.txt").is_none(),
+            "safe_resolve must reject dangling symlinks"
+        );
+        Ok(())
     }
 
     #[test]

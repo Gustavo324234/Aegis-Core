@@ -26,6 +26,8 @@ pub mod telemetry;
 pub mod trainer;
 pub mod tunnel;
 pub mod vcm;
+pub mod video_studio;
+pub mod whatsapp;
 pub mod workspace;
 
 // Re-exportar para fácil acceso
@@ -34,7 +36,7 @@ pub use chronos::ChronosDaemon;
 pub use citadel::identity::Citadel;
 pub use dag::{DagNode, DagNodeStatus, ExecutionGraph, GraphManager, NodeResult};
 pub use enclave::{MasterEnclave, TenantDB};
-pub use pcb::{ProcessRole, ProcessState, TaskType, PCB};
+pub use pcb::{ProcessRole, ProcessState, TaskType, ToolCall, ToolDefinition, ToolResult, PCB};
 pub use router::{CognitiveRouter, RoutingDecision, SirenEngine, SirenRouter};
 pub use scheduler::persistence::{SQLCipherPersistor, StatePersistor};
 pub use scheduler::{CognitiveScheduler, SchedulerEvent, SchedulerStats, SharedScheduler};

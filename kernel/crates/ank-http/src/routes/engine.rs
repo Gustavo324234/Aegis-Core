@@ -77,10 +77,7 @@ fn is_disallowed_ip(ip: IpAddr, allow_local_admin: bool) -> bool {
             if is_cloud_metadata_or_special_v4(v4) {
                 return true;
             }
-            if !allow_local_admin && (v4.is_loopback() || v4.is_private()) {
-                return true;
-            }
-            false
+            !allow_local_admin && (v4.is_loopback() || v4.is_private())
         }
         IpAddr::V6(v6) => {
             if let Some(mapped_v4) = v6.to_ipv4_mapped() {
@@ -94,10 +91,7 @@ fn is_disallowed_ip(ip: IpAddr, allow_local_admin: bool) -> bool {
             if v6.is_unspecified() || v6.is_multicast() || is_link_local || is_aws_imds_v6 {
                 return true;
             }
-            if !allow_local_admin && (v6.is_loopback() || is_ula) {
-                return true;
-            }
-            false
+            !allow_local_admin && (v6.is_loopback() || is_ula)
         }
     }
 }
@@ -107,10 +101,32 @@ fn is_disallowed_ip(ip: IpAddr, allow_local_admin: bool) -> bool {
 ///   including loopback/LAN Ollama/vLLM, while blocking cloud metadata IPs and URL credentials.
 /// - Regular Tenant (`allow_local_admin = false`): strictly requires `https://`
 ///   and rejects loopback, RFC1918 private LAN, `.local`/`.internal`, and metadata targets.
-fn validate_engine_api_url(
+fn resolve_host_ips_std(host: &str, port: u16) -> Option<Vec<IpAddr>> {
+    use std::net::ToSocketAddrs;
+    let addrs = (host, port).to_socket_addrs().ok()?;
+    let ips: Vec<IpAddr> = addrs.map(|sa| sa.ip()).collect();
+    if ips.is_empty() {
+        None
+    } else {
+        Some(ips)
+    }
+}
+
+pub(crate) fn validate_engine_api_url(
     raw_url: &str,
     allow_local_admin: bool,
 ) -> Result<String, AegisHttpError> {
+    validate_engine_api_url_with_resolver(raw_url, allow_local_admin, resolve_host_ips_std)
+}
+
+pub(crate) fn validate_engine_api_url_with_resolver<F>(
+    raw_url: &str,
+    allow_local_admin: bool,
+    resolve_fn: F,
+) -> Result<String, AegisHttpError>
+where
+    F: FnOnce(&str, u16) -> Option<Vec<IpAddr>>,
+{
     let trimmed = raw_url.trim();
     if trimmed.is_empty() {
         return Err(AegisHttpError::BadRequest(
@@ -172,6 +188,18 @@ fn validate_engine_api_url(
                 "Target IP address is not permitted for api_url".to_string(),
             ));
         }
+    } else {
+        let port = parsed.port_or_known_default().unwrap_or(443);
+        if let Some(resolved_ips) = resolve_fn(&lower_host, port) {
+            if resolved_ips
+                .iter()
+                .any(|ip| is_disallowed_ip(*ip, allow_local_admin))
+            {
+                return Err(AegisHttpError::Forbidden(
+                    "Resolved target IP address is not permitted for api_url".to_string(),
+                ));
+            }
+        }
     }
 
     Ok(trimmed.to_string())
@@ -203,41 +231,11 @@ fn infer_tenant_provider(raw_provider: &str, api_url: &str) -> String {
 }
 
 async fn resolve_optional_caller(state: &AppState, headers: &HeaderMap) -> CallerScope {
-    let Some(tenant_id) = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
-        return CallerScope::Unauthenticated;
-    };
-    let Some(raw_key) = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-    else {
-        return CallerScope::Unauthenticated;
-    };
-
-    let hash = hash_passphrase(raw_key);
-    let citadel = state.citadel.lock().await;
-    if citadel
-        .enclave
-        .authenticate_master(tenant_id, &hash)
-        .await
-        .unwrap_or(false)
-    {
-        return CallerScope::Master;
+    match crate::citadel::authenticate_headers(state, headers).await {
+        Ok(auth) if auth.is_master => CallerScope::Master,
+        Ok(auth) => CallerScope::Tenant(auth.tenant_id),
+        Err(_) => CallerScope::Unauthenticated,
     }
-    if citadel
-        .enclave
-        .authenticate_tenant(tenant_id, &hash)
-        .await
-        .unwrap_or(false)
-    {
-        return CallerScope::Tenant(tenant_id.to_string());
-    }
-    CallerScope::Unauthenticated
 }
 
 async fn read_global_engine_state(state: &AppState) -> EngineStatusResponse {
@@ -446,6 +444,16 @@ pub async fn configure(
         .map_err(AegisHttpError::Internal)?;
     router.invalidate_sticky(&auth.tenant_id).await;
 
+    let _ = state
+        .workspace_events
+        .send(ank_core::pr_manager::WorkspaceWsEvent {
+            tenant_id: auth.tenant_id.clone(),
+            payload: json!({
+                "event": "provider_keys_updated",
+                "data": { "scope": "engine" }
+            }),
+        });
+
     Ok(Json(ConfigureResponse {
         success: true,
         message: "Tenant Cognitive Engine key configured in isolated KeyPool.".to_string(),
@@ -463,14 +471,27 @@ pub async fn set_hw_profile(
     State(state): State<AppState>,
     Json(body): Json<HwProfileRequest>,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let admin_hash = crate::citadel::hash_passphrase(&body.session_key);
-    let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(&body.admin_tenant_id, &admin_hash)
-        .await
-        .map_err(AegisHttpError::Internal)?;
+    let is_auth = if body
+        .session_key
+        .trim()
+        .starts_with(crate::citadel::CITADEL_TOKEN_PREFIX)
+    {
+        state
+            .session_store
+            .resolve(&body.session_key, Some(&body.admin_tenant_id))
+            .map(|a| a.is_master)
+            .unwrap_or(false)
+    } else {
+        let admin_hash = hash_passphrase(&body.session_key);
+        let enclave = {
+            let citadel = state.citadel.lock().await;
+            citadel.enclave.clone()
+        };
+        enclave
+            .authenticate_master(&body.admin_tenant_id, &admin_hash)
+            .await
+            .map_err(AegisHttpError::Internal)?
+    };
 
     if !is_auth {
         return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
@@ -482,7 +503,7 @@ pub async fn set_hw_profile(
         ));
     }
 
-    std::env::set_var("HW_PROFILE", &body.profile);
+    *state.hw_profile.write().await = body.profile.clone();
 
     Ok(Json(json!({
         "success": true,
@@ -518,6 +539,45 @@ mod tests {
 
         // Embedded credentials rejected
         assert!(validate_engine_api_url("https://user:pass@openrouter.ai/api/v1", true).is_err());
+    }
+
+    #[test]
+    fn test_validate_engine_api_url_blocks_dns_rebinding_to_private_and_metadata_ips(
+    ) -> anyhow::Result<()> {
+        let loopback_ip: IpAddr = "127.0.0.1".parse()?;
+        let private_ip: IpAddr = "10.0.0.5".parse()?;
+        let metadata_ip: IpAddr = "169.254.169.254".parse()?;
+        let public_ip: IpAddr = "93.184.216.34".parse()?;
+
+        assert!(validate_engine_api_url_with_resolver(
+            "https://rebind.attacker.example/v1",
+            false,
+            |_, _| Some(vec![loopback_ip]),
+        )
+        .is_err());
+
+        assert!(validate_engine_api_url_with_resolver(
+            "https://internal.attacker.example/v1",
+            false,
+            |_, _| Some(vec![private_ip]),
+        )
+        .is_err());
+
+        assert!(validate_engine_api_url_with_resolver(
+            "http://meta.attacker.example/latest",
+            true,
+            |_, _| Some(vec![metadata_ip]),
+        )
+        .is_err());
+
+        assert!(validate_engine_api_url_with_resolver(
+            "https://api.example.com/v1",
+            false,
+            |_, _| Some(vec![public_ip]),
+        )
+        .is_ok());
+
+        Ok(())
     }
 
     #[test]

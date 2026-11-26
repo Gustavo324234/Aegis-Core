@@ -115,7 +115,7 @@ const AgentNodeRow: React.FC<{
 };
 
 export const AgentActivityPanel: React.FC = () => {
-    const { agentTree } = useAegisStore();
+    const agentTree = useAegisStore((s) => s.agentTree);
     const [panelExpanded, setPanelExpanded] = useState(false);
 
     const workingAgents = agentTree.filter(n =>

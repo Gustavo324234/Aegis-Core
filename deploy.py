@@ -26,17 +26,25 @@ Requisitos:
 
 import argparse
 import os
+import shlex
+import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
 # ── Configuración default ─────────────────────────────────────────────────────
-DEFAULT_HOST     = "192.168.1.6"
-DEFAULT_USER     = "tavo"
-DEFAULT_SSH_KEY  = str(Path.home() / ".ssh" / "id_ed25519")
-REMOTE_BIN       = "/usr/local/bin/ank-server"
-REMOTE_UI        = "/usr/share/aegis/ui"
-REMOTE_SERVICE   = "aegis"
+DEFAULT_HOST      = os.environ.get("AEGIS_DEPLOY_HOST", "127.0.0.1")
+DEFAULT_USER      = os.environ.get("AEGIS_DEPLOY_USER") or os.environ.get("USER") or os.environ.get("USERNAME") or "aegis"
+DEFAULT_SSH_KEY   = str(Path.home() / ".ssh" / "id_ed25519")
+REMOTE_BIN        = "/usr/local/bin/ank-server"
+REMOTE_UI         = "/usr/share/aegis/ui"
+REMOTE_MODULES    = "/etc/aegis/modules"
+REMOTE_AGENTS     = "/etc/aegis/agents"
+REMOTE_WA_BRIDGE  = "/opt/aegis/whatsapp_bridge"
+REMOTE_AGY_BRIDGE = "/opt/aegis/antigravity_bridge"
+REMOTE_ENV_FILE   = "/etc/aegis/aegis.env"
+REMOTE_SERVICE    = "aegis"
 
 # ── Colores ANSI ──────────────────────────────────────────────────────────────
 class C:
@@ -65,7 +73,7 @@ def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> Non
 def ssh(host: str, user: str, key: str, cmd: str) -> subprocess.CompletedProcess:
     """Ejecuta un comando remoto via SSH."""
     return subprocess.run(
-        ["ssh", "-i", key, "-o", "StrictHostKeyChecking=no",
+        ["ssh", "-i", key, "-o", "StrictHostKeyChecking=accept-new",
          f"{user}@{host}", cmd],
         capture_output=True, text=True
     )
@@ -73,7 +81,7 @@ def ssh(host: str, user: str, key: str, cmd: str) -> subprocess.CompletedProcess
 def scp(host: str, user: str, key: str, local: str, remote: str) -> None:
     """Copia un archivo local al servidor via SCP."""
     result = subprocess.run(
-        ["scp", "-i", key, "-o", "StrictHostKeyChecking=no",
+        ["scp", "-i", key, "-o", "StrictHostKeyChecking=accept-new",
          "-r", local, f"{user}@{host}:{remote}"],
         capture_output=True, text=True
     )
@@ -84,7 +92,7 @@ def rsync(host: str, user: str, key: str, local: str, remote: str) -> None:
     """Sincroniza un directorio via rsync (más eficiente que scp para la UI)."""
     result = subprocess.run(
         ["rsync", "-az", "--delete",
-         "-e", f"ssh -i {key} -o StrictHostKeyChecking=no",
+         "-e", f"ssh -i {key} -o StrictHostKeyChecking=accept-new",
          local + "/", f"{user}@{host}:{remote}/"],
         capture_output=True, text=True
     )
@@ -207,8 +215,27 @@ def stop_service(host: str, user: str, key: str) -> None:
     else:
         warn("No se pudo detener el servicio (puede que no esté corriendo)")
 
+def ensure_linux_elf_binary(binary: Path) -> None:
+    """Verifica que el binario a desplegar en Linux sea un ELF válido y no un .exe de Windows."""
+    if binary.suffix.lower() == ".exe":
+        die(
+            f"El binario {binary.name} es un ejecutable de Windows (.exe) y no puede desplegarse a Linux. "
+            "Compilá en Linux (cargo build --release -p ank-server), usá update.ps1 en Windows, o pasá --ui-only."
+        )
+    try:
+        with binary.open("rb") as fh:
+            magic = fh.read(4)
+    except OSError as exc:
+        die(f"No se pudo leer el binario {binary}: {exc}")
+    if magic != b"\x7fELF":
+        die(
+            f"El binario {binary} no es un ELF de Linux válido (cabecera {magic!r}). "
+            "Verificá la plataforma de compilación o usá --ui-only."
+        )
+
 def deploy_binary(host: str, user: str, key: str, binary: Path) -> None:
     """Sube el binario al servidor."""
+    ensure_linux_elf_binary(binary)
     log(f"Subiendo binario ({binary.stat().st_size / (1024*1024):.1f} MB)...")
     t = time.time()
 
@@ -227,44 +254,83 @@ def deploy_binary(host: str, user: str, key: str, binary: Path) -> None:
     elapsed = time.time() - t
     ok(f"Binario desplegado en {elapsed:.1f}s")
 
-def deploy_ui(host: str, user: str, key: str, dist: Path) -> None:
-    """Sube la UI dist al servidor."""
-    log(f"Subiendo UI ({dist})...")
+def deploy_directory(
+    host: str,
+    user: str,
+    key: str,
+    local_dir: Path,
+    remote_dir: str,
+    label: str,
+    excludes: tuple[str, ...] = (),
+) -> None:
+    """Sube un directorio local al servidor via rsync o scp con exclusiones."""
+    if not local_dir.is_dir():
+        warn(f"{label}: directorio local no encontrado ({local_dir}) — omitiendo.")
+        return
+
+    log(f"Subiendo {label} ({local_dir} → {remote_dir})...")
     t = time.time()
+    staging_name = f"aegis-deploy-{Path(remote_dir).name}"
+    remote_tmp = f"/tmp/{staging_name}"
 
-    # Verificar si rsync está disponible
-    has_rsync = subprocess.run(["which", "rsync"], capture_output=True).returncode == 0
+    ssh(host, user, key, f"sudo mkdir -p {shlex.quote(remote_dir)} && sudo chmod 755 {shlex.quote(remote_dir)}")
 
-    # Crear directorio destino si no existe
-    ssh(host, user, key, f"sudo mkdir -p {REMOTE_UI} && sudo chmod 755 {REMOTE_UI}")
-
+    has_rsync = shutil.which("rsync") is not None and not (os.name == "nt" and ":" in str(local_dir))
     if has_rsync:
-        # rsync es más eficiente — solo sube los archivos cambiados
-        result = subprocess.run(
-            ["rsync", "-az", "--delete",
-             "-e", f"ssh -i {key} -o StrictHostKeyChecking=no",
-             str(dist) + "/", f"{user}@{host}:/tmp/aegis-ui-dist/"],
-            capture_output=True, text=True
-        )
+        rsync_cmd = [
+            "rsync", "-az", "--delete",
+            *[f"--exclude={pat}" for pat in excludes],
+            "-e", f"ssh -i {key} -o StrictHostKeyChecking=accept-new",
+            str(local_dir) + "/", f"{user}@{host}:{remote_tmp}/",
+        ]
+        result = subprocess.run(rsync_cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            die(f"rsync falló: {result.stderr}")
-        ssh(host, user, key,
-            f"sudo rsync -a --delete /tmp/aegis-ui-dist/ {REMOTE_UI}/ && "
-            f"sudo chown -R aegis:aegis {REMOTE_UI} 2>/dev/null || true && "
-            f"rm -rf /tmp/aegis-ui-dist"
+            die(f"rsync falló ({label}): {result.stderr}")
+        sync_cmd = (
+            f"sudo rsync -a --delete {shlex.quote(remote_tmp)}/ {shlex.quote(remote_dir)}/ && "
+            f"sudo chown -R aegis:aegis {shlex.quote(remote_dir)} 2>/dev/null || true && "
+            f"rm -rf {shlex.quote(remote_tmp)}"
         )
     else:
-        # Fallback a scp
-        scp(host, user, key, str(dist), f"/tmp/aegis-ui-dist")
-        ssh(host, user, key,
-            f"sudo rm -rf {REMOTE_UI}/* && "
-            f"sudo cp -r /tmp/aegis-ui-dist/* {REMOTE_UI}/ && "
-            f"sudo chown -R aegis:aegis {REMOTE_UI} 2>/dev/null || true && "
-            f"rm -rf /tmp/aegis-ui-dist"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_to_send = local_dir
+            if excludes:
+                filtered = Path(tmp_dir) / staging_name
+                shutil.copytree(local_dir, filtered, ignore=shutil.ignore_patterns(*excludes))
+                src_to_send = filtered
+            ssh(host, user, key, f"rm -rf {shlex.quote(remote_tmp)}")
+            scp(host, user, key, str(src_to_send), remote_tmp)
+        sync_cmd = (
+            f"sudo rm -rf {shlex.quote(remote_dir)}/* && "
+            f"sudo cp -a {shlex.quote(remote_tmp)}/. {shlex.quote(remote_dir)}/ && "
+            f"sudo chown -R aegis:aegis {shlex.quote(remote_dir)} 2>/dev/null || true && "
+            f"rm -rf {shlex.quote(remote_tmp)}"
         )
 
+    res = ssh(host, user, key, sync_cmd)
+    if res.returncode != 0:
+        die(f"Error al instalar {label}: {res.stderr}")
+
     elapsed = time.time() - t
-    ok(f"UI desplegada en {elapsed:.1f}s")
+    ok(f"{label} desplegado en {elapsed:.1f}s")
+
+def backfill_remote_env(host: str, user: str, key: str) -> None:
+    """Asegura que /etc/aegis/aegis.env contenga las rutas de módulos, agentes y bridges."""
+    env_pairs = [
+        ("AEGIS_MODULES_DIR", REMOTE_MODULES),
+        ("AEGIS_AGENTS_CONFIG_DIR", REMOTE_AGENTS),
+        ("AEGIS_WHATSAPP_BRIDGE_DIR", REMOTE_WA_BRIDGE),
+        ("AEGIS_ANTIGRAVITY_BRIDGE_DIR", REMOTE_AGY_BRIDGE),
+    ]
+    checks = " && ".join(
+        f"(grep -q '^{k}=' {REMOTE_ENV_FILE} || echo '{k}={v}' | sudo tee -a {REMOTE_ENV_FILE} >/dev/null)"
+        for k, v in env_pairs
+    )
+    ssh(host, user, key, f"if [ -f {REMOTE_ENV_FILE} ]; then {checks}; fi")
+
+def deploy_ui(host: str, user: str, key: str, dist: Path) -> None:
+    """Sube la UI dist al servidor."""
+    deploy_directory(host, user, key, dist, REMOTE_UI, "UI")
 
 def start_service(host: str, user: str, key: str) -> None:
     """Inicia el servicio Aegis y verifica que arranque."""
@@ -314,6 +380,7 @@ def main():
     parser.add_argument("--key",          default=DEFAULT_SSH_KEY, help="Path a la SSH key")
     parser.add_argument("--kernel-only",  action="store_true",     help="Solo compilar y desplegar el binario")
     parser.add_argument("--ui-only",      action="store_true",     help="Solo compilar y desplegar la UI")
+    parser.add_argument("--skip-assets",  action="store_true",     help="No desplegar modules/, agents/ ni bridges")
     parser.add_argument("--no-build",     action="store_true",     help="Desplegar sin recompilar (usa binario existente)")
     args = parser.parse_args()
 
@@ -342,15 +409,18 @@ def main():
     else:
         warn("--no-build: usando artefactos existentes")
         if not args.ui_only:
-            binary = root / "target" / "release" / "ank-server.exe"
-            if not binary.exists():
-                binary = root / "target" / "release" / "ank-server"
+            linux_bin = root / "target" / "release" / "ank-server"
+            win_bin   = root / "target" / "release" / "ank-server.exe"
+            binary    = linux_bin if linux_bin.exists() else win_bin
             if not binary.exists():
                 die(f"Binario no encontrado en target/release/. Compilá primero.")
         if not args.kernel_only:
             dist = root / "shell" / "ui" / "dist"
             if not dist.exists():
                 die(f"UI dist no encontrada en {dist}. Compilá primero.")
+
+    if binary:
+        ensure_linux_elf_binary(binary)
 
     # 3. Deploy
     header("Desplegando en el servidor...")
@@ -360,6 +430,20 @@ def main():
         deploy_binary(args.host, args.user, args.key, binary)
     if dist:
         deploy_ui(args.host, args.user, args.key, dist)
+    if not args.kernel_only and not args.ui_only and not args.skip_assets:
+        deploy_directory(host=args.host, user=args.user, key=args.key,
+                         local_dir=root / "kernel" / "modules", remote_dir=REMOTE_MODULES,
+                         label="Módulos de dominio")
+        deploy_directory(host=args.host, user=args.user, key=args.key,
+                         local_dir=root / "kernel" / "config" / "agents", remote_dir=REMOTE_AGENTS,
+                         label="Configuración de agentes")
+        deploy_directory(host=args.host, user=args.user, key=args.key,
+                         local_dir=root / "tools" / "whatsapp_bridge", remote_dir=REMOTE_WA_BRIDGE,
+                         label="WhatsApp bridge", excludes=("node_modules", ".sessions"))
+        deploy_directory(host=args.host, user=args.user, key=args.key,
+                         local_dir=root / "tools" / "antigravity_bridge", remote_dir=REMOTE_AGY_BRIDGE,
+                         label="Antigravity bridge", excludes=("__pycache__", "*.pyc"))
+        backfill_remote_env(args.host, args.user, args.key)
 
     start_service(args.host, args.user, args.key)
     show_token(args.host, args.user, args.key)

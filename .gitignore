@@ -6,12 +6,17 @@ target_verify_fix/
 # Node / UI
 shell/ui/node_modules/
 shell/ui/dist/
+tools/whatsapp_bridge/node_modules/
+tools/whatsapp_bridge/.sessions/
 
 
-# Python (legacy BFF)
+# Python (legacy BFF & bridges)
 shell/bff/__pycache__/
 shell/bff/*.pyc
 shell/bff/.pytest_cache/
+.venv/
+.venv-agy/
+**/__pycache__/
 
 # Environment files
 .env
@@ -40,6 +45,10 @@ kernel/crates/ank-server/build_error.log
 kernel/crates/ank-server/test_output.txt
 kernel/clippy_output.txt
 pr_body.txt
+pr_url.txt
+tools/agent_sandbox/logs/
+tools/agent_sandbox/workspace/
+tools/agent_sandbox/server_data/
 
 # Scratch / temp
 scratch/
@@ -65,21 +74,24 @@ docker-compose.override.yml
 # AI assistant instructions
 CLAUDE.md
 
-# Internal governance — tickets, agent prompts, dispatch plans
-governance/Tickets/
+# Internal governance — agent prompts, dispatch plans, internal audits
+governance/Tickets/CORE-AUDIT-*.md
 governance/AGENT_PROMPTS.md
 governance/DISPATCH_PLAN.md
 governance/DISPATCH_EPICS_38_39_40.md
 governance/DISPATCH_EPIC_41.md
 governance/AEGIS_CONTEXT.md
 governance/AEGIS_MASTER_CODEX.md
-governance/TICKETS_MASTER.md
 
 # Internal AI model audits
 auditorias/
 
 # Claude assistant local settings
 .claude/
+
+# Local AI agent rules & graphify knowledge graph (never commit)
+.agents/
+graphify-out/
 
 # Plugin Signer keys (generated on startup, never commit)
 plugin_signer.key

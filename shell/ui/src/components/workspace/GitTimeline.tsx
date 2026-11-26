@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { GitBranch, GitCommit, RefreshCw } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../../store/useAegisStore';
 
 interface CommitInfo {
@@ -16,7 +17,9 @@ interface BranchInfo {
 }
 
 const GitTimeline: React.FC = () => {
-    const { tenantId, sessionKey } = useAegisStore();
+    const { tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
+    );
     const [branches, setBranches] = useState<BranchInfo[]>([]);
     const [commits, setCommits] = useState<CommitInfo[]>([]);
     const [currentBranch, setCurrentBranch] = useState('');

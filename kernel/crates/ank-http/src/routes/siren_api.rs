@@ -370,7 +370,6 @@ async fn webrtc_offer_handler(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
     Path(tenant_id): Path<String>,
-    headers: axum::http::HeaderMap,
     Json(req): Json<WebRtcOffer>,
 ) -> Result<Json<WebRtcAnswer>, AegisHttpError> {
     if !auth.is_master && auth.tenant_id != tenant_id {
@@ -385,11 +384,7 @@ async fn webrtc_offer_handler(
         ));
     }
 
-    let session_key = headers
-        .get("x-citadel-key")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
+    let session_key = auth.session_key_hash.clone();
 
     tracing::info!(
         "Siren WebRTC: Iniciando negociacion SDP para tenant={}",

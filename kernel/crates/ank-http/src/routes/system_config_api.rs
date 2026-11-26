@@ -1,8 +1,4 @@
-use crate::{
-    citadel::{hash_passphrase, CitadelError},
-    error::AegisHttpError,
-    state::AppState,
-};
+use crate::{error::AegisHttpError, state::AppState};
 use axum::{
     extract::{ConnectInfo, State},
     http::HeaderMap,
@@ -44,32 +40,9 @@ async fn require_master_auth(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<String, AegisHttpError> {
-    let tenant_id = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingTenant))?;
-
-    let raw_key = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingKey))?;
-
-    let hash = hash_passphrase(&raw_key);
-    let citadel = state.citadel.lock().await;
-
-    let is_auth = citadel
-        .enclave
-        .authenticate_master(&tenant_id, &hash)
+    crate::citadel::authenticate_master_headers(state, headers)
         .await
-        .map_err(|e| AegisHttpError::Kernel(e.to_string()))?;
-
-    if !is_auth {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-    }
-
-    Ok(tenant_id)
+        .map_err(AegisHttpError::Citadel)
 }
 
 pub async fn get_tls_status(
@@ -78,19 +51,22 @@ pub async fn get_tls_status(
 ) -> Result<Json<TlsStatusResponse>, AegisHttpError> {
     require_master_auth(&state, &headers).await?;
 
-    let citadel = state.citadel.lock().await;
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
 
-    let tls_enabled = match citadel.enclave.get_config("tls_enabled").await {
+    let tls_enabled = match enclave.get_config("tls_enabled").await {
         Ok(Some(v)) => v == "true",
         _ => false,
     };
 
-    let cert_path = match citadel.enclave.get_config("tls_cert_path").await {
+    let cert_path = match enclave.get_config("tls_cert_path").await {
         Ok(Some(p)) => Some(p),
         _ => None,
     };
 
-    let key_path = match citadel.enclave.get_config("tls_key_path").await {
+    let key_path = match enclave.get_config("tls_key_path").await {
         Ok(Some(p)) => Some(p),
         _ => None,
     };
@@ -149,19 +125,19 @@ pub async fn generate_tls(
         .args(["640", cert_path, key_path])
         .status();
 
-    let citadel = state.citadel.lock().await;
-    citadel
-        .enclave
+    let enclave = {
+        let citadel = state.citadel.lock().await;
+        citadel.enclave.clone()
+    };
+    enclave
         .set_config("tls_enabled", "true")
         .await
         .map_err(AegisHttpError::Internal)?;
-    citadel
-        .enclave
+    enclave
         .set_config("tls_cert_path", cert_path)
         .await
         .map_err(AegisHttpError::Internal)?;
-    citadel
-        .enclave
+    enclave
         .set_config("tls_key_path", key_path)
         .await
         .map_err(AegisHttpError::Internal)?;

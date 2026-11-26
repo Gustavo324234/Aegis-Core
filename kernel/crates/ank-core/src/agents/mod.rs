@@ -1,3 +1,4 @@
+pub mod antigravity_runner;
 pub mod chat_context;
 pub mod context;
 pub mod event;
@@ -11,6 +12,7 @@ pub mod project_ledger;
 pub mod tool_registry;
 pub mod tree;
 
+pub use antigravity_runner::{AntigravityRunner, AntigravitySdkStatus};
 pub use chat_context::{ChatContextWindow, CompactionHints, ConversationTurn, TurnRole};
 pub use context::ContextBudget;
 pub use event::AgentEvent;

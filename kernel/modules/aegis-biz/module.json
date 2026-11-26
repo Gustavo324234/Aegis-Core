@@ -1,10 +1,10 @@
 {
   "module_id": "aegis.domain.business",
-  "display_name": "Aegis Business & Store Manager",
-  "version": "1.0.0",
+  "display_name": "Aegis Business & POS",
+  "version": "1.1.0",
   "ipc_transport": {
-    "protocol": "gRPC",
-    "endpoint": "localhost:50071"
+    "protocol": "native",
+    "endpoint": "local://enclave"
   },
   "database": {
     "driver": "sqlite",
@@ -13,28 +13,73 @@
   "exposed_tools": [
     {
       "name": "biz_add_product",
-      "description": "Register a new product in the store database",
+      "description": "Crea o actualiza un producto/insumo en el catálogo e inventario del negocio (precio, costo, stock, stock mínimo, código de barras, categoría).",
       "parameters": {
         "type": "object",
         "properties": {
-          "barcode": { "type": "string" },
-          "name": { "type": "string" },
-          "price": { "type": "number" }
+          "id": { "type": "string", "description": "ID opcional si se quiere actualizar un producto existente." },
+          "barcode": { "type": "string", "description": "Código de barras o SKU." },
+          "name": { "type": "string", "description": "Nombre del producto." },
+          "category": { "type": "string", "description": "Categoría (ej: Repuestos, Lácteos, Electrónica, General)." },
+          "price": { "type": "number", "description": "Precio unitario de venta." },
+          "cost": { "type": "number", "description": "Costo unitario de compra (opcional)." },
+          "stock": { "type": "integer", "description": "Stock inicial o actualizado." },
+          "min_stock": { "type": "integer", "description": "Stock mínimo para alerta de reposición (por defecto 3)." }
         },
         "required": ["name", "price"]
       }
     },
     {
       "name": "biz_update_stock",
-      "description": "Update the inventory stock count for a specific item",
+      "description": "Suma o descuenta unidades del stock de un producto (por nombre, código de barras o id). Ej: +10 por compra a proveedor o -2 por ajuste.",
       "parameters": {
         "type": "object",
         "properties": {
-          "barcode": { "type": "string" },
-          "name": { "type": "string" },
-          "quantity_change": { "type": "integer" }
+          "product_id": { "type": "string", "description": "ID del producto (opcional)." },
+          "barcode": { "type": "string", "description": "Código de barras o SKU (opcional)." },
+          "name": { "type": "string", "description": "Nombre del producto." },
+          "quantity_change": { "type": "integer", "description": "Cambio de stock (positivo para ingreso, negativo para salida)." },
+          "reason": { "type": "string", "description": "Motivo del ajuste o proveedor (opcional)." }
         },
         "required": ["quantity_change"]
+      }
+    },
+    {
+      "name": "biz_record_sale",
+      "description": "Registra una venta en el Punto de Venta (POS), descuenta automáticamente el stock del producto y opcionalmente registra el ingreso en Finanzas.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "product_id": { "type": "string" },
+          "barcode": { "type": "string" },
+          "product_name": { "type": "string", "description": "Nombre del producto vendido." },
+          "quantity": { "type": "integer", "description": "Cantidad vendida (por defecto 1)." },
+          "unit_price": { "type": "number", "description": "Precio unitario cobrado (si se omite usa el precio de catálogo)." },
+          "customer": { "type": "string", "description": "Cliente o nota (opcional)." },
+          "payment_method": { "type": "string", "description": "efectivo, transferencia, tarjeta, qr, otro." },
+          "record_in_finances": { "type": "boolean", "description": "Si es true (por defecto), también registra la venta en el libro de ingresos personales." }
+        },
+        "required": ["quantity"]
+      }
+    },
+    {
+      "name": "biz_delete_product",
+      "description": "Elimina un producto del catálogo por id, código de barras o nombre.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "barcode": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "biz_get_overview",
+      "description": "Obtiene todo el inventario de productos, productos con bajo stock, ventas recientes y métricas del negocio.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
       }
     }
   ],
@@ -43,31 +88,16 @@
       "view_id": "add_product_form",
       "type": "form",
       "title": "Registrar Producto",
-      "description": "Añade un nuevo producto a la base de datos de la tienda",
+      "description": "Añade o actualiza un producto en el catálogo del negocio",
       "icon": "Plus",
       "tool_name": "biz_add_product",
       "fields": [
-        {
-          "name": "barcode",
-          "label": "Código de Barras",
-          "type": "text",
-          "placeholder": "841023...",
-          "required": false
-        },
-        {
-          "name": "name",
-          "label": "Nombre del Producto",
-          "type": "text",
-          "placeholder": "Ej. Queso Parmesano",
-          "required": true
-        },
-        {
-          "name": "price",
-          "label": "Precio Unitario",
-          "type": "number",
-          "placeholder": "0.00",
-          "required": true
-        }
+        { "name": "barcode", "label": "Código / SKU", "type": "text", "placeholder": "779...", "required": false },
+        { "name": "name", "label": "Nombre del Producto", "type": "text", "placeholder": "Ej. Filtro Secador", "required": true },
+        { "name": "category", "label": "Categoría", "type": "text", "placeholder": "Repuestos / General", "required": false },
+        { "name": "price", "label": "Precio Venta", "type": "number", "placeholder": "0.00", "required": true },
+        { "name": "cost", "label": "Costo", "type": "number", "placeholder": "0.00", "required": false },
+        { "name": "stock", "label": "Stock Inicial", "type": "number", "placeholder": "10", "required": false }
       ]
     },
     {
@@ -78,27 +108,23 @@
       "icon": "TrendingUp",
       "tool_name": "biz_update_stock",
       "fields": [
-        {
-          "name": "barcode",
-          "label": "Código de Barras",
-          "type": "text",
-          "placeholder": "841023...",
-          "required": false
-        },
-        {
-          "name": "name",
-          "label": "Nombre del Producto",
-          "type": "text",
-          "placeholder": "Ej. Queso Parmesano",
-          "required": false
-        },
-        {
-          "name": "quantity_change",
-          "label": "Cambio de Cantidad",
-          "type": "number",
-          "placeholder": "Ej. 15 o -5",
-          "required": true
-        }
+        { "name": "barcode", "label": "Código / SKU", "type": "text", "placeholder": "779...", "required": false },
+        { "name": "name", "label": "Nombre del Producto", "type": "text", "placeholder": "Ej. Filtro Secador", "required": false },
+        { "name": "quantity_change", "label": "Cambio de Cantidad (+ o -)", "type": "number", "placeholder": "Ej. 15 o -2", "required": true }
+      ]
+    },
+    {
+      "view_id": "record_sale_form",
+      "type": "form",
+      "title": "Registrar Venta (POS)",
+      "description": "Registra una venta y descuenta stock automáticamente",
+      "icon": "TrendingUp",
+      "tool_name": "biz_record_sale",
+      "fields": [
+        { "name": "product_name", "label": "Producto", "type": "text", "placeholder": "Nombre exacto o parcial", "required": true },
+        { "name": "quantity", "label": "Cantidad", "type": "number", "placeholder": "1", "required": true },
+        { "name": "unit_price", "label": "Precio Unitario (opcional)", "type": "number", "placeholder": "Usa catálogo si queda vacío", "required": false },
+        { "name": "customer", "label": "Cliente / Nota", "type": "text", "placeholder": "Consumidor Final", "required": false }
       ]
     }
   ]

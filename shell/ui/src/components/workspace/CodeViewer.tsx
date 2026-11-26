@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { FolderOpen, File, ChevronRight, ChevronDown, Code } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../../store/useAegisStore';
 
 interface FsEntry {
@@ -64,7 +65,9 @@ const FileNode: React.FC<{
 };
 
 const CodeViewer: React.FC = () => {
-    const { tenantId, sessionKey } = useAegisStore();
+    const { tenantId, sessionKey } = useAegisStore(
+        useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
+    );
     const [tree, setTree] = useState<FsEntry[]>([]);
     const [selectedPath, setSelectedPath] = useState<string | null>(null);
     const [content, setContent] = useState<string>('');

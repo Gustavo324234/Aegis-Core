@@ -6,6 +6,7 @@ pub mod native;
 pub mod siren;
 
 pub use cloud::CloudProxyDriver;
+pub use embeddings::{CloudEmbeddingDriver, LocalEmbeddingDriver};
 #[cfg(feature = "local_llm")]
 pub use native::LlamaNativeDriver;
 pub use siren::{ElevenLabsDriver, EspeakEngine, GroqSttEngine, VoxtralDriver, WhisperLocalEngine};

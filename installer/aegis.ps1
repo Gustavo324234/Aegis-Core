@@ -58,7 +58,12 @@ function cmd_stop {
     $svc = Get-ServiceStatus
     if (-not $svc) { Write-Red "Service '$SERVICE_NAME' not found."; return }
     if ($svc.Status -eq 'Stopped') { Write-Yellow "Already stopped."; return }
-    Stop-Service $SERVICE_NAME -Force
+    try {
+        Stop-Service $SERVICE_NAME -Force -ErrorAction Stop
+    } catch {
+        # SCM may return an error if the service process exits abruptly before RPC returns
+        Stop-Process -Name "ank-server" -Force -ErrorAction SilentlyContinue
+    }
     Write-Green "Aegis OS stopped."
 }
 
@@ -102,6 +107,15 @@ function cmd_status {
 function cmd_logs {
     param([int]$n = 100)
     Write-Cyan "--- Aegis OS Logs (last $n entries) ---"
+    $logsDir = "$DATA_DIR\logs"
+    $latestLog = Get-ChildItem -Path $logsDir -Filter "ank.log*" -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending |
+                 Select-Object -First 1
+    if ($latestLog) {
+        Get-Content $latestLog.FullName -Tail $n -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host $_ }
+        return
+    }
     try {
         Get-EventLog -LogName Application -Source "ank-server" -Newest $n -ErrorAction Stop |
             Sort-Object TimeGenerated |
@@ -171,7 +185,44 @@ function cmd_version {
 
 # ── token ──────────────────────────────────────────────────────────────────────
 function cmd_token {
+    Write-Cyan "Checking system status..."
+    try {
+        $stateRes = Invoke-RestMethod -Uri "http://localhost:$HTTP_PORT/api/system/state" -TimeoutSec 3 -ErrorAction Stop
+        if ($stateRes.state -eq "STATE_OPERATIONAL") {
+            $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                   Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.*" } |
+                   Select-Object -First 1).IPAddress
+            Write-Green "`nAegis OS is already initialized and operational."
+            Write-Host "You can access and log in directly at:"
+            Write-Green "  Local:   http://localhost:$HTTP_PORT"
+            if ($ip) {
+                Write-Green "  Network: http://${ip}:${HTTP_PORT}"
+            }
+            return
+        }
+    } catch {
+        # Proceed to check log files for setup token
+    }
+
     Write-Cyan "Retrieving setup token from logs..."
+    $logsDir = "$DATA_DIR\logs"
+    $latestLog = Get-ChildItem -Path $logsDir -Filter "ank.log*" -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending |
+                 Select-Object -First 1
+    if ($latestLog) {
+        $tokenMatch = Get-Content $latestLog.FullName -ErrorAction SilentlyContinue |
+                      Select-String -Pattern 'setup_token=([a-f0-9]{32})' |
+                      Select-Object -Last 1
+        if ($tokenMatch) {
+            $t = $tokenMatch.Matches[0].Groups[1].Value
+            $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                   Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.*" } |
+                   Select-Object -First 1).IPAddress
+            Write-Green "`nSetup URL: http://${ip}:${HTTP_PORT}?setup_token=$t"
+            return
+        }
+    }
+
     try {
         $entries = Get-EventLog -LogName Application -Source "ank-server" -Newest 500 -ErrorAction Stop
         $token = $entries |
@@ -181,16 +232,18 @@ function cmd_token {
 
         if ($token) {
             $t = $token.Matches[0].Groups[1].Value
-            $ip = (Get-NetIPAddress -AddressFamily IPv4 |
+            $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
                    Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.*" } |
                    Select-Object -First 1).IPAddress
             Write-Green "`nSetup URL: http://${ip}:${HTTP_PORT}?setup_token=$t"
-        } else {
-            Write-Yellow "No setup token found. System may already be initialized."
+            return
         }
     } catch {
-        Write-Yellow "Could not read logs. Try restarting the service."
+        # Ignore EventLog errors
     }
+
+    Write-Yellow "No active setup token found. The system may already be initialized, or the service is still starting."
+    Write-Host "Try checking http://localhost:$HTTP_PORT or running 'aegis status'."
 }
 
 # ── diag ───────────────────────────────────────────────────────────────────────
@@ -219,7 +272,7 @@ function cmd_diag {
 
     Write-Yellow "`n[3] CONFIGURATION"
     $envPath = "$DATA_DIR\aegis.env"
-    if (Test-Path $envPath) {
+    if (Test-Path $envPath -ErrorAction SilentlyContinue) {
         Write-Green "  $envPath (exists)"
         $keys = Get-Content $envPath | Where-Object { $_ -match "^[^#=\s][^=]*=" } | ForEach-Object { ($_ -split "=")[0] }
         Write-Host "  Keys: $($keys -join ', ')"
@@ -321,15 +374,64 @@ function cmd_update {
         Write-Yellow "  UI not available in this release — keeping current."
     }
 
+    function Update-OptionalArchive {
+        param(
+            [string]$ArchiveName,
+            [string]$TargetDir,
+            [string]$Label,
+            [string]$FallbackMsg
+        )
+        $tmpPath = "$env:TEMP\$($ArchiveName -replace '\.tar\.gz$', '-update.tar.gz')"
+        try {
+            Invoke-WebRequest -Uri "https://github.com/$GITHUB_ORG/$GITHUB_REPO/releases/download/$tag/$ArchiveName" -OutFile $tmpPath -UseBasicParsing
+            if (-not (Test-Path $TargetDir)) {
+                New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
+            }
+            tar -xzf $tmpPath -C $TargetDir
+            Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+            Write-Green "  $Label updated."
+            return $true
+        } catch {
+            Remove-Item $tmpPath -Force -ErrorAction SilentlyContinue
+            Write-Yellow "  $FallbackMsg"
+            return $false
+        }
+    }
+
     Write-Cyan "  Downloading agent config..."
-    $agentPath = "$env:TEMP\agents-update.tar.gz"
-    try {
-        Invoke-WebRequest -Uri "https://github.com/$GITHUB_ORG/$GITHUB_REPO/releases/download/$tag/agents-config.tar.gz" -OutFile $agentPath -UseBasicParsing
-        tar -xzf $agentPath -C "$DATA_DIR\agents"
-        Remove-Item $agentPath -Force
-        Write-Green "  Agent config updated."
-    } catch {
-        Write-Yellow "  Agent config not available — using binary fallbacks."
+    Update-OptionalArchive -ArchiveName "agents-config.tar.gz" -TargetDir "$DATA_DIR\agents" -Label "Agent config" -FallbackMsg "Agent config not available — using binary fallbacks." | Out-Null
+
+    Write-Cyan "  Downloading domain modules..."
+    Update-OptionalArchive -ArchiveName "modules-config.tar.gz" -TargetDir "$DATA_DIR\modules" -Label "Domain modules" -FallbackMsg "Domain modules not available in this release — keeping current." | Out-Null
+
+    Write-Cyan "  Downloading WhatsApp bridge..."
+    Update-OptionalArchive -ArchiveName "whatsapp-bridge.tar.gz" -TargetDir "$DATA_DIR\whatsapp_bridge" -Label "WhatsApp bridge" -FallbackMsg "WhatsApp bridge not available in this release — keeping current." | Out-Null
+
+    Write-Cyan "  Downloading Antigravity bridge..."
+    Update-OptionalArchive -ArchiveName "antigravity-bridge.tar.gz" -TargetDir "$DATA_DIR\antigravity_bridge" -Label "Antigravity bridge" -FallbackMsg "Antigravity bridge not available in this release — keeping current." | Out-Null
+
+    $envFile = "$DATA_DIR\aegis.env"
+    if (Test-Path $envFile) {
+        $envLines = @(Get-Content $envFile)
+        $envChanged = $false
+        $parityMap = [ordered]@{
+            "AEGIS_MODULES_DIR"            = "$DATA_DIR\modules"
+            "AEGIS_WHATSAPP_BRIDGE_DIR"    = "$DATA_DIR\whatsapp_bridge"
+            "AEGIS_ANTIGRAVITY_BRIDGE_DIR" = "$DATA_DIR\antigravity_bridge"
+        }
+        foreach ($kv in $parityMap.GetEnumerator()) {
+            $k = $kv.Key
+            $rawVal = $kv.Value.Replace("\", "/")
+            $fmtVal = if ($rawVal -match " ") { "`"$rawVal`"" } else { $rawVal }
+            if (-not ($envLines | Where-Object { $_ -match "^$k=" })) {
+                $envLines += "$k=$fmtVal"
+                $envChanged = $true
+            }
+        }
+        if ($envChanged) {
+            Set-Content -Path $envFile -Value $envLines -Encoding UTF8
+            Write-Green "  Updated aegis.env with module/bridge paths."
+        }
     }
 
     Write-Cyan "  Starting service..."

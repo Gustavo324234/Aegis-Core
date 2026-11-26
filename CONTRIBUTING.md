@@ -15,30 +15,47 @@ opening up to the community — contributions of any kind are genuinely apprecia
 
 ---
 
-## ⚠️ Active Project Focus & Roadmap
+## 🎯 Active Project Focus: EPIC 58 — Personal Assistant Experience & Zero-Friction UX
 
-With the successful completion of the stabilization and core intelligence epics (up to version 1.1.0), the project has transitioned to the next phase of its roadmap:
-- **Active Focus:** Development effort is now directed toward:
-  1. **Mobile Application (`app/`):** Completing the React Native / Expo client in both Satellite and Cloud modes.
-  2. **Minimal Linux Distribution (`distro/`):** Designing the read-only immutable self-hosted system service image.
-  3. **Cognitive Performance:** Scaling L3 Vector Memory (LanceDB) and optimizing cognitive scheduler loops.
-- **General Contributions:** Bug reports, architectural enhancements, UI/UX refinement, and documentation translations are always welcome across all crates.
+Our current top priority is **[EPIC 58](governance/EPIC_58_PERSONAL_ASSISTANT_UX_AND_COMMUNITY.md)**: making Aegis the ultimate **single-infinite-chat personal assistant** with instant personal tools (semantic expense tracking, reminders, long-term memory), `Chronos` nightly memory consolidation, and a **1-step Zero-Friction Onboarding UX** that anyone can install and use in under 60 seconds.
 
 ---
 
-## 🌟 How to Find Open Issues
+## ⚡ Fast Track: Test & Contribute in 60 Seconds (No Rust Build Needed!)
 
-If you are looking to make your first contribution, check out the active roadmap items and untracked bugs:
-1. Consult the single source of truth for tickets at [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md).
-2. Look for open issues on GitHub labeled `Good First Issue` or `Help Wanted`.
-3. Open a design discussion issue before embarking on major architectural contributions so we can align on design principles.
+You do **not** need to compile Rust + Node.js just to test or improve Aegis's conversational intelligence, prompts, or personal tools. We provide an isolated Python simulator (**[Aegis Agent Sandbox](tools/agent_sandbox/README.md)**) that runs in 5 seconds with zero external dependencies:
+
+```bash
+# 1. Add a free Gemini or OpenRouter API key to .env (or use local Ollama)
+# 2. Launch the interactive Personal Assistant simulator:
+python tools/agent_sandbox/sandbox.py
+
+# 3. Run the automated 5-scenario benchmark suite before submitting a PR:
+python tools/agent_sandbox/sandbox.py --test
+```
+
+Once a prompt or tool flow passes 100% in `tools/agent_sandbox/`, it can be ported directly into `kernel/config/agents/` and `kernel/crates/ank-core/`.
+
+---
+
+## 🌟 Open Tickets & `Good First Issues` ([EPIC 58](governance/EPIC_58_PERSONAL_ASSISTANT_UX_AND_COMMUNITY.md))
+
+If you are looking to make your first contribution, pick any of these open tickets or consult [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md):
+
+| Ticket | Area | Difficulty | Description |
+| :--- | :--- | :--- | :--- |
+| **[CORE-378](governance/Tickets/CORE-378.md)** | `shell/ui` (React/TS) | 🟢 **Good First Issue** | Persist `sessionKey` in `sessionStorage` so refreshing the browser (`F5`) does not force a logout in `App.tsx`. |
+| **[CORE-379](governance/Tickets/CORE-379.md)** | `shell/ui` (React/TS) | 🟢 **Good First Issue** | Replace kernel jargon (*"Operator"*, *"Executing Syscall"*) in `ChatTerminal.tsx` with friendly personal assistant labels and add a **Memory / Expenses / Background Jobs** side panel. |
+| **[CORE-377](governance/Tickets/CORE-377.md)** | `shell/ui` + `ank-http` | 🟡 **Medium** | Create a **1-Step Personal Onboarding Wizard** on `localhost` (*Name + Password + API Key/Ollama*) so new users skip the 6-step enterprise setup flow. |
+| **[CORE-375](governance/Tickets/CORE-375.md)** | `ank-core` (Rust) | 🟡 **Medium** | Port the instant personal tools (`log_expense_or_entry`, `query_ledger`, `remember_fact`, `manage_reminder`) from the Sandbox into `tool_registry.rs` and `orchestrator.rs`. |
+| **[CORE-376](governance/Tickets/CORE-376.md)** | `ank-core` (Rust) | 🟡 **Medium** | Connect `ChronosDaemon` (`chronos/mod.rs`) to real tenant conversation history instead of static test text to extract implicit long-term memories. |
 
 ---
 
 ## Before You Start
 
-1. Check [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md) for open tickets
-2. If your change maps to an open ticket, mention it in your PR
+1. Check [governance/TICKETS_MASTER.md](governance/TICKETS_MASTER.md) and [governance/EPIC_58_PERSONAL_ASSISTANT_UX_AND_COMMUNITY.md](governance/EPIC_58_PERSONAL_ASSISTANT_UX_AND_COMMUNITY.md) for open tickets
+2. If your change maps to an open ticket, mention its `CORE-XXX` ID in your PR
 3. If you're building something new, open an Issue first so we can discuss scope
 
 ---
@@ -194,6 +211,7 @@ CI runs format → audit → clippy → test automatically on every PR.
 | `kernel/crates/aegis-supervisor/` | Rust | Process manager |
 | `kernel/crates/aegis-sdk/` | Rust | Wasm plugin SDK |
 | `shell/ui/` | TypeScript/React | Web interface |
+| `tools/agent_sandbox/` | Python | Zero-dependency Personal Assistant simulator & automated benchmark harness |
 | `app/` | TypeScript/React Native | Mobile client |
 | `installer/` | Bash/PowerShell | Deployment scripts and multiplatform installer |
 | `governance/` | Markdown | Tickets, active epics, architecture, codex |

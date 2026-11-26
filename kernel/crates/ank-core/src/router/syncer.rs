@@ -1,6 +1,5 @@
 use crate::router::catalog::{ModelCatalog, ModelEntry, TaskScores, ToolUseSupport};
 use crate::router::key_pool::KeyPool;
-use anyhow::Context;
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -80,16 +79,8 @@ impl CatalogSyncer {
                 continue;
             }
 
-            // Ollama's /models listing advertises subscription-gated models the
-            // key can't actually call (free tier → 403 on the big models). For
-            // ollama we re-discover with a live callability probe so the catalog
-            // only gets models that return 2xx; for every other provider the
-            // stored active_models list is authoritative. On discovery failure we
-            // fall back to the stored list so a network blip never empties the
-            // catalog.
-            let models_to_register: Option<Vec<String>> = if key.provider == "ollama"
-                || key.provider == "ollama_cloud"
-            {
+            // Dynamic discovery: probe provider's live models via /models
+            let models_to_register: Option<Vec<String>> =
                 match crate::router::discovery::fetch_provider_models(
                     &key.provider,
                     key.api_url.as_deref(),
@@ -105,17 +96,17 @@ impl CatalogSyncer {
                         warn!(
                             provider = %key.provider,
                             error = %e,
-                            "CatalogSyncer: ollama discovery probe failed — using stored active_models"
+                            "CatalogSyncer: discovery probe failed — using stored active_models"
                         );
                         key.active_models.clone()
                     }
-                }
-            } else {
-                key.active_models.clone()
-            };
+                };
 
             if let Some(models) = &models_to_register {
                 if !models.is_empty() {
+                    self.key_pool
+                        .update_key_active_models(&key.key_id, models.clone())
+                        .await;
                     let n = register_provider_models(&key.provider, models, &self.catalog).await;
                     if n > 0 {
                         info!(
@@ -127,55 +118,54 @@ impl CatalogSyncer {
             }
         }
 
-        // Only sync OpenRouter catalog if we have an OpenRouter key
-        if !self.key_pool.has_openrouter_key().await {
-            return Ok(());
-        }
-
-        let response = self
+        // 2. Fetch live OpenRouter catalog (public keyless endpoint, attaches auth if key available).
+        // This synchronizes real-world pricing, context windows, tool support, and auto-discovers
+        // free models and all active models.
+        let mut req = self
             .client
             .get("https://openrouter.ai/api/v1/models")
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await
-            .context("Failed to fetch OpenRouter model list")?;
+            .timeout(std::time::Duration::from_secs(15));
 
-        if !response.status().is_success() {
-            let status = response.status();
-            anyhow::bail!("OpenRouter API returned non-success status: {}", status);
+        if let Some(openrouter_key) = self.key_pool.get_openrouter_key().await {
+            req = req.header("Authorization", format!("Bearer {}", openrouter_key));
         }
 
-        let model_list: OpenRouterModelList = response
-            .json()
-            .await
-            .context("Failed to parse OpenRouter model list JSON")?;
+        let response = match req.send().await {
+            Ok(resp) if resp.status().is_success() => resp,
+            Ok(resp) => {
+                warn!(
+                    "CatalogSyncer: OpenRouter public models API returned status: {}",
+                    resp.status()
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!("CatalogSyncer: OpenRouter public models API fetch failed (retaining cached catalog): {}", e);
+                return Ok(());
+            }
+        };
+
+        let model_list: OpenRouterModelList = match response.json().await {
+            Ok(list) => list,
+            Err(e) => {
+                warn!(
+                    "CatalogSyncer: failed to parse OpenRouter model list JSON: {}",
+                    e
+                );
+                return Ok(());
+            }
+        };
 
         let mut current = self.catalog.all_entries().await;
+        let has_openrouter_key = self.key_pool.has_openrouter_key().await;
+        let mut updated_count = 0usize;
+        let mut added_free_count = 0usize;
 
         for remote in model_list.data {
-            let cost_input = remote
-                .pricing
-                .as_ref()
-                .and_then(|p| p.prompt.as_ref())
-                .and_then(|v| match v {
-                    serde_json::Value::Number(n) => n.as_f64(),
-                    serde_json::Value::String(s) => s.parse::<f64>().ok(),
-                    _ => None,
-                })
-                .unwrap_or(0.0)
-                * 1_000_000.0;
-
-            let cost_output = remote
-                .pricing
-                .as_ref()
-                .and_then(|p| p.completion.as_ref())
-                .and_then(|v| match v {
-                    serde_json::Value::Number(n) => n.as_f64(),
-                    serde_json::Value::String(s) => s.parse::<f64>().ok(),
-                    _ => None,
-                })
-                .unwrap_or(0.0)
-                * 1_000_000.0;
+            let parsed_input =
+                parse_pricing_per_mtok(remote.pricing.as_ref().and_then(|p| p.prompt.as_ref()));
+            let parsed_output =
+                parse_pricing_per_mtok(remote.pricing.as_ref().and_then(|p| p.completion.as_ref()));
 
             let supports_tools = remote
                 .supported_parameters
@@ -186,31 +176,52 @@ impl CatalogSyncer {
             let supports_json = remote
                 .supported_parameters
                 .as_ref()
-                .map(|p| p.iter().any(|s| s == "json_mode"))
+                .map(|p| p.iter().any(|s| s == "json_mode" || s == "response_format"))
                 .unwrap_or(false);
 
             let context_window = remote.context_length.unwrap_or(4096);
+            let is_free = parsed_input == Some(0.0)
+                && parsed_output == Some(0.0)
+                && remote.id != "openrouter/auto";
 
             if let Some(existing) = current.iter_mut().find(|e| e.model_id == remote.id) {
                 // Skip local models — never overwrite from remote
                 if existing.is_local {
                     continue;
                 }
-                // Update pricing and capabilities, preserve task_scores
-                existing.cost_input_per_mtok = cost_input;
-                existing.cost_output_per_mtok = cost_output;
+                // Preserve catalog pricing when OpenRouter reports negative/variable rates (e.g. "-1")
+                if let (Some(cost_input), Some(cost_output)) = (parsed_input, parsed_output) {
+                    existing.cost_input_per_mtok = cost_input;
+                    existing.cost_output_per_mtok = cost_output;
+                }
                 existing.context_window = context_window;
                 existing.supports_tools = supports_tools;
                 existing.supports_json_mode = supports_json;
                 existing.display_name = remote.name;
-            } else {
-                // New model not in local catalog — infer scores by heuristic
+                if supports_tools && existing.tool_use_support == ToolUseSupport::Unknown {
+                    existing.tool_use_support = ToolUseSupport::Supported;
+                }
+                if is_free {
+                    existing.free_tier_eligible = true;
+                } else if existing.provider == "openrouter" {
+                    existing.free_tier_eligible = false;
+                }
+                updated_count += 1;
+            } else if is_free || has_openrouter_key {
+                let (Some(cost_input), Some(cost_output)) = (parsed_input, parsed_output) else {
+                    continue;
+                };
+                // New model not in local catalog — add if it's free or if we have an OpenRouter key
                 let scores = infer_task_scores(&remote.id);
                 let provider = remote.id.split('/').next().unwrap_or("unknown").to_string();
                 current.push(ModelEntry {
                     model_id: remote.id,
                     provider,
-                    display_name: remote.name,
+                    display_name: if is_free && !remote.name.contains("(free)") {
+                        format!("{} (free)", remote.name)
+                    } else {
+                        remote.name
+                    },
                     context_window,
                     cost_input_per_mtok: cost_input,
                     cost_output_per_mtok: cost_output,
@@ -218,14 +229,26 @@ impl CatalogSyncer {
                     supports_json_mode: supports_json,
                     task_scores: scores,
                     is_local: false,
-                    avg_latency_ms: None,
-                    free_tier_rpm: None,
-                    free_tier_rpd: None,
-                    free_tier_eligible: true,
-                    tool_use_support: crate::router::catalog::ToolUseSupport::Unknown,
+                    avg_latency_ms: if is_free { Some(2500) } else { None },
+                    free_tier_rpm: if is_free { Some(20) } else { None },
+                    free_tier_rpd: if is_free { Some(200) } else { None },
+                    free_tier_eligible: is_free,
+                    tool_use_support: if supports_tools {
+                        ToolUseSupport::Supported
+                    } else {
+                        ToolUseSupport::Unknown
+                    },
                 });
+                if is_free {
+                    added_free_count += 1;
+                }
             }
         }
+
+        info!(
+            "CatalogSyncer: OpenRouter sync complete. Updated {} models, added {} new free-tier models.",
+            updated_count, added_free_count
+        );
 
         self.catalog.replace_all(current).await;
         Ok(())
@@ -262,27 +285,15 @@ pub async fn register_provider_models(
         if catalog.find(&prefixed_id).await.is_some() {
             continue;
         }
-        let is_large = ["70b", "671b", "405b", "72b", "32b", "34b"]
-            .iter()
-            .any(|tag| model_id.contains(tag));
-        let scores = if is_large {
-            TaskScores {
-                chat: 5,
-                coding: 5,
-                planning: 5,
-                analysis: 5,
-                summarization: 4,
-                extraction: 5,
-            }
+        let scores = infer_task_scores(model_id);
+        let is_free_discovered =
+            provider == "ollama" || provider == "ollama_cloud" || model_id.ends_with(":free");
+        let (cost_in, cost_out, avg_lat) = if is_free_discovered {
+            (0.0, 0.0, Some(1500))
         } else {
-            TaskScores {
-                chat: 3,
-                coding: 3,
-                planning: 3,
-                analysis: 3,
-                summarization: 3,
-                extraction: 3,
-            }
+            // Do not falsely mark uncurated cloud /models entries (e.g. Gemini previews)
+            // as $0.00/1500ms; otherwise they outrank vetted flash models in models.yaml.
+            (0.25, 1.0, Some(2500))
         };
         catalog
             .add_entry(ModelEntry {
@@ -290,13 +301,13 @@ pub async fn register_provider_models(
                 provider: provider.to_string(),
                 display_name: format!("{} ({})", model_id, provider),
                 context_window: 32_768,
-                cost_input_per_mtok: 0.0,
-                cost_output_per_mtok: 0.0,
+                cost_input_per_mtok: cost_in,
+                cost_output_per_mtok: cost_out,
                 supports_tools: true,
                 supports_json_mode: true,
                 tool_use_support: ToolUseSupport::Unknown,
-                is_local: false,
-                avg_latency_ms: Some(3000),
+                is_local: provider == "ollama",
+                avg_latency_ms: avg_lat,
                 free_tier_rpm: None,
                 free_tier_rpd: None,
                 free_tier_eligible: true,
@@ -312,29 +323,53 @@ pub async fn register_provider_models(
     added
 }
 
-/// Fetches the OpenRouter model list with the given key, filters to free-tier
-/// parses a single OpenRouter model from JSON, returning a ModelEntry if it is free-tier (pricing.prompt <= 0.0).
-pub fn parse_openrouter_free_model(model: &serde_json::Value) -> Option<ModelEntry> {
-    let prompt_price_f64 = model["pricing"]["prompt"]
-        .as_f64()
-        .or_else(|| {
-            model["pricing"]["prompt"]
-                .as_str()
-                .and_then(|s| s.parse::<f64>().ok())
-        })
-        .unwrap_or(1.0);
-
-    if prompt_price_f64 > 0.0 {
+fn parse_pricing_per_mtok(val: Option<&serde_json::Value>) -> Option<f64> {
+    let raw = match val? {
+        serde_json::Value::Number(n) => n.as_f64()?,
+        serde_json::Value::String(s) => s.parse::<f64>().ok()?,
+        _ => return None,
+    };
+    if !raw.is_finite() || raw < 0.0 {
         return None;
     }
+    Some(raw * 1_000_000.0)
+}
 
+/// Parses a single OpenRouter model from JSON, returning a ModelEntry if it is free-tier
+/// (`pricing.prompt == 0.0` and non-negative non-paid `pricing.completion`).
+pub fn parse_openrouter_free_model(model: &serde_json::Value) -> Option<ModelEntry> {
     let model_id = match model["id"].as_str() {
-        Some(id) if !id.is_empty() => id.to_string(),
+        Some(id) if !id.is_empty() && id != "openrouter/auto" => id.to_string(),
         _ => return None,
     };
 
+    let prompt_price_mtok =
+        parse_pricing_per_mtok(model.get("pricing").and_then(|p| p.get("prompt")))?;
+    if prompt_price_mtok != 0.0 {
+        return None;
+    }
+    if let Some(completion_val) = model.get("pricing").and_then(|p| p.get("completion")) {
+        if parse_pricing_per_mtok(Some(completion_val)) != Some(0.0) {
+            return None;
+        }
+    }
+
     let context = model["context_length"].as_u64().unwrap_or(131_072) as u32;
     let name = model["name"].as_str().unwrap_or(&model_id).to_string();
+
+    let supports_tools = model["supported_parameters"]
+        .as_array()
+        .map(|arr| arr.iter().any(|v| v.as_str() == Some("tools")))
+        .unwrap_or(false);
+    let supports_json = model["supported_parameters"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .any(|v| v.as_str() == Some("json_mode") || v.as_str() == Some("response_format"))
+        })
+        .unwrap_or(false);
+
+    let scores = infer_task_scores(&model_id);
 
     Some(ModelEntry {
         model_id,
@@ -343,22 +378,19 @@ pub fn parse_openrouter_free_model(model: &serde_json::Value) -> Option<ModelEnt
         context_window: context,
         cost_input_per_mtok: 0.0,
         cost_output_per_mtok: 0.0,
-        supports_tools: false,
-        supports_json_mode: false,
-        tool_use_support: ToolUseSupport::Unknown,
+        supports_tools,
+        supports_json_mode: supports_json,
+        tool_use_support: if supports_tools {
+            ToolUseSupport::Supported
+        } else {
+            ToolUseSupport::Unknown
+        },
         is_local: false,
         avg_latency_ms: Some(2500),
         free_tier_rpm: Some(20),
         free_tier_rpd: Some(200),
         free_tier_eligible: true,
-        task_scores: TaskScores {
-            chat: 3,
-            coding: 3,
-            planning: 3,
-            analysis: 3,
-            summarization: 3,
-            extraction: 3,
-        },
+        task_scores: scores,
     })
 }
 
@@ -399,50 +431,118 @@ pub async fn sync_openrouter_free_models(
 
 fn infer_task_scores(model_id: &str) -> TaskScores {
     let id_lower = model_id.to_lowercase();
-    // CORE-FIX: recognise the current generation of frontier models. The old
-    // heuristic only matched "claude" and "gpt-4", so anything coming through
-    // discovery — Gemini 2.5/3.x, DeepSeek R, Llama 4, Qwen3, … — fell to
-    // score 3 across the board and lost the CMR ranking to bundled defaults.
-    // That was the root cause of "I added a Gemini key but gemini-2.5-pro
-    // never gets picked".
-    //
-    // The check is fuzzy on purpose so the next obvious version (gemini-3,
-    // claude-5, gpt-5, …) keeps scoring strong without another patch.
-    let is_strong = id_lower.contains("claude")           // Claude 3+, 4+, etc.
-        || id_lower.contains("gpt-4")                     // GPT-4, 4o, 4.1
-        || id_lower.contains("gpt-5")                     // future GPT-5
-        || id_lower.contains("/o3")                       // OpenAI o3 (reasoning)
+
+    // 1. Specialized Coding Models
+    let is_coder = id_lower.contains("coder")
+        || id_lower.contains("codestral")
+        || id_lower.contains("code-llama")
+        || id_lower.contains("qwen2.5-coder")
+        || id_lower.contains("qwen3-coder")
+        || id_lower.contains("starcoder")
+        || id_lower.contains("north-mini-code");
+
+    if is_coder {
+        let is_large_coder = id_lower.contains("32b")
+            || id_lower.contains("70b")
+            || id_lower.contains("72b")
+            || id_lower.contains("codestral");
+        return if is_large_coder {
+            TaskScores {
+                chat: 4,
+                coding: 5,
+                planning: 5,
+                analysis: 5,
+                summarization: 4,
+                extraction: 5,
+            }
+        } else {
+            TaskScores {
+                chat: 3,
+                coding: 5,
+                planning: 4,
+                analysis: 4,
+                summarization: 3,
+                extraction: 4,
+            }
+        };
+    }
+
+    // 2. Frontier / SOTA Reasoning & Foundation Models (Elo ~1350+)
+    let is_frontier = id_lower.contains("claude")
+        || id_lower.contains("gpt-4")
+        || id_lower.contains("gpt-5")
+        || id_lower.contains("/o1")
+        || id_lower.starts_with("o1")
+        || id_lower.contains("/o3")
         || id_lower.starts_with("o3")
         || id_lower.contains("/o4")
         || id_lower.starts_with("o4")
         || id_lower.contains("gemini-2.5")
-        || id_lower.contains("gemini-3")                  // 3.x preview families
+        || id_lower.contains("gemini-3")
+        || id_lower.contains("deepseek-r")
+        || id_lower.contains("deepseek-v3")
+        || id_lower.contains("deepseek-v4")
         || id_lower.contains("grok-3")
         || id_lower.contains("grok-4")
-        || id_lower.contains("deepseek-r")                // R1, R2 reasoning
-        || id_lower.contains("deepseek-v3")
+        || id_lower.contains("gpt-oss-120b")
+        || id_lower.contains("gpt-oss")
+        || id_lower.contains("llama-3.3")
+        || id_lower.contains("llama-4")
         || id_lower.contains("qwen3")
         || id_lower.contains("qwen-2.5")
-        || id_lower.contains("llama-4")
-        || id_lower.contains("llama-3.3");
-    if is_strong {
-        TaskScores {
+        || id_lower.contains("gemma-4")
+        || id_lower.contains("gemma4")
+        || id_lower.contains("mistral-large")
+        || id_lower.contains("kimi")
+        || id_lower.contains("openrouter/free")
+        || id_lower.contains("nemotron-3-ultra")
+        || id_lower.contains("nemotron-3.5")
+        || id_lower.contains("ernie-5.5");
+
+    if is_frontier {
+        return TaskScores {
             chat: 5,
             coding: 5,
             planning: 5,
             analysis: 5,
             summarization: 4,
             extraction: 5,
-        }
-    } else {
-        TaskScores {
+        };
+    }
+
+    // 3. Compact / Edge Models (8b, 7b, 3b, small, etc.)
+    let is_compact = id_lower.contains("8b")
+        || id_lower.contains("7b")
+        || id_lower.contains("3b")
+        || id_lower.contains("1b")
+        || id_lower.contains("1.7b")
+        || id_lower.contains("2.6b")
+        || id_lower.contains("mini")
+        || id_lower.contains("nano")
+        || id_lower.contains("small")
+        || id_lower.contains("lfm")
+        || id_lower.contains("flint")
+        || id_lower.contains("inkling");
+
+    if is_compact {
+        return TaskScores {
             chat: 3,
             coding: 3,
             planning: 3,
             analysis: 3,
             summarization: 3,
             extraction: 3,
-        }
+        };
+    }
+
+    // Default
+    TaskScores {
+        chat: 3,
+        coding: 3,
+        planning: 3,
+        analysis: 3,
+        summarization: 3,
+        extraction: 3,
     }
 }
 
@@ -498,7 +598,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_no_sync_without_openrouter_key() -> anyhow::Result<()> {
+    async fn test_sync_public_openrouter_catalog() -> anyhow::Result<()> {
         let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
             ModelProfile::Hybrid,
         )?);
@@ -506,13 +606,13 @@ mod tests {
         let syncer = CatalogSyncer::new(catalog.clone(), key_pool);
 
         let before = catalog.all_entries().await.len();
-        // sync_once should be a no-op when no openrouter key
         syncer.sync_once().await?;
         let after = catalog.all_entries().await.len();
 
-        assert_eq!(
-            before, after,
-            "Catalog should not change without OpenRouter key"
+        // Public OpenRouter sync discovers free models even without an OpenRouter key
+        assert!(
+            after >= before,
+            "Catalog should retain or expand with free models from public directory"
         );
         Ok(())
     }
@@ -682,5 +782,34 @@ mod tests {
             "name": "Llama 3 8B Instruct"
         });
         assert!(parse_openrouter_free_model(&model_missing_price).is_none());
+
+        // 6. Negative dynamic pricing ("-1" e.g. openrouter/auto) - must NEVER be treated as free
+        let model_negative_price = serde_json::json!({
+            "id": "openrouter/auto",
+            "name": "Auto Router",
+            "pricing": {
+                "prompt": "-1",
+                "completion": "-1"
+            }
+        });
+        assert!(parse_openrouter_free_model(&model_negative_price).is_none());
+        assert_eq!(
+            parse_pricing_per_mtok(
+                model_negative_price
+                    .get("pricing")
+                    .and_then(|p| p.get("prompt"))
+            ),
+            None
+        );
+
+        let model_negative_completion = serde_json::json!({
+            "id": "vendor/weird-model:free",
+            "name": "Weird Model",
+            "pricing": {
+                "prompt": "0",
+                "completion": "-1"
+            }
+        });
+        assert!(parse_openrouter_free_model(&model_negative_completion).is_none());
     }
 }

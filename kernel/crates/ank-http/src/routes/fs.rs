@@ -119,6 +119,9 @@ fn is_blocked_file(path: &Path) -> bool {
         .unwrap_or("")
         .to_lowercase();
 
+    if name == ".env.example" {
+        return false;
+    }
     if name == ".env" || name == "aegis.env" {
         return true;
     }
@@ -127,7 +130,16 @@ fn is_blocked_file(path: &Path) -> bool {
             return true;
         }
     }
-    for word in &["secret", "password", "token"] {
+    for word in &[
+        "credentials",
+        "service_account",
+        "client_secret",
+        "secret",
+        "password",
+        "token",
+        "apikey",
+        "api_key",
+    ] {
         if name.contains(word) {
             return true;
         }
@@ -203,15 +215,23 @@ fn build_tree(dir: &Path, root: &Path, depth: u8) -> Vec<FsEntry> {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if path.is_dir() {
+        // CORE-399: Canonicalizar y confinar dentro de `root` para bloquear symlinks externos.
+        let Ok(canon) = path.canonicalize() else {
+            continue;
+        };
+        if !canon.starts_with(root) {
+            continue;
+        }
+
+        if canon.is_dir() {
             if IGNORED_DIRS.contains(&name.as_str()) {
                 continue;
             }
-            let rel = path
+            let rel = canon
                 .strip_prefix(root)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
-            let children = build_tree(&path, root, depth - 1);
+            let children = build_tree(&canon, root, depth - 1);
             result.push(FsEntry {
                 name,
                 path: rel,
@@ -219,8 +239,11 @@ fn build_tree(dir: &Path, root: &Path, depth: u8) -> Vec<FsEntry> {
                 children: Some(children),
                 extension: None,
             });
-        } else if path.is_file() {
-            let rel = path
+        } else if canon.is_file() {
+            if is_blocked_file(&canon) {
+                continue;
+            }
+            let rel = canon
                 .strip_prefix(root)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
@@ -229,7 +252,7 @@ fn build_tree(dir: &Path, root: &Path, depth: u8) -> Vec<FsEntry> {
                 path: rel,
                 kind: FsEntryKind::File,
                 children: None,
-                extension: ext_str(&path),
+                extension: ext_str(&canon),
             });
         }
     }
@@ -396,5 +419,41 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
         let _ = std::fs::remove_dir_all(&outside_dir);
+    }
+
+    #[test]
+    fn test_is_blocked_file_blocks_credentials_and_allows_normal_json() {
+        assert!(is_blocked_file(Path::new("credentials.json")));
+        assert!(is_blocked_file(Path::new("google_service_account.json")));
+        assert!(is_blocked_file(Path::new("client_secret_123.json")));
+        assert!(is_blocked_file(Path::new(".env")));
+        assert!(is_blocked_file(Path::new("server.key")));
+        assert!(!is_blocked_file(Path::new(".env.example")));
+        assert!(!is_blocked_file(Path::new("package.json")));
+        assert!(!is_blocked_file(Path::new("tsconfig.json")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_build_tree_excludes_escaping_symlinks() -> anyhow::Result<()> {
+        use std::os::unix::fs::symlink;
+        let root_dir = tempfile::tempdir()?;
+        let outside_dir = tempfile::tempdir()?;
+        let root_canon = root_dir.path().canonicalize()?;
+
+        std::fs::write(root_canon.join("ok.rs"), b"fn main() {}")?;
+        std::fs::write(root_canon.join("credentials.json"), b"{}")?;
+        std::fs::write(outside_dir.path().join("host_secret.txt"), b"secret")?;
+        symlink(
+            outside_dir.path().join("host_secret.txt"),
+            root_canon.join("link_out.txt"),
+        )?;
+
+        let tree = build_tree(&root_canon, &root_canon, 2);
+        let names: Vec<&str> = tree.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"ok.rs"));
+        assert!(!names.contains(&"credentials.json"));
+        assert!(!names.contains(&"link_out.txt"));
+        Ok(())
     }
 }

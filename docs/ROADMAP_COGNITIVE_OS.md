@@ -86,3 +86,12 @@ La configuración en [distro/nixos/](../distro/nixos) se modularizará para admi
 ### Fase 4: Integración de Sensores como Herramientas (Planeado)
 * **Objetivo:** Exponer el hardware de la laptop directamente al kernel de agentes.
 * **Entregables:** Desarrollo de herramientas de sistema en Rust (`ank-core`) que permitan a los agentes interactuar con el entorno físico del dispositivo (leer carga de batería, silenciar/desmutear micrófonos, ajustar brillo de la pantalla o tomar fotos de verificación con la webcam local mediante autorización del protocolo Citadel).
+
+### Fase 5: Maduración a la Vanguardia (Cutting-Edge) — CORE-376 a CORE-379 (Planeado)
+* **Objetivo:** Dotar a Aegis de capacidades punteras de agente autónomo, interoperabilidad universal y memoria semántica local.
+* **Documento de especificación:** [TICKETS_CUTTING_EDGE_ROADMAP.md](./TICKETS_CUTTING_EDGE_ROADMAP.md)
+* **Iniciativas clave:**
+  * **CORE-376:** Soporte nativo de *Tool Calling* / *Function Calling* en el Router Cognitivo.
+  * **CORE-377:** Integración del estándar abierto *Model Context Protocol* (MCP).
+  * **CORE-378:** Motor de memoria semántica y RAG local embebido en Rust.
+  * **CORE-379:** Modernización de la UI con artefactos interactivos, Markdown avanzado y gestor gráfico de modelos.

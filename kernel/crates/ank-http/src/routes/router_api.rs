@@ -1,5 +1,5 @@
 use crate::{
-    citadel::{hash_passphrase, CitadelAuthenticated, CitadelError},
+    citadel::{CitadelAuthenticated, CitadelError},
     error::AegisHttpError,
     state::AppState,
 };
@@ -25,6 +25,18 @@ pub use modules_handlers::{
 };
 
 use discovery_handlers::{auto_discover_models, is_keyless_provider};
+
+fn notify_provider_keys_updated(state: &AppState, tenant_id: &str, scope: &str) {
+    let _ = state
+        .workspace_events
+        .send(ank_core::pr_manager::WorkspaceWsEvent {
+            tenant_id: tenant_id.to_string(),
+            payload: serde_json::json!({
+                "event": "provider_keys_updated",
+                "data": { "scope": scope }
+            }),
+        });
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -124,32 +136,9 @@ async fn require_master_auth(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<String, AegisHttpError> {
-    let tenant_id = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingTenant))?;
-
-    let raw_key = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .ok_or(AegisHttpError::Citadel(CitadelError::MissingKey))?;
-
-    let hash = hash_passphrase(&raw_key);
-
-    let citadel = state.citadel.lock().await;
-    let is_master = citadel
-        .enclave
-        .authenticate_master(&tenant_id, &hash)
+    crate::citadel::authenticate_master_headers(state, headers)
         .await
-        .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-
-    if !is_master {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-    }
-
-    Ok(tenant_id)
+        .map_err(AegisHttpError::Citadel)
 }
 
 /// Sincroniza inmediatamente los modelos asociados a una clave recién agregada o editada (CORE-356).
@@ -248,6 +237,7 @@ async fn add_global_key(
 
     router.invalidate_all_sticky().await;
     sync_key_models_into_catalog(&router, &entry).await;
+    notify_provider_keys_updated(&state, "*", "global_key_added");
 
     Ok(Json(SyncResponse {
         success: true,
@@ -389,6 +379,7 @@ async fn add_tenant_key(
 
     router.invalidate_sticky(&auth.tenant_id).await;
     sync_key_models_into_catalog(&router, &entry).await;
+    notify_provider_keys_updated(&state, &auth.tenant_id, "tenant_key_added");
 
     Ok(Json(SyncResponse {
         success: true,
@@ -596,6 +587,7 @@ async fn update_global_key(
 
     router.invalidate_all_sticky().await;
     sync_key_models_into_catalog(&router, &entry).await;
+    notify_provider_keys_updated(&state, "*", "global_key_updated");
 
     Ok(Json(SyncResponse {
         success: true,
@@ -660,6 +652,7 @@ async fn update_tenant_key(
 
     router.invalidate_sticky(&auth.tenant_id).await;
     sync_key_models_into_catalog(&router, &entry).await;
+    notify_provider_keys_updated(&state, &auth.tenant_id, "tenant_key_updated");
 
     Ok(Json(SyncResponse {
         success: true,
@@ -719,36 +712,19 @@ async fn resolve_backup_tenant_scope(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<String>, AegisHttpError> {
-    let tenant_id = headers
-        .get("x-citadel-tenant")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-    let key = headers
-        .get("x-citadel-key")
-        .and_then(|v| v.to_str().ok())
-        .ok_or(AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-    let hash = hash_passphrase(key);
-
-    let citadel = state.citadel.lock().await;
-    if citadel
-        .enclave
-        .authenticate_master(tenant_id, &hash)
+    let auth = crate::citadel::authenticate_headers(state, headers)
         .await
-        .unwrap_or(false)
-    {
-        return Ok(None);
+        .map_err(|e| match e {
+            CitadelError::PasswordMustChange => {
+                AegisHttpError::Citadel(CitadelError::PasswordMustChange)
+            }
+            _ => AegisHttpError::Citadel(CitadelError::Unauthorized),
+        })?;
+    if auth.is_master {
+        Ok(None)
+    } else {
+        Ok(Some(auth.tenant_id))
     }
-
-    let is_tenant = citadel
-        .enclave
-        .authenticate_tenant(tenant_id, &hash)
-        .await
-        .map_err(|_| AegisHttpError::Citadel(CitadelError::Unauthorized))?;
-    if !is_tenant {
-        return Err(AegisHttpError::Citadel(CitadelError::Unauthorized));
-    }
-
-    Ok(Some(tenant_id.to_string()))
 }
 
 #[utoipa::path(
@@ -826,6 +802,12 @@ async fn import_keys(
             warn!("Import: catalog sync failed after key import: {}", e);
         }
     }
+
+    notify_provider_keys_updated(
+        &state,
+        tenant_scope.as_deref().unwrap_or("*"),
+        "keys_imported",
+    );
 
     Ok(Json(ImportResponse {
         success: true,

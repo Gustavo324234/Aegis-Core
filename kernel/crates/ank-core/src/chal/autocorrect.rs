@@ -22,6 +22,11 @@ pub fn normalize_tool_name(name: &str) -> String {
         "answersupervisor" | "answer_supervisors" | "answersupervisor_tool" => {
             "answer_supervisor".to_string()
         }
+        "sendtoantigravity" | "send_antigravity" | "antigravity" => {
+            "send_to_antigravity".to_string()
+        }
+        "manageaiprovider" | "add_api_key" | "add_provider" | "add_model"
+        | "configure_provider" => "manage_ai_provider".to_string(),
         "addledgerentry" | "add_ledger" | "ledgerentry" => "add_ledger_entry".to_string(),
         "approvepath" | "approve_paths" => "approve_path".to_string(),
         "getprojectledger" | "projectledger" => "get_project_ledger".to_string(),
@@ -104,13 +109,31 @@ pub fn validate_and_sanitize_tool_call(
     tc: &ToolCallRecord,
     role: &AgentRole,
 ) -> Result<ToolCallRecord, String> {
+    validate_and_sanitize_tool_call_with_extra(tc, role, &[])
+}
+
+/// Variante que además acepta herramientas dinámicas activas (módulos de dominio / MCP).
+pub fn validate_and_sanitize_tool_call_with_extra(
+    tc: &ToolCallRecord,
+    role: &AgentRole,
+    extra_tools: &[crate::pcb::ToolDefinition],
+) -> Result<ToolCallRecord, String> {
     // 1. Normalizar el nombre de la herramienta
     let original_name = tc.function.name.trim();
     let norm_name = normalize_tool_name(original_name);
 
-    // Obtener las herramientas permitidas para el rol
-    let allowed_definitions = ToolRegistry::definitions_for(role);
-    let allowed_names: Vec<&str> = allowed_definitions.iter().map(|d| d.name).collect();
+    // Obtener las herramientas permitidas para el rol + herramientas dinámicas activas
+    let mut allowed_definitions: Vec<crate::pcb::ToolDefinition> =
+        ToolRegistry::definitions_for(role)
+            .into_iter()
+            .map(Into::into)
+            .collect();
+    allowed_definitions.extend(extra_tools.iter().cloned());
+
+    let allowed_names: Vec<&str> = allowed_definitions
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect();
 
     if !allowed_names.contains(&norm_name.as_str()) {
         return Err(format!(
