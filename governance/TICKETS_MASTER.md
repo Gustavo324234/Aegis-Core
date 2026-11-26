@@ -25,6 +25,7 @@
 | EPIC 59 | Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio | ✅ Completa | 100% |
 | EPIC 60 | Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience | ✅ Completa | 100% |
 | EPIC 61 | Sandbox Promotion, Security Hardening & SRE Maturation | ✅ Completa | 100% (13/13) |
+| EPIC 62 | Cognitive Efficiency, Adaptive Intelligence & 2026 Model Matrix | ✅ Completa | 100% (5/5) |
 
 ## EPIC 49 — Cognitive Loop
 
@@ -322,6 +323,16 @@
 | CORE-404 | perf | Optimización Frontend (`shell/ui`: selectores `useAegisStore`, `React.lazy()`, optimización de SVGs y `apiClient.ts`) | ✅ Done | Media | Shell Engineer |
 | CORE-405 | refactor | Modularización de God Files (`chal/mod.rs`, `useAegisStore.ts`, `ModulesAppHub.tsx`, `VideoStudioPanel.tsx`, scripts Python externos) | ✅ Done | Media | Kernel Engineer + Shell Engineer |
 | CORE-406 | chore | Tests UI (Vitest), CI Extendido (`app/`, bridges, `update.ps1`, `sync_tickets_master.py`) y Actualización/Protección de OpenAPI (`/api/docs`) | ✅ Done | Media | Shell Engineer + DevOps Engineer |
+
+## EPIC 62 — Cognitive Efficiency, Adaptive Intelligence & 2026 Model Matrix
+
+| ID | Tipo | Título | Estado | Prioridad | Asignado a |
+|---|---|---|---|---|---|
+| CORE-407 | chore | Higiene del Repo, Modularización Focalizada (`router/scoring.rs`, `chal/context_builder.rs`) y Mapa de Arquitectura | ✅ Done | Alta | Kernel Engineer |
+| CORE-408 | perf | Dynamic Tool Gating, Prompt Cache-First, Deduplicación de `chat_agent.md` y Memoria Selectiva | ✅ Done | Crítica | Kernel Engineer + AI Architect |
+| CORE-409 | feat | CMR v4 — Complejidad Adaptativa de Chat (`Quick`/`Standard`/`DeepReasoning`), `benchmark_pct` y `max_tokens` para Razonadores | ✅ Done | Crítica | Kernel Engineer + AI Architect |
+| CORE-410 | feat | Catálogo Curado 2026 (`models.yaml`), `update_models.py` y Presets Recomendados en UI/Sandbox | ✅ Done | Alta | AI Architect + Shell Engineer |
+| CORE-411 | test | Suite de Regresión de Tokens/Inteligencia, Documentación PinchBench/README y Verificación SRE Completa | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
 
 ## Governance & Tooling
 

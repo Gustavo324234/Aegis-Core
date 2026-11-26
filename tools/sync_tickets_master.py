@@ -32,6 +32,7 @@ ACTIVE_SECTIONS = [
     "EPIC 59 — Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio",
     "EPIC 60 — Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience",
     "EPIC 61 — Sandbox Promotion, Security Hardening & SRE Maturation",
+    "EPIC 62 — Cognitive Efficiency, Adaptive Intelligence & 2026 Model Matrix",
     "Governance & Tooling"
 ]
 
@@ -139,6 +140,8 @@ def get_target_section(ticket):
         return "EPIC 60 — Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience"
     elif "EPIC 61" in epic or "Sandbox Promotion" in epic:
         return "EPIC 61 — Sandbox Promotion, Security Hardening & SRE Maturation"
+    elif "EPIC 62" in epic or "Cognitive Efficiency" in epic:
+        return "EPIC 62 — Cognitive Efficiency, Adaptive Intelligence & 2026 Model Matrix"
     elif "Fase 5" in epic or "Otras Características" in epic:
         return "Otras Características Consolidadas"
     elif "Governance" in epic or "Tooling" in epic or ticket_id == "CORE-313":
@@ -154,8 +157,10 @@ def get_target_section(ticket):
         return "EPIC 59 — Antigravity SDK Delegation, Bidirectional IDE Bridge & Natural Voice/Identity Studio"
     elif 387 <= num <= 393:
         return "EPIC 60 — Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience"
-    elif num >= 394:
+    elif 394 <= num <= 406:
         return "EPIC 61 — Sandbox Promotion, Security Hardening & SRE Maturation"
+    elif num >= 407:
+        return "EPIC 62 — Cognitive Efficiency, Adaptive Intelligence & 2026 Model Matrix"
     elif 290 <= num <= 306:
         # En base a models.yaml / update_models / SirenRouter / CMR v2 / Asymmetric routing
         if num in [295, 302, 304]:
