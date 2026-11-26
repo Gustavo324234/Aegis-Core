@@ -347,6 +347,8 @@ Creemos en la honestidad de ingeniería absoluta. El núcleo cognitivo, la arqui
 | Epic 58 | **Experiencia de Asistente Personal, UX Zero-Friction y Onboarding de Comunidad** | `[Core / Estable]` ✅ Listo ([EPIC 58](governance/EPIC_58_PERSONAL_ASSISTANT_UX_AND_COMMUNITY.md)) |
 | Epic 59 | **Delegación SDK Antigravity, Puente IDE Bidireccional e Identidad/Voz** | `[Core / Estable]` ✅ Listo ([EPIC 59](governance/EPIC_59_ANTIGRAVITY_SDK_AND_VOICE_IDENTITY.md)) |
 | Epic 60 | **Canales Reales (WhatsApp y Google Calendar), UX de Chat y Resiliencia ReAct** | `[Core / Estable]` ✅ Listo ([EPIC 60](governance/EPIC_60_REAL_WORLD_CHANNELS_OAUTH_AND_RESILIENCE.md)) |
+| Epic 61 | **Promoción de Sandbox, Hardening de Seguridad y Maduración SRE** | `[Core / Estable]` ✅ Listo ([EPIC 61](governance/EPIC_61_SANDBOX_PROMOTION_AND_SRE.md)) |
+| Epic 62 | **Eficiencia Cognitiva (-60%–75% Tokens), CMR v4 y Matriz de Modelos 2026** | `[Core / Estable]` ✅ Listo ([EPIC 62](governance/EPIC_62_COGNITIVE_EFFICIENCY_AND_MODELS_2026.md)) |
 | Epic 52 | Calidad de Voz (estabilización de stream Siren WebRTC y feedback de silenciar mic) | `[Experimental / I+D]` 🧪 I+D Activo |
 | Epic 55 | App Móvil (modos Satélite y Cloud con integración Orion ID y Web) | `[Experimental / I+D]` 🧪 I+D Activo |
 
@@ -393,32 +395,28 @@ Los sponsoreos van directamente a la infraestructura de desarrollo: cómputo, co
 
 ---
 
-## Evidencia de Ruteo Cognitivo (PinchBench Benchmark)
+## Evidencia de Ruteo Cognitivo y Eficiencia (CMR v4 + PinchBench)
 
-Aegis OS no depende de mapeos de modelos estáticos ni cableados en el código. En un entorno de producción, las decisiones de enrutamiento son gobernadas en tiempo real por el planificador (scheduler) del kernel utilizando métricas empíricas reales de rendimiento.
+Aegis OS rutea cada turno de forma adaptativa usando evaluaciones empíricas de **PinchBench**, precios en vivo de OpenRouter y armado de contexto **Cache-First + Dynamic Tool Gating** (`EPIC 62`), reduciendo el consumo de tokens por turno entre **60% y 75%** mientras escala automáticamente preguntas complejas hacia modelos de mayor razonamiento.
 
-Aegis obtiene evaluaciones en vivo de **PinchBench**, el leaderboard líder de la industria que mide las tasas de éxito (Success Rates), latencias y costos de ejecución de agentes de IA autónomos bajo entornos de uso de herramientas (Tool Use) de múltiples turnos y alta exigencia.
+### Matriz Recomendada 2026 (Perfiles Gratis y Pagos)
 
-### Muestra de la Tabla del Líder de PinchBench (Real)
-
-La siguiente tabla ilustra las métricas del mundo real que Aegis OS utiliza para construir su matriz de puntuación:
-
-| ID del Modelo | Tasa de Éxito | Latencia Promedio | Costo (por 1M tokens de entrada) | Perfil de Tarea Óptimo |
+| ID del Modelo | Perfil | PinchBench | Costo (1M In / Out) | Rol Óptimo (`CMR v4`) |
 |---|---|---|---|---|
-| `anthropic/claude-opus-4.8-fast` | **94.49%** | ~159s | $15.00 | **Orquestación DAG / Edición de Código Crítico** |
-| `google/gemini-3.1-flash-lite` | **80.50%** | ~15s | $0.075 | **Búsquedas de Memoria L1 / Chequeos de UI** |
-| `openai/gpt-5.4-nano` | **77.26%** | ~12s | $0.05 | **Formateo de Texto / Extracción de Parámetros** |
-| `openai/gpt-oss-120b` (Local) | **47.44%** | ~108s | Gratis (GPU Local) | **Respaldo Offline / Acciones de Alta Privacidad** |
+| `anthropic/claude-opus-4.6` | Pago Frontier | **96.30%** | $5.00 / $25.00 | **Orquestación DAG / Arquitectura Crítica** |
+| `deepseek/deepseek-v4-flash` | Pago Valor (#1) | **91.46%** | $0.09 / $0.18 | **Razonamiento Diario y Código (`$0.018` cache read)** |
+| `openai/gpt-5.6-luna` | Pago Valor | **90.79%** | $0.20 / $1.20 | **Asistente Confiable y Síntesis** |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | 100% Gratis (OR) | **90.58%** | Gratis | **Razonamiento Profundo sin Costo (1M ctx)** |
+| `gemini-3.8-flash` | Free Tier (AI Studio) | **89.20%** | Free Tier | **Asistente Diario Gratuito Principal** |
+| `qwen/qwen3.8-27b` | Free Tier (Groq) | **86.40%** | Free Tier | **Failover Rápido con Tool Calling Gratis** |
+| `qwen2.5-coder:32b` (Ollama) | Local Soberano | **72.10%** | Gratis (GPU Local) | **Respaldo Offline / Enclaves Air-Gapped** |
 
-### Cómo Planifica las Tareas Aegis (Ruteo Asimétrico)
-Cuando un agente genera un árbol de tareas, el kernel analiza el bloque de ejecución y le asigna un `TaskType`:
-1. **Tareas Sintácticas L1 (ej. extracción JSON, sanitización de prompts):** El scheduler las envía a modelos ultra-económicos como `gpt-5.4-nano` o `gemini-3.1-flash-lite`. Esto reduce los costos en un 99% con un impacto prácticamente nulo en el éxito de la tarea.
-2. **Tareas de Razonamiento L2 (ej. modificaciones de código, auditorías de seguridad):** Se planifican en motores de razonamiento pesado como `claude-opus-4.8-fast` para garantizar la corrección y evitar fallos en tiempo de ejecución.
-3. **Escudo de Privacidad Local-First:** Para enclaves de datos altamente sensibles, el planificador restringe el enrutamiento exclusivamente a hardware local (`gpt-oss-120b` o modelos Gemma/Llama locales), manteniendo soberanía absoluta sobre los datos.
+### Cómo Optimiza Inteligencia por Token Aegis (CMR v4)
+1. **Cache-First + Dynamic Tool Gating:** El prefijo `System` (`messages[0]`) permanece invariante entre turnos para aprovechar KV-caching de los proveedores, el reloj y la memoria personal selectiva viajan justo antes del turno del usuario, y solo se adjuntan esquemas de herramientas del dominio activo (`0` en charla conceptual pura).
+2. **`ChatComplexity` Adaptativo (`Quick` / `Standard` / `DeepReasoning`):** Saludos breves van a modelos livianos/gratis (`gemini-3.5-flash-lite`, `gpt-oss-20b`), mientras consultas analíticas o estratégicas eliminan penalizaciones de chat y desbloquean modelos razonadores con hasta `4096` tokens de salida.
+3. **Blend Continuo con `benchmark_pct`:** La calidad efectiva combina `0.70 * task_score + 0.30 * benchmark_pct`, y `LocalOnly` mantiene enclaves sensibles 100% locales en Ollama.
 
-Esta estrategia adaptativa garantiza una estabilidad operativa de grado SRE, reduciendo los costos totales de API hasta en un **80%** sin sacrificar las capacidades contextuales del asistente.
-
-Para instrucciones completas de reproducibilidad y detalles de benchmarks, ver [docs/BENCHMARKS_PINCHBENCH.md](docs/BENCHMARKS_PINCHBENCH.md).
+Para instrucciones de reproducibilidad y la matriz completa 2026, ver [docs/BENCHMARKS_PINCHBENCH.md](docs/BENCHMARKS_PINCHBENCH.md).
 
 Para notas operativas del mundo real y experiencias de resiliencia SRE, ver [docs/DOGFOODING.md](docs/DOGFOODING.md).
 
