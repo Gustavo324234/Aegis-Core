@@ -168,7 +168,7 @@ function withAegisAssistant(config) {
       fs.writeFileSync(
         path.join(voiceDir, 'AegisAssistantModule.kt'),
         KOTLIN_MODULE.replace(
-          '__AEGIS_SUPPORTS_IN_APP_UPDATE__',
+          /__AEGIS_SUPPORTS_IN_APP_UPDATE__/g,
           isPlayStoreBuild ? 'false' : 'true'
         )
       );
