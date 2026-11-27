@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.34.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.33.0...shell-ui-v1.34.0) (2026-11-27)
+
+
+### Features
+
+* **voice,desktop,ui:** tenant self-service voice activation, custom wake phrase & 1-click PC activator ([#389](https://github.com/Gustavo324234/Aegis-Core/issues/389)) ([c7147d9](https://github.com/Gustavo324234/Aegis-Core/commit/c7147d9baf5c07cfb38b4f4809807f1eaa2e4b56))
+
 ## [1.33.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.32.0...shell-ui-v1.33.0) (2026-11-27)
 
 

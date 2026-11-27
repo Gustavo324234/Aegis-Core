@@ -1,6 +1,6 @@
 [package]
 name = "ank-server"
-version = "0.1.106"
+version = "0.1.107"
 edition = "2021"
 license = "AGPL-3.0-only"
 

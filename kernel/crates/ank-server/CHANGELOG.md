@@ -6,6 +6,8 @@
 
 
 
+
+
 ## [0.1.106](https://github.com/Gustavo324234/Aegis-Core/compare/ank-server-v0.1.105...ank-server-v0.1.106) (2026-11-27)
 
 

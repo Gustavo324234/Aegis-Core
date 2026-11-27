@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.90](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.89...ank-core-v0.1.90) (2026-11-27)
+
+
+### Features
+
+* **voice,desktop,ui:** tenant self-service voice activation, custom wake phrase & 1-click PC activator ([#389](https://github.com/Gustavo324234/Aegis-Core/issues/389)) ([c7147d9](https://github.com/Gustavo324234/Aegis-Core/commit/c7147d9baf5c07cfb38b4f4809807f1eaa2e4b56))
+
 ## [0.1.89](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.88...ank-core-v0.1.89) (2026-11-27)
 
 
