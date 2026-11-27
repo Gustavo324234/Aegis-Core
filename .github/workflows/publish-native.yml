@@ -277,7 +277,18 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - name: Configure preinstalled Android SDK
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if [ ! -d "$SDK_ROOT" ]; then
+            echo "::error::Preinstalled Android SDK not found at $SDK_ROOT"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: actions/cache@v4
         with:
           path: |
@@ -301,20 +312,22 @@ jobs:
           mkdir -p dist-android
           cd app/android
           chmod +x gradlew
+          GRADLE_ARGS="--no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a"
           if [ -n "$ANDROID_KEYSTORE_B64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
             echo "$ANDROID_KEYSTORE_B64" | base64 -d > app/aegis-release.keystore
-            ./gradlew assembleRelease --no-daemon \
+            ./gradlew assembleRelease $GRADLE_ARGS \
+              -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m" \
               -Pandroid.injected.signing.store.file="$(pwd)/app/aegis-release.keystore" \
               -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_PASSWORD" \
               -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
               -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
-            cp app/build/outputs/apk/release/app-release.apk ../../dist-android/aegis-android.apk
             rm -f app/aegis-release.keystore
           else
-            echo "::warning::ANDROID_KEYSTORE_* secrets not configured; building debug-signed APK (in-app upgrades require a consistent release keystore)."
-            ./gradlew assembleDebug --no-daemon
-            cp app/build/outputs/apk/debug/app-debug.apk ../../dist-android/aegis-android.apk
+            echo "::warning::ANDROID_KEYSTORE_* secrets not configured; building standalone release APK with Expo default signing (configure ANDROID_KEYSTORE_* for production signing)."
+            ./gradlew assembleRelease $GRADLE_ARGS \
+              -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"
           fi
+          cp app/build/outputs/apk/release/app-release.apk ../../dist-android/aegis-android.apk
           cd ../../dist-android
           sha256sum aegis-android.apk > aegis-android.apk.sha256
       - uses: actions/upload-artifact@v4
