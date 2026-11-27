@@ -20,3 +20,4 @@ Dotar a Aegis OS de una interfaz de voz verdaderamente fluida, manos libres y mu
 3. **`CORE-414`** (`feat`, ✅ Done): Demonio de Voz de Escritorio Siempre Activo con Navegador Cerrado (`tools/desktop_voice/`).
 4. **`CORE-415`** (`feat`, ✅ Done): App Android como Asistente Digital Predeterminado (`ROLE_ASSISTANT`) + `ForegroundService` de Escucha Continua.
 5. **`CORE-416`** (`test`, ✅ Done): Suite de Pruebas de Biometría/Wake-Word/Daemon, Documentación Android Studio/PC y Sincronización SRE.
+6. **`CORE-417`** (`feat`, ✅ Done): Builder Automático Android APK en CI, Auto-Updater In-App (SHA-256) y QR de Descarga en Web.

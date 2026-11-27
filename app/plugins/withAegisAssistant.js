@@ -14,6 +14,9 @@ const path = require('path');
  * and exposes `AegisAssistantModule` for 16kHz PCM breath-aware capture & background wake listening.
  */
 function withAegisAssistant(config) {
+  const isPlayStoreBuild =
+    process.env.PLAY_STORE_BUILD === '1' || process.env.PLAY_STORE_BUILD === 'true';
+
   config = withAndroidManifest(config, (cfg) => {
     const manifest = cfg.modResults;
     const appPkg = manifest.manifest;
@@ -25,6 +28,9 @@ function withAegisAssistant(config) {
       'android.permission.WAKE_LOCK',
       'android.permission.POST_NOTIFICATIONS',
     ];
+    if (!isPlayStoreBuild) {
+      requiredPerms.push('android.permission.REQUEST_INSTALL_PACKAGES');
+    }
     appPkg['uses-permission'] = appPkg['uses-permission'] || [];
     for (const perm of requiredPerms) {
       const exists = appPkg['uses-permission'].some(
@@ -69,6 +75,32 @@ function withAegisAssistant(config) {
             'android:foregroundServiceType': 'microphone',
           },
         });
+      }
+
+      if (!isPlayStoreBuild) {
+        application.provider = application.provider || [];
+        const providerAuth = '${applicationId}.aegis.fileprovider';
+        const hasProvider = application.provider.some(
+          (p) => p.$ && p.$['android:authorities'] === providerAuth
+        );
+        if (!hasProvider) {
+          application.provider.push({
+            $: {
+              'android:name': 'androidx.core.content.FileProvider',
+              'android:authorities': providerAuth,
+              'android:exported': 'false',
+              'android:grantUriPermissions': 'true',
+            },
+            'meta-data': [
+              {
+                $: {
+                  'android:name': 'android.support.FILE_PROVIDER_PATHS',
+                  'android:resource': '@xml/aegis_updater_paths',
+                },
+              },
+            ],
+          });
+        }
       }
     }
     return cfg;
@@ -126,8 +158,26 @@ function withAegisAssistant(config) {
       fs.mkdirSync(voiceDir, { recursive: true });
 
       fs.writeFileSync(path.join(voiceDir, 'AegisAssistantPackage.kt'), KOTLIN_PACKAGE);
-      fs.writeFileSync(path.join(voiceDir, 'AegisAssistantModule.kt'), KOTLIN_MODULE);
+      fs.writeFileSync(
+        path.join(voiceDir, 'AegisAssistantModule.kt'),
+        KOTLIN_MODULE.replace(
+          '__AEGIS_SUPPORTS_IN_APP_UPDATE__',
+          isPlayStoreBuild ? 'false' : 'true'
+        )
+      );
       fs.writeFileSync(path.join(voiceDir, 'AegisVoiceForegroundService.kt'), KOTLIN_SERVICE);
+
+      if (!isPlayStoreBuild) {
+        const xmlDir = path.join(
+          cfg.modRequest.platformProjectRoot,
+          'app/src/main/res/xml'
+        );
+        fs.mkdirSync(xmlDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(xmlDir, 'aegis_updater_paths.xml'),
+          UPDATER_PATHS_XML
+        );
+      }
       return cfg;
     },
   ]);
@@ -160,12 +210,18 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.provider.Settings
 import android.util.Base64
+import androidx.core.content.FileProvider
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
 import kotlin.concurrent.thread
 import kotlin.math.sqrt
 
@@ -265,6 +321,116 @@ class AegisAssistantModule(private val reactCtx: ReactApplicationContext) :
   @ReactMethod
   fun isContinuousListening(promise: Promise) {
     promise.resolve(AegisVoiceForegroundService.isRunning)
+  }
+
+  @ReactMethod
+  fun getAppVersionInfo(promise: Promise) {
+    try {
+      val pm = reactCtx.packageManager
+      val pInfo = pm.getPackageInfo(reactCtx.packageName, 0)
+      val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        pInfo.longVersionCode.toDouble()
+      } else {
+        @Suppress("DEPRECATION")
+        pInfo.versionCode.toDouble()
+      }
+      val map = Arguments.createMap().apply {
+        putString("versionName", pInfo.versionName ?: "1.0.0")
+        putDouble("versionCode", code)
+        putBoolean("supportsInAppUpdate", __AEGIS_SUPPORTS_IN_APP_UPDATE__)
+      }
+      promise.resolve(map)
+    } catch (e: Exception) {
+      promise.reject("ERR_VERSION", e)
+    }
+  }
+
+  @ReactMethod
+  fun downloadAndInstallApk(apkUrl: String, expectedSha256: String?, promise: Promise) {
+    if (!__AEGIS_SUPPORTS_IN_APP_UPDATE__) {
+      promise.reject("ERR_PLAY_BUILD", "Play Store build uses Google Play updates.")
+      return
+    }
+    thread(start = true) {
+      try {
+        var currentUrl = apkUrl
+        var conn: HttpURLConnection? = null
+        for (hop in 0..5) {
+          val candidate = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+            instanceFollowRedirects = true
+            connectTimeout = 15000
+            readTimeout = 60000
+            requestMethod = "GET"
+          }
+          val status = candidate.responseCode
+          if (status in 300..399) {
+            val loc = candidate.getHeaderField("Location")
+            candidate.disconnect()
+            if (loc.isNullOrBlank()) {
+              promise.reject("ERR_REDIRECT", "Redirect without Location header")
+              return@thread
+            }
+            currentUrl = loc
+            continue
+          }
+          conn = candidate
+          break
+        }
+
+        val activeConn = conn ?: run {
+          promise.reject("ERR_DOWNLOAD", "Too many redirects")
+          return@thread
+        }
+        if (activeConn.responseCode !in 200..299) {
+          val code = activeConn.responseCode
+          activeConn.disconnect()
+          promise.reject("ERR_HTTP", "Failed to download APK: HTTP " + code)
+          return@thread
+        }
+
+        val updatesDir = File(reactCtx.cacheDir, "updates").apply { mkdirs() }
+        val apkFile = File(updatesDir, "aegis-update.apk")
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buf = ByteArray(16384)
+
+        activeConn.inputStream.use { input ->
+          FileOutputStream(apkFile).use { output ->
+            while (true) {
+              val n = input.read(buf)
+              if (n <= 0) break
+              digest.update(buf, 0, n)
+              output.write(buf, 0, n)
+            }
+          }
+        }
+        activeConn.disconnect()
+
+        val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
+        val expectedClean = expectedSha256?.trim()?.lowercase() ?: ""
+        if (expectedClean.isNotEmpty() && actualSha != expectedClean) {
+          apkFile.delete()
+          promise.reject(
+            "ERR_CHECKSUM_MISMATCH",
+            "SHA-256 mismatch: expected " + expectedClean + ", got " + actualSha
+          )
+          return@thread
+        }
+
+        val contentUri = FileProvider.getUriForFile(
+          reactCtx,
+          reactCtx.packageName + ".aegis.fileprovider",
+          apkFile
+        )
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+          setDataAndType(contentUri, "application/vnd.android.package-archive")
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        reactCtx.startActivity(installIntent)
+        promise.resolve(actualSha)
+      } catch (e: Exception) {
+        promise.reject("ERR_INSTALL_APK", e)
+      }
+    }
   }
 
   /**
@@ -677,6 +843,12 @@ class AegisVoiceForegroundService : Service(), TextToSpeech.OnInitListener {
     super.onDestroy()
   }
 }
+`;
+
+const UPDATER_PATHS_XML = `<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <cache-path name="aegis_updates" path="updates/" />
+</paths>
 `;
 
 module.exports = withAegisAssistant;

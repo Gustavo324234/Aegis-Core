@@ -1,5 +1,11 @@
 import { NativeModules, Platform } from 'react-native';
 
+export interface AppVersionInfo {
+  versionName: string;
+  versionCode: number;
+  supportsInAppUpdate: boolean;
+}
+
 interface AegisNativeInterface {
   openAssistantSettings(): Promise<boolean>;
   consumeAssistLaunchTrigger(): Promise<boolean>;
@@ -17,6 +23,8 @@ interface AegisNativeInterface {
     hangoverMs: number,
     fixedDurationMs: number
   ): Promise<{ pcmB64: string; sampleRate: number; hadSpeech: boolean }>;
+  getAppVersionInfo(): Promise<AppVersionInfo>;
+  downloadAndInstallApk(apkUrl: string, expectedSha256: string | null): Promise<string>;
 }
 
 const nativeModule: AegisNativeInterface | undefined =
@@ -74,4 +82,19 @@ export async function recordNativePcm16Utterance(
 ): Promise<{ pcmB64: string; sampleRate: number; hadSpeech: boolean } | null> {
   if (!nativeModule) return null;
   return nativeModule.recordPcm16Utterance(hangoverMs, fixedDurationMs);
+}
+
+export async function getAppVersionInfo(): Promise<AppVersionInfo> {
+  if (!nativeModule) {
+    return { versionName: '1.0.0', versionCode: 1, supportsInAppUpdate: false };
+  }
+  return nativeModule.getAppVersionInfo();
+}
+
+export async function downloadAndInstallApk(
+  apkUrl: string,
+  expectedSha256: string | null
+): Promise<string | null> {
+  if (!nativeModule) return null;
+  return nativeModule.downloadAndInstallApk(apkUrl, expectedSha256);
 }

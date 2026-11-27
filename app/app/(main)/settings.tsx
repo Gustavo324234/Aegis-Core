@@ -11,7 +11,9 @@ import { PROVIDERS } from '@/constants/providers';
 import { TRANSLATIONS, Language } from '@/constants/i18n';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as voiceService from '@/services/voiceService';
+import * as appUpdater from '@/services/appUpdater';
 import {
+  getAppVersionInfo,
   hasNativeAssistantModule,
   isAlwaysOnListening,
   openAndroidAssistantSettings,
@@ -47,9 +49,16 @@ export default function SettingsScreen() {
   const [enrolledVoices, setEnrolledVoices] = useState<voiceService.EnrolledVoiceItem[]>([]);
   const [wakeAgentName, setWakeAgentName] = useState('Aegis');
   const [enrollingVoice, setEnrollingVoice] = useState(false);
+  const [appVersionLabel, setAppVersionLabel] = useState('1.0.0');
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [updateResult, setUpdateResult] = useState<appUpdater.AppUpdateCheckResult | null>(null);
+  const [updateMsg, setUpdateMsg] = useState<string | null>(null);
   const nativeReady = hasNativeAssistantModule();
 
   const loadMobileVoiceState = useCallback(async () => {
+    const vInfo = await getAppVersionInfo().catch(() => null);
+    if (vInfo) setAppVersionLabel(vInfo.versionName);
     if (nativeReady) {
       setAlwaysOnActive(await isAlwaysOnListening().catch(() => false));
     }
@@ -109,6 +118,36 @@ export default function SettingsScreen() {
       Alert.alert('Error', e?.message || 'No se pudo registrar la voz.');
     } finally {
       setEnrollingVoice(false);
+    }
+  };
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    setUpdateMsg(null);
+    try {
+      const res = await appUpdater.checkForAppUpdate();
+      setUpdateResult(res);
+      setUpdateMsg(
+        res.available
+          ? `Nueva versión disponible: ${res.releaseName}`
+          : `Tenés la última versión (${res.installedVersion}).`
+      );
+    } catch (e: any) {
+      setUpdateMsg(e?.message || 'Error buscando actualizaciones.');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!updateResult) return;
+    setInstallingUpdate(true);
+    try {
+      await appUpdater.installAppUpdate(updateResult);
+    } catch (e: any) {
+      Alert.alert('Error actualizando', e?.message || 'No se pudo descargar la APK.');
+    } finally {
+      setInstallingUpdate(false);
     }
   };
 
@@ -313,6 +352,37 @@ export default function SettingsScreen() {
                 </View>
               ))}
             </View>
+          )}
+        </View>
+
+        {/* SECTION: ACTUALIZACIONES DE LA APP */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>ACTUALIZACIONES (GITHUB RELEASES)</Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>VERSIÓN INSTALADA: v{appVersionLabel}</Text>
+          <TouchableOpacity
+            style={styles.relinkBtn}
+            onPress={handleCheckUpdate}
+            disabled={checkingUpdate || installingUpdate}
+          >
+            <Text style={styles.relinkBtnText}>
+              {checkingUpdate ? 'BUSCANDO EN GITHUB...' : 'BUSCAR ACTUALIZACIONES'}
+            </Text>
+          </TouchableOpacity>
+          {updateMsg && (
+            <Text style={[styles.modeDesc, { color: '#AAA', marginTop: 10 }]}>{updateMsg}</Text>
+          )}
+          {updateResult?.available && (
+            <TouchableOpacity
+              style={[styles.actionBtnPrimary, { marginTop: 10, alignItems: 'center' }]}
+              onPress={handleInstallUpdate}
+              disabled={installingUpdate}
+            >
+              <Text style={styles.actionBtnText}>
+                {installingUpdate ? 'DESCARGANDO APK...' : 'DESCARGAR E INSTALAR ACTUALIZACIÓN'}
+              </Text>
+            </TouchableOpacity>
           )}
         </View>
 
