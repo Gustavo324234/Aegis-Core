@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/Gustavo324234/Aegis-Core/compare/aegis-sdk-v0.1.7...aegis-sdk-v0.1.8) (2026-11-27)
+
+
+### Features
+
+* **ci,mobile,ui:** add Android APK GitHub Actions builder, in-app SHA-256 updater and Web download QR (CORE-417) ([#386](https://github.com/Gustavo324234/Aegis-Core/issues/386)) ([d80281d](https://github.com/Gustavo324234/Aegis-Core/commit/d80281d75bebad07bb940e07a5668cf2fccfdcf0))
+
 ## [0.1.7](https://github.com/Gustavo324234/Aegis-Core/compare/aegis-sdk-v0.1.6...aegis-sdk-v0.1.7) (2026-08-02)
 
 

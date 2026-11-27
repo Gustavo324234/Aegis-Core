@@ -38,6 +38,13 @@
 
 
 
+## [0.1.99](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.98...ank-http-v0.1.99) (2026-11-27)
+
+
+### Features
+
+* **ci,mobile,ui:** add Android APK GitHub Actions builder, in-app SHA-256 updater and Web download QR (CORE-417) ([#386](https://github.com/Gustavo324234/Aegis-Core/issues/386)) ([d80281d](https://github.com/Gustavo324234/Aegis-Core/commit/d80281d75bebad07bb940e07a5668cf2fccfdcf0))
+
 ## [0.1.98](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.97...ank-http-v0.1.98) (2026-11-27)
 
 

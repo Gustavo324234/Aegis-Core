@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.33.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.32.0...shell-ui-v1.33.0) (2026-11-27)
+
+
+### Features
+
+* **ci,mobile,ui:** add Android APK GitHub Actions builder, in-app SHA-256 updater and Web download QR (CORE-417) ([#384](https://github.com/Gustavo324234/Aegis-Core/issues/384)) ([6e6b2fd](https://github.com/Gustavo324234/Aegis-Core/commit/6e6b2fdd07549bd34cd945683d0dfb25cb2cbd34))
+* **ci,mobile,ui:** add Android APK GitHub Actions builder, in-app SHA-256 updater and Web download QR (CORE-417) ([#386](https://github.com/Gustavo324234/Aegis-Core/issues/386)) ([d80281d](https://github.com/Gustavo324234/Aegis-Core/commit/d80281d75bebad07bb940e07a5668cf2fccfdcf0))
+
 ## [1.32.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.31.0...shell-ui-v1.32.0) (2026-11-27)
 
 
