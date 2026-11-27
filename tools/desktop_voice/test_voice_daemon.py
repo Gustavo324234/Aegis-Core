@@ -1,14 +1,19 @@
+import io
+import json
 import os
 import struct
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aegis_voice_daemon import (
+    AegisHttpBridge,
     BreathAwareVadSegmenter,
     FRAME_SAMPLES,
     VadConfig,
     compute_rms_pcm16,
+    parse_chat_ws_frame,
 )
 
 
@@ -67,6 +72,56 @@ class BreathAwareVadTests(unittest.TestCase):
         self.assertEqual(compute_rms_pcm16(b""), 0.0)
         rms = compute_rms_pcm16(make_pcm_frame(16384))
         self.assertAlmostEqual(rms, 0.5, places=2)
+
+    def test_login_sends_session_key_and_extracts_session_token(self) -> None:
+        captured = {}
+
+        class _FakeResp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_urlopen(req, timeout=15):
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            payload = json.dumps(
+                {
+                    "status": "authenticated",
+                    "role": "tenant",
+                    "session_token": "cst_test_token_123",
+                }
+            ).encode("utf-8")
+            return _FakeResp(payload)
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            bridge = AegisHttpBridge.login("http://127.0.0.1:8000", "Tavo", "secret")
+
+        self.assertEqual(captured["url"], "http://127.0.0.1:8000/api/auth/login")
+        self.assertEqual(captured["body"], {"tenant_id": "Tavo", "session_key": "secret"})
+        self.assertNotIn("passphrase", captured["body"])
+        self.assertEqual(bridge.session_key, "cst_test_token_123")
+
+    def test_parse_chat_ws_frame_handles_kernel_and_error_events(self) -> None:
+        self.assertEqual(
+            parse_chat_ws_frame({"event": "kernel_event", "data": {"pid": "p1", "output": "Hola"}}),
+            ("Hola", False, None),
+        )
+        self.assertEqual(
+            parse_chat_ws_frame(
+                {"event": "kernel_event", "data": {"pid": "p1", "status_update": {"state": "STATE_COMPLETED"}}}
+            ),
+            (None, True, None),
+        )
+        self.assertEqual(
+            parse_chat_ws_frame({"event": "kernel_event", "data": {"pid": "p1", "error": "boom"}}),
+            (None, True, "boom"),
+        )
+        self.assertEqual(
+            parse_chat_ws_frame({"event": "error", "data": {"code": "E_RATE", "message": "Rate limited"}}),
+            (None, True, "Rate limited"),
+        )
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ import threading
 import time
 from typing import Deque, List, Optional, Tuple
 import urllib.error
+import urllib.parse
 import urllib.request
 
 SAMPLE_RATE = 16000
@@ -165,6 +166,7 @@ def speak_text_native(text: str) -> None:
         return
     if sys.platform.startswith("win"):
         ps_script = (
+            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
             "Add-Type -AssemblyName System.Speech; "
             "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
             "$s.Rate = 1; "
@@ -184,15 +186,62 @@ def speak_text_native(text: str) -> None:
         pass
 
 
+def parse_chat_ws_frame(frame: dict) -> Tuple[Optional[str], bool, Optional[str]]:
+    """
+    Parses a WebSocket frame from `ank-http` (`/ws/chat/:tenant_id`) into
+    `(output_chunk, is_done, error_msg)`. Also keeps fallback support for
+    legacy `{type: "token"|"status"|"error"}` frames.
+    """
+    event = frame.get("event")
+    if event == "kernel_event":
+        data = frame.get("data")
+        if isinstance(data, dict):
+            if "output" in data and data["output"] is not None:
+                return (str(data["output"]), False, None)
+            if "error" in data and data["error"] is not None:
+                return (None, True, str(data["error"]))
+            status_update = data.get("status_update")
+            if isinstance(status_update, dict) and status_update.get("state") in (
+                "STATE_COMPLETED",
+                "STATE_FAILED",
+            ):
+                return (None, True, None)
+        return (None, False, None)
+
+    if event == "error":
+        data = frame.get("data")
+        if isinstance(data, dict):
+            msg = data.get("message") or data.get("code") or str(data)
+        else:
+            msg = str(data or "Unknown WebSocket error")
+        return (None, True, str(msg))
+
+    kind = frame.get("type")
+    if kind == "token":
+        return (str(frame.get("data", "")), False, None)
+    if kind == "status" and str(frame.get("data", "")) in ("idle", "completed"):
+        return (None, True, None)
+    if kind == "error":
+        return (None, True, str(frame.get("data", "")))
+    return (None, False, None)
+
+
 class AegisHttpBridge:
-    def __init__(self, base_url: str, tenant_id: str, session_key: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        tenant_id: str,
+        session_key: str,
+        passphrase: Optional[str] = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.tenant_id = tenant_id
         self.session_key = session_key
+        self._passphrase = passphrase
 
     @classmethod
-    def login(cls, base_url: str, tenant_id: str, passphrase: str) -> "AegisHttpBridge":
-        payload = json.dumps({"tenant_id": tenant_id, "passphrase": passphrase}).encode("utf-8")
+    def _request_login_token(cls, base_url: str, tenant_id: str, passphrase: str) -> str:
+        payload = json.dumps({"tenant_id": tenant_id, "session_key": passphrase}).encode("utf-8")
         req = urllib.request.Request(
             f"{base_url.rstrip('/')}/api/auth/login",
             data=payload,
@@ -201,10 +250,28 @@ class AegisHttpBridge:
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        token = data.get("session_key") or data.get("token")
+        token = (
+            data.get("session_token")
+            or data.get("session_key")
+            or data.get("token")
+            or passphrase
+        )
         if not token:
             raise RuntimeError(f"Login failed: {data}")
-        return cls(base_url, tenant_id, token)
+        return str(token)
+
+    @classmethod
+    def login(cls, base_url: str, tenant_id: str, passphrase: str) -> "AegisHttpBridge":
+        token = cls._request_login_token(base_url, tenant_id, passphrase)
+        return cls(base_url, tenant_id, token, passphrase=passphrase)
+
+    def refresh_session(self) -> bool:
+        if not self._passphrase:
+            return False
+        self.session_key = self._request_login_token(
+            self.base_url, self.tenant_id, self._passphrase
+        )
+        return True
 
     def _headers(self) -> dict:
         return {
@@ -222,21 +289,29 @@ class AegisHttpBridge:
                 "lang": lang,
             }
         ).encode("utf-8")
-        req = urllib.request.Request(
-            f"{self.base_url}/api/siren/utterance",
-            data=body,
-            headers=self._headers(),
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        for attempt in range(2):
+            req = urllib.request.Request(
+                f"{self.base_url}/api/siren/utterance",
+                data=body,
+                headers=self._headers(),
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as err:
+                if err.code == 401 and attempt == 0 and self.refresh_session():
+                    continue
+                raise
+        raise RuntimeError("Failed to post utterance after session refresh")
 
     def send_chat_and_wait(self, prompt: str) -> str:
         """Sends a prompt via Aegis WebSocket chat and waits for the assistant response."""
         import websockets.sync.client as ws_client  # type: ignore
 
         ws_base = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
-        url = f"{ws_base}/ws/chat/{self.tenant_id}"
+        encoded_tenant = urllib.parse.quote(self.tenant_id, safe="")
+        url = f"{ws_base}/ws/chat/{encoded_tenant}"
         reply_parts: List[str] = []
 
         with ws_client.connect(
@@ -244,17 +319,17 @@ class AegisHttpBridge:
             additional_headers={"x-citadel-key": self.session_key},
             open_timeout=10,
         ) as ws:
-            ws.send(json.dumps({"prompt": prompt}))
+            ws.send(json.dumps({"action": "submit", "prompt": prompt}))
             while True:
                 raw = ws.recv(timeout=90)
                 frame = json.loads(raw)
-                kind = frame.get("type")
-                if kind == "token":
-                    reply_parts.append(str(frame.get("data", "")))
-                elif kind == "status" and str(frame.get("data", "")) in ("idle", "completed"):
+                chunk, is_done, error_msg = parse_chat_ws_frame(frame)
+                if chunk is not None:
+                    reply_parts.append(chunk)
+                if error_msg is not None:
+                    return f"Error: {error_msg}"
+                if is_done:
                     break
-                elif kind == "error":
-                    return f"Error: {frame.get('data', '')}"
         return "".join(reply_parts).strip()
 
 
