@@ -139,10 +139,17 @@ function withAegisAssistant(config) {
         'import expo.modules.ApplicationLifecycleDispatcher',
         `import expo.modules.ApplicationLifecycleDispatcher\n${importLine}`
       );
-      contents = contents.replace(
-        'packages.apply {',
-        'packages.apply {\n              add(AegisAssistantPackage())'
-      );
+      if (contents.includes('packages.apply {')) {
+        contents = contents.replace(
+          'packages.apply {',
+          'packages.apply {\n              add(AegisAssistantPackage())'
+        );
+      } else if (contents.includes('return packages')) {
+        contents = contents.replace(
+          'return packages',
+          'packages.add(AegisAssistantPackage())\n            return packages'
+        );
+      }
     }
     cfg.modResults.contents = contents;
     return cfg;
@@ -203,6 +210,7 @@ class AegisAssistantPackage : ReactPackage {
 
 const KOTLIN_MODULE = `package io.aegis.app.voice
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -240,7 +248,7 @@ class AegisAssistantModule(private val reactCtx: ReactApplicationContext) :
       val cmd = intent?.getStringExtra("aegis_voice_command")?.trim()
       if (!cmd.isNullOrEmpty()) {
         pendingVoiceCommand = cmd
-        intent.removeExtra("aegis_voice_command")
+        intent?.removeExtra("aegis_voice_command")
       }
       val action = intent?.action ?: return
       if (action == Intent.ACTION_ASSIST || action == Intent.ACTION_VOICE_COMMAND) {
@@ -437,6 +445,7 @@ class AegisAssistantModule(private val reactCtx: ReactApplicationContext) :
    * Captures a single 16 kHz PCM16 mono utterance with adaptive VAD and breath-tolerant
    * hangover (hangoverMs), or a fixed sample when fixedDurationMs > 0 for voice enrollment.
    */
+  @SuppressLint("MissingPermission")
   @ReactMethod
   fun recordPcm16Utterance(
     hangoverMs: Int,
@@ -460,6 +469,7 @@ class AegisAssistantModule(private val reactCtx: ReactApplicationContext) :
         minBuf
       )
       if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+        recorder.release()
         promise.reject("ERR_MIC_INIT", "AudioRecord initialization failed")
         return@thread
       }
@@ -550,6 +560,7 @@ class AegisAssistantModule(private val reactCtx: ReactApplicationContext) :
 
 const KOTLIN_SERVICE = `package io.aegis.app.voice
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -620,6 +631,7 @@ class AegisVoiceForegroundService : Service(), TextToSpeech.OnInitListener {
 
     ensureNotificationChannel()
     val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+      ?: Intent(this, io.aegis.app.MainActivity::class.java)
     val pi = PendingIntent.getActivity(
       this,
       0,
@@ -634,7 +646,7 @@ class AegisVoiceForegroundService : Service(), TextToSpeech.OnInitListener {
       .setContentIntent(pi)
       .build()
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       startForeground(
         NOTIF_ID,
         notif,
@@ -653,6 +665,7 @@ class AegisVoiceForegroundService : Service(), TextToSpeech.OnInitListener {
     return START_STICKY
   }
 
+  @SuppressLint("MissingPermission")
   private fun runListenLoop(
     baseUrl: String,
     tenantId: String,
@@ -675,6 +688,7 @@ class AegisVoiceForegroundService : Service(), TextToSpeech.OnInitListener {
       minBuf
     )
     if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+      recorder.release()
       loopActive.set(false)
       isRunning = false
       stopSelf()
@@ -831,7 +845,7 @@ class AegisVoiceForegroundService : Service(), TextToSpeech.OnInitListener {
         "Aegis Escucha Continua",
         NotificationManager.IMPORTANCE_LOW
       )
-      nm.createNotificationChannel(channel)
+      nm?.createNotificationChannel(channel)
     }
   }
 
