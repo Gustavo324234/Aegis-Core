@@ -2,7 +2,7 @@
 name = "ank-http"
 version = "0.1.99"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [dependencies]
 ank-core  = { path = "../ank-core" }

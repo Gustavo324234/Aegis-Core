@@ -19,7 +19,7 @@ rustPlatform.buildRustPackage rec {
   meta = with lib; {
     description = "Aegis OS Cognitive Kernel Server";
     homepage = "https://github.com/Gustavo324234/Aegis-Core";
-    license = licenses.mit;
+    license = licenses.agpl3Only;
     maintainers = [ "Gustavo324234" ];
   };
 }

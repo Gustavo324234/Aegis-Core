@@ -4,7 +4,7 @@
 >
 > 🌐 **[🇪🇸 Leer en Español](README.es.md)** · **[⚡ Try the Brain in 30s (`agent_sandbox`)](tools/agent_sandbox/README.md)** · **[🤝 Contribute (`EPIC 58`)](CONTRIBUTING.md)**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Build & Test](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
 [![Rust Version](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
 [![Architecture: Zero--Panic](https://img.shields.io/badge/Kernel-Zero--Panic-green.svg)](ARCHITECTURE.md)
@@ -448,6 +448,6 @@ Aegis is built on a few firm beliefs:
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+GNU Affero General Public License v3.0 (`AGPL-3.0-only`) — see [LICENSE](LICENSE). Commercial licensing for proprietary/closed-source deployments is available by contacting the author.
 
 Copyright (c) 2026 Gustavo Aversente
