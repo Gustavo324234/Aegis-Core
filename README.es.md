@@ -4,7 +4,7 @@
 >
 > 🌐 **[🇺🇸 Read in English](README.md)** · **[⚡ Probá el Cerebro en 30s (`agent_sandbox`)](tools/agent_sandbox/README.md)** · **[🤝 Cómo Colaborar (`EPIC 58`)](CONTRIBUTING.md)**
 
-[![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
+[![Licencia: AGPL-3.0](https://img.shields.io/badge/Licencia-AGPL--3.0-blue.svg)](LICENSE)
 [![Build & Test](https://github.com/Gustavo324234/Aegis-Core/actions/workflows/publish-native.yml/badge.svg)](https://github.com/Gustavo324234/Aegis-Core/actions)
 [![Rust Version](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](Cargo.toml)
 [![Arquitectura: Zero--Panic](https://img.shields.io/badge/Kernel-Zero--Panic-green.svg)](ARCHITECTURE.md)
@@ -435,6 +435,6 @@ Para notas operativas del mundo real y experiencias de resiliencia SRE, ver [doc
 
 ## Licencia
 
-MIT — ver [LICENSE](LICENSE)
+GNU Affero General Public License v3.0 (`AGPL-3.0-only`) — ver [LICENSE](LICENSE). Para despliegues propietarios o de código cerrado, contactar al autor para una licencia comercial.
 
 Copyright (c) 2026 Gustavo Aversente

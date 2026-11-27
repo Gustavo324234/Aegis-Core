@@ -2,7 +2,7 @@
 name = "aegis-connect-relay"
 version = "0.1.5"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [dependencies]
 tokio = { workspace = true }
