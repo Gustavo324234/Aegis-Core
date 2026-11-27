@@ -232,6 +232,8 @@ impl CatalogSyncer {
                     avg_latency_ms: if is_free { Some(2500) } else { None },
                     free_tier_rpm: if is_free { Some(20) } else { None },
                     free_tier_rpd: if is_free { Some(200) } else { None },
+                    benchmark_pct: None,
+                    supports_reasoning: false,
                     free_tier_eligible: is_free,
                     tool_use_support: if supports_tools {
                         ToolUseSupport::Supported
@@ -310,6 +312,8 @@ pub async fn register_provider_models(
                 avg_latency_ms: avg_lat,
                 free_tier_rpm: None,
                 free_tier_rpd: None,
+                benchmark_pct: None,
+                supports_reasoning: false,
                 free_tier_eligible: true,
                 task_scores: scores,
             })
@@ -389,6 +393,8 @@ pub fn parse_openrouter_free_model(model: &serde_json::Value) -> Option<ModelEnt
         avg_latency_ms: Some(2500),
         free_tier_rpm: Some(20),
         free_tier_rpd: Some(200),
+        benchmark_pct: None,
+        supports_reasoning: false,
         free_tier_eligible: true,
         task_scores: scores,
     })
@@ -639,6 +645,8 @@ mod tests {
                 avg_latency_ms: Some(1800),
                 free_tier_rpm: None,
                 free_tier_rpd: None,
+                benchmark_pct: None,
+                supports_reasoning: false,
                 free_tier_eligible: true,
                 task_scores: TaskScores {
                     chat: 4,

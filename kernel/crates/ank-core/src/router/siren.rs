@@ -251,6 +251,79 @@ impl SirenRouter {
             .ok_or_else(|| anyhow::anyhow!("SirenRouter: No default 'mock' engine registered"))
     }
 
+    /// CORE-412: Transcribes raw 16kHz PCM or encoded audio using configured Groq / KeyPool Groq / Whisper Local fallback.
+    pub async fn transcribe_with_fallback(
+        &self,
+        tenant_id: &str,
+        pcm_16k: Option<Vec<u8>>,
+        encoded_audio: Option<(Vec<u8>, String, String)>,
+        keypool_groq_key: Option<String>,
+        lang_hint: Option<&str>,
+    ) -> Result<(String, &'static str)> {
+        let profile = self
+            .persistence
+            .get_voice_profile(tenant_id)
+            .await
+            .ok()
+            .flatten();
+        let settings = profile
+            .as_ref()
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.settings_json).ok());
+
+        let stt_provider = settings
+            .as_ref()
+            .and_then(|s| s["stt_provider"].as_str())
+            .unwrap_or("auto");
+
+        let profile_groq_key = settings
+            .as_ref()
+            .and_then(|s| s["stt_api_key"].as_str())
+            .filter(|k| !k.trim().is_empty())
+            .map(|s| s.to_string());
+
+        let effective_groq_key = profile_groq_key.or(keypool_groq_key);
+
+        if stt_provider != "local" {
+            if let Some(api_key) = effective_groq_key {
+                match crate::chal::drivers::GroqSttEngine::new(api_key) {
+                    Ok(engine) => {
+                        let groq_res = if let Some((bytes, filename, mime)) = encoded_audio {
+                            engine
+                                .transcribe_encoded(bytes, &filename, &mime, lang_hint)
+                                .await
+                        } else if let Some(ref pcm) = pcm_16k {
+                            engine.transcribe_with_lang(pcm.clone(), lang_hint).await
+                        } else {
+                            Ok(String::new())
+                        };
+                        match groq_res {
+                            Ok(text) => return Ok((text, "groq-whisper-turbo")),
+                            Err(e) => {
+                                warn!(
+                                    "SirenRouter: Groq STT failed ({}), trying local fallback.",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => warn!("SirenRouter: GroqSttEngine init failed: {}", e),
+                }
+            }
+        }
+
+        if let Some(pcm) = pcm_16k {
+            let engines = self.engines.read().await;
+            if let Some(whisper) = engines.get("whisper-local") {
+                let text = whisper.transcribe(pcm).await?;
+                return Ok((text, "whisper-local"));
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "No hay motor STT disponible en el servidor (configurá una API key de Groq o activá Whisper local)"
+        ))
+    }
+
     /// Procesa audio crudo para un tenant eligiendo el STT engine configurado.
     pub async fn process_audio(&self, tenant_id: &str, pcm_data: Vec<u8>) -> Result<String> {
         let profile = self

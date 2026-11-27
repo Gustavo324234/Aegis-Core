@@ -149,6 +149,10 @@ export interface AegisState {
     sttAvailable: boolean;
     sttProvider: string;
     sttApiKey: string;
+    groqKeyDetected: boolean;
+    sttReady: boolean;
+    wakeFollowupUntil: number;
+    lastWakeSpeaker: string | null;
     currentView: 'chat' | 'dashboard' | 'agents' | 'agent_thread';
     activeAgentId: string | null;
     inputMode: 'text' | 'audio' | 'conversation' | 'wakeword';
@@ -183,6 +187,7 @@ export interface AegisState {
     fetchAgentName: () => Promise<void>;
     startWakewordListener: () => void;
     stopWakewordListener: () => void;
+    armWakeFollowupWindow: (secs?: number) => void;
     setVoiceEnabled: (val: boolean) => void;
     setCurrentView: (view: 'chat' | 'dashboard' | 'agents' | 'agent_thread') => void;
     setActiveAgentId: (agentId: string | null) => void;

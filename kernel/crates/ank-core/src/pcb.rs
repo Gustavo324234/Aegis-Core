@@ -27,6 +27,88 @@ pub enum RoutingPolicy {
     LatencyOptimized,
 }
 
+/// Conversational depth classification for Chat Agent (Level 0) turns (CORE-409).
+/// Allows CMR v4 to keep greetings/errands fast and cheap (`Quick`) while
+/// escalating analytical, comparative, or strategic questions (`DeepReasoning`)
+/// to high-capability models without losing `agent_id = None` chat flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum ChatComplexity {
+    Quick,
+    #[default]
+    Standard,
+    DeepReasoning,
+}
+
+/// Deterministically classifies the cognitive depth of a chat prompt (0 tokens).
+pub fn infer_chat_complexity(prompt: &str) -> ChatComplexity {
+    let trimmed = prompt.trim();
+    if trimmed.is_empty() {
+        return ChatComplexity::Quick;
+    }
+
+    let lower = trimmed.to_lowercase();
+    let deep_signals: &[&str] = &[
+        "analiza",
+        "analizá",
+        "analyze",
+        "compara",
+        "compará",
+        "compare",
+        "pros y contras",
+        "trade-off",
+        "tradeoff",
+        "ventajas",
+        "desventajas",
+        "estrategia",
+        "strategy",
+        "arquitectura",
+        "architecture",
+        "planific",
+        "roadmap",
+        "explica en detalle",
+        "explicá en detalle",
+        "detailed explanation",
+        "en profundidad",
+        "paso a paso",
+        "por qué",
+        "¿por qué",
+        "why ",
+        "cómo funciona",
+        "como funciona",
+        "how does",
+        "evaluá",
+        "evalua",
+        "optimiz",
+        "diagnóstico",
+        "diagnostico",
+        "hipótesis",
+        "hipotesis",
+        "diseña",
+        "diseñá",
+        " vs ",
+        "largo plazo",
+        "inversi",
+        "diferencia entre",
+        "cuál conviene",
+        "cual conviene",
+    ];
+
+    let has_deep_signal = deep_signals.iter().any(|s| lower.contains(s));
+    let char_count = trimmed.chars().count();
+    let multi_question = trimmed.matches('?').count() >= 2;
+    let has_code_block = trimmed.contains("```");
+
+    if has_deep_signal || char_count > 280 || multi_question || has_code_block {
+        return ChatComplexity::DeepReasoning;
+    }
+
+    if char_count <= 60 {
+        return ChatComplexity::Quick;
+    }
+
+    ChatComplexity::Standard
+}
+
 /// Heuristically infer the cognitive nature of a user prompt so the router
 /// can pick a model whose `task_scores` actually match what's being asked.
 ///
@@ -384,6 +466,8 @@ pub struct PCB {
     #[serde(default)]
     pub task_type: TaskType,
     #[serde(default)]
+    pub chat_complexity: ChatComplexity,
+    #[serde(default)]
     pub routing_policy: RoutingPolicy,
     /// Archivos o contenido empaquetado para migración (Teleportación)
     #[serde(default)]
@@ -483,6 +567,7 @@ impl std::fmt::Debug for PCB {
 
 impl PCB {
     pub fn new(name: String, priority: u32, l1_prompt: String) -> Self {
+        let chat_complexity = infer_chat_complexity(&l1_prompt);
         Self {
             pid: format!("proc_{}", &Uuid::new_v4().to_string()[..8]),
             parent_pid: None,
@@ -512,6 +597,7 @@ impl PCB {
             },
             model_pref: ModelPreference::HybridSmart,
             task_type: TaskType::default(),
+            chat_complexity,
             routing_policy: RoutingPolicy::default(),
             inlined_context: HashMap::new(),
             role: ProcessRole::Standalone,

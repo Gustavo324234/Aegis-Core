@@ -61,6 +61,13 @@ pub struct ModelEntry {
     /// Free-tier requests-per-day limit (None = no known limit / paid-only model).
     #[serde(default)]
     pub free_tier_rpd: Option<u32>,
+    /// Continuous PinchBench overall success rate (0.0..=100.0) used to break ties
+    /// among models that share the same discrete 1..=5 `task_scores` bucket (CORE-409).
+    #[serde(default)]
+    pub benchmark_pct: Option<f64>,
+    /// Whether the model exposes internal reasoning / extended thinking tokens.
+    #[serde(default)]
+    pub supports_reasoning: bool,
     /// CORE-FIX (F): whether this model is usable AT ALL on the provider's free
     /// tier. Some models (e.g. gemini-2.5-pro, gemini-1.5-pro) return HTTP 429
     /// `RESOURCE_EXHAUSTED` with `limit: 0` for free-tier keys — they simply
@@ -86,6 +93,33 @@ impl ModelEntry {
             TaskType::Extraction => self.task_scores.extraction,
             TaskType::Creative => self.task_scores.analysis, // Creative usa el score de analysis como fallback
             TaskType::Local => 5, // Local type always scores max for local models
+        }
+    }
+
+    /// Returns a normalized quality score in `[0.0, 1.0]` combining discrete
+    /// `task_scores` with continuous `benchmark_pct` when available (CORE-409).
+    pub fn normalized_quality_for(
+        &self,
+        task: TaskType,
+        complexity: crate::pcb::ChatComplexity,
+    ) -> f64 {
+        let discrete_score = if matches!(task, TaskType::Chat)
+            && matches!(complexity, crate::pcb::ChatComplexity::DeepReasoning)
+        {
+            self.task_scores
+                .analysis
+                .max(self.task_scores.planning)
+                .max(self.task_scores.chat)
+        } else {
+            self.score_for(task)
+        };
+        let discrete_ratio = (discrete_score as f64 / 5.0).clamp(0.0, 1.0);
+        match self.benchmark_pct {
+            Some(pct) if pct > 0.0 => {
+                let bench_ratio = (pct / 100.0).clamp(0.0, 1.0);
+                (0.70 * discrete_ratio + 0.30 * bench_ratio).clamp(0.0, 1.0)
+            }
+            _ => discrete_ratio,
         }
     }
 }

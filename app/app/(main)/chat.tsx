@@ -21,6 +21,10 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import * as bffClient from '@/services/bffClient';
 import * as cloudRouter from '@/services/cloudRouter';
 import * as voiceService from '@/services/voiceService';
+import {
+  consumeAssistLaunchTrigger,
+  consumePendingVoiceCommand,
+} from '@/services/aegisAssistantNative';
 import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import ModeSelector from '@/components/ModeSelector';
@@ -204,22 +208,61 @@ export default function ChatScreen() {
   };
 
   const toggleVoice = async () => {
-    if (isListening) {
-      setIsListening(false);
-    } else {
-      const granted = await voiceService.requestPermissions();
-      if (!granted) {
-        setError('Microphone permission required');
+    if (isListening) return;
+    if (!serverUrl || !tenantId || !sessionKey) {
+      setError('Conectate al servidor Aegis en Modo Satélite para usar reconocimiento de voz.');
+      return;
+    }
+
+    const granted = await voiceService.requestPermissions();
+    if (!granted) {
+      setError('Se requiere permiso de micrófono');
+      return;
+    }
+
+    setIsListening(true);
+    clearError();
+    try {
+      const res = await voiceService.captureAndProcessUtterance(serverUrl, tenantId, sessionKey, {
+        hangoverMs: 2400,
+        mode: 'direct',
+        lang: language === 'es' ? 'es-AR' : 'en-US',
+      });
+      if (!res.accepted) {
+        if (res.reason === 'speaker_mismatch') {
+          setError('Voz no reconocida por el filtro biométrico.');
+        }
         return;
       }
-      setIsListening(true);
-      
-      // Mock listening period for the bridge
-      setTimeout(() => {
-        setIsListening(false);
-      }, 5000); 
+      const cmd = (res.command || res.transcript || '').trim();
+      if (cmd) {
+        await handleSendMessage(cmd);
+      }
+    } catch (e: any) {
+      setError(e?.message || 'Error procesando audio');
+    } finally {
+      setIsListening(false);
     }
   };
+
+  // Trigger hands-free voice capture or dispatch pending foreground wake command
+  useEffect(() => {
+    if (mode !== 'cloud' && serverUrl && tenantId && sessionKey) {
+      consumePendingVoiceCommand()
+        .then((cmd) => {
+          if (cmd && cmd.trim()) {
+            handleSendMessage(cmd.trim());
+            return;
+          }
+          return consumeAssistLaunchTrigger().then((triggered) => {
+            if (triggered) {
+              toggleVoice();
+            }
+          });
+        })
+        .catch(() => {});
+    }
+  }, [mode, serverUrl, tenantId, sessionKey]);
 
   const toggleConversationMode = () => {
     const newMode = !isConversationMode;

@@ -664,7 +664,7 @@ mod tests {
             .model_cooldown_remaining_secs("claude-sonnet-4-6")
             .await
             .expect("hard-unavailable model circuit must report remaining cooldown");
-        assert!(secs >= 1 && secs <= 3600);
+        assert!((1..=3600).contains(&secs));
         let open = t.open_model_circuits().await;
         assert!(
             open.get("claude-sonnet-4-6").copied().unwrap_or(0) >= 1,

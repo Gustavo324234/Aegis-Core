@@ -358,6 +358,9 @@ We believe in absolute engineering honesty. The core cognitive kernel, single-bi
 | Epic 58 | **Personal Assistant Experience, Zero-Friction UX & Community Onboarding** | `[Core / Stable]` ✅ Done ([EPIC 58](governance/EPIC_58_PERSONAL_ASSISTANT_UX_AND_COMMUNITY.md)) |
 | Epic 59 | **Antigravity SDK Delegation, Bidirectional IDE Bridge & Voice/Identity Studio** | `[Core / Stable]` ✅ Done ([EPIC 59](governance/EPIC_59_ANTIGRAVITY_SDK_AND_VOICE_IDENTITY.md)) |
 | Epic 60 | **Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience** | `[Core / Stable]` ✅ Done ([EPIC 60](governance/EPIC_60_REAL_WORLD_CHANNELS_OAUTH_AND_RESILIENCE.md)) |
+| Epic 61 | **Sandbox Promotion, Security Hardening & SRE Maturation** | `[Core / Stable]` ✅ Done ([EPIC 61](governance/EPIC_61_SANDBOX_PROMOTION_AND_SRE.md)) |
+| Epic 62 | **Cognitive Efficiency (-60%–75% Tokens), CMR v4 & 2026 Model Matrix** | `[Core / Stable]` ✅ Done ([EPIC 62](governance/EPIC_62_COGNITIVE_EFFICIENCY_AND_MODELS_2026.md)) |
+| Epic 63 | **Hands-Free Voice Biometrics (56-dim), Breath-Aware VAD & Native Android/PC Assistant** | `[Core / Stable]` ✅ Done ([EPIC 63](governance/EPIC_63_VOICE_BIOMETRICS_WAKEWORD_AND_NATIVE_ASSISTANT.md)) |
 | Epic 52 | Voice Quality (Siren WebRTC stream stabilization & mic-mute feedback) | `[Experimental / R&D]` 🧪 Active R&D |
 | Epic 55 | Mobile App (Satellite and Cloud modes with Orion ID & Web integration) | `[Experimental / R&D]` 🧪 Active R&D |
 
@@ -404,32 +407,28 @@ Sponsorships go directly toward development infrastructure: compute, API costs, 
 
 ---
 
-## Cognitive Routing & PinchBench Evidence
+## Cognitive Routing & PinchBench Evidence (CMR v4)
 
-Aegis OS does not rely on static hardcoded model mappings. In a production environment, routing decisions are governed in real-time by the kernel scheduler using empirical agent performance metrics. 
+Aegis OS routes every turn dynamically using empirical **PinchBench** evaluations, OpenRouter live pricing, and **Cache-First + Dynamic Tool Gating** context construction (`EPIC 62`), cutting chat token usage by **60%–75%** while automatically escalating complex prompts to stronger reasoning models.
 
-Aegis pulls live evaluations from **PinchBench** — the leading industry leaderboard that measures raw autonomous LLM agent success rates, latencies, and execution costs under stressful multi-turn tool use environments. 
+### 2026 Curated Model Profiles (Free & Paid)
 
-### Live PinchBench Leaderboard Sample
-
-The table below illustrates the real-world metrics used by Aegis OS to build its scoring matrix:
-
-| Model ID | Success Rate | Average Latency | Cost (per 1M input tokens) | Optimal Task Profile |
+| Model ID | Tier | PinchBench | Cost (1M Input / Output) | Optimal `CMR v4` Role |
 |---|---|---|---|---|
-| `anthropic/claude-opus-4.8-fast` | **94.49%** | ~159s | $15.00 | **DAG Orchestration / Critical Code Edits** |
-| `google/gemini-3.1-flash-lite` | **80.50%** | ~15s | $0.075 | **L1 Memory Searches / UI Layout Checks** |
-| `openai/gpt-5.4-nano` | **77.26%** | ~12s | $0.05 | **Text Formatting / Parameter Extraction** |
-| `openai/gpt-oss-120b` (Local) | **47.44%** | ~108s | Free (Host GPU) | **Offline Fallback / High-Privacy Actions** |
+| `anthropic/claude-opus-4.6` | Paid Frontier | **96.30%** | $5.00 / $25.00 | **DAG Orchestration / Critical Architecture** |
+| `deepseek/deepseek-v4-flash` | Paid Value (#1) | **91.46%** | $0.09 / $0.18 | **Daily Reasoning & Coding (`$0.018` cache read)** |
+| `openai/gpt-5.6-luna` | Paid Value | **90.79%** | $0.20 / $1.20 | **High-Reliability Assistant & Synthesis** |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | 100% Free (OR) | **90.58%** | Free | **Zero-Cost Deep Reasoning (1M ctx)** |
+| `gemini-3.8-flash` | Free Tier (AI Studio) | **89.20%** | Free Tier | **Primary Free Daily Assistant** |
+| `qwen/qwen3.8-27b` | Free Tier (Groq) | **86.40%** | Free Tier | **Fast Free Reasoning & Tool Failover** |
+| `qwen2.5-coder:32b` (Ollama) | Local Sovereign | **72.10%** | Free (Host GPU) | **Offline Fallback / Air-Gapped Enclaves** |
 
-### How Aegis Schedules Tasks (Asymmetric Routing)
-When an agent spawns a task tree, the kernel parses the execution block and assigns it a `TaskType`:
-1. **L1 Syntactic Tasks (e.g. JSON extraction, prompt sanitization):** The scheduler routes these to ultra-cheap models like `gpt-5.4-nano` or `gemini-3.1-flash-lite`. This cuts cost by 99% with a negligible impact on success rates.
-2. **L2 Reasoning Tasks (e.g. code modifications, security audits):** Routed to heavy-weight reasoning engines like `claude-opus-4.8-fast` to guarantee correctness and avoid runtime failures.
-3. **Local-First Privacy Guard:** For highly sensitive enclaves, the scheduler restricts routing entirely to local hardware (`gpt-oss-120b` or local Gemma/Llama models), maintaining absolute data sovereignty.
+### How Aegis Optimizes Intelligence per Token (CMR v4)
+1. **Cache-First + Dynamic Tool Gating:** The base `System` prefix (`messages[0]`) stays byte-invariant across turns for provider KV-cache reuse, volatile clocks and selective personal memory sit right before the user turn, and only domain-relevant tool schemas (`0` on pure conceptual chat) are attached.
+2. **Adaptive `ChatComplexity` (`Quick` / `Standard` / `DeepReasoning`):** Casual greetings hit fast/free models (`gemini-3.5-flash-lite`, `gpt-oss-20b`), while analytical or architectural prompts bypass chat penalties and unlock `DeepReasoning` models with up to `4096` output tokens.
+3. **Continuous `benchmark_pct` Blending & Local-First Guard:** Model quality blends `0.70 * task_score + 0.30 * benchmark_pct`, while `LocalOnly` keeps sensitive workloads strictly on local Ollama weights.
 
-This adaptive strategy ensures SRE-grade operational stability, bringing down overall API costs by up to **80%** without sacrificing the agent's contextual capabilities.
-
-For full reproducibility instructions and benchmarking details, see [docs/BENCHMARKS_PINCHBENCH.md](docs/BENCHMARKS_PINCHBENCH.md).
+For full reproducibility instructions and the complete 2026 matrix, see [docs/BENCHMARKS_PINCHBENCH.md](docs/BENCHMARKS_PINCHBENCH.md).
 
 For real-world operational notes and SRE resilience experiences, see [docs/DOGFOODING.md](docs/DOGFOODING.md).
 

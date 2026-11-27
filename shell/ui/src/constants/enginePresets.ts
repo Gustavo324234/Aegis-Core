@@ -23,14 +23,21 @@ export const PROVIDER_PRESETS = {
   groq: {
     label: "Groq",
     url: "https://api.groq.com/openai/v1/chat/completions",
-    model: "gpt-oss-120b",
+    model: "openai/gpt-oss-120b",
     keyLink: "https://console.groq.com/keys",
     provider: "groq"
+  },
+  deepseek: {
+    label: "DeepSeek",
+    url: "https://api.deepseek.com/v1/chat/completions",
+    model: "deepseek-chat",
+    keyLink: "https://platform.deepseek.com/api_keys",
+    provider: "deepseek"
   },
   grok: {
     label: "Grok (xAI)",
     url: "https://api.x.ai/v1/chat/completions",
-    model: "grok-3",
+    model: "grok-4.5",
     keyLink: "https://console.x.ai",
     provider: "grok"
   },

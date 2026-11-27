@@ -63,3 +63,19 @@ cargo build --workspace
 1. **Zero-Panic:** El código del Kernel en Rust y los scripts de instalación de producción deben tolerar fallos en caliente y degradar con gracia (*graceful degradation*).
 2. **Soberanía y Zero-Trust:** Citadel protocol debe requerir llaves locales auto-generadas de forma transparente y rechazar plugins sin firma válida (`.wasm.sig`) a menos que el usuario lo solicite explícitamente.
 3. **Idempotencia de Actores:** El ciclo de vida de los supervisores y especialistas jerárquicos debe ser acotado y de un solo reporte (synthesis_done), terminando su canal cuando finalizan su labor en lugar de permanecer zombis.
+
+---
+
+## 🗺️ Mapa Rápido de Arquitectura (Subsistema → Archivo)
+
+| Subsistema | Ruta Principal |
+| :--- | :--- |
+| **Loop ReAct y Prompts del Chat** | `kernel/crates/ank-core/src/chal/mod.rs`, `chal/context_builder.rs`, `chal/failover.rs` |
+| **Driver Cloud y Prompt Caching** | `kernel/crates/ank-core/src/chal/drivers/cloud.rs` |
+| **Router CMR y Scoring de Modelos** | `kernel/crates/ank-core/src/router/mod.rs`, `router/scoring.rs`, `router/catalog.rs`, `router/models.yaml` |
+| **ToolRegistry y Schemas** | `kernel/crates/ank-core/src/agents/tool_registry.rs`, `kernel/config/agents/*.md` |
+| **Enclave SQLCipher y Memoria Personal** | `kernel/crates/ank-core/src/enclave/mod.rs` |
+| **PCB e Inferencia de Complejidad** | `kernel/crates/ank-core/src/pcb.rs` |
+| **WebSocket Chat y Onboarding** | `kernel/crates/ank-http/src/ws/chat.rs`, `kernel/crates/ank-http/src/routes/auth.rs` |
+| **Frontend Web (Shell UI)** | `shell/ui/src/constants/enginePresets.ts`, `shell/ui/src/components/PersonalQuickSetup.tsx`, `shell/ui/src/components/RouterConfig/ModelCatalogViewer.tsx` |
+| **Sandbox y Scripts de Modelos** | `tools/agent_sandbox/sandbox.py`, `tools/update_models.py`, `tools/sync_tickets_master.py` |

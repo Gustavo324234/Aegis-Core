@@ -12,6 +12,9 @@
       "package": "io.aegis.app",
       "permissions": [
         "android.permission.RECORD_AUDIO",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.WAKE_LOCK",
         "android.permission.READ_CONTACTS",
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.POST_NOTIFICATIONS",
@@ -27,6 +30,7 @@
       }
     },
     "plugins": [
+      "./plugins/withAegisAssistant",
       "expo-router",
       "expo-secure-store",
       [

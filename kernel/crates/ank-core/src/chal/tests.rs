@@ -652,6 +652,8 @@ fn test_summarize_configured_providers_free_tier_and_dedup() {
         avg_latency_ms: None,
         free_tier_rpm: None,
         free_tier_rpd: None,
+        benchmark_pct: None,
+        supports_reasoning: false,
         free_tier_eligible: free_ok,
     };
 
@@ -745,4 +747,106 @@ fn test_mask_api_keys_in_text_preserves_multiline_markdown() {
     assert!(!masked.contains("0123456789abcdef0123456789abcdef"));
     assert!(masked.contains("\n\n| Proveedor | Clave |\n|---|---|\n| groq | "));
     assert!(masked.contains("\n\n> Nota final\n  - Item indentado"));
+}
+
+#[test]
+fn test_dynamic_tool_gating_reduces_token_footprint() {
+    use crate::agents::node::AgentRole;
+    use crate::agents::tool_registry::{ProviderKind, ToolRegistry};
+
+    let all_tools = ToolRegistry::tools_for(&AgentRole::ChatAgent, &ProviderKind::OpenAI);
+    assert!(all_tools.len() >= 13);
+    let all_bytes = serde_json::to_string(&all_tools)
+        .expect("serialize all chat tools")
+        .len();
+    assert!(all_bytes > 5_000);
+
+    // 1. Pure conceptual turn should attach zero heavy tool schemas (100% reduction).
+    let conceptual_names = crate::chal::context_builder::select_chat_tool_names(
+        "¿Qué opinás sobre invertir en índices globales vs bonos soberanos a 10 años?",
+        &[],
+    );
+    assert!(
+        conceptual_names.is_empty(),
+        "Conceptual chat must gate out all tools, got: {:?}",
+        conceptual_names
+    );
+    assert!(ToolRegistry::chat_tools_filtered(&conceptual_names, &ProviderKind::OpenAI).is_empty());
+
+    // 2. Expense query selects only ledger tools (>70% schema byte savings).
+    let expense_names = crate::chal::context_builder::select_chat_tool_names(
+        "Anotá $12.500 de carnicería y decime cuánto llevo gastado",
+        &[],
+    );
+    assert!(expense_names.contains(&"log_expense_or_entry"));
+    assert!(expense_names.contains(&"query_ledger"));
+    let filtered_expense = ToolRegistry::chat_tools_filtered(&expense_names, &ProviderKind::OpenAI);
+    assert!(filtered_expense.len() <= 3);
+    let expense_bytes = serde_json::to_string(&filtered_expense)
+        .expect("serialize filtered expense tools")
+        .len();
+    assert!(
+        expense_bytes * 100 <= all_bytes * 30,
+        "Expected >= 70% tool schema reduction, got {} vs {} bytes",
+        expense_bytes,
+        all_bytes
+    );
+
+    // 3. WhatsApp + reminder intent selects both messaging and reminder tools.
+    let wsp_names = crate::chal::context_builder::select_chat_tool_names(
+        "Mandale un mensaje a Ana por WhatsApp y recordame a las 20hs llamarla",
+        &[],
+    );
+    assert!(wsp_names.contains(&"manage_whatsapp"));
+    assert!(wsp_names.contains(&"manage_reminder"));
+}
+
+#[tokio::test]
+async fn test_system_prompt_prefix_cache_invariance() -> anyhow::Result<()> {
+    let pm = Arc::new(RwLock::new(PluginManager::new()?));
+    let hal = CognitiveHAL::new(pm)?;
+    let persona = Some("Respondé con calidez rioplatense.");
+
+    let mut pcb_a = PCB::new(
+        "cache-a".into(),
+        5,
+        "Analizá mi estrategia de ahorro mensual y gastos fijos".into(),
+    );
+    pcb_a.task_type = crate::pcb::TaskType::Chat;
+
+    let mut pcb_b = PCB::new(
+        "cache-b".into(),
+        5,
+        "Explicame las ventajas de Rust sobre Go para sistemas distribuidos".into(),
+    );
+    pcb_b.task_type = crate::pcb::TaskType::Chat;
+
+    let (msgs_a, _) = hal
+        .build_messages_for_chat_with_warnings(&pcb_a, persona)
+        .await;
+    let (msgs_b, _) = hal
+        .build_messages_for_chat_with_warnings(&pcb_b, persona)
+        .await;
+
+    assert_eq!(msgs_a[0].role, ChatRole::System);
+    assert_eq!(msgs_b[0].role, ChatRole::System);
+    assert_eq!(
+        msgs_a[0].content, msgs_b[0].content,
+        "Cache-first prefix (messages[0]) must stay byte-identical across queries"
+    );
+
+    let static_sys = msgs_a[0].content.as_deref().unwrap_or_default();
+    assert!(
+        !static_sys.contains("Fecha y hora local del sistema:"),
+        "Volatile temporal clock must never invalidate static messages[0]"
+    );
+    assert!(
+        msgs_a.iter().skip(1).any(|m| m
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Fecha y hora local del sistema:")),
+        "Operational clock block should be placed in the ephemeral post-history context"
+    );
+    Ok(())
 }

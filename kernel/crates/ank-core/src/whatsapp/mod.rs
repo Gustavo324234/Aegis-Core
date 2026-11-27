@@ -1270,11 +1270,13 @@ mod tests {
         let _env = crate::enclave::ScopedTestDataDir::new().unwrap();
         let db = TenantDB::open("t_wa_rate", "secret_key_123").unwrap();
 
-        let mut cfg = WhatsAppRateConfig::default();
-        cfg.min_interval_secs = 5;
-        cfg.max_per_minute = 3;
-        cfg.max_per_recipient_10m = 3;
-        cfg.dedup_window_secs = 60;
+        let cfg = WhatsAppRateConfig {
+            min_interval_secs: 5,
+            max_per_minute: 3,
+            max_per_recipient_10m: 3,
+            dedup_window_secs: 60,
+            ..Default::default()
+        };
         let saved = set_rate_config(&db, cfg).unwrap();
         assert_eq!(saved.min_interval_secs, 5);
 

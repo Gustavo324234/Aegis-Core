@@ -477,6 +477,21 @@ impl TenantDB {
             )
             .context("Failed to initialize sync_log table")?;
 
+        // EPIC 63 (CORE-412): Perfiles de voz autorizados por tenant para biometría multi-voz
+        self.connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS enrolled_voices (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                fingerprint_json TEXT NOT NULL,
+                threshold REAL NOT NULL DEFAULT 0.78,
+                sample_count INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+                [],
+            )
+            .context("Failed to initialize enrolled_voices table")?;
+
         Ok(())
     }
 
@@ -1474,6 +1489,249 @@ impl TenantDB {
 
         Ok(block)
     }
+
+    /// CORE-408: Context-aware personal memory block for chat turns.
+    /// Injects financial totals and reminder lists only when the query touches
+    /// those domains (or when a reminder is due soon), and ranks long-term
+    /// facts by lexical relevance when the tenant has > 8 facts.
+    pub fn build_contextual_personal_memory_block(&self, query: &str) -> Result<String> {
+        let lower = fold_spanish_lowercase(query);
+        let wants_finance = [
+            "$",
+            "gast",
+            "compr",
+            "pag",
+            "cobr",
+            "sueldo",
+            "ingres",
+            "plata",
+            "dinero",
+            "presupuesto",
+            "finanz",
+            "super",
+            "nafta",
+            "alquiler",
+            "ledger",
+            "resumen",
+            "cuanto llev",
+            "cuanto gast",
+        ]
+        .iter()
+        .any(|kw| lower.contains(kw));
+
+        let wants_reminders = [
+            "recorda",
+            "alarma",
+            "avis",
+            "agenda",
+            "pendiente",
+            "turno",
+            "cita",
+            "clase",
+            "horario",
+            "reunion",
+            "hoy",
+            "manana",
+            "semana",
+            "viernes",
+            "lunes",
+            "martes",
+            "miercoles",
+            "jueves",
+            "sabado",
+            "domingo",
+        ]
+        .iter()
+        .any(|kw| lower.contains(kw));
+
+        let wants_all_facts = [
+            "que sabes de mi",
+            "que recordas",
+            "mi memoria",
+            "mis datos",
+            "mis notas",
+            "sobre mi",
+            "olvid",
+            "actualiza",
+        ]
+        .iter()
+        .any(|kw| lower.contains(kw));
+
+        let all_facts = self.get_personal_facts(30)?;
+        let selected_facts: Vec<serde_json::Value> = if all_facts.len() <= 8 || wants_all_facts {
+            all_facts
+        } else {
+            let q_tokens = normalize_fact_topic_tokens(query);
+            let mut scored: Vec<(usize, usize, serde_json::Value)> = all_facts
+                .into_iter()
+                .enumerate()
+                .map(|(idx, f)| {
+                    let fact_txt = f.get("fact").and_then(|v| v.as_str()).unwrap_or_default();
+                    let cat = f
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("general");
+                    let f_tokens = normalize_fact_topic_tokens(fact_txt);
+                    let overlap = q_tokens.iter().filter(|t| f_tokens.contains(*t)).count();
+                    let cat_bonus = if matches!(cat, "preferencias" | "salud") {
+                        1
+                    } else {
+                        0
+                    };
+                    (overlap * 3 + cat_bonus, usize::MAX - idx, f)
+                })
+                .collect();
+            scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+            scored.into_iter().take(8).map(|(_, _, f)| f).collect()
+        };
+
+        let mut block = String::new();
+        if !selected_facts.is_empty() {
+            block.push_str("\n[MEMORIA A LARGO PLAZO DEL USUARIO]\n");
+            for f in &selected_facts {
+                let fact_id = f.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                let fact_text = f.get("fact").and_then(|v| v.as_str()).unwrap_or_default();
+                let category = f
+                    .get("category")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("general");
+                block.push_str(&format!("- [#{}] [{}] {}\n", fact_id, category, fact_text));
+            }
+        }
+
+        if wants_finance {
+            let expenses = self.query_expenses_summary(None)?;
+            let total = expenses
+                .get("total")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            block.push_str("\n[RESUMEN FINANCIERO]\n");
+            block.push_str(&format!("- Gastos acumulados: ${:.2}\n", total));
+            if let Some(by_cat) = expenses
+                .get("totals_by_category")
+                .and_then(|v| v.as_object())
+            {
+                if !by_cat.is_empty() {
+                    let cat_strs: Vec<String> = by_cat
+                        .iter()
+                        .map(|(k, v)| format!("{}: ${:.0}", k, v.as_f64().unwrap_or(0.0)))
+                        .collect();
+                    block.push_str(&format!("- Desglose: {}\n", cat_strs.join(", ")));
+                }
+            }
+        }
+
+        if wants_reminders {
+            let mut rem_stmt = self.connection.prepare(
+                "SELECT id, remind_at, description, COALESCE(recurrence, '')
+                 FROM reminders
+                 WHERE status = 'pending'
+                 ORDER BY remind_at ASC, id ASC
+                 LIMIT 8",
+            )?;
+            let pending_reminders: Vec<(i64, String, String, String)> = rem_stmt
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            if !pending_reminders.is_empty() {
+                block.push_str("\n[RECORDATORIOS PENDIENTES]\n");
+                for (id, remind_at, desc, recurrence) in pending_reminders {
+                    if recurrence.is_empty() {
+                        block.push_str(&format!("* [#{}] {} ({})\n", id, desc, remind_at));
+                    } else {
+                        block.push_str(&format!(
+                            "* [#{}] {} ({}, recurrente: {})\n",
+                            id, desc, remind_at, recurrence
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(block)
+    }
+
+    // ── EPIC 63 (CORE-412): Multi-Speaker Enrolled Voices & Biometrics Gate ──
+
+    pub fn list_enrolled_voices(&self) -> Result<Vec<crate::speaker_id::EnrolledSpeakerProfile>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, label, fingerprint_json, threshold, sample_count, COALESCE(created_at, '')
+             FROM enrolled_voices
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let label: String = row.get(1)?;
+                let fp_json: String = row.get(2)?;
+                let threshold: f32 = row.get::<_, f64>(3)? as f32;
+                let sample_count: usize = row.get::<_, i64>(4)?.max(1) as usize;
+                let created_at: String = row.get(5)?;
+                Ok((id, label, fp_json, threshold, sample_count, created_at))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(
+                |(id, label, fp_json, threshold, sample_count, created_at)| {
+                    let fingerprint: Vec<f32> = serde_json::from_str(&fp_json).ok()?;
+                    Some(crate::speaker_id::EnrolledSpeakerProfile {
+                        id,
+                        label,
+                        fingerprint,
+                        threshold,
+                        sample_count,
+                        created_at,
+                    })
+                },
+            )
+            .collect();
+        Ok(rows)
+    }
+
+    pub fn upsert_enrolled_voice(
+        &self,
+        profile: &crate::speaker_id::EnrolledSpeakerProfile,
+    ) -> Result<()> {
+        use anyhow::Context;
+        let fp_json = serde_json::to_string(&profile.fingerprint)?;
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO enrolled_voices (id, label, fingerprint_json, threshold, sample_count, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)",
+                rusqlite::params![
+                    profile.id,
+                    profile.label,
+                    fp_json,
+                    f64::from(profile.threshold),
+                    profile.sample_count as i64
+                ],
+            )
+            .context("Failed to upsert enrolled voice")?;
+        Ok(())
+    }
+
+    pub fn delete_enrolled_voice(&self, id: &str) -> Result<bool> {
+        let n = self
+            .connection
+            .execute("DELETE FROM enrolled_voices WHERE id = ?1", [id])?;
+        Ok(n > 0)
+    }
+
+    pub fn get_voice_gate_enabled(&self) -> Result<bool> {
+        match self.get_kv("voice_biometrics_gate")? {
+            Some(v) => Ok(v != "false" && v != "0"),
+            None => Ok(true),
+        }
+    }
+
+    pub fn set_voice_gate_enabled(&self, enabled: bool) -> Result<()> {
+        self.set_kv(
+            "voice_biometrics_gate",
+            if enabled { "true" } else { "false" },
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2221,18 +2479,12 @@ mod tests {
 
     #[test]
     fn test_persona_set_get_delete() -> anyhow::Result<()> {
-        let _guard = acquire_test_lock();
-        let tenant_id = format!(
-            "test_persona_user_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
-                .as_millis()
-        );
+        let _scoped = ScopedTestDataDir::new()?;
+        let tenant_id = "test_persona_user";
         let correct_key = "test_key_123";
 
         {
-            let db = TenantDB::open(&tenant_id, correct_key)?;
+            let db = TenantDB::open(tenant_id, correct_key)?;
             db.set_persona("Eres Eve, asistente de ACME Corp.")?;
             let loaded = db.get_persona()?;
             assert!(loaded.is_some(), "Persona should be stored");
@@ -2243,7 +2495,7 @@ mod tests {
         }
 
         {
-            let db = TenantDB::open(&tenant_id, correct_key)?;
+            let db = TenantDB::open(tenant_id, correct_key)?;
             let loaded = db.get_persona()?;
             assert!(loaded.is_some());
             db.delete_persona()?;
@@ -2251,25 +2503,18 @@ mod tests {
             assert!(after_delete.is_none(), "Persona should be deleted");
         }
 
-        let _ = std::fs::remove_dir_all(format!("./users/{}", tenant_id));
         Ok(())
     }
 
     #[test]
     fn test_persona_max_length() -> anyhow::Result<()> {
-        let _guard = acquire_test_lock();
-        let tenant_id = format!(
-            "test_maxlen_user_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
-                .as_millis()
-        );
+        let _scoped = ScopedTestDataDir::new()?;
+        let tenant_id = "test_maxlen_user";
         let correct_key = "test_key_456";
 
         let too_long = "x".repeat(4001);
         {
-            let db = TenantDB::open(&tenant_id, correct_key)?;
+            let db = TenantDB::open(tenant_id, correct_key)?;
             let result = db.set_persona(&too_long);
             assert!(result.is_err(), "Persona of 4001 chars should fail");
 
@@ -2279,12 +2524,6 @@ mod tests {
             assert_eq!(loaded.unwrap_or_default().len(), 4000);
         }
 
-        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let _ = std::fs::remove_dir_all(
-            std::path::Path::new(&base_dir)
-                .join("users")
-                .join(&tenant_id),
-        );
         Ok(())
     }
 
@@ -2360,14 +2599,8 @@ mod tests {
 
     #[test]
     fn test_sync_log_recording() -> anyhow::Result<()> {
-        let _guard = acquire_test_lock();
-        let tenant_id = format!(
-            "test_synclog_user_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
-                .as_millis()
-        );
+        let _scoped = ScopedTestDataDir::new()?;
+        let tenant_id = "test_synclog_user";
         let correct_key = "test_key_sync_999";
 
         struct SyncEntry {
@@ -2379,7 +2612,7 @@ mod tests {
         }
 
         let results: Vec<SyncEntry> = {
-            let db = TenantDB::open(&tenant_id, correct_key)?;
+            let db = TenantDB::open(tenant_id, correct_key)?;
 
             // 1. KV write
             db.set_kv("agent_persona", "Hello test persona")?;
@@ -2432,12 +2665,6 @@ mod tests {
         assert_eq!(results[2].operation, "INSERT");
         assert_eq!(results[2].seq_num, 3);
 
-        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let _ = std::fs::remove_dir_all(
-            std::path::Path::new(&base_dir)
-                .join("users")
-                .join(&tenant_id),
-        );
         Ok(())
     }
 
@@ -2509,17 +2736,11 @@ mod tests {
 
     #[test]
     fn test_core_375_personal_facts_and_expenses() -> Result<()> {
-        let _guard = acquire_test_lock();
-        let tenant_id = format!(
-            "test_personal_user_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
-                .as_millis()
-        );
+        let _scoped = ScopedTestDataDir::new()?;
+        let tenant_id = "test_personal_user";
         let key = "test_key_personal_123";
 
-        let db = TenantDB::open(&tenant_id, key)?;
+        let db = TenantDB::open(tenant_id, key)?;
 
         // Facts
         assert!(db.add_personal_fact("preferencias", "Le gusta el café sin azúcar", "chat")?);
@@ -2606,22 +2827,14 @@ mod tests {
         assert!(db.delete_personal_fact(fact_id)?);
         assert_eq!(db.get_personal_facts(10)?.len(), 0);
 
-        let dir = format!("./users/{}", tenant_id);
-        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
     #[test]
     fn test_personal_facts_topic_consolidation_and_update() -> Result<()> {
-        let _guard = acquire_test_lock();
-        let tenant_id = format!(
-            "test_facts_consolidation_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_else(|_| std::time::Duration::from_secs(0))
-                .as_millis()
-        );
-        let db = TenantDB::open(&tenant_id, "test_key_consolidation_123")?;
+        let _scoped = ScopedTestDataDir::new()?;
+        let tenant_id = "test_facts_consolidation";
+        let db = TenantDB::open(tenant_id, "test_key_consolidation_123")?;
 
         // 1. Progressive updates of the same topic must consolidate into ONE note
         let out1 = db.upsert_personal_fact(
@@ -2689,8 +2902,6 @@ mod tests {
         let block = db.build_personal_memory_prompt_block()?;
         assert!(block.contains(&format!("[#{}]", prof_id)));
 
-        let dir = format!("./users/{}", tenant_id);
-        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -2824,6 +3035,51 @@ mod tests {
         })
         .await?;
         assert_eq!(count, 8);
+        Ok(())
+    }
+
+    #[test]
+    fn test_enrolled_voices_crud_and_gate_toggle() -> Result<()> {
+        let _scoped = ScopedTestDataDir::new()?;
+        let db = TenantDB::open("voice_crud_tenant", "voice_secret_key_777")?;
+
+        assert!(db.get_voice_gate_enabled()?);
+        db.set_voice_gate_enabled(false)?;
+        assert!(!db.get_voice_gate_enabled()?);
+        db.set_voice_gate_enabled(true)?;
+        assert!(db.get_voice_gate_enabled()?);
+
+        let p1 = crate::speaker_id::EnrolledSpeakerProfile {
+            id: "v_primary".to_string(),
+            label: "Tavo PC".to_string(),
+            fingerprint: vec![0.1; 56],
+            threshold: 0.78,
+            sample_count: 3,
+            created_at: String::new(),
+        };
+        let p2 = crate::speaker_id::EnrolledSpeakerProfile {
+            id: "v_partner".to_string(),
+            label: "Invitado".to_string(),
+            fingerprint: vec![0.2; 56],
+            threshold: 0.78,
+            sample_count: 2,
+            created_at: String::new(),
+        };
+        db.upsert_enrolled_voice(&p1)?;
+        db.upsert_enrolled_voice(&p2)?;
+
+        let list = db.list_enrolled_voices()?;
+        assert_eq!(list.len(), 2);
+        assert!(list
+            .iter()
+            .any(|p| p.label == "Tavo PC" && p.sample_count == 3));
+        assert!(list.iter().any(|p| p.label == "Invitado"));
+
+        assert!(db.delete_enrolled_voice("v_partner")?);
+        assert!(!db.delete_enrolled_voice("v_partner")?);
+        let remaining = db.list_enrolled_voices()?;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "v_primary");
         Ok(())
     }
 }

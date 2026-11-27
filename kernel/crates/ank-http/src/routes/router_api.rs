@@ -484,6 +484,8 @@ async fn list_router_models(
                 "cost_input_per_mtok": m.cost_input_per_mtok,
                 "cost_output_per_mtok": m.cost_output_per_mtok,
                 "is_local": m.is_local,
+                "benchmark_pct": m.benchmark_pct,
+                "free_tier_eligible": m.free_tier_eligible,
                 "task_scores": {
                     "chat": m.task_scores.chat,
                     "coding": m.task_scores.coding,

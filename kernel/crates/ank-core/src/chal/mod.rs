@@ -20,6 +20,7 @@ use tokio_stream::StreamExt;
 use tracing::{info, warn};
 
 pub mod autocorrect;
+mod context_builder;
 pub mod drivers;
 mod failover;
 pub mod hardware;
@@ -28,6 +29,8 @@ mod sanitizer;
 #[cfg(test)]
 mod tests;
 mod tool_handlers;
+
+use context_builder::{prune_stale_tool_outputs, select_chat_tool_names};
 
 pub(crate) use failover::summarize_configured_providers;
 use failover::{
@@ -616,6 +619,31 @@ impl CognitiveHAL {
 
         let is_video_req =
             Self::has_video_context(&pcb.memory_pointers.l1_instruction, &pcb.message_history);
+        let prompt_lc = pcb.memory_pointers.l1_instruction.to_lowercase();
+        let wants_modules_domain = is_video_req
+            || [
+                "módulo",
+                "modulo",
+                "módulos",
+                "modulos",
+                "studio",
+                "creator",
+                "video",
+                "negocio",
+                "pos",
+                "factura",
+                "venta",
+                "cliente",
+                "dev studio",
+            ]
+            .iter()
+            .any(|kw| prompt_lc.contains(kw));
+        let selected_chat_tools = if casual_turn {
+            Vec::new()
+        } else {
+            select_chat_tool_names(&pcb.memory_pointers.l1_instruction, &pcb.message_history)
+        };
+
         let load_extra_tools = || async {
             let mut list: Vec<crate::pcb::ToolDefinition> = cached_mcp_tools
                 .iter()
@@ -640,12 +668,18 @@ impl CognitiveHAL {
                         }
                     }
                 }
-                if let Some(r) = self.router_ref.read().await.clone() {
-                    let router_guard = r.read().await;
-                    let mod_tools = router_guard
-                        .get_enabled_module_tools(&module_tenant, module_skey)
-                        .await;
-                    list.extend(mod_tools);
+                if wants_modules_domain {
+                    if let Some(r) = self.router_ref.read().await.clone() {
+                        let router_guard = r.read().await;
+                        let mod_tools = router_guard
+                            .get_enabled_module_tools(&module_tenant, module_skey)
+                            .await;
+                        for mt in mod_tools {
+                            if is_video_req || !mt.name.starts_with("video_") {
+                                list.push(mt);
+                            }
+                        }
+                    }
                 }
             }
             list
@@ -664,7 +698,7 @@ impl CognitiveHAL {
                 return None;
             }
             let prov_kind = ProviderKind::from_string(prov_str);
-            let mut list = ToolRegistry::tools_for(&AgentRole::ChatAgent, &prov_kind);
+            let mut list = ToolRegistry::chat_tools_filtered(&selected_chat_tools, &prov_kind);
             for dyn_tool in dyn_tools {
                 list.push(ToolRegistry::serialize_canonical(dyn_tool, &prov_kind));
             }
@@ -718,6 +752,9 @@ impl CognitiveHAL {
         let mut rendered_video_ids: Vec<String> = Vec::new();
 
         for iteration in 0..MAX_ITERATIONS {
+            if iteration >= 2 {
+                prune_stale_tool_outputs(&mut messages, 2, 1_200);
+            }
             let mut autocorrect_retries = 0;
             let mut local_messages = messages.clone();
 
@@ -2177,6 +2214,9 @@ impl CognitiveHAL {
         };
 
         for iteration in 0..MAX_ITERATIONS {
+            if iteration >= 2 {
+                prune_stale_tool_outputs(&mut messages, 2, 1_200);
+            }
             let mut autocorrect_retries = 0;
             let mut local_messages = messages.clone();
 
@@ -2606,334 +2646,6 @@ impl CognitiveHAL {
                 }
             }
         }
-    }
-
-    /// Construye los mensajes para el LLM usando VCM para ensamblar contexto.
-    pub async fn build_messages(&self, pcb: &PCB, persona: Option<&str>) -> Vec<ChatMessage> {
-        let (messages, _warnings) = self.build_messages_with_warnings(pcb, persona).await;
-        messages
-    }
-
-    async fn get_dynamic_scripts_section(tenant_id: &str) -> String {
-        let base_dir = std::env::var("AEGIS_DATA_DIR").unwrap_or_else(|_| ".".to_string());
-        let workspace_path = std::path::Path::new(&base_dir)
-            .join("users")
-            .join(tenant_id)
-            .join("workspace");
-
-        let mut scripts_list = String::new();
-
-        if let Ok(entries) = std::fs::read_dir(workspace_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("js") {
-                    if let Some(filename) = path.file_name().and_then(|s| s.to_str()) {
-                        let mut description = "No description available.".to_string();
-                        let mut params_example = "{}".to_string();
-
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            for line in content.lines().take(5) {
-                                let trimmed = line.trim();
-                                if trimmed.starts_with("// Description:")
-                                    || trimmed.starts_with("// description:")
-                                {
-                                    description = trimmed
-                                        .split_once(':')
-                                        .map(|x| x.1)
-                                        .unwrap_or("")
-                                        .trim()
-                                        .to_string();
-                                } else if trimmed.starts_with("// Parameters:")
-                                    || trimmed.starts_with("// parameters:")
-                                    || trimmed.starts_with("// Example:")
-                                {
-                                    params_example = trimmed
-                                        .split_once(':')
-                                        .map(|x| x.1)
-                                        .unwrap_or("")
-                                        .trim()
-                                        .to_string();
-                                }
-                            }
-                        }
-
-                        scripts_list.push_str(&format!(
-                        "- **{}**: {}\n  Uso: [SYS_CALL_MAKER(\"js\", \"return eval(read_file('{}'))\", {})]\n",
-                        filename, description, filename, params_example
-                    ));
-                    }
-                }
-            }
-        }
-
-        if scripts_list.is_empty() {
-            String::new()
-        } else {
-            format!(
-            "\n\nDYNAMIC SCRIPTS (HERRAMIENTAS DINÁMICAS GUARDADAS EN EL WORKSPACE):\n\
-             Podés reutilizar los siguientes scripts previamente creados y guardados en tu espacio de trabajo:\n\
-             {}\n",
-            scripts_list
-        )
-        }
-    }
-
-    /// CORE-FIX (A3): variant that also returns any non-fatal warnings produced
-    /// while assembling the context (e.g. VCM failures that triggered a
-    /// fallback to the raw l1_instruction). Callers that have a way to surface
-    /// this to the user (the chat ReAct loop) should use this variant.
-    pub async fn build_messages_with_warnings(
-        &self,
-        pcb: &PCB,
-        persona: Option<&str>,
-    ) -> (Vec<ChatMessage>, Vec<String>) {
-        self.build_messages_internal(pcb, persona, false).await
-    }
-
-    /// Compact chat-session variant used by `execute_chat_react`: omits redundant
-    /// `[SYS_CALL_PLUGIN]` instructions for tools already exposed natively (`ledger`,
-    /// `chronos`), and strips heavy sections on casual greetings.
-    pub async fn build_messages_for_chat_with_warnings(
-        &self,
-        pcb: &PCB,
-        persona: Option<&str>,
-    ) -> (Vec<ChatMessage>, Vec<String>) {
-        self.build_messages_internal(pcb, persona, true).await
-    }
-
-    async fn build_messages_internal(
-        &self,
-        pcb: &PCB,
-        persona: Option<&str>,
-        compact_chat: bool,
-    ) -> (Vec<ChatMessage>, Vec<String>) {
-        let mut warnings: Vec<String> = Vec::new();
-        let casual_turn = compact_chat && is_casual_chat_turn(pcb);
-
-        // Skip heavy VCM assembly (git/governance/embeddings) for direct Chat turns
-        // with no explicit L2/swap pointers so prompts stay compact and fast.
-        let skip_vcm = pcb.task_type == crate::pcb::TaskType::Chat
-            && pcb.agent_id.is_none()
-            && pcb.memory_pointers.l2_context_refs.is_empty()
-            && pcb.memory_pointers.swap_refs.is_empty();
-
-        // 1. Ensamblar contexto via VCM (L1 + L2 + L3) cuando aplique
-        let assembled_context = if skip_vcm {
-            pcb.memory_pointers.l1_instruction.clone()
-        } else {
-            self.vcm
-                .assemble_context(
-                    pcb,
-                    &self.swap_manager,
-                    self.embedding_driver.as_deref(),
-                    4096,
-                )
-                .await
-                .unwrap_or_else(|e| {
-                    warn!(
-                        "VCM assembly failed: {}. Falling back to raw instruction.",
-                        e
-                    );
-                    warnings.push(format!(
-                        "Context assembly failed; responding with reduced memory. Detail: {}",
-                        e
-                    ));
-                    pcb.memory_pointers.l1_instruction.clone()
-                })
-        };
-
-        let tool_prompt = if casual_turn {
-            String::new()
-        } else if compact_chat && pcb.agent_id.is_none() {
-            // ledger & chronos are already exposed as native ChatAgent function tools
-            self.plugin_manager
-                .read()
-                .await
-                .get_available_tools_prompt_excluding(&["ledger", "chronos"])
-        } else {
-            self.plugin_manager
-                .read()
-                .await
-                .get_available_tools_prompt()
-        };
-        let mcp_tool_prompt = if casual_turn {
-            String::new()
-        } else {
-            self.mcp_registry.generate_system_prompt().await
-        };
-
-        let tenant_id = pcb.tenant_id.as_deref().unwrap_or("default");
-
-        let modules_tool_prompt = if casual_turn {
-            String::new()
-        } else if let Some(session_key) = Self::valid_pcb_session_key(pcb) {
-            if let Some(ref router_lock) = *self.router.read().await {
-                let router = router_lock.read().await;
-                router
-                    .generate_modules_prompt(
-                        &pcb.memory_pointers.l1_instruction,
-                        tenant_id,
-                        session_key,
-                    )
-                    .await
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        let persona_section = match persona {
-            Some(p) if !p.trim().is_empty() => PERSONA_SECTION_TEMPLATE.replace("{persona}", p),
-            _ => String::new(),
-        };
-
-        // CORE-148: Music instructions are only injected if the music_search plugin is active.
-        let has_music_plugin = !casual_turn
-            && self
-                .plugin_manager
-                .read()
-                .await
-                .is_plugin_active("music_search");
-
-        let music_section = if has_music_plugin {
-            "\n\nMÚSICA — INSTRUCCIONES:\
-             \n- Para reproducir: [SYS_CALL_PLUGIN(\"music_search\", {\"query\": \"<artista canción>\", \"max_results\": 1})] y luego [MUSIC_PLAY:youtube:<video_id>] (o [MUSIC_PLAY:spotify:<track_id>] si usas Spotify)\
-             \n- Para pausar: responde brevemente y termina con [MUSIC_PAUSE]\
-             \n- Para continuar: responde brevemente y termina con [MUSIC_RESUME]\
-             \n- Para detener: responde brevemente y termina con [MUSIC_STOP]\
-             \n- Para cambiar volumen: termina con [MUSIC_VOLUME:<0-100>]\
-             \n- Para cambiar canción: haz una nueva búsqueda y usa [MUSIC_PLAY:youtube:<nuevo_video_id>]\
-             \nNunca expliques estos tags al usuario. Solo úsalos.\n"
-        } else {
-            ""
-        };
-
-        // CORE-226: Si el PCB es del Chat Agent (sin agent_id asignado), cargar chat_agent.md.
-        // Si tiene agent_id, es un agente del árbol — el AgentOrchestrator ya maneja sus instrucciones.
-        let (role_instructions, instruction_source) = if pcb.agent_id.is_none() {
-            let instructions = self
-                .instruction_loader
-                .write()
-                .await
-                .instructions_for(&AgentRole::ChatAgent);
-            (instructions, "chat_agent.md")
-        } else {
-            (SYSTEM_PROMPT_MASTER.to_string(), "SYSTEM_PROMPT_MASTER")
-        };
-
-        info!(
-            pid = %pcb.pid,
-            source = instruction_source,
-            chars = role_instructions.len(),
-            "build_messages: role instructions loaded"
-        );
-
-        let has_maker_plugin =
-            !casual_turn && self.plugin_manager.read().await.is_plugin_active("maker");
-
-        let maker_section = if has_maker_plugin && pcb.agent_id.is_none() {
-            let dynamic_scripts = Self::get_dynamic_scripts_section(tenant_id).await;
-            if !compact_chat {
-                format!("{}{}", MAKER_INSTRUCTIONS, dynamic_scripts)
-            } else {
-                let prompt_lower = pcb.memory_pointers.l1_instruction.to_lowercase();
-                let wants_maker = !dynamic_scripts.trim().is_empty()
-                    || prompt_lower.contains("script")
-                    || prompt_lower.contains("javascript")
-                    || prompt_lower.contains("maker")
-                    || prompt_lower.contains("automatiz")
-                    || prompt_lower.contains("boa");
-                if wants_maker {
-                    format!("{}{}", MAKER_INSTRUCTIONS, dynamic_scripts)
-                } else {
-                    String::new()
-                }
-            }
-        } else {
-            String::new()
-        };
-
-        let system_content = if tool_prompt.trim().is_empty()
-            && mcp_tool_prompt.trim().is_empty()
-            && modules_tool_prompt.trim().is_empty()
-        {
-            format!(
-                "{}{}{}{}{}",
-                maker_section,
-                SPAWN_INSTRUCTIONS,
-                role_instructions,
-                persona_section,
-                music_section
-            )
-        } else {
-            format!(
-                "{}{}{}{}{}\n\nHERRAMIENTAS DISPONIBLES:\n{}{}{}",
-                maker_section,
-                SPAWN_INSTRUCTIONS,
-                role_instructions,
-                persona_section,
-                music_section,
-                tool_prompt,
-                mcp_tool_prompt,
-                modules_tool_prompt
-            )
-        };
-
-        // CORE-375: Bloque de memoria a largo plazo y resumen financiero del tenant
-        let personal_memory_section = if !casual_turn && pcb.agent_id.is_none() {
-            if let (Some(tid), Some(skey)) = (&pcb.tenant_id, &pcb.session_key) {
-                if let Ok(db) = crate::enclave::TenantDB::open(tid, skey) {
-                    db.build_personal_memory_prompt_block().unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        let mut full_system_content = system_content;
-        if pcb.agent_id.is_none() {
-            use chrono::Datelike;
-            let now_local = chrono::Local::now();
-            let weekday_es = match now_local.weekday() {
-                chrono::Weekday::Mon => "Lunes",
-                chrono::Weekday::Tue => "Martes",
-                chrono::Weekday::Wed => "Miércoles",
-                chrono::Weekday::Thu => "Jueves",
-                chrono::Weekday::Fri => "Viernes",
-                chrono::Weekday::Sat => "Sábado",
-                chrono::Weekday::Sun => "Domingo",
-            };
-            full_system_content.push_str(&format!(
-                "\n\n[CONTEXTO TEMPORAL ACTUAL]\n- Fecha y hora local del sistema: {} {}\n",
-                weekday_es,
-                now_local.format("%Y-%m-%d %H:%M (%:z)")
-            ));
-        }
-        if !personal_memory_section.is_empty() {
-            full_system_content.push_str(&personal_memory_section);
-        }
-
-        let mut messages = vec![ChatMessage {
-            role: ChatRole::System,
-            content: Some(full_system_content),
-            ..Default::default()
-        }];
-
-        // CORE-260: Historial previo de la sesión
-        messages.extend(pcb.message_history.clone());
-
-        messages.push(ChatMessage {
-            role: ChatRole::User,
-            content: Some(assembled_context),
-            ..Default::default()
-        });
-
-        (messages, warnings)
     }
 }
 

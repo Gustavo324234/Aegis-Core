@@ -16,6 +16,11 @@ import {
     ChevronDown,
     ChevronUp,
     Sliders,
+    ShieldCheck,
+    UserPlus,
+    Trash2,
+    Wand2,
+    Activity,
 } from 'lucide-react';
 import { useAegisStore } from '../store/useAegisStore';
 import {
@@ -28,6 +33,7 @@ import {
     VoiceGender,
     VOICE_STYLE_PRESETS,
 } from '../audio/naturalVoice';
+import { recordFixedSamplePcm16, playWakeChime } from '../audio/smartVadRecorder';
 
 const MIC_LANGUAGES = [
     { id: 'es-AR', label: 'Español (Argentina / Rioplatense)' },
@@ -55,9 +61,23 @@ const SirenConfigTab: React.FC = () => {
     const [pitch, setPitch] = useState<number>(initialPrefs.pitch);
     const [micLang, setMicLang] = useState<string>(initialPrefs.lang || 'es-AR');
     const [autoContinueMic, setAutoContinueMic] = useState<boolean>(initialPrefs.autoContinueMic);
+    const [silenceHangoverMs, setSilenceHangoverMs] = useState<number>(initialPrefs.silenceHangoverMs ?? 2400);
     const [availableVoices, setAvailableVoices] = useState<ScoredVoice[]>([]);
     const [isTestingVoice, setIsTestingVoice] = useState(false);
     const [savedToast, setSavedToast] = useState(false);
+
+    // Biometría multi-voz & Wake-Word Studio (EPIC 63 / CORE-413)
+    const [wakeNameInput, setWakeNameInput] = useState('Aegis');
+    const [savingWakeName, setSavingWakeName] = useState(false);
+    const [enrolledProfiles, setEnrolledProfiles] = useState<Array<{ id: string; label: string; sample_count: number; dims?: number }>>([]);
+    const [gateEnabled, setGateEnabled] = useState(true);
+    const [groqKeyDetected, setGroqKeyDetected] = useState(false);
+    const [enrollLabel, setEnrollLabel] = useState('Mi voz (PC)');
+    const [enrollStep, setEnrollStep] = useState<number>(0);
+    const [enrollLevel, setEnrollLevel] = useState<number>(0);
+    const [isEnrolling, setIsEnrolling] = useState(false);
+    const [isTestingSpeaker, setIsTestingSpeaker] = useState(false);
+    const [biometricStatusMsg, setBiometricStatusMsg] = useState<string | null>(null);
 
     // Opciones avanzadas cloud (plegadas por defecto)
     const [showAdvancedCloud, setShowAdvancedCloud] = useState(false);
@@ -87,6 +107,27 @@ const SirenConfigTab: React.FC = () => {
         };
     }, [refreshBrowserVoices, voiceGender]);
 
+    const loadBiometricsState = useCallback(async () => {
+        if (!tenantId || !sessionKey) return;
+        try {
+            const res = await fetch('/api/siren/voices/enrolled', {
+                headers: {
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                },
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setEnrolledProfiles(data.profiles || []);
+                setGateEnabled(data.gate_enabled !== false);
+                if (data.agent_name) setWakeNameInput(data.agent_name);
+                setGroqKeyDetected(!!data.groq_key_detected);
+            }
+        } catch {
+            // best-effort
+        }
+    }, [tenantId, sessionKey]);
+
     useEffect(() => {
         if (!tenantId || !sessionKey) return;
         fetch('/api/siren/config', {
@@ -102,10 +143,12 @@ const SirenConfigTab: React.FC = () => {
                     setApiKey(data.api_key || '');
                     setSttProvider(data.stt_provider || 'browser');
                     setSttApiKey(data.stt_api_key || '');
+                    setGroqKeyDetected(!!data.groq_key_detected);
                 }
             })
             .catch(() => {});
-    }, [tenantId, sessionKey]);
+        loadBiometricsState();
+    }, [tenantId, sessionKey, loadBiometricsState]);
 
     const handleUpdatePrefs = (
         patch: Partial<{
@@ -116,6 +159,8 @@ const SirenConfigTab: React.FC = () => {
             pitch: number;
             lang: string;
             autoContinueMic: boolean;
+            silenceHangoverMs: number;
+            followupWindowSecs: number;
         }>
     ) => {
         const next = saveVoicePrefs(patch);
@@ -126,9 +171,141 @@ const SirenConfigTab: React.FC = () => {
         setPitch(next.pitch);
         setMicLang(next.lang);
         setAutoContinueMic(next.autoContinueMic);
+        setSilenceHangoverMs(next.silenceHangoverMs ?? 2400);
         refreshBrowserVoices(next.voiceGender);
         setSavedToast(true);
         setTimeout(() => setSavedToast(false), 2000);
+    };
+
+    const handleSaveWakeName = async () => {
+        if (!tenantId || !sessionKey || !wakeNameInput.trim()) return;
+        setSavingWakeName(true);
+        try {
+            const res = await fetch('/api/persona/name', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                },
+                body: JSON.stringify({ name: wakeNameInput.trim() }),
+            });
+            if (res.ok) {
+                await useAegisStore.getState().fetchAgentName();
+                setBiometricStatusMsg(`✓ Nombre de activación guardado: "${wakeNameInput.trim()} escuchame".`);
+            }
+        } finally {
+            setSavingWakeName(false);
+        }
+    };
+
+    const handleToggleGate = async () => {
+        if (!tenantId || !sessionKey) return;
+        const next = !gateEnabled;
+        setGateEnabled(next);
+        await fetch('/api/siren/voices/gate', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-citadel-tenant': tenantId,
+                'x-citadel-key': sessionKey,
+            },
+            body: JSON.stringify({ enabled: next }),
+        });
+    };
+
+    const handleEnrollVoiceWizard = async () => {
+        if (!tenantId || !sessionKey || !enrollLabel.trim() || isEnrolling) return;
+        setIsEnrolling(true);
+        setBiometricStatusMsg(null);
+        try {
+            const samples: string[] = [];
+            for (let step = 1; step <= 3; step++) {
+                setEnrollStep(step);
+                playWakeChime('ready');
+                const rec = await recordFixedSamplePcm16(3000, (rms) => setEnrollLevel(Math.min(1, rms * 10)));
+                samples.push(rec.pcmB64);
+                await new Promise((r) => setTimeout(r, 350));
+            }
+            setEnrollStep(0);
+            setEnrollLevel(0);
+            const res = await fetch('/api/siren/voices/enroll', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                },
+                body: JSON.stringify({
+                    label: enrollLabel.trim(),
+                    samples_pcm_b64: samples,
+                    sample_rate: 16000,
+                }),
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                playWakeChime('done');
+                setBiometricStatusMsg(`✓ Voz "${enrollLabel.trim()}" registrada con 3 muestras (56 rasgos acústicos).`);
+                await loadBiometricsState();
+            } else {
+                setBiometricStatusMsg(`✕ Error al registrar voz: ${data.error || data.message || 'Audio muy bajo'}`);
+            }
+        } catch (err) {
+            setBiometricStatusMsg(`✕ No se pudo acceder al micrófono: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+            setIsEnrolling(false);
+            setEnrollStep(0);
+            setEnrollLevel(0);
+        }
+    };
+
+    const handleTestSpeakerRecognition = async () => {
+        if (!tenantId || !sessionKey || isTestingSpeaker) return;
+        setIsTestingSpeaker(true);
+        setBiometricStatusMsg('Hablá durante 3 segundos para probar tu huella vocal...');
+        try {
+            playWakeChime('ready');
+            const rec = await recordFixedSamplePcm16(3000, (rms) => setEnrollLevel(Math.min(1, rms * 10)));
+            const res = await fetch('/api/siren/voices/verify-test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-citadel-tenant': tenantId,
+                    'x-citadel-key': sessionKey,
+                },
+                body: JSON.stringify({ pcm_b64: rec.pcmB64, sample_rate: 16000 }),
+            });
+            const data = await res.json();
+            const pct = Math.round((data.score ?? 0) * 100);
+            if (data.accepted) {
+                playWakeChime('done');
+                setBiometricStatusMsg(
+                    data.matched_label
+                        ? `✓ Voz reconocida: "${data.matched_label}" (${pct}% similitud)`
+                        : `✓ Sin filtro activo aún (agregá al menos una voz para restringir accesos).`
+                );
+            } else {
+                playWakeChime('rejected');
+                setBiometricStatusMsg(`✕ Voz rechazada (${pct}% < ${Math.round((data.threshold ?? 0.78) * 100)}% requerido).`);
+            }
+        } catch (err) {
+            setBiometricStatusMsg(`✕ Error probando micrófono: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+            setIsTestingSpeaker(false);
+            setEnrollLevel(0);
+        }
+    };
+
+    const handleDeleteEnrolledVoice = async (id: string) => {
+        if (!tenantId || !sessionKey) return;
+        await fetch(`/api/siren/voices/enrolled/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: {
+                'x-citadel-tenant': tenantId,
+                'x-citadel-key': sessionKey,
+            },
+        });
+        await loadBiometricsState();
     };
 
     const handleSelectPreset = (presetId: string) => {
@@ -410,6 +587,36 @@ const SirenConfigTab: React.FC = () => {
                     </div>
                 </div>
 
+                {/* Tolerancia a pausas para respirar */}
+                <div className="pt-4 border-t border-white/10 space-y-2">
+                    <label className="text-xs font-mono text-white/60 uppercase tracking-wider flex items-center gap-2">
+                        <Activity className="w-3.5 h-3.5 text-aegis-cyan" /> Tolerancia a Pausas / Respiración al Hablar
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                        {[
+                            { ms: 1600, label: 'Ágil (1.6s)' },
+                            { ms: 2400, label: 'Natural (2.4s)' },
+                            { ms: 3400, label: 'Pensativo (3.4s)' },
+                        ].map((opt) => (
+                            <button
+                                key={opt.ms}
+                                type="button"
+                                onClick={() => handleUpdatePrefs({ silenceHangoverMs: opt.ms })}
+                                className={`py-2 px-3 rounded-xl border text-xs font-mono transition-all ${
+                                    silenceHangoverMs === opt.ms
+                                        ? 'bg-aegis-cyan/15 border-aegis-cyan/50 text-white font-bold'
+                                        : 'bg-white/[0.02] border-white/10 text-white/50 hover:text-white'
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+                    <p className="text-[11px] text-white/35">
+                        Evita cortes cuando respirás o pensás a mitad de una frase.
+                    </p>
+                </div>
+
                 {savedToast && (
                     <motion.div
                         initial={{ opacity: 0, y: 4 }}
@@ -419,6 +626,141 @@ const SirenConfigTab: React.FC = () => {
                         <Check className="w-4 h-4" /> Preferencias de voz actualizadas.
                     </motion.div>
                 )}
+            </div>
+
+            {/* Estudio de Activación por Nombre y Biometría Multi-Voz (EPIC 63) */}
+            <div className="glass p-6 rounded-2xl border border-amber-500/20 shadow-xl space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
+                            <ShieldCheck className="w-5 h-5 text-amber-400" />
+                        </div>
+                        <div>
+                            <h3 className="text-sm font-mono font-bold uppercase tracking-wider text-white">
+                                Activación por Voz y Voces Autorizadas
+                            </h3>
+                            <p className="text-xs text-white/45">
+                                Decí &ldquo;{wakeNameInput || 'Aegis'} escuchame&rdquo; · {groqKeyDetected ? '✓ Groq Whisper Turbo activo (0 config extra)' : 'Usando modo navegador / Whisper local'}
+                            </p>
+                        </div>
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={handleToggleGate}
+                        className={`px-3.5 py-2 rounded-xl font-mono text-xs font-bold uppercase transition-all border ${
+                            gateEnabled
+                                ? 'bg-green-500/15 border-green-500/40 text-green-300'
+                                : 'bg-white/5 border-white/10 text-white/40'
+                        }`}
+                    >
+                        {gateEnabled ? '🔒 Solo Voces Registradas' : '🔓 Cualquier Voz'}
+                    </button>
+                </div>
+
+                {/* Nombre de activación personalizado */}
+                <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
+                    <div className="flex-1 space-y-1.5">
+                        <label className="text-[11px] font-mono text-white/60 uppercase flex items-center gap-1.5">
+                            <Wand2 className="w-3.5 h-3.5 text-amber-400" /> Nombre para llamar al asistente
+                        </label>
+                        <input
+                            type="text"
+                            value={wakeNameInput}
+                            onChange={(e) => setWakeNameInput(e.target.value)}
+                            placeholder="Aegis (o Jarvis, Nova...)"
+                            className="w-full bg-black/50 border border-white/15 rounded-xl py-2.5 px-3 text-sm text-white focus:border-amber-400/60 focus:outline-none"
+                        />
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleSaveWakeName}
+                        disabled={savingWakeName}
+                        className="px-4 py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs font-mono font-bold text-amber-200 uppercase"
+                    >
+                        {savingWakeName ? 'Guardando...' : 'Guardar Nombre'}
+                    </button>
+                </div>
+
+                {/* Enrolamiento de múltiples voces */}
+                <div className="bg-black/30 border border-white/10 rounded-xl p-4 space-y-3">
+                    <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+                        <input
+                            type="text"
+                            value={enrollLabel}
+                            onChange={(e) => setEnrollLabel(e.target.value)}
+                            placeholder="Etiqueta (ej: Mi voz PC, Mi voz Celular, Pareja)"
+                            className="flex-1 bg-black/50 border border-white/15 rounded-xl py-2 px-3 text-xs text-white focus:border-aegis-cyan/60 focus:outline-none"
+                        />
+                        <button
+                            type="button"
+                            onClick={handleEnrollVoiceWizard}
+                            disabled={isEnrolling || isTestingSpeaker}
+                            className="px-4 py-2 rounded-xl bg-aegis-cyan/20 hover:bg-aegis-cyan/30 border border-aegis-cyan/40 text-xs font-mono font-bold text-aegis-cyan flex items-center justify-center gap-2 disabled:opacity-40"
+                        >
+                            <UserPlus className="w-3.5 h-3.5" />
+                            {isEnrolling ? `Grabando muestra ${enrollStep}/3...` : 'Registrar Voz (3 muestras)'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleTestSpeakerRecognition}
+                            disabled={isEnrolling || isTestingSpeaker}
+                            className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-mono text-white disabled:opacity-40"
+                        >
+                            {isTestingSpeaker ? 'Escuchando 3s...' : 'Probar Mi Voz'}
+                        </button>
+                    </div>
+
+                    {(isEnrolling || isTestingSpeaker) && (
+                        <div className="space-y-1.5">
+                            <p className="text-[11px] font-mono text-amber-300">
+                                {enrollStep === 1 && `Muestra 1/3 — Decí: "${wakeNameInput || 'Aegis'} escuchame, revisá mis recordatorios"`}
+                                {enrollStep === 2 && 'Muestra 2/3 — Decí: "Anotá diez mil pesos de supermercado en gastos"'}
+                                {enrollStep === 3 && 'Muestra 3/3 — Decí: "Contame qué tengo agendado para mañana a la mañana"'}
+                                {enrollStep === 0 && 'Hablá naturalmente durante 3 segundos...'}
+                            </p>
+                            <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-aegis-cyan transition-all duration-75"
+                                    style={{ width: `${Math.round(enrollLevel * 100)}%` }}
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {biometricStatusMsg && (
+                        <p className="text-xs font-mono text-white/80 bg-white/5 border border-white/10 rounded-lg px-3 py-2">
+                            {biometricStatusMsg}
+                        </p>
+                    )}
+
+                    {/* Lista de voces registradas */}
+                    {enrolledProfiles.length > 0 ? (
+                        <div className="flex flex-wrap gap-2 pt-1">
+                            {enrolledProfiles.map((p) => (
+                                <div
+                                    key={p.id}
+                                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs font-mono text-white/80"
+                                >
+                                    <span>{p.label}</span>
+                                    <span className="text-[10px] text-white/40">({p.sample_count} muestras)</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDeleteEnrolledVoice(p.id)}
+                                        className="text-white/30 hover:text-red-400 transition-colors"
+                                        title="Eliminar voz"
+                                    >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-[11px] text-white/40">
+                            Aún no cargaste voces autorizadas. Grabá 3 muestras tuyas para evitar que responda a otras personas o la TV.
+                        </p>
+                    )}
+                </div>
             </div>
 
             {/* Opciones Cloud Avanzadas (Opcional, plegado por defecto) */}

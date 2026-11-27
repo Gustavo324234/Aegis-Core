@@ -13,21 +13,36 @@ const MODES: { mode: InputMode; icon: React.FC<React.SVGProps<SVGSVGElement>>; l
 ];
 
 export const InputModeSelector: React.FC = () => {
-    const { inputMode, setInputMode, isRecording, stopSirenStream, sttProvider, agentName, isWakewordListening } = useAegisStore(
+    const {
+        inputMode,
+        setInputMode,
+        isRecording,
+        stopSirenStream,
+        sttProvider,
+        sttReady,
+        agentName,
+        isWakewordListening,
+        lastWakeSpeaker,
+    } = useAegisStore(
         useShallow((s) => ({
             inputMode: s.inputMode,
             setInputMode: s.setInputMode,
             isRecording: s.isRecording,
             stopSirenStream: s.stopSirenStream,
             sttProvider: s.sttProvider,
+            sttReady: s.sttReady,
             agentName: s.agentName,
             isWakewordListening: s.isWakewordListening,
+            lastWakeSpeaker: s.lastWakeSpeaker,
         })),
     );
     const [micError, setMicError] = useState<string | null>(null);
 
     const handleSelect = (mode: InputMode) => {
         if (isRecording) stopSirenStream();
+
+        const useServerStt = sttReady || sttProvider !== 'browser';
+        const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
 
         if (mode === 'audio' || mode === 'conversation') {
             const isInsecure =
@@ -38,18 +53,16 @@ export const InputModeSelector: React.FC = () => {
                 setInputMode(mode);
                 return;
             }
-            const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (sttProvider === 'browser' && !SpeechRecognitionCtor) {
-                setMicError('Tu navegador no soporta voz. Usá Chrome o Edge.');
+            if (!useServerStt && !SpeechRecognitionCtor) {
+                setMicError('Configurá Groq en Motores o usá Chrome/Edge para dictado.');
                 setInputMode(mode);
                 return;
             }
         }
 
         if (mode === 'wakeword') {
-            const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognitionCtor) {
-                setMicError('Wake word requiere Chrome o Edge.');
+            if (!useServerStt && !SpeechRecognitionCtor) {
+                setMicError('Activá Groq/Whisper local o usá Chrome/Edge para Wake Word.');
                 return;
             }
         }
@@ -58,9 +71,10 @@ export const InputModeSelector: React.FC = () => {
         setInputMode(mode);
     };
 
-    const wakewordTooltip = inputMode === 'wakeword' && agentName
-        ? `Escuchando: "${agentName}"`
-        : 'Activación por nombre del agente';
+    const effectiveName = agentName || 'Aegis';
+    const wakewordTooltip = inputMode === 'wakeword'
+        ? `Escuchando: "${effectiveName} escuchame"`
+        : 'Activación por voz con reconocimiento de identidad';
 
     return (
         <div className="flex flex-col gap-1">
@@ -90,9 +104,11 @@ export const InputModeSelector: React.FC = () => {
                     <span className="text-[9px] font-mono text-amber-300 leading-tight">{micError}</span>
                 </div>
             )}
-            {inputMode === 'wakeword' && agentName && (
-                <div className="px-1 text-[8px] font-mono text-amber-400/60 tracking-wider">
-                    {isWakewordListening ? `● escuchando "${agentName}"` : `○ iniciando…`}
+            {inputMode === 'wakeword' && (
+                <div className="px-1 text-[8px] font-mono text-amber-400/70 tracking-wider">
+                    {isWakewordListening
+                        ? `● escuchando "${effectiveName} escuchame"${lastWakeSpeaker ? ` · ${lastWakeSpeaker}` : ''}`
+                        : `○ iniciando escucha…`}
                 </div>
             )}
         </div>

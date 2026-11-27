@@ -94,6 +94,19 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// CORE-408: Retorna solo el subconjunto de tool definitions del `ChatAgent`
+    /// cuyos nombres coinciden con `allowed_names`, reduciendo tokens y tool-confusion.
+    pub fn chat_tools_filtered(allowed_names: &[&str], provider: &ProviderKind) -> Vec<Value> {
+        if allowed_names.is_empty() {
+            return Vec::new();
+        }
+        Self::definitions_for(&AgentRole::ChatAgent)
+            .into_iter()
+            .filter(|def| allowed_names.contains(&def.name))
+            .map(|def| Self::serialize(&def, provider))
+            .collect()
+    }
+
     pub fn definitions_for(role: &AgentRole) -> Vec<ToolDefinition> {
         match role {
             // CORE-243: ChatAgent no tiene agent_id — query_agent y report requieren uno.
@@ -475,42 +488,42 @@ impl ToolRegistry {
     fn manage_ai_provider() -> ToolDefinition {
         ToolDefinition {
             name: "manage_ai_provider",
-            description: "Lista proveedores configurados, consulta el catálogo de modelos disponibles (por ejemplo OpenRouter o modelos gratuitos), o agrega/elimina claves API (Groq, Gemini, OpenRouter, OpenAI, Anthropic, DeepSeek, xAI, Mistral, Ollama). Si el usuario pega una API key (gsk_..., AIza..., sk-...), el proveedor se detecta automáticamente.",
+            description: "Lista proveedores configurados, consulta catálogo (p.ej. OpenRouter/free) o agrega/elimina API keys.",
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["add", "add_model", "list", "catalog", "remove"],
-                        "description": "'list' para ver los proveedores configurados y su estado; 'catalog' para listar los modelos disponibles en el catálogo (filtrables por provider, free_only y limit — usalo cuando pidan la lista de modelos de OpenRouter o de otro proveedor); 'add' para registrar una nueva API key/proveedor; 'add_model' para sumar un modelo a un proveedor ya configurado; 'remove' para eliminar un proveedor."
+                        "description": "'list', 'catalog', 'add' (key nueva), 'add_model', 'remove'."
                     },
                     "provider": {
                         "type": "string",
-                        "description": "Nombre del proveedor: 'groq', 'gemini', 'openrouter', 'openai', 'anthropic', 'deepseek', 'xai', 'mistral', 'ollama'. Opcional si se provee una api_key con prefijo reconocible o en 'list'/'catalog'."
+                        "description": "'groq'|'gemini'|'openrouter'|'openai'|'anthropic'|'deepseek'|'xai'|'mistral'|'ollama'. Opcional si se infiere de api_key."
                     },
                     "api_key": {
                         "type": "string",
-                        "description": "Clave API del proveedor (no requerida para 'ollama', 'list', 'catalog', 'add_model' o 'remove')."
+                        "description": "Clave API (no requerida para ollama/list/catalog/add_model/remove)."
                     },
                     "model": {
                         "type": "string",
-                        "description": "ID del modelo a activar o agregar (ej: 'gemini-2.5-flash', 'llama-3.3-70b-versatile', 'deepseek-chat', 'llama3.2'). Si se omite en 'add', se usa el modelo recomendado por defecto del proveedor."
+                        "description": "ID del modelo (ej: 'gemini-3.6-flash', 'deepseek/deepseek-v4-flash', 'openai/gpt-oss-120b')."
                     },
                     "api_url": {
                         "type": "string",
-                        "description": "URL base opcional (útil para Ollama local 'http://localhost:11434/v1' o endpoints custom)."
+                        "description": "URL base opcional para endpoints custom u Ollama."
                     },
                     "set_primary": {
                         "type": "boolean",
-                        "description": "Si es true, establece este proveedor y modelo como motor primario inmediato."
+                        "description": "Si es true, fija como motor primario."
                     },
                     "free_only": {
                         "type": "boolean",
-                        "description": "Usado con action='catalog'. Si es true, devuelve solo modelos gratuitos o de free tier."
+                        "description": "Filtro para action='catalog'."
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Usado con action='catalog'. Cantidad máxima de modelos a devolver (por defecto 30, máximo 100)."
+                        "description": "Máximo de modelos en 'catalog' (default 30, max 100)."
                     }
                 },
                 "required": ["action"]
@@ -722,7 +735,7 @@ impl ToolRegistry {
     fn manage_whatsapp() -> ToolDefinition {
         ToolDefinition {
             name: "manage_whatsapp",
-            description: "Lee chats/mensajes, gestiona agenda de contactos/apodos y envía mensajes por el WhatsApp conectado del usuario, respetando el limitador anti-spam y el modo de confirmación previa.",
+            description: "Lee chats, gestiona contactos/apodos y envía mensajes por WhatsApp respetando confirmación previa y anti-spam.",
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -740,43 +753,43 @@ impl ToolRegistry {
                             "save_contact",
                             "list_contacts"
                         ],
-                        "description": "'status' muestra conexión y reglas; 'list_chats' lista conversaciones y contactos recientes (usar search para filtrar por nombre o teléfono); 'read_messages' lee un chat por nombre, alias o número; 'send_message' prepara o envía según la confirmación activa; 'confirm_send' envía un borrador pendiente tras confirmación explícita; 'cancel_pending' cancela borradores; 'set_confirmation' activa o desactiva pedir confirmación antes de enviar; 'save_contact' guarda un apodo/alias asociado a un teléfono; 'list_contacts' lista apodos guardados y contactos sincronizados de WhatsApp."
+                        "description": "'status'|'list_chats'|'read_messages'|'send_message'|'confirm_send'|'cancel_pending'|'list_pending'|'set_confirmation'|'save_contact'|'list_contacts'."
                     },
                     "search": {
                         "type": "string",
-                        "description": "Filtro opcional de nombre o teléfono para 'list_chats' o 'list_contacts'."
+                        "description": "Filtro nombre/teléfono para list_chats o list_contacts."
                     },
                     "chat": {
                         "type": "string",
-                        "description": "Nombre del contacto/grupo, alias, teléfono o JID para 'read_messages'."
+                        "description": "Contacto, grupo, alias, teléfono o JID para read_messages."
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Cantidad de chats, contactos o mensajes a devolver (por defecto 20)."
+                        "description": "Máximo de ítems (default 20)."
                     },
                     "to": {
                         "type": "string",
-                        "description": "Destinatario para 'send_message' (nombre, alias, teléfono con código de país o JID) o teléfono/JID para 'save_contact'."
+                        "description": "Destinatario para send_message o teléfono/JID para save_contact."
                     },
                     "message": {
                         "type": "string",
-                        "description": "Texto del mensaje para 'send_message'."
+                        "description": "Texto del mensaje."
                     },
                     "pending_id": {
                         "type": "string",
-                        "description": "ID del borrador pendiente (ej. 'wa_ab12cd') para 'confirm_send' o 'cancel_pending' (o 'all' para cancelar todos)."
+                        "description": "ID del borrador pendiente (o 'all' para cancelar todos)."
                     },
                     "require_confirmation": {
                         "type": "boolean",
-                        "description": "Usado con 'set_confirmation': false si el usuario pide enviar directo sin confirmar; true para volver a pedir confirmación."
+                        "description": "Para set_confirmation."
                     },
                     "alias": {
                         "type": "string",
-                        "description": "Nombre corto o apodo para 'save_contact' (ej. 'Ana', 'mi pareja', 'Juan')."
+                        "description": "Apodo corto para save_contact."
                     },
                     "note": {
                         "type": "string",
-                        "description": "Nota o relación opcional para 'save_contact' (ej. 'Pareja / Ana')."
+                        "description": "Nota opcional para save_contact."
                     }
                 },
                 "required": ["action"]

@@ -4,17 +4,19 @@ pub mod key_pool;
 pub mod module_runtime;
 pub mod modules;
 pub mod rate_tracker;
+mod scoring;
 pub mod siren;
 pub mod syncer;
 
 pub use siren::{SirenEngine, SirenRouter};
 
 use crate::chal::SystemError;
-use crate::pcb::{RoutingPolicy, TaskType, PCB};
+use crate::pcb::{ChatComplexity, TaskType, PCB};
 use crate::scheduler::ModelPreference;
 pub use catalog::{ModelCatalog, ModelEntry, ToolUseSupport};
 pub use key_pool::KeyPool;
 pub use rate_tracker::{ModelOutcomes, ModelUsageTracker};
+use scoring::{compute_model_score, task_weighted_cost, ScoreCtx};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -58,6 +60,7 @@ struct StickyKey {
     /// model decision; keying by conversation isolates them.
     conversation_id: Option<String>,
     task_type: TaskType,
+    chat_complexity: ChatComplexity,
     model_pref: ModelPreference,
 }
 
@@ -256,6 +259,7 @@ impl CognitiveRouter {
                 tenant_id: tenant_id.to_string(),
                 conversation_id: pcb.conversation_id.clone(),
                 task_type,
+                chat_complexity: pcb.chat_complexity,
                 model_pref,
             };
             let cached = {
@@ -397,8 +401,14 @@ impl CognitiveRouter {
 
         // CORE-305: Detect trivial/light tasks and override preference to LocalOnly
         // to bypass cloud enclaves if healthy local models are available.
+        // CORE-409: Never override Standard or DeepReasoning turns to LocalOnly.
         let mut model_pref = model_pref;
-        if crate::chal::autocorrect::is_light_task(&pcb.memory_pointers.l1_instruction, task_type) {
+        if pcb.chat_complexity == ChatComplexity::Quick
+            && crate::chal::autocorrect::is_light_task(
+                &pcb.memory_pointers.l1_instruction,
+                task_type,
+            )
+        {
             let mut has_healthy_local = false;
             for entry in &all_candidates {
                 if entry.is_local
@@ -636,6 +646,7 @@ impl CognitiveRouter {
                 recent_errors: self.recent_errors_merged(&entry).await,
                 estimated_tokens,
                 routing_policy: pcb.routing_policy,
+                chat_complexity: pcb.chat_complexity,
                 outcomes: self.outcomes_merged_for_task(&entry, task_type).await,
             };
             let base = self.compute_score(&entry, task_type, &ctx);
@@ -754,6 +765,7 @@ impl CognitiveRouter {
                 tenant_id: tenant_id.to_string(),
                 conversation_id: pcb.conversation_id.clone(),
                 task_type,
+                chat_complexity: pcb.chat_complexity,
                 model_pref: pcb.model_pref,
             };
             let mut sticky = self.sticky.write().await;
@@ -840,13 +852,13 @@ impl CognitiveRouter {
         task_type: TaskType,
         model_pref: ModelPreference,
     ) -> bool {
-        let key = StickyKey {
-            tenant_id: tenant_id.to_string(),
-            conversation_id: conversation_id.map(|s| s.to_string()),
-            task_type,
-            model_pref,
-        };
-        self.sticky.read().await.contains_key(&key)
+        let conv = conversation_id.map(|s| s.to_string());
+        self.sticky.read().await.keys().any(|k| {
+            k.tenant_id == tenant_id
+                && k.conversation_id == conv
+                && k.task_type == task_type
+                && k.model_pref == model_pref
+        })
     }
 
     pub fn tracker_ref(&self) -> &Arc<ModelUsageTracker> {
@@ -1050,183 +1062,7 @@ impl CognitiveRouter {
     }
 
     fn compute_score(&self, entry: &ModelEntry, task_type: TaskType, ctx: &ScoreCtx<'_>) -> f64 {
-        let (prompt, max_cost, max_latency, observed_latency, recent_errors) = (
-            ctx.prompt,
-            ctx.max_cost,
-            ctx.max_latency,
-            ctx.observed_latency,
-            ctx.recent_errors,
-        );
-        // ── 1. Quality (40%) ─────────────────────────────────────────
-        let base_quality = entry.score_for(task_type) as f64 / 5.0;
-        let content_boost = detect_content_type(prompt, task_type);
-        let quality = (base_quality * (1.0 + content_boost)).min(1.0);
-
-        // ── 2. Cost (25%) ────────────────────────────────────────────
-        // CORE-324: task-weighted — long-output tasks amplify output cost.
-        let total_cost = task_weighted_cost(entry, task_type);
-        let cost_inv = if max_cost > 0.0 {
-            (1.0 - (total_cost / max_cost)).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-
-        // ── 3. Speed (20%) ───────────────────────────────────────────
-        let effective_latency =
-            observed_latency.unwrap_or(entry.avg_latency_ms.unwrap_or(2000)) as f64;
-        let speed_inv = if max_latency > 0.0 {
-            1.0 - (effective_latency / max_latency).min(1.0)
-        } else {
-            1.0
-        };
-
-        // ── 4. Context fit (15%) ─────────────────────────────────────
-        let estimated_tokens = ctx.estimated_tokens;
-        let context_fit = if entry.context_window as usize > estimated_tokens * 4 {
-            1.0
-        } else if entry.context_window as usize > estimated_tokens * 2 {
-            0.7
-        } else if entry.context_window as usize > estimated_tokens {
-            0.3
-        } else {
-            0.0
-        };
-
-        // ── 5. Error penalty ─────────────────────────────────────────
-        let error_penalty = (recent_errors as f64 * 0.10).min(0.30);
-
-        // ── 6. Oversize penalty for chat-trivial prompts ─────────────
-        // CORE-FIX: for short, conversational prompts, route to a fast
-        // model — not the most powerful one. Without this penalty the
-        // scorer happily picked cogito-2.1:671b or deepseek-v3.1:671b
-        // for "hola" because their cost_inv was 1.0 (free via
-        // ollama_cloud) and their quality was 5/5.
-        //
-        // A model is "oversize" when its id advertises ≥120B parameters
-        // (heuristic: contains "671b" / "405b" / "120b" / "180b" /
-        // "236b" etc.) AND the task is plain Chat AND the prompt is
-        // short (< 400 chars). In that case we knock the score down
-        // 30% — the lighter Gemini/Claude Flash tier wins instead.
-        let oversize_penalty = {
-            let lower_id = entry.model_id.to_lowercase();
-            let is_giant = ["671b", "405b", "236b", "180b", "120b", "70b"]
-                .iter()
-                .any(|tag| lower_id.contains(tag));
-            let is_chat_trivial = matches!(task_type, TaskType::Chat) && prompt.len() < 400;
-            if is_giant && is_chat_trivial {
-                0.30
-            } else {
-                0.0
-            }
-        };
-
-        // ── 7. Policy and Task-aware weights ──────────────────────────
-        let (w_quality, w_cost, w_speed, w_fit) = match ctx.routing_policy {
-            RoutingPolicy::CostOptimized => (0.15, 0.60, 0.10, 0.15),
-            RoutingPolicy::QualityOptimized => (0.70, 0.05, 0.10, 0.15),
-            RoutingPolicy::LatencyOptimized => (0.15, 0.10, 0.60, 0.15),
-            RoutingPolicy::Balanced => match task_type {
-                TaskType::Chat => (0.30, 0.20, 0.35, 0.15),
-                TaskType::Code | TaskType::Planning => (0.55, 0.15, 0.15, 0.15),
-                TaskType::Analysis => (0.55, 0.15, 0.15, 0.15),
-                _ => (0.40, 0.25, 0.20, 0.15),
-            },
-        };
-
-        let raw =
-            quality * w_quality + cost_inv * w_cost + speed_inv * w_speed + context_fit * w_fit;
-
-        // CORE-305: Tiny Model Penalty (Asymmetric Offloading)
-        // If a model is local and its ID contains "1b", "2b", or "3b", and either the task
-        // is heavy (Coding, Planning, Analysis) or the prompt is complex (>300 chars),
-        // apply a 90% score penalty.
-        let tiny_penalty_factor = {
-            if entry.is_local {
-                let lower_id = entry.model_id.to_lowercase();
-                let is_tiny = ["1b", "2b", "3b"].iter().any(|tag| lower_id.contains(tag));
-                let is_heavy_task = matches!(
-                    task_type,
-                    TaskType::Code | TaskType::Planning | TaskType::Analysis
-                );
-                let is_complex_prompt = prompt.chars().count() > 300;
-                if is_tiny && (is_heavy_task || is_complex_prompt) {
-                    0.10 // 90% penalty -> keeps 10% of score
-                } else {
-                    1.0
-                }
-            } else {
-                1.0
-            }
-        };
-
-        // ── 8. Chat vs Subagents model routing adjustment ─────────────
-        // "para chat tiene que usar modelos de respaldo y para subagentes los buenos"
-        let chat_subagent_factor = {
-            let is_chat = matches!(task_type, TaskType::Chat);
-            let is_backup = entry.is_local
-                || entry.provider == "ollama_cloud"
-                || (entry.cost_input_per_mtok == 0.0 && entry.model_id != "openrouter/auto")
-                || entry.model_id.ends_with(":free");
-            let is_chat_primary = is_backup
-                || (entry.free_tier_eligible
-                    && entry.cost_input_per_mtok <= 0.5
-                    && !entry.model_id.contains("pro")
-                    && entry.model_id != "openrouter/auto");
-            // CORE-320: fold in the runtime tool-use probe (CORE-237). A model
-            // whose tool_use_support was observed as Degraded has PROVEN it
-            // can't drive the ReAct loop, regardless of what the static
-            // supports_tools flag claims.
-            let effective_tools = entry.supports_tools
-                && entry.tool_use_support != crate::router::catalog::ToolUseSupport::Degraded;
-
-            if is_chat {
-                if is_chat_primary {
-                    2.0 // Boost backup & free-tier chat models for Chat so they win
-                } else {
-                    0.05 // Heavily penalize premium/dynamic-router models for Chat to keep them as last-resort fallbacks
-                }
-            } else {
-                // For subagents/specialist tasks (Coding, Planning, Analysis, etc.)
-                if is_backup {
-                    if effective_tools {
-                        0.5 // Minor penalty for tool-supporting backup models (viable fallbacks)
-                    } else {
-                        0.01 // Heavy penalty for backup models without tool support (subagents need tools)
-                    }
-                } else if entry.tool_use_support == crate::router::catalog::ToolUseSupport::Degraded
-                {
-                    // CORE-320: a premium model that FAILED the live tool probe
-                    // is as useless to a subagent as a no-tools backup model.
-                    // (Static supports_tools=false premium models keep the
-                    // boost — Analysis/Planning don't always need tools and
-                    // absence of evidence isn't a proven failure.)
-                    0.05
-                } else {
-                    2.0 // Boost premium/good models for subagents
-                }
-            }
-        };
-
-        // ── 9. CORE-320: observed reliability ─────────────────────────
-        // success/failure outcomes were tracked since D2 but never consumed
-        // by the scorer. With ≥ 3 samples, scale by 0.5 + 0.5·success_rate:
-        // a fully stable model keeps its score, a permanently failing one
-        // keeps half — hard exclusion remains the circuit breakers' job.
-        // Under 3 samples there is no signal: no data must not mean penalty.
-        let reliability_factor = {
-            let total = ctx.outcomes.successes + ctx.outcomes.failures;
-            match ctx.outcomes.success_rate() {
-                Some(rate) if total >= 3 => 0.5 + 0.5 * rate,
-                _ => 1.0,
-            }
-        };
-
-        (raw * (1.0 - error_penalty)
-            * (1.0 - oversize_penalty)
-            * tiny_penalty_factor
-            * chat_subagent_factor
-            * reliability_factor)
-            .max(0.0)
+        compute_model_score(entry, task_type, ctx)
     }
 
     /// Busca una entrada en el catálogo por model_id (CORE-237).
@@ -1278,18 +1114,6 @@ impl CognitiveRouter {
             .get_available_key(&entry.provider, &entry.model_id, tenant_id)
             .await
     }
-}
-
-struct ScoreCtx<'a> {
-    prompt: &'a str,
-    max_cost: f64,
-    max_latency: f64,
-    observed_latency: Option<u32>,
-    recent_errors: u32,
-    estimated_tokens: usize,
-    routing_policy: RoutingPolicy,
-    /// CORE-320: merged success/failure outcomes (catalog + API id spaces).
-    outcomes: ModelOutcomes,
 }
 
 /// Canonicalises a provider identifier so downstream matches (catalog lookups,
@@ -1344,89 +1168,10 @@ pub fn normalize_provider_id(raw: &str) -> String {
     }
 }
 
-/// CORE-324: blended per-Mtok cost of a model for a given task type.
-/// Code/Planning/Creative turns generate several times more output tokens
-/// than input, so a flat in+out sum systematically understated expensive-
-/// output models (e.g. Opus at $75/Mtok out vs $15 in). Weight output 3×
-/// for long-output tasks; everything else keeps the flat sum.
-fn task_weighted_cost(entry: &ModelEntry, task: TaskType) -> f64 {
-    let out_weight = match task {
-        TaskType::Code | TaskType::Planning | TaskType::Creative => 3.0,
-        _ => 1.0,
-    };
-    entry.cost_input_per_mtok.max(0.0) + entry.cost_output_per_mtok.max(0.0) * out_weight
-}
-
-/// Analyses the prompt with lexical signals and returns a boost (0.0–0.30)
-/// when the detected content type matches the declared task_type.
-fn detect_content_type(prompt: &str, task_type: TaskType) -> f64 {
-    let lower = prompt.to_lowercase();
-
-    let code_signals = [
-        "```",
-        "fn ",
-        "def ",
-        "function ",
-        "import ",
-        "class ",
-        "let ",
-        "const ",
-        "var ",
-        "=>",
-        "{}",
-    ];
-    let code_score: f64 = code_signals.iter().filter(|s| lower.contains(*s)).count() as f64
-        / code_signals.len() as f64;
-
-    let analysis_signals = [
-        "analiza",
-        "analyze",
-        "compare",
-        "compara",
-        "diferencia",
-        "¿por qué",
-        "why",
-        "explica",
-        "explain",
-        "cuál es mejor",
-    ];
-    let analysis_score: f64 = analysis_signals
-        .iter()
-        .filter(|s| lower.contains(*s))
-        .count() as f64
-        / analysis_signals.len() as f64;
-
-    let planning_signals = [
-        "plan",
-        "roadmap",
-        "pasos",
-        "steps",
-        "cómo hacer",
-        "how to",
-        "estrategia",
-        "strategy",
-        "prioridad",
-    ];
-    let planning_score: f64 = planning_signals
-        .iter()
-        .filter(|s| lower.contains(*s))
-        .count() as f64
-        / planning_signals.len() as f64;
-
-    let boost = match task_type {
-        TaskType::Code => code_score,
-        TaskType::Analysis => analysis_score,
-        TaskType::Planning => planning_score,
-        _ => 0.0,
-    };
-
-    (boost * 0.30_f64).min(0.30)
-}
-
 /// Returns the model ID as expected by the provider's native API.
 /// Strips the leading "provider/" prefix for APIs that don't use it.
 /// OpenRouter is the exception — it expects the full "org/model" format.
-pub(crate) fn bare_model_id(model_id: &str, provider: &str) -> String {
+pub fn bare_model_id(model_id: &str, provider: &str) -> String {
     match provider {
         // OpenRouter expects the full "org/model" format natively
         "openrouter" => model_id.to_string(),
@@ -1572,7 +1317,7 @@ mod normalize_url_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pcb::PCB;
+    use crate::pcb::{RoutingPolicy, PCB};
     use crate::router::catalog::{ModelCatalog, ModelProfile};
     use crate::router::key_pool::ApiKeyEntry;
     use crate::scheduler::persistence::{StatePersistor, VoiceProfile};
@@ -1816,6 +1561,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::Balanced,
+            chat_complexity: ChatComplexity::Standard,
             outcomes: ModelOutcomes::default(),
         };
 
@@ -1828,6 +1574,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::Balanced,
+            chat_complexity: ChatComplexity::Quick,
             outcomes: ModelOutcomes::default(),
         };
         let score_light = router.compute_score(&entry_1b, TaskType::Chat, &ctx_light);
@@ -1845,6 +1592,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::Balanced,
+            chat_complexity: ChatComplexity::DeepReasoning,
             outcomes: ModelOutcomes::default(),
         };
         let score_complex_prompt = router.compute_score(&entry_1b, TaskType::Chat, &ctx_complex);
@@ -1878,6 +1626,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::CostOptimized,
+            chat_complexity: ChatComplexity::Quick,
             outcomes: ModelOutcomes::default(),
         };
 
@@ -1983,6 +1732,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::CostOptimized,
+            chat_complexity: ChatComplexity::Standard,
             outcomes: ModelOutcomes::default(),
         };
 
@@ -2002,6 +1752,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::QualityOptimized,
+            chat_complexity: ChatComplexity::Standard,
             outcomes: ModelOutcomes::default(),
         };
 
@@ -2195,6 +1946,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::Balanced,
+            chat_complexity: ChatComplexity::Standard,
             outcomes,
         };
 
@@ -2296,6 +2048,7 @@ mod tests {
             recent_errors: 0,
             estimated_tokens: 10,
             routing_policy: RoutingPolicy::Balanced,
+            chat_complexity: ChatComplexity::Standard,
             outcomes: ModelOutcomes::default(),
         };
 
@@ -2571,6 +2324,101 @@ mod tests {
             second.model_id, first.model_id,
             "decide_excluding must skip excluded model despite active sticky entry"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cmr_v4_adaptive_chat_complexity_escalates_on_deep_reasoning() -> anyhow::Result<()>
+    {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Cloud,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        key_pool
+            .add_tenant_key(
+                "adaptive-user",
+                ApiKeyEntry {
+                    key_id: "or-adaptive".to_string(),
+                    provider: "openrouter".to_string(),
+                    api_key: "sk-or-adaptive".to_string(),
+                    api_url: None,
+                    label: None,
+                    is_active: true,
+                    rate_limited_until: None,
+                    active_models: Some(vec![
+                        "google/gemini-3.1-flash-lite".to_string(),
+                        "openai/gpt-5.4-nano".to_string(),
+                        "deepseek/deepseek-v4-flash".to_string(),
+                        "anthropic/claude-opus-4.6".to_string(),
+                    ]),
+                    is_free_tier: false,
+                },
+            )
+            .await?;
+
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let mut pcb_quick = PCB::new("q".to_string(), 5, "hola, buen día!".to_string());
+        pcb_quick.tenant_id = Some("adaptive-user".to_string());
+        pcb_quick.task_type = TaskType::Chat;
+        pcb_quick.model_pref = ModelPreference::CloudOnly;
+        pcb_quick.routing_policy = RoutingPolicy::Balanced;
+        pcb_quick.conversation_id = Some("conv-cmr4".to_string());
+        assert_eq!(pcb_quick.chat_complexity, ChatComplexity::Quick);
+
+        let mut pcb_deep = PCB::new(
+            "d".to_string(),
+            5,
+            "Analizá en profundidad los pros y contras arquitectónicos de migrar este monolito a microservicios, compará costos operativos y armá una estrategia paso a paso con riesgos y mitigaciones.".to_string(),
+        );
+        pcb_deep.tenant_id = Some("adaptive-user".to_string());
+        pcb_deep.task_type = TaskType::Chat;
+        pcb_deep.model_pref = ModelPreference::CloudOnly;
+        pcb_deep.routing_policy = RoutingPolicy::Balanced;
+        pcb_deep.conversation_id = Some("conv-cmr4".to_string());
+        assert_eq!(pcb_deep.chat_complexity, ChatComplexity::DeepReasoning);
+
+        let d_quick = router.decide(&pcb_quick).await?;
+        let d_deep = router.decide(&pcb_deep).await?;
+
+        assert_ne!(
+            d_quick.model_id, "anthropic/claude-opus-4.6",
+            "Quick greeting must not burn frontier reasoning tier"
+        );
+        assert!(
+            matches!(
+                d_deep.model_id.as_str(),
+                "deepseek/deepseek-v4-flash" | "anthropic/claude-opus-4.6"
+            ),
+            "DeepReasoning chat should escalate to high-PinchBench model on same conversation, got {}",
+            d_deep.model_id
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_catalog_paid_models_not_marked_free_tier_eligible() -> anyhow::Result<()> {
+        let catalog = Arc::new(ModelCatalog::load_bundled_with_profile(
+            ModelProfile::Cloud,
+        )?);
+        let key_pool = Arc::new(KeyPool::new(Arc::new(NoopPersistor)));
+        let router = CognitiveRouter::new(catalog, key_pool);
+
+        let models = router.list_models_for_catalog().await;
+        assert!(!models.is_empty());
+
+        for entry in models {
+            if !entry.is_local
+                && entry.cost_input_per_mtok > 0.0
+                && !matches!(entry.provider.as_str(), "gemini" | "groq")
+            {
+                assert!(
+                    !entry.free_tier_eligible,
+                    "Paid model '{}' (provider '{}', ${}/Mtok) must have free_tier_eligible: false",
+                    entry.model_id, entry.provider, entry.cost_input_per_mtok
+                );
+            }
+        }
         Ok(())
     }
 }

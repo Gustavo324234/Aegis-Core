@@ -362,13 +362,55 @@ struct ChatCompletionRequest {
     tools: Option<Vec<serde_json::Value>>,
 }
 
-fn recommended_max_tokens(messages: &[ChatMessage], has_tools: bool) -> u32 {
+fn is_reasoning_capable_model(model_id: &str) -> bool {
+    let lc = model_id.to_lowercase();
+    [
+        "reasoner",
+        "-r1",
+        "o1",
+        "o3",
+        "o4",
+        "opus",
+        "sonnet",
+        "deepseek-v4",
+        "gpt-5",
+        "qwen3",
+        "nemotron-3",
+        "gemini-3",
+        "gemini-2.5",
+        "glm-5",
+        "grok-4",
+    ]
+    .iter()
+    .any(|tag| lc.contains(tag))
+}
+
+fn is_complex_user_turn(messages: &[ChatMessage]) -> bool {
+    let Some(last_user) = messages
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, crate::chal::ChatRole::User))
+        .and_then(|m| m.content.as_deref())
+    else {
+        return false;
+    };
+    let complexity = crate::pcb::infer_chat_complexity(last_user);
+    matches!(complexity, crate::pcb::ChatComplexity::DeepReasoning)
+}
+
+fn recommended_max_tokens(model_id: &str, messages: &[ChatMessage], has_tools: bool) -> u32 {
     let total_chars: usize = messages
         .iter()
         .filter_map(|m| m.content.as_deref())
         .map(str::len)
         .sum();
-    if !has_tools && total_chars <= 2_000 {
+    if is_reasoning_capable_model(model_id) || is_complex_user_turn(messages) {
+        if total_chars > 12_000 {
+            4096
+        } else {
+            3072
+        }
+    } else if !has_tools && total_chars <= 2_000 {
         1024
     } else if total_chars <= 12_000 {
         1280
@@ -398,14 +440,24 @@ fn parse_openrouter_affordable_tokens(body: &str) -> Option<u32> {
 /// Only OpenRouter (402 credit-reservation checks) and Anthropic require an explicit
 /// `max_tokens` ceiling. Sending a small `max_tokens` to Gemini's OpenAI-compatible
 /// endpoint starves visible `delta.content` when thinking models consume the budget.
+#[cfg_attr(not(test), allow(dead_code))]
 fn recommended_max_tokens_for_provider(
     api_url: &str,
     messages: &[ChatMessage],
     has_tools: bool,
 ) -> Option<u32> {
+    recommended_max_tokens_for_model(api_url, "", messages, has_tools)
+}
+
+fn recommended_max_tokens_for_model(
+    api_url: &str,
+    model_id: &str,
+    messages: &[ChatMessage],
+    has_tools: bool,
+) -> Option<u32> {
     let url_lc = api_url.to_lowercase();
     if url_lc.contains("openrouter.ai") || url_lc.contains("anthropic.com") {
-        Some(recommended_max_tokens(messages, has_tools))
+        Some(recommended_max_tokens(model_id, messages, has_tools))
     } else {
         None
     }
@@ -490,8 +542,9 @@ impl InferenceDriver for CloudProxyDriver {
             messages
         };
 
-        let max_tokens = recommended_max_tokens_for_provider(
+        let max_tokens = recommended_max_tokens_for_model(
             &self.api_url,
+            &self.model_id,
             &processed_messages,
             tools.is_some(),
         );

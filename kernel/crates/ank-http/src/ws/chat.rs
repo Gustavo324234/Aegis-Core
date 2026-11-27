@@ -669,6 +669,7 @@ async fn handle_chat(
             // Las tareas complejas (Code/Planning/Analysis) NO se resuelven en el chat:
             // el ChatAgent las delega a un ProjectSupervisor mediante `spawn_agent`.
             pcb.task_type = TaskType::Chat;
+            pcb.chat_complexity = ank_core::pcb::infer_chat_complexity(&prompt);
 
             // CORE-260: Inyectar historial de la sesión en el PCB (acotado a los últimos 12 mensajes)
             {
