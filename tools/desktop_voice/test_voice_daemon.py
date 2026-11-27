@@ -136,6 +136,34 @@ class BreathAwareVadTests(unittest.TestCase):
         self.assertEqual(format_http_error(err), "HTTP 400: No hay motor STT disponible")
         err.close()
 
+    def test_bridge_headers_include_daemon_tag_and_fetch_voice_settings(self) -> None:
+        bridge = AegisHttpBridge("http://127.0.0.1:8000", "Tavo", "cst_tok")
+        self.assertEqual(bridge._headers().get("x-aegis-voice-client"), "daemon")
+
+        captured = {}
+
+        class _FakeResp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_urlopen(req, timeout=10):
+            captured["url"] = req.full_url
+            captured["client"] = req.headers.get("X-aegis-voice-client")
+            return _FakeResp(
+                json.dumps({"wake_phrase": "Oye Titan", "always_on_enabled": True}).encode("utf-8")
+            )
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = bridge.get_voice_settings()
+
+        self.assertEqual(captured["url"], "http://127.0.0.1:8000/api/siren/voice-settings")
+        self.assertEqual(captured["client"], "daemon")
+        self.assertEqual(res["wake_phrase"], "Oye Titan")
+        self.assertTrue(res["always_on_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

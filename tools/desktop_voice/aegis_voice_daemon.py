@@ -299,7 +299,24 @@ class AegisHttpBridge:
             "Content-Type": "application/json",
             "x-citadel-tenant": self.tenant_id,
             "x-citadel-key": self.session_key,
+            "x-aegis-voice-client": "daemon",
         }
+
+    def get_voice_settings(self) -> dict:
+        for attempt in range(2):
+            req = urllib.request.Request(
+                f"{self.base_url}/api/siren/voice-settings",
+                headers=self._headers(),
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as err:
+                if err.code == 401 and attempt == 0 and self.refresh_session():
+                    continue
+                raise
+        raise RuntimeError("Failed to read voice settings after session refresh")
 
     def post_utterance(self, pcm_bytes: bytes, mode: str, lang: str = "es-AR") -> dict:
         body = json.dumps(
@@ -354,7 +371,9 @@ class AegisHttpBridge:
         return "".join(reply_parts).strip()
 
 
-def install_windows_startup(base_url: str, tenant_id: str) -> None:
+def install_windows_startup(
+    base_url: str, tenant_id: str, config_path: Optional[str] = None
+) -> None:
     if not sys.platform.startswith("win"):
         raise RuntimeError("--install-startup solo aplica a Windows.")
     startup_dir = os.path.join(
@@ -371,7 +390,11 @@ def install_windows_startup(base_url: str, tenant_id: str) -> None:
     py_exe = sys.executable.replace("python.exe", "pythonw.exe")
     if not os.path.exists(py_exe):
         py_exe = sys.executable
-    cmd = f'"{py_exe}" "{script_path}" --url "{base_url}" --tenant "{tenant_id}"'
+    if config_path:
+        abs_cfg = os.path.abspath(config_path)
+        cmd = f'"{py_exe}" "{script_path}" --config "{abs_cfg}"'
+    else:
+        cmd = f'"{py_exe}" "{script_path}" --url "{base_url}" --tenant "{tenant_id}"'
     content = (
         'Set WshShell = CreateObject("WScript.Shell")\n'
         f'WshShell.Run "{cmd.replace(chr(34), chr(34) * 2)}", 0, False\n'
@@ -432,13 +455,40 @@ def run_daemon(args: argparse.Namespace) -> None:
 
     token = args.token or os.environ.get("AEGIS_SESSION_TOKEN", "")
     passphrase = args.passphrase or os.environ.get("AEGIS_PASSWORD", "")
-    if token:
-        bridge = AegisHttpBridge(args.url, args.tenant, token)
-    elif passphrase:
+    if passphrase:
         bridge = AegisHttpBridge.login(args.url, args.tenant, passphrase)
+    elif token:
+        bridge = AegisHttpBridge(args.url, args.tenant, token)
     else:
         print("Configurá --token (o AEGIS_SESSION_TOKEN) o --passphrase (o AEGIS_PASSWORD).")
         sys.exit(1)
+
+    remote_state = {"always_on": True, "wake_phrase": "Aegis escuchame"}
+    try:
+        cfg_data = bridge.get_voice_settings()
+        remote_state["always_on"] = bool(cfg_data.get("always_on_enabled", True))
+        remote_state["wake_phrase"] = str(cfg_data.get("wake_phrase") or "Aegis escuchame")
+    except Exception:
+        pass
+
+    def _poll_voice_settings() -> None:
+        while True:
+            time.sleep(15)
+            try:
+                cfg_data = bridge.get_voice_settings()
+                next_on = bool(cfg_data.get("always_on_enabled", True))
+                next_phrase = str(cfg_data.get("wake_phrase") or "Aegis escuchame")
+                if next_on != remote_state["always_on"]:
+                    remote_state["always_on"] = next_on
+                    state_txt = "Activada" if next_on else "Pausada"
+                    print(f"[AegisVoice] Escucha continua {state_txt} desde el tenant.")
+                if next_phrase != remote_state["wake_phrase"]:
+                    remote_state["wake_phrase"] = next_phrase
+                    print(f'[AegisVoice] Nueva frase activa: "{next_phrase}"')
+            except Exception:
+                pass
+
+    threading.Thread(target=_poll_voice_settings, daemon=True).start()
 
     vad = BreathAwareVadSegmenter(VadConfig(command_hangover_ms=args.pause_ms))
     audio_q: "queue.Queue[bytes]" = queue.Queue()
@@ -452,7 +502,9 @@ def run_daemon(args: argparse.Namespace) -> None:
 
     start_hotkey_listener(on_hotkey)
     print(f"[AegisVoice] Conectado a {args.url} (tenant={args.tenant}).")
-    print('[AegisVoice] Decí "Aegis escuchame <pedido>" o presioná Alt+Shift+A aunque el navegador esté cerrado.')
+    status_lbl = "Activa" if remote_state["always_on"] else "Pausada"
+    print(f'[AegisVoice] Frase activa: "{remote_state["wake_phrase"]}" | Escucha continua: {status_lbl}')
+    print('[AegisVoice] Presioná Alt+Shift+A cuando quieras hablar directo, incluso con el navegador cerrado.')
 
     def callback(indata, frames, time_info, status) -> None:
         if speaking_lock.locked():
@@ -468,6 +520,9 @@ def run_daemon(args: argparse.Namespace) -> None:
     ):
         while True:
             frame = audio_q.get()
+            if not remote_state["always_on"] and vad.mode == "wakeword":
+                vad.reset_utterance()
+                continue
             if time.monotonic() < followup_until[0] and vad.mode == "wakeword":
                 vad.mode = "followup"
             elif time.monotonic() >= followup_until[0] and vad.mode == "followup":
@@ -512,10 +567,22 @@ def run_daemon(args: argparse.Namespace) -> None:
                 followup_until[0] = time.monotonic() + args.followup_secs
 
 
+def _load_json_config(config_path: str) -> dict:
+    if not config_path or not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aegis PC Always-On Voice Daemon")
-    parser.add_argument("--url", default=os.environ.get("AEGIS_URL", "http://127.0.0.1:8000"))
-    parser.add_argument("--tenant", default=os.environ.get("AEGIS_TENANT", "default"))
+    parser.add_argument("--config", default="")
+    parser.add_argument("--url", default=None)
+    parser.add_argument("--tenant", default=None)
     parser.add_argument("--token", default="")
     parser.add_argument("--passphrase", default="")
     parser.add_argument("--lang", default="es-AR")
@@ -525,8 +592,20 @@ def main() -> None:
     parser.add_argument("--uninstall-startup", action="store_true")
     args = parser.parse_args()
 
+    cfg_path = args.config
+    if not cfg_path and sys.platform.startswith("win") and not args.token and not args.passphrase:
+        default_cfg = os.path.join(os.environ.get("LOCALAPPDATA", ""), "AegisVoice", "config.json")
+        if os.path.exists(default_cfg):
+            cfg_path = default_cfg
+    cfg = _load_json_config(cfg_path)
+
+    args.url = args.url or cfg.get("url") or os.environ.get("AEGIS_URL", "http://127.0.0.1:8000")
+    args.tenant = args.tenant or cfg.get("tenant") or os.environ.get("AEGIS_TENANT", "default")
+    args.token = args.token or str(cfg.get("token") or "")
+    args.passphrase = args.passphrase or str(cfg.get("passphrase") or "")
+
     if args.install_startup:
-        install_windows_startup(args.url, args.tenant)
+        install_windows_startup(args.url, args.tenant, config_path=cfg_path or None)
         return
     if args.uninstall_startup:
         uninstall_windows_startup()

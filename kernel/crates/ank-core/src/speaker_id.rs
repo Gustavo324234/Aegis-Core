@@ -531,10 +531,52 @@ fn fold_spanish_token(s: &str) -> String {
     out
 }
 
+fn tokenize_normalized_words(input: &str) -> Vec<(usize, usize, String)> {
+    let mut words = Vec::new();
+    let mut cur_start: Option<usize> = None;
+    for (idx, ch) in input.char_indices() {
+        if ch.is_alphanumeric() {
+            if cur_start.is_none() {
+                cur_start = Some(idx);
+            }
+        } else if let Some(s) = cur_start.take() {
+            let norm = fold_spanish_token(&input[s..idx]);
+            if !norm.is_empty() {
+                words.push((s, idx, norm));
+            }
+        }
+    }
+    if let Some(s) = cur_start.take() {
+        let norm = fold_spanish_token(&input[s..]);
+        if !norm.is_empty() {
+            words.push((s, input.len(), norm));
+        }
+    }
+    words
+}
+
+fn is_aegis_phonetic(tok: &str) -> bool {
+    matches!(
+        tok,
+        "aegis" | "eyis" | "egis" | "ayis" | "hegis" | "aegys" | "ejis"
+    )
+}
+
 /// Checks whether a transcript begins with a dynamic wake phrase for `agent_name` or `"Aegis"`,
 /// e.g. `"Aegis escuchame, anotá $5000"`, `"Jarvis escuchame"`, `"Oye Jarvis ..."`.
 /// Preserves the original casing/punctuation of the remaining user command.
 pub fn match_and_strip_wake_phrase(transcript: &str, agent_name: &str) -> WakeMatchResult {
+    match_and_strip_custom_wake_phrase(transcript, agent_name, None)
+}
+
+/// Checks whether a transcript begins with either the tenant's configured `custom_wake_phrase`
+/// (e.g. `"Oye Titán"`, `"Despertate Aegis"`, `"Jarvis"`) or, when `None`/empty, the default
+/// dynamic `<agent_name> [escuchame]` wake phrase.
+pub fn match_and_strip_custom_wake_phrase(
+    transcript: &str,
+    agent_name: &str,
+    custom_wake_phrase: Option<&str>,
+) -> WakeMatchResult {
     let trimmed = transcript.trim();
     if trimmed.is_empty() {
         return WakeMatchResult {
@@ -545,28 +587,7 @@ pub fn match_and_strip_wake_phrase(transcript: &str, agent_name: &str) -> WakeMa
         };
     }
 
-    // Build word spans in original text: (byte_start, byte_end, normalized_token)
-    let mut words: Vec<(usize, usize, String)> = Vec::new();
-    let mut cur_start: Option<usize> = None;
-    for (idx, ch) in trimmed.char_indices() {
-        if ch.is_alphanumeric() {
-            if cur_start.is_none() {
-                cur_start = Some(idx);
-            }
-        } else if let Some(s) = cur_start.take() {
-            let norm = fold_spanish_token(&trimmed[s..idx]);
-            if !norm.is_empty() {
-                words.push((s, idx, norm));
-            }
-        }
-    }
-    if let Some(s) = cur_start.take() {
-        let norm = fold_spanish_token(&trimmed[s..]);
-        if !norm.is_empty() {
-            words.push((s, trimmed.len(), norm));
-        }
-    }
-
+    let words = tokenize_normalized_words(trimmed);
     if words.is_empty() {
         return WakeMatchResult {
             matched: false,
@@ -576,46 +597,83 @@ pub fn match_and_strip_wake_phrase(transcript: &str, agent_name: &str) -> WakeMa
         };
     }
 
-    let custom_norm = fold_spanish_token(agent_name);
-    let mut aliases: Vec<String> = Vec::new();
-    if !custom_norm.is_empty() {
-        aliases.push(custom_norm);
-    }
-    for base in ["aegis", "eyis", "egis", "ayis", "hegis", "aegys", "ejis"] {
-        if !aliases.iter().any(|a| a == base) {
-            aliases.push(base.to_string());
-        }
-    }
-
     let greetings = ["hola", "oye", "ok", "hey", "che", "eh", "buenas"];
     let cue_words = ["escuchame", "escucha", "atendeme", "decime"];
-    let is_alias = |tok: &str| -> bool { aliases.iter().any(|a| a == tok) };
-
-    // Optional single leading greeting ("hola aegis escuchame ..." or "oye jarvis ...")
-    let start_idx = if words.len() >= 2 && greetings.contains(&words[0].2.as_str()) {
-        1
-    } else {
-        0
-    };
+    let custom_tokens: Vec<String> = custom_wake_phrase
+        .map(|p| {
+            tokenize_normalized_words(p.trim())
+                .into_iter()
+                .map(|(_, _, tok)| tok)
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut matched_end_idx: Option<usize> = None;
 
-    if start_idx < words.len() {
-        let first = words[start_idx].2.as_str();
-        // Pattern 1: "[greeting] <name> [escuchame] [por favor]"
-        if is_alias(first) {
-            let mut end_i = start_idx;
-            if end_i + 1 < words.len() && cue_words.contains(&words[end_i + 1].2.as_str()) {
-                end_i += 1;
-            }
-            matched_end_idx = Some(end_i);
-        }
-        // Pattern 2: "[greeting] escuchame <name>"
-        else if cue_words.contains(&first)
-            && start_idx + 1 < words.len()
-            && is_alias(&words[start_idx + 1].2)
+    if !custom_tokens.is_empty() {
+        let token_matches = |spoken: &str, expected: &str| -> bool {
+            spoken == expected || (expected == "aegis" && is_aegis_phonetic(spoken))
+        };
+        let mut candidate_starts = vec![0usize];
+        if words.len() > custom_tokens.len()
+            && greetings.contains(&words[0].2.as_str())
+            && !token_matches(&words[0].2, &custom_tokens[0])
         {
-            matched_end_idx = Some(start_idx + 1);
+            candidate_starts.push(1);
+        }
+        for s in candidate_starts {
+            if s + custom_tokens.len() <= words.len()
+                && (0..custom_tokens.len())
+                    .all(|i| token_matches(&words[s + i].2, &custom_tokens[i]))
+            {
+                let mut end_i = s + custom_tokens.len() - 1;
+                if custom_tokens.len() == 1
+                    && end_i + 1 < words.len()
+                    && cue_words.contains(&words[end_i + 1].2.as_str())
+                {
+                    end_i += 1;
+                }
+                matched_end_idx = Some(end_i);
+                break;
+            }
+        }
+    } else {
+        let custom_norm = fold_spanish_token(agent_name);
+        let mut aliases: Vec<String> = Vec::new();
+        if !custom_norm.is_empty() {
+            aliases.push(custom_norm);
+        }
+        for base in ["aegis", "eyis", "egis", "ayis", "hegis", "aegys", "ejis"] {
+            if !aliases.iter().any(|a| a == base) {
+                aliases.push(base.to_string());
+            }
+        }
+        let is_alias = |tok: &str| -> bool { aliases.iter().any(|a| a == tok) };
+
+        // Optional single leading greeting ("hola aegis escuchame ..." or "oye jarvis ...")
+        let start_idx = if words.len() >= 2 && greetings.contains(&words[0].2.as_str()) {
+            1
+        } else {
+            0
+        };
+
+        if start_idx < words.len() {
+            let first = words[start_idx].2.as_str();
+            // Pattern 1: "[greeting] <name> [escuchame] [por favor]"
+            if is_alias(first) {
+                let mut end_i = start_idx;
+                if end_i + 1 < words.len() && cue_words.contains(&words[end_i + 1].2.as_str()) {
+                    end_i += 1;
+                }
+                matched_end_idx = Some(end_i);
+            }
+            // Pattern 2: "[greeting] escuchame <name>"
+            else if cue_words.contains(&first)
+                && start_idx + 1 < words.len()
+                && is_alias(&words[start_idx + 1].2)
+            {
+                matched_end_idx = Some(start_idx + 1);
+            }
         }
     }
 
@@ -776,6 +834,37 @@ mod tests {
         assert_eq!(r3.command, "recordame comprar pan");
 
         let r4 = match_and_strip_wake_phrase("Hola Marcos, ¿cómo estuvo tu día?", "Jarvis");
+        assert!(!r4.matched);
+    }
+
+    #[test]
+    fn custom_wake_phrase_matches_multiword_and_phonetic_variants() {
+        let r1 = match_and_strip_custom_wake_phrase(
+            "Oye Titán, recordame pagar la luz",
+            "Aegis",
+            Some("Oye Titán"),
+        );
+        assert!(r1.matched);
+        assert!(!r1.wake_only);
+        assert_eq!(r1.command, "recordame pagar la luz");
+
+        let r2 = match_and_strip_custom_wake_phrase(
+            "Despertate Eyis por favor abrí mis notas",
+            "Aegis",
+            Some("Despertate Aegis"),
+        );
+        assert!(r2.matched);
+        assert_eq!(r2.command, "abrí mis notas");
+
+        let r3 = match_and_strip_custom_wake_phrase("Che Titán escuchame", "Aegis", Some("Titán"));
+        assert!(r3.matched);
+        assert!(r3.wake_only);
+
+        let r4 = match_and_strip_custom_wake_phrase(
+            "Hola Juan cómo estás hoy",
+            "Aegis",
+            Some("Oye Titán"),
+        );
         assert!(!r4.matched);
     }
 }

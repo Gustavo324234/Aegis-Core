@@ -3,11 +3,13 @@ use ank_core::chal::drivers::siren::whisper_local::is_safe_whisper_model_id;
 use ank_core::enclave::TenantDB;
 use ank_core::scheduler::persistence::VoiceProfile;
 use ank_core::speaker_id::{
-    match_and_strip_wake_phrase, merge_enrollments, resample_pcm16_mono, verify_multi,
+    match_and_strip_custom_wake_phrase, merge_enrollments, resample_pcm16_mono, verify_multi,
     EnrolledSpeakerProfile, DEFAULT_THRESHOLD,
 };
 use axum::{
     extract::{Path, State},
+    http::{header, HeaderMap},
+    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -35,14 +37,41 @@ const MAX_ENROLL_B64_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SDP_OFFER_BYTES: usize = 64 * 1024;
 const MAX_WEBRTC_PCM_SAMPLES: usize = 16_000 * 120; // ~2 min @ 16kHz mono
 const MAX_ACTIVE_WEBRTC_PER_TENANT: usize = 4;
+const DAEMON_HEARTBEAT_TTL_SECS: u64 = 45;
+const DESKTOP_VOICE_DAEMON_PY: &str =
+    include_str!("../../../../../tools/desktop_voice/aegis_voice_daemon.py");
 
 type ActivePeerRegistry = DashMap<String, Vec<(u64, Arc<RTCPeerConnection>)>>;
 
 static NEXT_WEBRTC_CONN_ID: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_WEBRTC_PEERS: OnceLock<ActivePeerRegistry> = OnceLock::new();
+static DAEMON_HEARTBEATS: OnceLock<DashMap<String, std::time::Instant>> = OnceLock::new();
 
 fn active_webrtc_peers() -> &'static ActivePeerRegistry {
     ACTIVE_WEBRTC_PEERS.get_or_init(DashMap::new)
+}
+
+fn daemon_heartbeats() -> &'static DashMap<String, std::time::Instant> {
+    DAEMON_HEARTBEATS.get_or_init(DashMap::new)
+}
+
+fn record_daemon_heartbeat(tenant_id: &str) {
+    daemon_heartbeats().insert(tenant_id.to_string(), std::time::Instant::now());
+}
+
+fn is_daemon_connected(tenant_id: &str) -> bool {
+    daemon_heartbeats()
+        .get(tenant_id)
+        .map(|ts| ts.elapsed().as_secs() <= DAEMON_HEARTBEAT_TTL_SECS)
+        .unwrap_or(false)
+}
+
+fn is_daemon_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-aegis-voice-client")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("daemon"))
+        .unwrap_or(false)
 }
 
 fn unregister_webrtc_peer(tenant_id: &str, conn_id: u64) -> Option<Arc<RTCPeerConnection>> {
@@ -92,6 +121,16 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/config", get(get_siren_config))
         .route("/config", post(set_siren_config))
+        .route("/voice-settings", get(get_voice_settings))
+        .route("/voice-settings", post(update_voice_settings))
+        .route(
+            "/desktop-daemon/script",
+            get(download_desktop_daemon_script),
+        )
+        .route(
+            "/desktop-daemon/installer",
+            post(generate_desktop_daemon_installer),
+        )
         .route("/voices", get(list_siren_voices))
         .route("/enroll", post(enroll_speaker))
         .route("/enroll", delete(delete_enrollment))
@@ -120,30 +159,7 @@ async fn get_siren_config(
     State(state): State<AppState>,
     auth: CitadelAuthenticated,
 ) -> Result<Json<Value>, AegisHttpError> {
-    let models_dir = state.config.data_dir.join("models");
-    let active_model_path = models_dir.join("active_model.txt");
-    let (stt_available, active_model) =
-        if let Ok(name) = std::fs::read_to_string(&active_model_path) {
-            let name = name.trim().to_string();
-            if is_safe_whisper_model_id(&name) {
-                let model_file = models_dir.join(format!("ggml-{}.bin", name));
-                (model_file.exists(), Some(name))
-            } else {
-                tracing::warn!(
-                    model = %name,
-                    "Siren API: unsafe model id in active_model.txt; ignoring."
-                );
-                (false, None)
-            }
-        } else {
-            // backwards-compat: accept ggml-base.bin without active_model.txt
-            let legacy = models_dir.join("ggml-base.bin");
-            if legacy.exists() {
-                (true, Some("base".to_string()))
-            } else {
-                (false, None)
-            }
-        };
+    let (stt_available, active_model) = check_local_whisper_ready(&state.config.data_dir);
 
     let profile = state
         .persistence
@@ -377,6 +393,43 @@ pub struct UtteranceBody {
     pub lang: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct VoiceSettingsUpdateBody {
+    #[serde(default)]
+    pub wake_phrase: Option<String>,
+    #[serde(default)]
+    pub always_on_enabled: Option<bool>,
+    #[serde(default)]
+    pub gate_enabled: Option<bool>,
+    #[serde(default)]
+    pub groq_api_key: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct DaemonInstallerBody {
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+fn check_local_whisper_ready(data_dir: &std::path::Path) -> (bool, Option<String>) {
+    let models_dir = data_dir.join("models");
+    let active_model_path = models_dir.join("active_model.txt");
+    if let Ok(name) = std::fs::read_to_string(&active_model_path) {
+        let name = name.trim().to_string();
+        if is_safe_whisper_model_id(&name) {
+            let model_file = models_dir.join(format!("ggml-{}.bin", name));
+            return (model_file.exists(), Some(name));
+        }
+        return (false, None);
+    }
+    let legacy = models_dir.join("ggml-base.bin");
+    if legacy.exists() {
+        (true, Some("base".to_string()))
+    } else {
+        (false, None)
+    }
+}
+
 async fn resolve_tenant_assistant_name(tenant_id: &str, session_key_hash: &str) -> String {
     TenantDB::with_async(tenant_id.to_string(), session_key_hash.to_string(), |db| {
         let explicit = db.get_kv("assistant_name").ok().flatten();
@@ -394,24 +447,40 @@ async fn resolve_tenant_assistant_name(tenant_id: &str, session_key_hash: &str) 
     .unwrap_or_else(|| "Aegis".to_string())
 }
 
-async fn list_enrolled_voices(
-    State(state): State<AppState>,
-    auth: CitadelAuthenticated,
-) -> Result<Json<Value>, AegisHttpError> {
-    let (profiles, gate_enabled) = TenantDB::with_async(
+async fn build_voice_settings_payload(
+    state: &AppState,
+    auth: &CitadelAuthenticated,
+) -> Result<Value, AegisHttpError> {
+    let (profiles, gate_enabled, custom_wake, always_on_enabled) = TenantDB::with_async(
         auth.tenant_id.clone(),
         auth.session_key_hash.clone(),
         |db| {
             let voices = db.list_enrolled_voices()?;
             let gate = db.get_voice_gate_enabled()?;
-            Ok((voices, gate))
+            let wake = db.get_voice_wake_phrase()?;
+            let always_on = db.get_voice_always_on_enabled()?;
+            Ok((voices, gate, wake, always_on))
         },
     )
     .await
     .map_err(AegisHttpError::Internal)?;
 
     let agent_name = resolve_tenant_assistant_name(&auth.tenant_id, &auth.session_key_hash).await;
-    let groq_key_detected = {
+    let effective_wake_phrase = custom_wake
+        .clone()
+        .unwrap_or_else(|| format!("{} escuchame", agent_name));
+
+    let (stt_available, _) = check_local_whisper_ready(&state.config.data_dir);
+    let profile_groq_exists = state
+        .persistence
+        .get_voice_profile(&auth.tenant_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.settings_json).ok())
+        .and_then(|v| v["stt_api_key"].as_str().map(|s| !s.trim().is_empty()))
+        .unwrap_or(false);
+    let keypool_groq_exists = {
         let router = state.router.read().await;
         router
             .key_pool_ref()
@@ -419,6 +488,7 @@ async fn list_enrolled_voices(
             .await
             .is_some()
     };
+    let groq_key_detected = profile_groq_exists || keypool_groq_exists;
 
     let sanitized: Vec<Value> = profiles
         .into_iter()
@@ -434,11 +504,207 @@ async fn list_enrolled_voices(
         })
         .collect();
 
-    Ok(Json(json!({
+    Ok(json!({
         "profiles": sanitized,
         "gate_enabled": gate_enabled,
         "agent_name": agent_name,
+        "wake_phrase": effective_wake_phrase,
+        "custom_wake_phrase": custom_wake.unwrap_or_default(),
+        "always_on_enabled": always_on_enabled,
         "groq_key_detected": groq_key_detected,
+        "stt_available": stt_available,
+        "stt_ready": stt_available || groq_key_detected,
+        "daemon_connected": is_daemon_connected(&auth.tenant_id),
+    }))
+}
+
+async fn list_enrolled_voices(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+) -> Result<Json<Value>, AegisHttpError> {
+    Ok(Json(build_voice_settings_payload(&state, &auth).await?))
+}
+
+async fn get_voice_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: CitadelAuthenticated,
+) -> Result<Json<Value>, AegisHttpError> {
+    if is_daemon_request(&headers) {
+        record_daemon_heartbeat(&auth.tenant_id);
+    }
+    Ok(Json(build_voice_settings_payload(&state, &auth).await?))
+}
+
+async fn update_voice_settings(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Json(req): Json<VoiceSettingsUpdateBody>,
+) -> Result<Json<Value>, AegisHttpError> {
+    if let Some(ref phrase) = req.wake_phrase {
+        if phrase.trim().chars().count() > 60 {
+            return Err(AegisHttpError::BadRequest(
+                "La frase de activación no puede superar los 60 caracteres.".to_string(),
+            ));
+        }
+    }
+
+    let wake_opt = req.wake_phrase.map(|s| s.trim().to_string());
+    let always_on_opt = req.always_on_enabled;
+    let gate_opt = req.gate_enabled;
+
+    TenantDB::with_async(
+        auth.tenant_id.clone(),
+        auth.session_key_hash.clone(),
+        move |db| {
+            if let Some(ref phrase) = wake_opt {
+                db.set_voice_wake_phrase(phrase)?;
+            }
+            if let Some(enabled) = always_on_opt {
+                db.set_voice_always_on_enabled(enabled)?;
+            }
+            if let Some(gate) = gate_opt {
+                db.set_voice_gate_enabled(gate)?;
+            }
+            Ok(())
+        },
+    )
+    .await
+    .map_err(AegisHttpError::Internal)?;
+
+    if let Some(ref raw_key) = req.groq_api_key {
+        let trimmed_key = raw_key.trim();
+        if !trimmed_key.is_empty() && !trimmed_key.starts_with("••••") {
+            let existing = state
+                .persistence
+                .get_voice_profile(&auth.tenant_id)
+                .await
+                .unwrap_or(None);
+            let existing_settings = existing
+                .as_ref()
+                .and_then(|p| serde_json::from_str::<serde_json::Value>(&p.settings_json).ok());
+            let existing_api_key = existing_settings
+                .as_ref()
+                .and_then(|v| v["api_key"].as_str())
+                .unwrap_or_default()
+                .to_string();
+
+            let profile = VoiceProfile {
+                tenant_id: auth.tenant_id.clone(),
+                engine_id: existing
+                    .as_ref()
+                    .map(|p| p.engine_id.clone())
+                    .unwrap_or_else(|| "browser".to_string()),
+                voice_id: existing
+                    .as_ref()
+                    .map(|p| p.voice_id.clone())
+                    .unwrap_or_default(),
+                model_pref: existing
+                    .as_ref()
+                    .map(|p| p.model_pref.clone())
+                    .unwrap_or_else(|| "HybridSmart".to_string()),
+                settings_json: json!({
+                    "api_key": existing_api_key,
+                    "stt_provider": "groq",
+                    "stt_api_key": trimmed_key,
+                })
+                .to_string(),
+            };
+            state
+                .persistence
+                .update_voice_profile(profile)
+                .await
+                .map_err(|e| AegisHttpError::Internal(anyhow::anyhow!(e)))?;
+        }
+    }
+
+    Ok(Json(build_voice_settings_payload(&state, &auth).await?))
+}
+
+async fn download_desktop_daemon_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/x-python; charset=utf-8")],
+        DESKTOP_VOICE_DAEMON_PY,
+    )
+}
+
+fn sanitize_installer_base_url(raw: Option<&str>, fallback_port: u16) -> String {
+    if let Some(candidate) = raw.map(str::trim).filter(|s| !s.is_empty()) {
+        let clean = candidate.trim_end_matches('/');
+        let valid_scheme = clean.starts_with("http://") || clean.starts_with("https://");
+        let safe_chars = clean
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '/' | '.' | '-' | '_'));
+        if valid_scheme && safe_chars && clean.len() <= 200 {
+            return clean.to_string();
+        }
+    }
+    format!("http://127.0.0.1:{}", fallback_port)
+}
+
+async fn generate_desktop_daemon_installer(
+    State(state): State<AppState>,
+    auth: CitadelAuthenticated,
+    Json(req): Json<DaemonInstallerBody>,
+) -> Result<Json<Value>, AegisHttpError> {
+    let base_url = sanitize_installer_base_url(req.base_url.as_deref(), state.config.port);
+    let (token, _) = state.session_store.issue_with_ttl(
+        &auth.tenant_id,
+        &auth.session_key_hash,
+        auth.is_master,
+        7 * 86_400,
+    );
+
+    let cfg_json = json!({
+        "url": base_url,
+        "tenant": auth.tenant_id,
+        "token": token,
+    })
+    .to_string();
+    let cfg_b64 = base64::engine::general_purpose::STANDARD.encode(cfg_json.as_bytes());
+
+    let ps_cmd = "$ErrorActionPreference = 'Stop'; \
+$cfgJson = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($env:AEGIS_CFG_B64)); \
+$cfg = $cfgJson | ConvertFrom-Json; \
+if (-not (Get-Command python -ErrorAction SilentlyContinue)) { Write-Host '[ERROR] Python 3 no esta instalado.' -ForegroundColor Red; exit 1 }; \
+Write-Host 'Instalando dependencias de audio (sounddevice, websockets)...' -ForegroundColor Cyan; \
+python -m pip install --quiet sounddevice websockets; \
+$dir = Join-Path $env:LOCALAPPDATA 'AegisVoice'; \
+New-Item -ItemType Directory -Force -Path $dir | Out-Null; \
+Write-Host 'Descargando asistente desde Aegis...' -ForegroundColor Cyan; \
+Invoke-WebRequest -UseBasicParsing -Uri ($cfg.url + '/api/siren/desktop-daemon/script') -OutFile (Join-Path $dir 'aegis_voice_daemon.py'); \
+$sec = Read-Host 'Opcional - Clave de tu usuario Aegis para reconectar tras reiniciar Windows (Enter para activar ahora)' -AsSecureString; \
+$pw = [System.Net.NetworkCredential]::new('', $sec).Password; \
+if (-not [string]::IsNullOrWhiteSpace($pw)) { $cfg | Add-Member -Force -NotePropertyName passphrase -NotePropertyValue $pw }; \
+[System.IO.File]::WriteAllText((Join-Path $dir 'config.json'), ($cfg | ConvertTo-Json -Compress), [System.Text.UTF8Encoding]::new($false)); \
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*aegis_voice_daemon.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; \
+python (Join-Path $dir 'aegis_voice_daemon.py') --config (Join-Path $dir 'config.json') --install-startup; \
+$pyw = (Get-Command pythonw -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1); \
+if ($pyw) { Start-Process -FilePath $pyw -ArgumentList @((Join-Path $dir 'aegis_voice_daemon.py'), '--config', (Join-Path $dir 'config.json')) -WindowStyle Hidden } else { Start-Process -FilePath 'python' -ArgumentList @((Join-Path $dir 'aegis_voice_daemon.py'), '--config', (Join-Path $dir 'config.json')) -WindowStyle Hidden }; \
+Start-Sleep -Seconds 2; \
+Write-Host 'Listo! Aegis ya te escucha en segundo plano (podes cerrar esta ventana).' -ForegroundColor Green";
+
+    let bat_script = format!(
+        "@echo off\r\nsetlocal\r\nset \"AEGIS_CFG_B64={}\"\r\npowershell -NoProfile -ExecutionPolicy Bypass -Command \"{}\"\r\necho.\r\npause\r\n",
+        cfg_b64, ps_cmd
+    );
+
+    let safe_tenant: String = auth
+        .tenant_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let filename = format!("activar-voz-aegis-{}.bat", safe_tenant);
+
+    Ok(Json(json!({
+        "filename": filename,
+        "script": bat_script,
     })))
 }
 
@@ -618,9 +884,13 @@ async fn verify_speaker_test(
 
 async fn process_utterance(
     State(state): State<AppState>,
+    headers: HeaderMap,
     auth: CitadelAuthenticated,
     Json(req): Json<UtteranceBody>,
 ) -> Result<Json<Value>, AegisHttpError> {
+    if is_daemon_request(&headers) {
+        record_daemon_heartbeat(&auth.tenant_id);
+    }
     let mode = req.mode.as_deref().unwrap_or("direct");
     let pcm_16k = if let Some(ref b64) = req.pcm_b64 {
         if b64.len() > MAX_ENROLL_B64_BYTES {
@@ -670,17 +940,29 @@ async fn process_utterance(
         ));
     }
 
-    let (profiles, gate_enabled) = TenantDB::with_async(
+    let (profiles, gate_enabled, custom_wake, always_on_enabled) = TenantDB::with_async(
         auth.tenant_id.clone(),
         auth.session_key_hash.clone(),
         |db| {
             let voices = db.list_enrolled_voices()?;
             let gate = db.get_voice_gate_enabled()?;
-            Ok((voices, gate))
+            let wake = db.get_voice_wake_phrase()?;
+            let always_on = db.get_voice_always_on_enabled()?;
+            Ok((voices, gate, wake, always_on))
         },
     )
     .await
     .map_err(AegisHttpError::Internal)?;
+
+    if mode == "wakeword" && !always_on_enabled {
+        return Ok(Json(json!({
+            "accepted": false,
+            "reason": "always_on_disabled",
+            "wake_only": false,
+            "command": "",
+            "transcript": "",
+        })));
+    }
 
     let agent_name = resolve_tenant_assistant_name(&auth.tenant_id, &auth.session_key_hash).await;
 
@@ -747,7 +1029,8 @@ async fn process_utterance(
 
     // Step 3: Dynamic wake-word check when in "wakeword" standby.
     if mode == "wakeword" {
-        let wm = match_and_strip_wake_phrase(&transcript, &agent_name);
+        let wm =
+            match_and_strip_custom_wake_phrase(&transcript, &agent_name, custom_wake.as_deref());
         return Ok(Json(json!({
             "accepted": wm.matched,
             "reason": if wm.matched { "ok" } else { "no_wake_phrase" },

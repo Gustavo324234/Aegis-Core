@@ -1732,6 +1732,31 @@ impl TenantDB {
             if enabled { "true" } else { "false" },
         )
     }
+
+    pub fn get_voice_wake_phrase(&self) -> Result<Option<String>> {
+        Ok(self
+            .get_kv("voice_wake_phrase")?
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()))
+    }
+
+    pub fn set_voice_wake_phrase(&self, phrase: &str) -> Result<()> {
+        self.set_kv("voice_wake_phrase", phrase.trim())
+    }
+
+    pub fn get_voice_always_on_enabled(&self) -> Result<bool> {
+        match self.get_kv("voice_always_on_enabled")? {
+            Some(v) => Ok(v != "false" && v != "0"),
+            None => Ok(true),
+        }
+    }
+
+    pub fn set_voice_always_on_enabled(&self, enabled: bool) -> Result<()> {
+        self.set_kv(
+            "voice_always_on_enabled",
+            if enabled { "true" } else { "false" },
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3048,6 +3073,18 @@ mod tests {
         assert!(!db.get_voice_gate_enabled()?);
         db.set_voice_gate_enabled(true)?;
         assert!(db.get_voice_gate_enabled()?);
+
+        assert_eq!(db.get_voice_wake_phrase()?, None);
+        db.set_voice_wake_phrase("  Oye Titán  ")?;
+        assert_eq!(db.get_voice_wake_phrase()?.as_deref(), Some("Oye Titán"));
+        db.set_voice_wake_phrase("")?;
+        assert_eq!(db.get_voice_wake_phrase()?, None);
+
+        assert!(db.get_voice_always_on_enabled()?);
+        db.set_voice_always_on_enabled(false)?;
+        assert!(!db.get_voice_always_on_enabled()?);
+        db.set_voice_always_on_enabled(true)?;
+        assert!(db.get_voice_always_on_enabled()?);
 
         let p1 = crate::speaker_id::EnrolledSpeakerProfile {
             id: "v_primary".to_string(),
