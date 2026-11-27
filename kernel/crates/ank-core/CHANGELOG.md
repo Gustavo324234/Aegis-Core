@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.89](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.88...ank-core-v0.1.89) (2026-11-27)
+
+
+### Features
+
+* **ci,mobile,ui:** add Android APK GitHub Actions builder, in-app SHA-256 updater and Web download QR (CORE-417) ([#386](https://github.com/Gustavo324234/Aegis-Core/issues/386)) ([d80281d](https://github.com/Gustavo324234/Aegis-Core/commit/d80281d75bebad07bb940e07a5668cf2fccfdcf0))
+
 ## [0.1.88](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.87...ank-core-v0.1.88) (2026-11-27)
 
 

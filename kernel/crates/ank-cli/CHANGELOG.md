@@ -2,6 +2,13 @@
 
 
 
+## [0.1.13](https://github.com/Gustavo324234/Aegis-Core/compare/ank-cli-v0.1.12...ank-cli-v0.1.13) (2026-11-27)
+
+
+### Features
+
+* **ci,mobile,ui:** add Android APK GitHub Actions builder, in-app SHA-256 updater and Web download QR (CORE-417) ([#386](https://github.com/Gustavo324234/Aegis-Core/issues/386)) ([d80281d](https://github.com/Gustavo324234/Aegis-Core/commit/d80281d75bebad07bb940e07a5668cf2fccfdcf0))
+
 ## [0.1.12](https://github.com/Gustavo324234/Aegis-Core/compare/ank-cli-v0.1.11...ank-cli-v0.1.12) (2026-10-28)
 
 

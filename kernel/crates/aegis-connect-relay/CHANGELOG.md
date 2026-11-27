@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/Gustavo324234/Aegis-Core/compare/aegis-connect-relay-v0.1.4...aegis-connect-relay-v0.1.5) (2026-11-27)
+
+
+### Features
+
+* **ci,mobile,ui:** add Android APK GitHub Actions builder, in-app SHA-256 updater and Web download QR (CORE-417) ([#386](https://github.com/Gustavo324234/Aegis-Core/issues/386)) ([d80281d](https://github.com/Gustavo324234/Aegis-Core/commit/d80281d75bebad07bb940e07a5668cf2fccfdcf0))
+
 ## [0.1.4](https://github.com/Gustavo324234/Aegis-Core/compare/aegis-connect-relay-v0.1.3...aegis-connect-relay-v0.1.4) (2026-10-28)
 
 
