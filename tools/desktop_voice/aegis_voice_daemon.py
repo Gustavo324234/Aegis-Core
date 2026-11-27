@@ -29,6 +29,7 @@ import threading
 import time
 from typing import Deque, List, Optional, Tuple
 import urllib.error
+import urllib.parse
 import urllib.request
 
 SAMPLE_RATE = 16000
@@ -165,6 +166,7 @@ def speak_text_native(text: str) -> None:
         return
     if sys.platform.startswith("win"):
         ps_script = (
+            "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
             "Add-Type -AssemblyName System.Speech; "
             "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
             "$s.Rate = 1; "
@@ -184,15 +186,83 @@ def speak_text_native(text: str) -> None:
         pass
 
 
+def format_http_error(exc: urllib.error.HTTPError) -> str:
+    """Extracts the server's JSON error/message detail from an HTTPError for clear logging."""
+    detail = ""
+    try:
+        raw = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        raw = ""
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                detail = str(parsed.get("error") or parsed.get("message") or raw).strip()
+            else:
+                detail = raw
+        except ValueError:
+            detail = raw
+    if detail:
+        return f"HTTP {exc.code}: {detail}"
+    return f"HTTP {exc.code}: {exc.reason}"
+
+
+def parse_chat_ws_frame(frame: dict) -> Tuple[Optional[str], bool, Optional[str]]:
+    """
+    Parses a WebSocket frame from `ank-http` (`/ws/chat/:tenant_id`) into
+    `(output_chunk, is_done, error_msg)`. Also keeps fallback support for
+    legacy `{type: "token"|"status"|"error"}` frames.
+    """
+    event = frame.get("event")
+    if event == "kernel_event":
+        data = frame.get("data")
+        if isinstance(data, dict):
+            if "output" in data and data["output"] is not None:
+                return (str(data["output"]), False, None)
+            if "error" in data and data["error"] is not None:
+                return (None, True, str(data["error"]))
+            status_update = data.get("status_update")
+            if isinstance(status_update, dict) and status_update.get("state") in (
+                "STATE_COMPLETED",
+                "STATE_FAILED",
+            ):
+                return (None, True, None)
+        return (None, False, None)
+
+    if event == "error":
+        data = frame.get("data")
+        if isinstance(data, dict):
+            msg = data.get("message") or data.get("code") or str(data)
+        else:
+            msg = str(data or "Unknown WebSocket error")
+        return (None, True, str(msg))
+
+    kind = frame.get("type")
+    if kind == "token":
+        return (str(frame.get("data", "")), False, None)
+    if kind == "status" and str(frame.get("data", "")) in ("idle", "completed"):
+        return (None, True, None)
+    if kind == "error":
+        return (None, True, str(frame.get("data", "")))
+    return (None, False, None)
+
+
 class AegisHttpBridge:
-    def __init__(self, base_url: str, tenant_id: str, session_key: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        tenant_id: str,
+        session_key: str,
+        passphrase: Optional[str] = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.tenant_id = tenant_id
         self.session_key = session_key
+        self._passphrase = passphrase
 
     @classmethod
-    def login(cls, base_url: str, tenant_id: str, passphrase: str) -> "AegisHttpBridge":
-        payload = json.dumps({"tenant_id": tenant_id, "passphrase": passphrase}).encode("utf-8")
+    def _request_login_token(cls, base_url: str, tenant_id: str, passphrase: str) -> str:
+        payload = json.dumps({"tenant_id": tenant_id, "session_key": passphrase}).encode("utf-8")
         req = urllib.request.Request(
             f"{base_url.rstrip('/')}/api/auth/login",
             data=payload,
@@ -201,17 +271,52 @@ class AegisHttpBridge:
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        token = data.get("session_key") or data.get("token")
+        token = (
+            data.get("session_token")
+            or data.get("session_key")
+            or data.get("token")
+            or passphrase
+        )
         if not token:
             raise RuntimeError(f"Login failed: {data}")
-        return cls(base_url, tenant_id, token)
+        return str(token)
+
+    @classmethod
+    def login(cls, base_url: str, tenant_id: str, passphrase: str) -> "AegisHttpBridge":
+        token = cls._request_login_token(base_url, tenant_id, passphrase)
+        return cls(base_url, tenant_id, token, passphrase=passphrase)
+
+    def refresh_session(self) -> bool:
+        if not self._passphrase:
+            return False
+        self.session_key = self._request_login_token(
+            self.base_url, self.tenant_id, self._passphrase
+        )
+        return True
 
     def _headers(self) -> dict:
         return {
             "Content-Type": "application/json",
             "x-citadel-tenant": self.tenant_id,
             "x-citadel-key": self.session_key,
+            "x-aegis-voice-client": "daemon",
         }
+
+    def get_voice_settings(self) -> dict:
+        for attempt in range(2):
+            req = urllib.request.Request(
+                f"{self.base_url}/api/siren/voice-settings",
+                headers=self._headers(),
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as err:
+                if err.code == 401 and attempt == 0 and self.refresh_session():
+                    continue
+                raise
+        raise RuntimeError("Failed to read voice settings after session refresh")
 
     def post_utterance(self, pcm_bytes: bytes, mode: str, lang: str = "es-AR") -> dict:
         body = json.dumps(
@@ -222,21 +327,29 @@ class AegisHttpBridge:
                 "lang": lang,
             }
         ).encode("utf-8")
-        req = urllib.request.Request(
-            f"{self.base_url}/api/siren/utterance",
-            data=body,
-            headers=self._headers(),
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        for attempt in range(2):
+            req = urllib.request.Request(
+                f"{self.base_url}/api/siren/utterance",
+                data=body,
+                headers=self._headers(),
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as err:
+                if err.code == 401 and attempt == 0 and self.refresh_session():
+                    continue
+                raise
+        raise RuntimeError("Failed to post utterance after session refresh")
 
     def send_chat_and_wait(self, prompt: str) -> str:
         """Sends a prompt via Aegis WebSocket chat and waits for the assistant response."""
         import websockets.sync.client as ws_client  # type: ignore
 
         ws_base = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
-        url = f"{ws_base}/ws/chat/{self.tenant_id}"
+        encoded_tenant = urllib.parse.quote(self.tenant_id, safe="")
+        url = f"{ws_base}/ws/chat/{encoded_tenant}"
         reply_parts: List[str] = []
 
         with ws_client.connect(
@@ -244,21 +357,23 @@ class AegisHttpBridge:
             additional_headers={"x-citadel-key": self.session_key},
             open_timeout=10,
         ) as ws:
-            ws.send(json.dumps({"prompt": prompt}))
+            ws.send(json.dumps({"action": "submit", "prompt": prompt}))
             while True:
                 raw = ws.recv(timeout=90)
                 frame = json.loads(raw)
-                kind = frame.get("type")
-                if kind == "token":
-                    reply_parts.append(str(frame.get("data", "")))
-                elif kind == "status" and str(frame.get("data", "")) in ("idle", "completed"):
+                chunk, is_done, error_msg = parse_chat_ws_frame(frame)
+                if chunk is not None:
+                    reply_parts.append(chunk)
+                if error_msg is not None:
+                    return f"Error: {error_msg}"
+                if is_done:
                     break
-                elif kind == "error":
-                    return f"Error: {frame.get('data', '')}"
         return "".join(reply_parts).strip()
 
 
-def install_windows_startup(base_url: str, tenant_id: str) -> None:
+def install_windows_startup(
+    base_url: str, tenant_id: str, config_path: Optional[str] = None
+) -> None:
     if not sys.platform.startswith("win"):
         raise RuntimeError("--install-startup solo aplica a Windows.")
     startup_dir = os.path.join(
@@ -275,7 +390,11 @@ def install_windows_startup(base_url: str, tenant_id: str) -> None:
     py_exe = sys.executable.replace("python.exe", "pythonw.exe")
     if not os.path.exists(py_exe):
         py_exe = sys.executable
-    cmd = f'"{py_exe}" "{script_path}" --url "{base_url}" --tenant "{tenant_id}"'
+    if config_path:
+        abs_cfg = os.path.abspath(config_path)
+        cmd = f'"{py_exe}" "{script_path}" --config "{abs_cfg}"'
+    else:
+        cmd = f'"{py_exe}" "{script_path}" --url "{base_url}" --tenant "{tenant_id}"'
     content = (
         'Set WshShell = CreateObject("WScript.Shell")\n'
         f'WshShell.Run "{cmd.replace(chr(34), chr(34) * 2)}", 0, False\n'
@@ -336,13 +455,40 @@ def run_daemon(args: argparse.Namespace) -> None:
 
     token = args.token or os.environ.get("AEGIS_SESSION_TOKEN", "")
     passphrase = args.passphrase or os.environ.get("AEGIS_PASSWORD", "")
-    if token:
-        bridge = AegisHttpBridge(args.url, args.tenant, token)
-    elif passphrase:
+    if passphrase:
         bridge = AegisHttpBridge.login(args.url, args.tenant, passphrase)
+    elif token:
+        bridge = AegisHttpBridge(args.url, args.tenant, token)
     else:
         print("Configurá --token (o AEGIS_SESSION_TOKEN) o --passphrase (o AEGIS_PASSWORD).")
         sys.exit(1)
+
+    remote_state = {"always_on": True, "wake_phrase": "Aegis escuchame"}
+    try:
+        cfg_data = bridge.get_voice_settings()
+        remote_state["always_on"] = bool(cfg_data.get("always_on_enabled", True))
+        remote_state["wake_phrase"] = str(cfg_data.get("wake_phrase") or "Aegis escuchame")
+    except Exception:
+        pass
+
+    def _poll_voice_settings() -> None:
+        while True:
+            time.sleep(15)
+            try:
+                cfg_data = bridge.get_voice_settings()
+                next_on = bool(cfg_data.get("always_on_enabled", True))
+                next_phrase = str(cfg_data.get("wake_phrase") or "Aegis escuchame")
+                if next_on != remote_state["always_on"]:
+                    remote_state["always_on"] = next_on
+                    state_txt = "Activada" if next_on else "Pausada"
+                    print(f"[AegisVoice] Escucha continua {state_txt} desde el tenant.")
+                if next_phrase != remote_state["wake_phrase"]:
+                    remote_state["wake_phrase"] = next_phrase
+                    print(f'[AegisVoice] Nueva frase activa: "{next_phrase}"')
+            except Exception:
+                pass
+
+    threading.Thread(target=_poll_voice_settings, daemon=True).start()
 
     vad = BreathAwareVadSegmenter(VadConfig(command_hangover_ms=args.pause_ms))
     audio_q: "queue.Queue[bytes]" = queue.Queue()
@@ -356,7 +502,9 @@ def run_daemon(args: argparse.Namespace) -> None:
 
     start_hotkey_listener(on_hotkey)
     print(f"[AegisVoice] Conectado a {args.url} (tenant={args.tenant}).")
-    print('[AegisVoice] Decí "Aegis escuchame <pedido>" o presioná Alt+Shift+A aunque el navegador esté cerrado.')
+    status_lbl = "Activa" if remote_state["always_on"] else "Pausada"
+    print(f'[AegisVoice] Frase activa: "{remote_state["wake_phrase"]}" | Escucha continua: {status_lbl}')
+    print('[AegisVoice] Presioná Alt+Shift+A cuando quieras hablar directo, incluso con el navegador cerrado.')
 
     def callback(indata, frames, time_info, status) -> None:
         if speaking_lock.locked():
@@ -372,6 +520,9 @@ def run_daemon(args: argparse.Namespace) -> None:
     ):
         while True:
             frame = audio_q.get()
+            if not remote_state["always_on"] and vad.mode == "wakeword":
+                vad.reset_utterance()
+                continue
             if time.monotonic() < followup_until[0] and vad.mode == "wakeword":
                 vad.mode = "followup"
             elif time.monotonic() >= followup_until[0] and vad.mode == "followup":
@@ -384,6 +535,9 @@ def run_daemon(args: argparse.Namespace) -> None:
             pcm_bytes, mode = result
             try:
                 res = bridge.post_utterance(pcm_bytes, mode, lang=args.lang)
+            except urllib.error.HTTPError as exc:
+                print(f"[AegisVoice] Error del servidor ({format_http_error(exc)})")
+                continue
             except urllib.error.URLError as exc:
                 print(f"[AegisVoice] Servidor no disponible: {exc}")
                 continue
@@ -413,10 +567,22 @@ def run_daemon(args: argparse.Namespace) -> None:
                 followup_until[0] = time.monotonic() + args.followup_secs
 
 
+def _load_json_config(config_path: str) -> dict:
+    if not config_path or not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aegis PC Always-On Voice Daemon")
-    parser.add_argument("--url", default=os.environ.get("AEGIS_URL", "http://127.0.0.1:8000"))
-    parser.add_argument("--tenant", default=os.environ.get("AEGIS_TENANT", "default"))
+    parser.add_argument("--config", default="")
+    parser.add_argument("--url", default=None)
+    parser.add_argument("--tenant", default=None)
     parser.add_argument("--token", default="")
     parser.add_argument("--passphrase", default="")
     parser.add_argument("--lang", default="es-AR")
@@ -426,8 +592,20 @@ def main() -> None:
     parser.add_argument("--uninstall-startup", action="store_true")
     args = parser.parse_args()
 
+    cfg_path = args.config
+    if not cfg_path and sys.platform.startswith("win") and not args.token and not args.passphrase:
+        default_cfg = os.path.join(os.environ.get("LOCALAPPDATA", ""), "AegisVoice", "config.json")
+        if os.path.exists(default_cfg):
+            cfg_path = default_cfg
+    cfg = _load_json_config(cfg_path)
+
+    args.url = args.url or cfg.get("url") or os.environ.get("AEGIS_URL", "http://127.0.0.1:8000")
+    args.tenant = args.tenant or cfg.get("tenant") or os.environ.get("AEGIS_TENANT", "default")
+    args.token = args.token or str(cfg.get("token") or "")
+    args.passphrase = args.passphrase or str(cfg.get("passphrase") or "")
+
     if args.install_startup:
-        install_windows_startup(args.url, args.tenant)
+        install_windows_startup(args.url, args.tenant, config_path=cfg_path or None)
         return
     if args.uninstall_startup:
         uninstall_windows_startup()

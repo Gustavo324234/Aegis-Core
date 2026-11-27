@@ -49,7 +49,7 @@ export const InputModeSelector: React.FC = () => {
                 window.location.protocol === 'http:' &&
                 !['localhost', '127.0.0.1'].includes(window.location.hostname);
             if (isInsecure) {
-                setMicError('El micrófono requiere HTTPS. Accedé via el link de Cloudflare.');
+                setMicError('El micrófono en navegador requiere http://localhost:8000 o HTTPS.');
                 setInputMode(mode);
                 return;
             }

@@ -1,14 +1,21 @@
+import io
+import json
 import os
 import struct
 import sys
 import unittest
+from unittest.mock import patch
+import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aegis_voice_daemon import (
+    AegisHttpBridge,
     BreathAwareVadSegmenter,
     FRAME_SAMPLES,
     VadConfig,
     compute_rms_pcm16,
+    format_http_error,
+    parse_chat_ws_frame,
 )
 
 
@@ -67,6 +74,95 @@ class BreathAwareVadTests(unittest.TestCase):
         self.assertEqual(compute_rms_pcm16(b""), 0.0)
         rms = compute_rms_pcm16(make_pcm_frame(16384))
         self.assertAlmostEqual(rms, 0.5, places=2)
+
+    def test_login_sends_session_key_and_extracts_session_token(self) -> None:
+        captured = {}
+
+        class _FakeResp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_urlopen(req, timeout=15):
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            payload = json.dumps(
+                {
+                    "status": "authenticated",
+                    "role": "tenant",
+                    "session_token": "cst_test_token_123",
+                }
+            ).encode("utf-8")
+            return _FakeResp(payload)
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            bridge = AegisHttpBridge.login("http://127.0.0.1:8000", "Tavo", "secret")
+
+        self.assertEqual(captured["url"], "http://127.0.0.1:8000/api/auth/login")
+        self.assertEqual(captured["body"], {"tenant_id": "Tavo", "session_key": "secret"})
+        self.assertNotIn("passphrase", captured["body"])
+        self.assertEqual(bridge.session_key, "cst_test_token_123")
+
+    def test_parse_chat_ws_frame_handles_kernel_and_error_events(self) -> None:
+        self.assertEqual(
+            parse_chat_ws_frame({"event": "kernel_event", "data": {"pid": "p1", "output": "Hola"}}),
+            ("Hola", False, None),
+        )
+        self.assertEqual(
+            parse_chat_ws_frame(
+                {"event": "kernel_event", "data": {"pid": "p1", "status_update": {"state": "STATE_COMPLETED"}}}
+            ),
+            (None, True, None),
+        )
+        self.assertEqual(
+            parse_chat_ws_frame({"event": "kernel_event", "data": {"pid": "p1", "error": "boom"}}),
+            (None, True, "boom"),
+        )
+        self.assertEqual(
+            parse_chat_ws_frame({"event": "error", "data": {"code": "E_RATE", "message": "Rate limited"}}),
+            (None, True, "Rate limited"),
+        )
+
+    def test_format_http_error_extracts_json_server_reason(self) -> None:
+        err = urllib.error.HTTPError(
+            "http://127.0.0.1:8000/api/siren/utterance",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(json.dumps({"error": "No hay motor STT disponible"}).encode("utf-8")),
+        )
+        self.assertEqual(format_http_error(err), "HTTP 400: No hay motor STT disponible")
+        err.close()
+
+    def test_bridge_headers_include_daemon_tag_and_fetch_voice_settings(self) -> None:
+        bridge = AegisHttpBridge("http://127.0.0.1:8000", "Tavo", "cst_tok")
+        self.assertEqual(bridge._headers().get("x-aegis-voice-client"), "daemon")
+
+        captured = {}
+
+        class _FakeResp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_urlopen(req, timeout=10):
+            captured["url"] = req.full_url
+            captured["client"] = req.headers.get("X-aegis-voice-client")
+            return _FakeResp(
+                json.dumps({"wake_phrase": "Oye Titan", "always_on_enabled": True}).encode("utf-8")
+            )
+
+        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            res = bridge.get_voice_settings()
+
+        self.assertEqual(captured["url"], "http://127.0.0.1:8000/api/siren/voice-settings")
+        self.assertEqual(captured["client"], "daemon")
+        self.assertEqual(res["wake_phrase"], "Oye Titan")
+        self.assertTrue(res["always_on_enabled"])
 
 
 if __name__ == "__main__":
