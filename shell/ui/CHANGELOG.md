@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.32.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.31.0...shell-ui-v1.32.0) (2026-11-27)
+
+
+### Features
+
+* **core,ui,mobile:** EPIC 62 Cognitive Efficiency & 2026 Models + EPIC 63 Voice Biometrics & Native Assistant ([#382](https://github.com/Gustavo324234/Aegis-Core/issues/382)) ([d1a28c4](https://github.com/Gustavo324234/Aegis-Core/commit/d1a28c4063b9672ff7cfcf8577d8d624793cbfbb))
+
 ## [1.31.0](https://github.com/Gustavo324234/Aegis-Core/compare/shell-ui-v1.30.0...shell-ui-v1.31.0) (2026-11-26)
 
 

@@ -38,6 +38,13 @@
 
 
 
+## [0.1.98](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.97...ank-http-v0.1.98) (2026-11-27)
+
+
+### Features
+
+* **core,ui,mobile:** EPIC 62 Cognitive Efficiency & 2026 Models + EPIC 63 Voice Biometrics & Native Assistant ([#382](https://github.com/Gustavo324234/Aegis-Core/issues/382)) ([d1a28c4](https://github.com/Gustavo324234/Aegis-Core/commit/d1a28c4063b9672ff7cfcf8577d8d624793cbfbb))
+
 ## [0.1.97](https://github.com/Gustavo324234/Aegis-Core/compare/ank-http-v0.1.96...ank-http-v0.1.97) (2026-11-26)
 
 

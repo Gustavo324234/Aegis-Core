@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.88](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.87...ank-core-v0.1.88) (2026-11-27)
+
+
+### Features
+
+* **core,ui,mobile:** EPIC 62 Cognitive Efficiency & 2026 Models + EPIC 63 Voice Biometrics & Native Assistant ([#382](https://github.com/Gustavo324234/Aegis-Core/issues/382)) ([d1a28c4](https://github.com/Gustavo324234/Aegis-Core/commit/d1a28c4063b9672ff7cfcf8577d8d624793cbfbb))
+
 ## [0.1.87](https://github.com/Gustavo324234/Aegis-Core/compare/ank-core-v0.1.86...ank-core-v0.1.87) (2026-11-26)
 
 
