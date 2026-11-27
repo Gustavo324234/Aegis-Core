@@ -5,6 +5,7 @@ import struct
 import sys
 import unittest
 from unittest.mock import patch
+import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aegis_voice_daemon import (
@@ -13,6 +14,7 @@ from aegis_voice_daemon import (
     FRAME_SAMPLES,
     VadConfig,
     compute_rms_pcm16,
+    format_http_error,
     parse_chat_ws_frame,
 )
 
@@ -122,6 +124,17 @@ class BreathAwareVadTests(unittest.TestCase):
             parse_chat_ws_frame({"event": "error", "data": {"code": "E_RATE", "message": "Rate limited"}}),
             (None, True, "Rate limited"),
         )
+
+    def test_format_http_error_extracts_json_server_reason(self) -> None:
+        err = urllib.error.HTTPError(
+            "http://127.0.0.1:8000/api/siren/utterance",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(json.dumps({"error": "No hay motor STT disponible"}).encode("utf-8")),
+        )
+        self.assertEqual(format_http_error(err), "HTTP 400: No hay motor STT disponible")
+        err.close()
 
 
 if __name__ == "__main__":

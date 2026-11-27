@@ -186,6 +186,27 @@ def speak_text_native(text: str) -> None:
         pass
 
 
+def format_http_error(exc: urllib.error.HTTPError) -> str:
+    """Extracts the server's JSON error/message detail from an HTTPError for clear logging."""
+    detail = ""
+    try:
+        raw = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        raw = ""
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                detail = str(parsed.get("error") or parsed.get("message") or raw).strip()
+            else:
+                detail = raw
+        except ValueError:
+            detail = raw
+    if detail:
+        return f"HTTP {exc.code}: {detail}"
+    return f"HTTP {exc.code}: {exc.reason}"
+
+
 def parse_chat_ws_frame(frame: dict) -> Tuple[Optional[str], bool, Optional[str]]:
     """
     Parses a WebSocket frame from `ank-http` (`/ws/chat/:tenant_id`) into
@@ -459,6 +480,9 @@ def run_daemon(args: argparse.Namespace) -> None:
             pcm_bytes, mode = result
             try:
                 res = bridge.post_utterance(pcm_bytes, mode, lang=args.lang)
+            except urllib.error.HTTPError as exc:
+                print(f"[AegisVoice] Error del servidor ({format_http_error(exc)})")
+                continue
             except urllib.error.URLError as exc:
                 print(f"[AegisVoice] Servidor no disponible: {exc}")
                 continue
