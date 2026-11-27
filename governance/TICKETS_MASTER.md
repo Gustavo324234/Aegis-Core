@@ -26,7 +26,7 @@
 | EPIC 60 | Real-World Channels (WhatsApp & Google Calendar), Chat UX & ReAct Resilience | ✅ Completa | 100% |
 | EPIC 61 | Sandbox Promotion, Security Hardening & SRE Maturation | ✅ Completa | 100% (13/13) |
 | EPIC 62 | Cognitive Efficiency, Adaptive Intelligence & 2026 Model Matrix | ✅ Completa | 100% (5/5) |
-| EPIC 63 | Hands-Free Voice Biometrics, Dynamic Wake-Word & Native Assistant | ✅ Completa | 100% (5/5) |
+| EPIC 63 | Hands-Free Voice Biometrics, Dynamic Wake-Word & Native Assistant | ✅ Completa | 100% (6/6) |
 
 ## EPIC 49 — Cognitive Loop
 
@@ -344,6 +344,7 @@
 | CORE-414 | feat | Demonio de Voz de Escritorio Siempre Activo con Navegador Cerrado (`tools/desktop_voice/`) | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
 | CORE-415 | feat | App Android como Asistente Digital Predeterminado (`ROLE_ASSISTANT`) + `ForegroundService` de Escucha Continua | ✅ Done | Crítica | Shell Engineer |
 | CORE-416 | test | Suite de Pruebas de Biometría/Wake-Word/Daemon, Documentación Android Studio/PC y Sincronización SRE | ✅ Done | Alta | Kernel Engineer + Shell Engineer |
+| CORE-417 | feat | Builder Automático Android APK en CI, Auto-Updater In-App (SHA-256) y QR de Descarga en Web | ✅ Done | Alta | DevOps Engineer + Shell Engineer |
 
 ## Governance & Tooling
 

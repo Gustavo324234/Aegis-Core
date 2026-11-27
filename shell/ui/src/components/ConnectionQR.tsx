@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { X, RefreshCw, Smartphone, Globe, Shield } from 'lucide-react';
+import { X, RefreshCw, Smartphone, Globe, Shield, Download } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAegisStore } from '../store/useAegisStore';
 import { ApiError, apiGet } from '../utils/apiClient';
+
+const ANDROID_APK_NIGHTLY_URL =
+  'https://github.com/Gustavo324234/Aegis-Core/releases/download/nightly/aegis-android.apk';
 
 interface ConnectionInfo {
   local_url: string;
@@ -16,6 +19,7 @@ export const ConnectionQR: React.FC<{ onClose: () => void }> = ({ onClose }) => 
   const { tenantId, sessionKey } = useAegisStore(
     useShallow((s) => ({ tenantId: s.tenantId, sessionKey: s.sessionKey })),
   );
+  const [activeTab, setActiveTab] = useState<'link' | 'download'>('link');
   const [info, setInfo] = useState<ConnectionInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,8 +73,62 @@ export const ConnectionQR: React.FC<{ onClose: () => void }> = ({ onClose }) => 
           </button>
         </div>
 
+        <div className="px-6 pt-4">
+          <div className="grid grid-cols-2 gap-1 bg-white/5 p-1 rounded-xl border border-white/10">
+            <button
+              type="button"
+              onClick={() => setActiveTab('link')}
+              className={`py-2 px-3 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === 'link'
+                  ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                  : 'text-white/50 hover:text-white'
+              }`}
+            >
+              1. Vincular App
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('download')}
+              className={`py-2 px-3 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                activeTab === 'download'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                  : 'text-white/50 hover:text-white'
+              }`}
+            >
+              <Download className="w-3.5 h-3.5" /> 2. Bajar APK
+            </button>
+          </div>
+        </div>
+
         <div className="p-8 flex flex-col items-center gap-6">
-          {loading && !info ? (
+          {activeTab === 'download' ? (
+            <>
+              <div className="p-4 bg-white rounded-2xl shadow-inner">
+                <QRCodeSVG
+                  value={ANDROID_APK_NIGHTLY_URL}
+                  size={192}
+                  level="H"
+                  includeMargin={false}
+                />
+              </div>
+              <div className="w-full space-y-3">
+                <a
+                  href={ANDROID_APK_NIGHTLY_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  Descargar aegis-android.apk
+                </a>
+                <div className="p-3 bg-white/5 rounded-xl border border-white/10">
+                  <p className="text-[11px] text-white/65 leading-snug">
+                    Escaneá este QR desde tu teléfono Android para instalar Aegis. Las futuras versiones se actualizan directo desde <strong className="text-white">Ajustes → Buscar Actualizaciones</strong> en la app.
+                  </p>
+                </div>
+              </div>
+            </>
+          ) : loading && !info ? (
             <div className="w-48 h-48 bg-white/5 rounded-xl flex items-center justify-center animate-pulse">
               <RefreshCw className="w-8 h-8 text-white/20 animate-spin" />
             </div>
